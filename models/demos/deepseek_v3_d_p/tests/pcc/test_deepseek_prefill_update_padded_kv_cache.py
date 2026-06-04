@@ -25,6 +25,21 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 KVPE_HEAD_DIM = 576
 
 
+def _index_tensor(value, mesh_device):
+    """Single-element ROW_MAJOR uint32 device tensor (mesh-replicated), read on-device by the op.
+    slot_idx and kv_actual_global are passed this way so their values stay out of the program hash
+    and the buffer-binding fast cache-hit path can patch their addresses across calls. A fresh tensor
+    per call (different buffer address, same shape/dtype) exercises that path."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int32).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
@@ -78,7 +93,6 @@ def test_update_padded_kv_cache_single_iteration_prefill(
     input_shard_dims[sp_axis] = 2  # split the chunk across sp devices
 
     mesh_device.enable_program_cache()
-    entries_after_first = None
 
     for u in range(num_users):
         for l in range(num_layers):
@@ -95,23 +109,20 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=u,
+                slot_idx=_index_tensor(u, mesh_device),
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
+                kv_actual_global=_index_tensor(0, mesh_device),
                 cluster_axis=sp_axis,
             )
-            if entries_after_first is None:
-                ttnn.synchronize_device(mesh_device)
-                entries_after_first = mesh_device.num_program_cache_entries()
 
     ttnn.synchronize_device(mesh_device)
 
-    # slot_idx / layer_idx / kv_actual_global are runtime args (not in the program hash), so
-    # every subsequent (user, layer) call must reuse the program compiled on the first call.
-    assert mesh_device.num_program_cache_entries() == entries_after_first, (
-        f"op must reuse one cached program across users/layers; entries grew from "
-        f"{entries_after_first} to {mesh_device.num_program_cache_entries()}"
+    # slot_idx and kv_actual_global are device tensors (not in the program hash) and layer_idx is
+    # hashed, so exactly one cached program per layer is reused across all users — entries == num_layers.
+    assert mesh_device.num_program_cache_entries() == num_layers, (
+        f"op must reuse one cached program per layer across users; expected {num_layers} entries, "
+        f"got {mesh_device.num_program_cache_entries()}"
     )
 
     # Gather: concat sp shards on the seq dim, drop the tp-replicated head copies.
@@ -212,6 +223,13 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
         new_actual_isls = [chunk_global, chunk_global]
     else:  # padded_partial: whole-tile boundary_offset != 0; boundary chip writes straddle slabs
         new_actual_isls = [(sp - 1) * C + tile, 2 * C, sp * C]
+    # Each iteration writes exactly one chunk_global-token chunk, so the valid frontier can advance by
+    # at most chunk_global per iteration. A larger advance would claim tokens valid that were never
+    # written, leaving an unwritten hole -- e.g. a scenario tuned for sp>=2 (2*C) run at sp=1, where
+    # chunk_global == C is smallest.
+    assert all(
+        isl <= chunk_global for isl in new_actual_isls
+    ), f"each new_isl must be <= chunk_global ({chunk_global}); got {new_actual_isls}"
     cum_total = sum(new_actual_isls)
     cache_global = cache_tokens_per_dev * sp
     assert cum_total <= cache_global, f"valid tokens ({cum_total}) must fit the cache ({cache_global})"
@@ -241,7 +259,6 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
     input_shard_dims[sp_axis] = 2
 
     mesh_device.enable_program_cache()
-    entries_after_first = None
 
     kv_actual = 0
     for it, new_actual_isl in enumerate(new_actual_isls):
@@ -271,24 +288,22 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     kv_cache,
                     tt_input,
-                    slot_idx=u,
+                    slot_idx=_index_tensor(u, mesh_device),
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=kv_actual,
+                    kv_actual_global=_index_tensor(kv_actual, mesh_device),
                     cluster_axis=sp_axis,
                 )
-                if entries_after_first is None:
-                    ttnn.synchronize_device(mesh_device)
-                    entries_after_first = mesh_device.num_program_cache_entries()
         kv_actual = valid_end
 
     ttnn.synchronize_device(mesh_device)
 
-    # kv_actual_global / slot_idx / layer_idx are runtime args (not in the program hash), so every
-    # iteration and (user, layer) must reuse the program compiled on the first call.
-    assert mesh_device.num_program_cache_entries() == entries_after_first, (
-        f"op must reuse one cached program across iterations/users/layers; entries grew from "
-        f"{entries_after_first} to {mesh_device.num_program_cache_entries()}"
+    # kv_actual_global and slot_idx are device tensors (not in the program hash) and layer_idx is
+    # hashed, so exactly one cached program per layer is reused across all iterations and users —
+    # entries == num_layers.
+    assert mesh_device.num_program_cache_entries() == num_layers, (
+        f"op must reuse one cached program per layer across iterations/users; expected {num_layers} "
+        f"entries, got {mesh_device.num_program_cache_entries()}"
     )
 
     concat_dims = [None, None]

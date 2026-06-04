@@ -20,16 +20,25 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct operation_attributes_t {
         // Cache slot is linearized as users-outer, layers-inner:
         //   batch_idx = slot_idx * num_layers + layer_idx
-        uint32_t slot_idx;  // TODO: should be moved to metadata
+        // slot_idx is a per-call device tensor (see tensor_args_t); layer_idx is hashed (structural):
+        // it takes only num_layers distinct values, so one cached program per layer is reused across
+        // users and chunks -- and a hashed scalar stays correct on the buffer-binding fast cache-hit
+        // path (each program bakes its own layer_idx), unlike a non-hashed common rt-arg which would
+        // go stale there.
         uint32_t layer_idx;
         uint32_t num_layers;
-        uint32_t kv_actual_global;  // in tokens; tile-aligned. TODO: should be moved to metadata
         uint32_t cluster_axis;
     };
 
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
+        // Single-element ROW_MAJOR uint32 device tensors, read on-device by the writer kernel.
+        // Tensors (not scalar attrs) so their values stay out of the program hash and the
+        // buffer-binding fast cache-hit path can patch their addresses -- one cached program (per
+        // layer) is reused across users and chunks. NOT hashed by value.
+        const Tensor& slot_idx;          // user slot in the batched prefill cache
+        const Tensor& kv_actual_global;  // prior valid global KV length in tokens; tile-aligned
     };
 
     using spec_return_value_t = TensorSpec;
@@ -60,10 +69,10 @@ namespace ttnn::prim {
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    uint32_t slot_idx,
+    const ttnn::Tensor& slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t kv_actual_global,
+    const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::prim
