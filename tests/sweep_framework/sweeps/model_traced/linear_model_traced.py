@@ -359,6 +359,235 @@ def _run_gather_in0_ring_matmul(
             pass
 
 
+def _pad_batch_to_dram_banks(batch, banks):
+    # `banks` is the device's actual DRAM-bank count
+    # (dev.get_optimal_dram_bank_to_logical_worker_assignment) — hardware-specific
+    # (Wormhole=12, Blackhole differs), so it is always passed in, never defaulted.
+    return batch if batch % banks == 0 else ((batch + banks - 1) // banks) * banks
+
+
+def _placement_to_2d_mesh_dims(placement):
+    """Parse a traced placement into (rows_spec, cols_spec) for ShardTensor2dMesh.
+
+    Each spec is the (possibly negative) tensor dim sharded on that mesh axis, or
+    None for Replicate. A single-element ``[Replicate]`` (ReplicateTensorToMesh)
+    returns ("REPLICATE_ALL", None).
+    """
+    s = str(placement.get("placement", "")) if isinstance(placement, dict) else str(placement)
+    import re
+
+    toks = re.findall(r"PlacementShard\((?:dim=)?(-?\d+)\)|PlacementReplicate", s)
+    # re.findall with alternation returns the captured group ('' for Replicate)
+    specs = []
+    for t in toks:
+        specs.append(int(t) if t != "" else None)
+    if len(specs) <= 1:
+        return ("REPLICATE_ALL", None)
+    return (specs[0], specs[1])
+
+
+def _run_batched_dram_sharded_matmul(
+    input_a_shape,
+    input_b_shape,
+    input_a_placement,
+    input_b_placement,
+    pc,
+    mesh_shape,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    output_tile,
+    compute_kernel_config_raw,
+):
+    """BatchedDRAMSharded matmul (DeepSeek-V3 MLA wkv_b1 / wkv_b2 decode projections).
+
+    ``MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig`` is a batch-sharded
+    distributed matmul: the activation (in0) is L1 HEIGHT_SHARDED across the 12 DRAM-bank
+    -> worker cores (get_optimal_dram_bank_to_logical_worker_assignment), the weight is
+    DRAM HEIGHT_SHARDED over the 12 banks, and the output is L1 HEIGHT_SHARDED on the same
+    worker cores. The generic per-vector path can't reproduce that L1 batch-shard on the
+    optimal worker grid (in0 lands interleaved -> ``is_sharded()`` TT_FATAL), so this routine
+    rebuilds the model's launch path on a COL-dispatch mesh (frees row y=9 so the device's
+    optimal worker grid matches the trace) and reads the per-device tensors back for the
+    torch golden. Mirrors models/demos/deepseek_v3/tt/mla/mla1d.py and the standalone repro.
+    """
+    from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+    TILE = ttnn.TILE_SIZE
+    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+
+    def _ru(n, m):
+        return ((n + m - 1) // m) * m
+
+    # Traced input_a_shape is the per-device shape (1, batch, m, k); weight (1, batch, k, n).
+    a_shape = tuple(input_a_shape)
+    b_shape = tuple(input_b_shape)
+    batch = int(a_shape[-3])
+    m = int(a_shape[-2])
+    k = int(a_shape[-1])
+    n = int(b_shape[-1])
+
+    tile_h = TILE
+    if output_tile is not None:
+        try:
+            tile_h = int(output_tile.tile_shape[0])
+        except Exception:
+            tile_h = TILE
+    shard_m = _ru(m, tile_h)  # program/tile-padded M (>= logical m)
+    reshard_in0 = m < shard_m  # logical m < a tile -> build interleaved then reshard
+
+    in0_block_w = int(pc["in0_block_w"])
+    per_core_M = int(pc.get("per_core_M", 1))
+    per_core_N = int(pc.get("per_core_N", 1))
+
+    act_dtype = _as_dtype(input_a_dtype, ttnn.bfloat16)
+    wt_dtype = _as_dtype(input_b_dtype, ttnn.bfloat8_b)
+    out_dtype = _as_dtype(output_dtype, None)
+
+    ckc = compute_kernel_config_raw
+    if isinstance(ckc, dict):
+        try:
+            ckc = parse_dict_value("compute_kernel_config", ckc)
+        except Exception:
+            ckc = None
+    if not isinstance(ckc, ttnn.WormholeComputeKernelConfig):
+        ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=True, fp32_dest_acc_en=True, packer_l1_acc=True
+        )
+
+    in0_dims = _placement_to_2d_mesh_dims(input_a_placement)
+    wt_dims = _placement_to_2d_mesh_dims(input_b_placement)
+
+    _close_vector_device()
+    dev = create_mesh_device((rows, cols), l1_small_size=0, dispatch_core_axis=ttnn.DispatchCoreAxis.COL)
+    try:
+        # Batch is sharded over the device's DRAM banks (one worker core per bank), so the
+        # bank count is a hardware property — query it rather than hardcoding the Wormhole 12
+        # (Blackhole differs). The kernel keys off this exact optimal worker assignment, so
+        # bpc / shard shapes must follow the device's real bank count, not a constant.
+        cores = dev.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        num_banks = len(cores)
+        worker_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in cores]
+        )
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+
+        batch_padded = _pad_batch_to_dram_banks(batch, num_banks)
+        bpc = batch_padded // num_banks  # batches per bank / worker core
+
+        in0_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [bpc * shard_m, k], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        in1_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_grid, [bpc * k, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out_mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(worker_grid, [bpc * shard_m, n], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+        torch.manual_seed(0)
+
+        # --- in0: build the global host so ShardTensor2dMesh yields per-device [1,batch,m,k] ---
+        g_a = [1, batch, m, k]
+        if in0_dims[0] == "REPLICATE_ALL":
+            a_mapper = ttnn.ReplicateTensorToMesh(dev)
+        else:
+            if in0_dims[0] is not None:
+                g_a[in0_dims[0]] *= rows
+            if in0_dims[1] is not None:
+                g_a[in0_dims[1]] *= cols
+            a_mapper = ttnn.ShardTensor2dMesh(dev, dims=in0_dims, mesh_shape=(rows, cols))
+        a_host = torch.randn(*g_a, dtype=torch.bfloat16)
+        if reshard_in0:
+            # Direct from_torch into the height-shard (a) pads the logical m to a tile and
+            # (b) lands the buffer in low L1 where it collides with the matmul's static CBs.
+            # Build L1-interleaved first (preserves logical m, lands high in L1), then reshard.
+            a_tmp = ttnn.from_torch(
+                a_host,
+                dtype=act_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=a_mapper,
+            )
+            a_tt = ttnn.to_memory_config(a_tmp, in0_mc)
+            ttnn.deallocate(a_tmp)
+        else:
+            a_tt = ttnn.from_torch(
+                a_host,
+                dtype=act_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=dev,
+                memory_config=in0_mc,
+                mesh_mapper=a_mapper,
+            )
+
+        # --- weight: global host -> per-device [1,batch,k,n] via placement, DRAM HEIGHT_SHARDED ---
+        g_b = [1, batch, k, n]
+        if wt_dims[0] == "REPLICATE_ALL":
+            b_mapper = ttnn.ReplicateTensorToMesh(dev)
+        else:
+            if wt_dims[0] is not None:
+                g_b[wt_dims[0]] *= rows
+            if wt_dims[1] is not None:
+                g_b[wt_dims[1]] *= cols
+            b_mapper = ttnn.ShardTensor2dMesh(dev, dims=wt_dims, mesh_shape=(rows, cols))
+        b_host = torch.randn(*g_b, dtype=torch.bfloat16)
+        b_tt = ttnn.from_torch(
+            b_host,
+            dtype=wt_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=in1_mc,
+            mesh_mapper=b_mapper,
+        )
+
+        pc_obj = ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+            in0_block_w=in0_block_w, per_core_M=per_core_M, per_core_N=per_core_N, fused_activation=None
+        )
+        linear_kwargs = dict(
+            input_tensor_b=b_tt, memory_config=out_mc, compute_kernel_config=ckc, program_config=pc_obj
+        )
+        if out_dtype is not None:
+            linear_kwargs["dtype"] = out_dtype
+        if output_tile is not None:
+            linear_kwargs["output_tile"] = output_tile
+
+        start_time = start_measuring_time()
+        out = ttnn.linear(a_tt, **linear_kwargs)
+        ttnn.synchronize_device(dev)
+        e2e_perf = stop_measuring_time(start_time)
+
+        # --- golden: read back the exact per-device inputs, matmul in torch, compare per device ---
+        # ConcatMeshToTensor(dim=0) stacks the per-device [1,batch,m,k] tensors -> [n_dev,batch,m,k]
+        # at their *logical* shapes (the height-shard's tile padding on M is not surfaced here).
+        cat = ttnn.ConcatMeshToTensor(dev, dim=0)
+        a_rb = ttnn.to_torch(a_tt, mesh_composer=cat).float()
+        b_rb = ttnn.to_torch(b_tt, mesh_composer=cat).float()
+        o_rb = ttnn.to_torch(out, mesh_composer=cat).float()
+        golden = torch.matmul(a_rb, b_rb)  # [n_dev, batch, m, n]
+        # guard against any tile padding the op leaves on the output's M/N
+        o_rb = o_rb[..., : golden.shape[-2], : golden.shape[-1]]
+        golden = golden[..., : o_rb.shape[-2], : o_rb.shape[-1]]
+
+        ttnn.deallocate(a_tt)
+        ttnn.deallocate(b_tt)
+        ttnn.deallocate(out)
+        return [check_with_pcc(golden, o_rb, 0.99), e2e_perf]
+    finally:
+        try:
+            ttnn.close_mesh_device(dev)
+        except Exception:
+            # best-effort teardown of the batched-DRAM-sharded device
+            pass
+
+
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout
 TIMEOUT = 300
@@ -580,6 +809,41 @@ def run(
             input_a_dtype=input_a_dtype,
             input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
             output_dtype=dtype,
+            compute_kernel_config_raw=compute_kernel_config,
+        )
+
+    # BatchedDRAMSharded matmuls (DeepSeek-V3 MLA wkv_b1 / wkv_b2) are batch-sharded
+    # distributed fragments: in0 must be L1 HEIGHT_SHARDED on the device's optimal
+    # DRAM-bank -> worker grid (COL dispatch), weight DRAM HEIGHT_SHARDED. The generic
+    # path can't build that (in0 lands interleaved -> is_sharded() TT_FATAL), so detect
+    # on the RAW program_config and run the faithful model reconstruction.
+    if (
+        isinstance(program_config, dict)
+        and "BatchedDRAMSharded" in str(program_config.get("type", ""))
+        and _ib_shape is not None
+    ):
+        _ot_raw = kwargs.get("output_tile")
+        _otile = None
+        if isinstance(_ot_raw, dict) and _ot_raw.get("type") == "Tile":
+            import re as _re_ot
+
+            _m = _re_ot.search(r"shape:\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]", str(_ot_raw.get("value", "")))
+            if _m:
+                try:
+                    _otile = ttnn.Tile([int(_m.group(1)), int(_m.group(2))])
+                except Exception:
+                    _otile = None
+        return _run_batched_dram_sharded_matmul(
+            input_a_shape=input_a_shape,
+            input_b_shape=_ib_shape,
+            input_a_placement=kwargs.get("input_a_tensor_placement"),
+            input_b_placement=(kwargs.get("input_b_tensor_placement") or kwargs.get("input_tensor_b_tensor_placement")),
+            pc=program_config,
+            mesh_shape=get_model_traced_mesh_shape(),
+            input_a_dtype=input_a_dtype,
+            input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
+            output_dtype=dtype,
+            output_tile=_otile,
             compute_kernel_config_raw=compute_kernel_config,
         )
 
