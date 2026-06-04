@@ -107,12 +107,6 @@ MemoryConfig recompute_shard_spec_for_output(
     auto phys_h = output_shape.physical_shape().height();
     auto phys_w = output_shape.physical_shape().width();
 
-    // bounding_box() TT_FATALs on an empty grid; guard before calling it.
-    if (source_shard_spec.grid.num_cores() == 0) {
-        log_warning(tt::LogOp, "ttnn.reshape: shard grid is empty; falling back to INTERLEAVED");
-        return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-    }
-
     // Reject non-rectangular grids; bounding_box() would silently include extra cores.
     // TODO: search for a rectangular sub-grid inside the input before falling back.
     auto input_bbox = source_shard_spec.grid.bounding_box();
@@ -175,16 +169,6 @@ MemoryConfig recompute_shard_spec_for_output(
         const bool is_height = (layout == TensorMemoryLayout::HEIGHT_SHARDED);
         const uint32_t num_cores = source_shard_spec.grid.num_cores();
         const uint32_t phys_dim = is_height ? phys_h : phys_w;
-
-        // phys_dim == 0 cannot form a valid sharded spec; fall back to INTERLEAVED.
-        if (phys_dim == 0) {
-            log_warning(
-                tt::LogOp,
-                "ttnn.reshape: cannot form valid {} spec for output (phys_{}=0); falling back to INTERLEAVED",
-                layout,
-                is_height ? 'h' : 'w');
-            return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-        }
 
         // Preserve the input grid; height/width_sharded() rounds the per-core shape up
         // to tile alignment without changing the grid itself.
