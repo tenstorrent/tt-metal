@@ -3349,9 +3349,12 @@ class ModelArgs:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
 
         out_subblock_h = 1
-        # For Blackhole with fp32_dest_acc_en=True, out_subblock_h * out_subblock_w must be <= 4
-        # For Wormhole/Grayskull with fp32_dest_acc_en=False, the limit is 8
-        max_subblock_w = 8
+        # The matmul op asserts out_subblock_h * out_subblock_w <= available DEST registers.
+        # On Blackhole the decode 1D-ring matmuls accumulate in fp32 (fp32_dest_acc_en=True),
+        # which halves the budget to 4; elsewhere it is 8. Clamping conservatively keeps the
+        # config valid for any out_block_w (e.g. 3B's QKV gives out_block_w=5, which would
+        # otherwise pick out_subblock_w=5 and exceed the Blackhole limit).
+        max_subblock_w = 4 if is_blackhole() else 8
         out_subblock_w = max_subblock_w
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
