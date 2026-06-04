@@ -3,6 +3,11 @@ name: "(TM-Fabric) Fabric Tests"
 on:
   workflow_dispatch:
     inputs:
+      run-fabric-cpu-only-unit-tests:
+        description: "Run fabric CPU-only unit tests (no hardware needed)"
+        required: false
+        default: true
+        type: boolean
       run-wh-n300-fabric-tests:
         description: "Run Wormhole N300 fabric tests"
         required: false
@@ -218,6 +223,16 @@ jobs:
       bh-runner-loudbox: ${{ matrix.test-config.bh-runner-loudbox || false }}
       bh-runner-p300: ${{ matrix.test-config.bh-runner-p300 || false }}
       bh-runner-quietbox-2: ${{ matrix.test-config.bh-runner-quietbox-2 || false }}
+  fabric-cpu-unit-tests:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-fabric-cpu-only-unit-tests != false || github.event_name == 'push' }}
+    needs: [resolve-docker-pull-refs, build-artifact]
+    secrets: inherit
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: wormhole_b0
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   fabric-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
     needs: [resolve-docker-pull-refs, build-artifact]
