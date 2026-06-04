@@ -188,7 +188,7 @@ def _expand_model_configs(
                                         id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}-{ring_tag}",
                                         marks=cfg.marks,
                                     )
-                            )
+                                )
     return expanded
 
 
