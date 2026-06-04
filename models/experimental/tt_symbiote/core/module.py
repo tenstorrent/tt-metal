@@ -337,6 +337,7 @@ class DeviceArch(Enum):
     P150x4 = "p150x4"
     P150x8 = "p150x8"
     BHGLX = "bhglx"
+    N150x4 = "n150x4"
 
 
 MeshShapeToDeviceArch = {
@@ -349,6 +350,7 @@ MeshShapeToDeviceArch = {
     "P150x4": DeviceArch.P150x4,
     "P150x8": DeviceArch.P150x8,
     "BHGLX": DeviceArch.BHGLX,
+    "N150x4": DeviceArch.N150x4,
 }
 
 # Ring / mesh collectives used by column-sharded linears (reduce_scatter, all_gather, all_reduce).
@@ -363,6 +365,7 @@ SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS = (
     DeviceArch.P150x4,
     DeviceArch.P150x8,
     DeviceArch.BHGLX,
+    DeviceArch.N150x4,
 )
 
 

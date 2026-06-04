@@ -23,6 +23,11 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from models.experimental.tt_symbiote.modules.linear import (
+    _tp_requires_ccl,
+    _tp_mesh_mapper,
+    _ccl_num_links,
+)
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
@@ -866,8 +871,9 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
                 ttnn.TILE_LAYOUT,
                 memory_config=out_mem or ttnn.DRAM_MEMORY_CONFIG,
             )
-
+        print("post trunk x.shape:", x.shape)
         if self._use_layer_norm:
+            print("Using LayerNorm")
             out = ttnn.layer_norm(
                 x,
                 weight=self.tt_weight,
@@ -877,6 +883,7 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
                 memory_config=out_mem,
             )
         else:
+            print("Using RMSNorm")
             out = ttnn.rms_norm(
                 x,
                 weight=self.tt_weight,
@@ -975,6 +982,32 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc2_weight = pw(self._fc2_weight)
         self.tt_fc2_bias = pb(self._fc2_bias)
 
+    def _mlp_tp_num_devices(self) -> int:
+        """TP-axis device count (cluster_axis=1 = last mesh dim), or 1 if not a TP mesh.
+
+        The vision tower body runs replicated across the TP axis; we shard only the
+        MLP weights/FLOPs and re-replicate the output via an all-reduce, so the block
+        residual contract (full hidden per device) is preserved.
+        """
+        dev = self.device
+        if dev is None or not hasattr(dev, "get_num_devices") or int(dev.get_num_devices()) <= 1:
+            return 1
+        if not _tp_requires_ccl(dev):
+            return 1
+        return int(list(dev.shape)[-1]) if hasattr(dev, "shape") else int(dev.get_num_devices())
+
+    def _mlp_use_tp(self) -> bool:
+        """True when the SwiGLU MLP should be tensor-parallel (column gate/up + row down).
+
+        Requires the intermediate dim to divide the TP-axis device count so each device
+        holds tile-aligned, equal-width gate/up/down shards.
+        """
+        num_tp = self._mlp_tp_num_devices()
+        if num_tp <= 1 or self._fc1_weight is None or self._fc2_weight is None:
+            return False
+        intermediate = int(self._fc1_weight.shape[0])
+        return intermediate % num_tp == 0
+
     def move_weights_to_device_impl(self):
         mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -985,6 +1018,10 @@ class TTNNDotsVisionMLP(TTNNModule):
 
         self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
 
+        if self._mlp_use_tp():
+            self._move_weights_tp(mem)
+            return
+
         self.tt_fused_gate_up_weight = _to_dev(getattr(self, "tt_fused_gate_up_weight", None))
         self.tt_fused_gate_up_bias = _to_dev(getattr(self, "tt_fused_gate_up_bias", None))
         self.tt_fc1_weight = _to_dev(getattr(self, "tt_fc1_weight", None))
@@ -994,9 +1031,58 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
         self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
 
+    def _move_weights_tp(self, mem):
+        """Shard the SwiGLU weights for tensor parallelism (Megatron column/row split).
+
+        fc1 (gate) / fc3 (up) are column-parallel: their output (intermediate) dim is
+        sharded so each device computes ``intermediate/num_tp`` columns from the full,
+        replicated hidden input -- no collective needed. fc2 (down) is row-parallel:
+        its contraction (intermediate) dim is sharded so each device produces a partial
+        ``[*, hidden]`` sum, which forward() all-reduces back to the replicated stream.
+        The fc2 bias is replicated and added once after the all-reduce (fusing it would
+        double-count it across the reduce).
+        """
+        dev = self.device
+        # preprocess_linear_weight transposes [out, in] -> [in, out] then shards:
+        #   dim=-1 shards the OUT dim (column-parallel), dim=-2 shards the IN/K dim (row-parallel).
+        col_mapper = _tp_mesh_mapper(dev, -1)  # gate/up: shard intermediate (output)
+        row_mapper = _tp_mesh_mapper(dev, -2)  # down: shard intermediate (contraction)
+
+        def _shard_w(w, mapper):
+            if w is None:
+                return None
+            host = preprocess_linear_weight(
+                w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=mapper
+            )
+            return ttnn.to_device(host, dev, memory_config=mem)
+
+        def _shard_b(b, mapper):
+            if b is None:
+                return None
+            host = preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, weights_mesh_mapper=mapper)
+            return ttnn.to_device(host, dev, memory_config=mem)
+
+        def _repl_b(b):
+            if b is None:
+                return None
+            host = preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            return ttnn.to_device(host, dev, memory_config=mem)
+
+        self.tt_fused_gate_up_weight = None
+        self.tt_fused_gate_up_bias = None
+        self.tt_fc1_weight = _shard_w(self._fc1_weight, col_mapper)
+        self.tt_fc1_bias = _shard_b(self._fc1_bias, col_mapper)
+        self.tt_fc3_weight = _shard_w(self._fc3_weight, col_mapper)
+        self.tt_fc3_bias = _shard_b(self._fc3_bias, col_mapper)
+        self.tt_fc2_weight = _shard_w(self._fc2_weight, row_mapper)
+        self.tt_fc2_bias = _repl_b(self._fc2_bias)
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if self._mlp_use_tp():
+            return self._forward_tp(hidden_states)
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -1098,6 +1184,106 @@ class TTNNDotsVisionMLP(TTNNModule):
         ttnn.deallocate(gate_up_mul)
         # output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
 
+        return output
+
+    def _forward_tp(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """Tensor-parallel SwiGLU: replicated hidden in -> replicated hidden out.
+
+        The vision tower body runs replicated across the TP axis, so this MLP takes a
+        full-width ``[*, hidden]`` input on every device, shards the intermediate-dim
+        FLOPs (gate/up column-parallel, no collective), then row-parallel down-projects
+        to per-device partial ``[*, hidden]`` sums and all-reduces them so the block
+        residual stays replicated and numerically identical to the single-device path
+        (up to bf16 reduction order). Weights/FLOPs/activation L1 are all 1/num_tp per
+        device, which is the perf win over the previous fully-replicated MLP.
+        """
+        dev = self.device
+        mem = ttnn.DRAM_MEMORY_CONFIG
+
+        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
+        k_dim = int(self.tt_fc1_weight.shape[-2])  # full hidden (replicated input)
+        n_dim = int(self.tt_fc1_weight.shape[-1])  # intermediate / num_tp (column shard)
+        gate_up_pc = _vision_matmul_program_config(dev, m_dim, k_dim, n_dim)
+
+        gate = ttnn.linear(
+            hidden_states,
+            self.tt_fc1_weight,
+            bias=self.tt_fc1_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=mem,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_up_pc,
+        )
+        up = ttnn.linear(
+            hidden_states,
+            self.tt_fc3_weight,
+            bias=self.tt_fc3_bias,
+            dtype=ttnn.bfloat4_b,
+            memory_config=mem,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_up_pc,
+        )
+        ttnn.deallocate(hidden_states)
+
+        gate_up_mul = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        # Row-parallel down-projection: each device contracts its intermediate shard
+        # into a full-width partial sum. The hand-tuned ``_vision_mlp_down_l1_pc`` is
+        # pinned to the unsharded K=intermediate shape, so derive the config from the
+        # sharded shapes instead. Output stays DRAM-interleaved for the reduce_scatter.
+        down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
+        down_k = int(self.tt_fc2_weight.shape[-2])  # intermediate / num_tp (contraction shard)
+        down_n = int(self.tt_fc2_weight.shape[-1])  # full hidden
+        down_pc = _vision_matmul_program_config(dev, down_m, down_k, down_n)
+        partial = ttnn.linear(
+            gate_up_mul,
+            self.tt_fc2_weight,
+            bias=None,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=down_pc,
+        )
+        ttnn.deallocate(gate_up_mul)
+
+        # all_reduce == reduce_scatter + all_gather (trace-stable; mirrors linear.py).
+        # The reduce sums the per-device partials; scatter/gather on dim=3 keeps the
+        # full hidden replicated on every device afterwards.
+        num_links = _ccl_num_links(dev)
+        if len(partial.shape) != 4:
+            shp = list(partial.shape)
+            while len(shp) < 4:
+                shp.insert(0, 1)
+            partial = ttnn.reshape(partial, shp)
+        reduced = ttnn.reduce_scatter(
+            partial,
+            dim=3,
+            num_links=num_links,
+            cluster_axis=1,
+            memory_config=mem,
+            topology=ttnn.Topology.Linear,
+        )
+        output = ttnn.all_gather(
+            reduced,
+            dim=3,
+            num_links=num_links,
+            cluster_axis=1,
+            memory_config=mem,
+            topology=ttnn.Topology.Linear,
+        )
+        # fc2 bias is replicated (full hidden) and added once, after the reduce, so it
+        # is not summed num_tp times.
+        if self.tt_fc2_bias is not None:
+            output = ttnn.add(output, self.tt_fc2_bias)
         return output
 
 
@@ -1249,6 +1435,8 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             )
 
             if self.tt_norm_weight is not None:
+                print("Using RMSNorm")
+                print("post patch embed out.shape:", out.shape)
                 out = ttnn.rms_norm(
                     out,
                     weight=self.tt_norm_weight,
@@ -1306,6 +1494,8 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         )
 
         if self.tt_norm_weight is not None:
+            print("Using RMSNorm")
+            print("post patch embed1 out.shape:", out.shape)
             out = ttnn.rms_norm(
                 out,
                 weight=self.tt_norm_weight,
@@ -1465,11 +1655,13 @@ class TTNNDotsVisionAttention(TTNNModule):
         elif seq_len <= 1024:
             q_chunk = k_chunk = 128
         else:
-            # k_chunk=1024 only fits once V is BFP4 (see typecast in forward())
-            # AND SDPA output is routed to DRAM (see _sdpa_padded_with_key_mask).
-            # With BFP8 V + k=1024 the scores CB exceeds L1 by ~7 KB.
+            # k_chunk=512 (not 1024): under trace capture the generate pins extra
+            # persistent L1, so the q=256/k=1024 scores CB (~1 MB/core) no longer
+            # fits and clashes with this SDPA's static CBs. Halving k_chunk frees
+            # ~512 KB/core (well past the overflow); divides the padded vision seq
+            # evenly. Minor SDPA perf cost vs k=1024.
             q_chunk = 256
-            k_chunk = 1024
+            k_chunk = 512
         # q_chunk = 512
         # k_chunk = 512   -- same product (256K), overflow..
         return SDPAProgramConfig(
@@ -1772,6 +1964,7 @@ class TTNNDotsVisionBlock(TTNNModule):
 
         residual = hidden_states
         _vision_debug_mem("residual_pre_attn", residual)
+        print("norm1 vision before attnhidden_states.shape:", hidden_states.shape)
         normed = self.norm1(hidden_states, output_l1=False)
         _vision_debug_mem("after norm1", normed)
         attn_out = self.attn(
@@ -1794,6 +1987,7 @@ class TTNNDotsVisionBlock(TTNNModule):
         ttnn.deallocate(residual)
         residual = hidden_states
         _vision_debug_mem("residual_pre_mlp", residual)
+        print("vision bloock after attnhidden_states.shape:", hidden_states.shape)
         normed = self.norm2(hidden_states, output_l1=True)
         _vision_debug_mem("after norm2", normed)
         mlp_out = self.mlp(normed)
@@ -2009,15 +2203,20 @@ class TTNNDotsPatchMerger(TTNNModule):
                 f"PatchMerger block-sharded path requires an 8x8 grid and folded M={new_r} "
                 "divisible by the shard grid; got an incompatible device/shape."
             )
-
+        print("pre patch merger hidden_states.shape:", hidden_states.shape)
         if self._use_layer_norm:
+            print("Using LayerNorm")
             hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_ln_weight, bias=self.tt_ln_bias, epsilon=1e-6)
         elif self.tt_ln_weight is not None:
+            print("Using RMSNorm")
             hidden_states = ttnn.rms_norm(hidden_states, weight=self.tt_ln_weight, epsilon=1e-6)
 
         # Fold [B,1,S,H] -> [B,1,S',mlp_size] in TILE (avoids RM untilize/tilize).
+        # DRAM (not L1): under trace capture the ~590 KB L1-interleaved in0 gets
+        # placed overlapping the fc1 block-sharded CB region (clash). The 2D-mcast
+        # matmul streams in0 into CBs from DRAM just the same; frees the L1 edge.
         hidden_states = ttnn.reshape(
-            hidden_states, (b0, b1, new_r, int(self.mlp_size)), memory_config=ttnn.L1_MEMORY_CONFIG
+            hidden_states, (b0, b1, new_r, int(self.mlp_size)), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         compute_kc = getattr(self, "compute_kernel_config", None)

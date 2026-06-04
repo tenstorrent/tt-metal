@@ -264,13 +264,19 @@ class TTNNDistributedRMSNorm(TTNNModule):
         tt_stats = ttnn.rms_norm_pre_all_gather(
             inp, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config
         )
-        # AllGather stats — use Ring topology for trace compatibility.
-        # Linear topology may allocate dynamic intermediates not pinned by trace.
+        # AllGather the per-shard stats across the tensor-parallel axis (cluster_axis=1).
+        # Use Linear topology, matching the linear.py CCL path that runs on this stack:
+        # a Ring all_gather needs a physical wraparound link (D_last -> D0) that a 1D
+        # line fabric (e.g. N150x4) does not have, so it fails fabric routing with
+        # "Could not find any forwarding direction from src (M0, D0) to dst (M0, D3)".
+        # Linear routes hop-by-hop and is valid on both line and ring fabrics (and is
+        # the topology already used by the traced decode CCLs, so it stays trace-safe).
         tt_stats = ttnn.all_gather(
             tt_stats,
             dim=-1,
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
         )
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(

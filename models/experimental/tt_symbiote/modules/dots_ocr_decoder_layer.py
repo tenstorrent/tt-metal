@@ -104,6 +104,8 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        print("Using RMSNorm")
+        print("decode sharded inp.shape:", inp.shape)
         tt_out = ttnn.rms_norm(
             inp,
             epsilon=eps,
@@ -157,6 +159,8 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        print("Using RMSNorm")
+        print("prefill sharded inp.shape:", inp.shape)
         tt_out = ttnn.rms_norm(
             inp,
             epsilon=eps,
@@ -189,6 +193,8 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         if inp.layout != ttnn.TILE_LAYOUT:
             inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+        print("Using RMSNorm")
+        print("prefill inp.shape:", inp.shape)
         tt_out = ttnn.rms_norm(
             inp,
             epsilon=eps,
