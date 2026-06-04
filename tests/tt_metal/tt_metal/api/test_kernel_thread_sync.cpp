@@ -58,14 +58,14 @@ ProgramRunArgs::KernelRunArgs make_run_params(
             AdvancedKernelRunArgs{
                 .runtime_varargs =
                     {{node,
-                      {{
+                      {
                           layout.arrivals_addr,
                           layout.observed_addr,
                           layout.post_addr,
                           rounds,
                           skew_iters,
                           layout.total_words,
-                      }}}},
+                      }}},
             },
     };
 }

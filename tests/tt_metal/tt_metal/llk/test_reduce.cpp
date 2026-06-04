@@ -265,14 +265,14 @@ void validate_reduce_result(
 
 static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
     experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
-    reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
+    reduce_defines.emplace_back("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
     switch (test_config.reduce_type) {
-        case ReduceType::SUM: reduce_defines.emplace("REDUCE_OP", "PoolType::SUM"); break;
-        case ReduceType::AVG: reduce_defines.emplace("REDUCE_OP", "PoolType::AVG"); break;
-        case ReduceType::MAX: reduce_defines.emplace("REDUCE_OP", "PoolType::MAX"); break;
+        case ReduceType::SUM: reduce_defines.emplace_back("REDUCE_OP", "PoolType::SUM"); break;
+        case ReduceType::AVG: reduce_defines.emplace_back("REDUCE_OP", "PoolType::AVG"); break;
+        case ReduceType::MAX: reduce_defines.emplace_back("REDUCE_OP", "PoolType::MAX"); break;
     }
-    reduce_defines.emplace("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
-    reduce_defines.emplace("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
+    reduce_defines.emplace_back("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
+    reduce_defines.emplace_back("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
     return reduce_defines;
 }
 
@@ -350,12 +350,12 @@ void run_single_core_reduce_program(
         bfloat16 bfloat_scaler_value = bfloat16(scaler);
         uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
         reader_cta_bindings = {{"scaler", packed_scaler_value}};
-        reader_defines.emplace("REDUCE_SCALER", "1");
+        reader_defines.emplace_back("REDUCE_SCALER", "1");
         reader_runtime_arg_names = {"N", "Ht", "Wt", "HtWt"};
     } else {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp";
-        reader_defines.emplace("GENERATE_BCAST_SCALER", "1");
-        reader_defines.emplace("BLOCK_SIZE", "1");
+        reader_defines.emplace_back("GENERATE_BCAST_SCALER", "1");
+        reader_defines.emplace_back("BLOCK_SIZE", "1");
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
@@ -468,7 +468,7 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::Table<std::string, uint32_t> reader_named_rtas;
+    std::unordered_map<std::string, uint32_t> reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
@@ -483,19 +483,19 @@ void run_single_core_reduce_program(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .runtime_arg_values = {{node, reader_named_rtas}},
+            .runtime_arg_values = {{.node = node, .args = reader_named_rtas}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
     params.tensor_args = {
-        {IN_TENSOR, {in_tensor}},
-        {OUT_TENSOR, {out_tensor}},
+        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

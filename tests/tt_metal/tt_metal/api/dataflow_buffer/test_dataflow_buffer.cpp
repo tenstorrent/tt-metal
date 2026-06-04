@@ -355,11 +355,12 @@ void run_single_dfb_program(
 
     using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     auto build_dm_named_rtas = [&]() {
-        NodeRuntimeArgs result;
+        std::vector<NodeRuntimeArgs> result;
+        result.reserve(core_to_chunk_offset.size());
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
-            result.insert(
-                {experimental::NodeCoord{core.x, core.y},
-                 {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
+            result.push_back(NodeRuntimeArgs{
+                experimental::NodeCoord{core.x, core.y},
+                {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
         }
         return result;
     };
@@ -375,10 +376,10 @@ void run_single_dfb_program(
     }
     run_params.kernel_run_args = {producer_params, consumer_params};
     if (need_in_tensor) {
-        run_params.tensor_args.insert({IN_TENSOR, {std::cref(*in_tensor)}});
+        run_params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(*in_tensor)});
     }
     if (need_out_tensor) {
-        run_params.tensor_args.insert({OUT_TENSOR, {std::cref(*out_tensor)}});
+        run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -725,8 +726,8 @@ void run_concurrent_dfbs_program(
         run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = name});
     }
     run_params.tensor_args = {
-        {IN_TENSOR, {std::cref(in_tensor)}},
-        {OUT_TENSOR, {std::cref(out_tensor)}},
+        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -886,8 +887,10 @@ void run_concurrent_tensix_dm_dfbs_program(
     for (const auto& name : kernel_names) {
         run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = name});
     }
+    run_params.tensor_args.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        run_params.tensor_args.insert({"out_tensor_" + std::to_string(i), {std::cref(out_tensors[i])}});
+        run_params.tensor_args.push_back(
+            {.tensor_parameter_name = "out_tensor_" + std::to_string(i), .tensor = std::cref(out_tensors[i])});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1098,8 +1101,8 @@ void run_sequential_dfbs_program(
             .tensor_parameter_name = out_tensor_name,
             .accessor_name = "dst_" + idx,
         });
-        consumer_spec.compile_time_args.emplace("entries_per_consumer_" + idx, epc);
-        consumer_spec.compile_time_args.emplace("is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u));
+        consumer_spec.compile_time_args.push_back({"entries_per_consumer_" + idx, epc});
+        consumer_spec.compile_time_args.push_back({"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
     }
 
     experimental::WorkUnitSpec wu{
@@ -1123,10 +1126,13 @@ void run_sequential_dfbs_program(
         experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = PRODUCER},
         experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = CONSUMER},
     };
+    run_params.tensor_args.reserve(2 * num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string idx = std::to_string(i);
-        run_params.tensor_args.insert({"in_tensor_" + idx, {std::cref(in_tensors[i])}});
-        run_params.tensor_args.insert({"out_tensor_" + idx, {std::cref(out_tensors[i])}});
+        run_params.tensor_args.push_back(
+            {.tensor_parameter_name = "in_tensor_" + idx, .tensor = std::cref(in_tensors[i])});
+        run_params.tensor_args.push_back(
+            {.tensor_parameter_name = "out_tensor_" + idx, .tensor = std::cref(out_tensors[i])});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1312,9 +1318,9 @@ void run_in_dfb_out_dfb_program(
 
     using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     auto build_named_rtas = [&]() {
-        return NodeRuntimeArgs{
-            {experimental::NodeCoord{logical_core.x, logical_core.y},
-             {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
+        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
+            experimental::NodeCoord{logical_core.x, logical_core.y},
+            {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     };
 
     experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel_spec_name = PRODUCER};
@@ -1326,8 +1332,8 @@ void run_in_dfb_out_dfb_program(
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {producer_params, compute_params, consumer_params};
     run_params.tensor_args = {
-        {IN_TENSOR, {std::cref(in_tensor)}},
-        {OUT_TENSOR, {std::cref(out_tensor)}},
+        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -2140,14 +2146,14 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 
     using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
     experimental::ProgramRunArgs::KernelRunArgs dm_producer_params{.kernel_spec_name = DM_PRODUCER};
-    dm_producer_params.runtime_arg_values = NodeRuntimeArgs{
-        {experimental::NodeCoord{logical_core.x, logical_core.y},
-         {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
+    dm_producer_params.runtime_arg_values = std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
+        experimental::NodeCoord{logical_core.x, logical_core.y},
+        {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     experimental::ProgramRunArgs::KernelRunArgs compute_params{.kernel_spec_name = COMPUTE};
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {dm_producer_params, compute_params};
-    run_params.tensor_args = {{IN_TENSOR, {std::cref(in_tensor)}}};
+    run_params.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
     experimental::SetProgramRunArgs(program, run_params);
 
     // L1 layout follows DFB creation order:

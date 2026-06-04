@@ -114,7 +114,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         {"RESULTS_ADDR", std::to_string(rta_base_dm)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        dm_defines.emplace("COMMON_RUNTIME_ARGS", "1");
+        dm_defines.push_back({"COMMON_RUNTIME_ARGS", "1"});
     }
 
     constexpr const char* KERNEL = "dm_runtime_args";
@@ -198,7 +198,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         {"RESULTS_ADDR", std::to_string(rta_base)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        defines_vec.emplace("COMMON_RUNTIME_ARGS", "1");
+        defines_vec.push_back({"COMMON_RUNTIME_ARGS", "1"});
     }
 
     std::vector<std::string> kernel_names(num_kernels);
@@ -1003,7 +1003,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         .kernel_spec_name = kernel_names[0],
         .advanced_options =
             experimental::AdvancedKernelRunArgs{
-                .runtime_varargs = {{core, {std::vector<uint32_t>(common_rtas.size(), 0)}}},
+                .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
                 .common_runtime_varargs = common_rtas,
             },
     }};
@@ -1045,7 +1045,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
             .kernel_spec_name = kernel_names[i],
             .advanced_options =
                 experimental::AdvancedKernelRunArgs{
-                    .runtime_varargs = {{core, {std::vector<uint32_t>(base_crtas.size(), 0)}}},
+                    .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
                     .common_runtime_varargs = kernel_crtas,
                 },
         });

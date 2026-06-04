@@ -67,10 +67,7 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::KernelSpec::CompilerOptions::Defines defines_vec;
-        for (const auto& [name, value] : dm_defines) {
-            defines_vec.emplace(name, value);
-        }
+        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines.begin(), dm_defines.end());
 
         // Quasar: one multi-threaded DM kernel spans the user DMs (DM2..DM7).
         // Gen1 (BH): one KernelSpec per DM processor (BRISC, NCRISC), each single-threaded with its
@@ -83,7 +80,8 @@ protected:
             return experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel_spec_name = name,
                 .runtime_arg_values =
-                    {{core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                    {{.node = core,
+                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             };
         };
 

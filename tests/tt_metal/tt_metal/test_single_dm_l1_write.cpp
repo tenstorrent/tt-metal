@@ -82,7 +82,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"address", address}}}},
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);

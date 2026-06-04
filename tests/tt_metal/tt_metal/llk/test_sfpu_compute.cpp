@@ -438,7 +438,7 @@ bool run_sfpu_all_same_buffer(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : sfpu_defines) {
-        compute_defines.emplace(k, v);
+        compute_defines.emplace_back(k, v);
     }
 
     experimental::KernelSpec compute_spec{
@@ -496,18 +496,20 @@ bool run_sfpu_all_same_buffer(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", input_dram_buffer->address()},
-                   {"bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+                {{.node = node,
+                  .args =
+                      {{"src_addr", input_dram_buffer->address()},
+                       {"bank_id", 0u},
+                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", output_dram_buffer->address()},
-                   {"bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", output_dram_buffer->address()},
+                       {"bank_id", 0u},
+                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
@@ -546,11 +548,11 @@ experimental::DataflowBufferSpec make_dfb_spec(const char* id, const SfpuConfig&
     };
 }
 
-// Converts a string→string defines map to the CompilerOptions::Defines table form.
+// Converts a string→string defines map to the CompilerOptions::Defines vector form.
 experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
     experimental::KernelSpec::CompilerOptions::Defines defines;
     for (const auto& [k, v] : m) {
-        defines.emplace(k, v);
+        defines.emplace_back(k, v);
     }
     return defines;
 }
@@ -581,8 +583,8 @@ experimental::ProgramRunArgs::KernelRunArgs make_writer_run_args(
     return {
         .kernel_spec_name = kernel_id,
         .runtime_arg_values = {{
-            node,
-            {{"dst_addr", dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}},
+            .node = node,
+            .args = {{"dst_addr", dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}},
         }},
     };
 }
@@ -766,12 +768,13 @@ bool run_sfpu_binary_two_input_buffer(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src0_addr", input0_dram_buffer->address()},
-                   {"src0_bank_id", 0u},
-                   {"src1_addr", input1_dram_buffer->address()},
-                   {"src1_bank_id", 0u},
-                   {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}}},
+                {{.node = node,
+                  .args =
+                      {{"src0_addr", input0_dram_buffer->address()},
+                       {"src0_bank_id", 0u},
+                       {"src1_addr", input1_dram_buffer->address()},
+                       {"src1_bank_id", 0u},
+                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}}},
         make_writer_run_args(WRITER, node, output_dram_buffer->address(), test_config.num_tiles),
         experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
@@ -935,14 +938,15 @@ bool run_sfpu_ternary_three_input_buffer(
             experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel_spec_name = READER,
                 .runtime_arg_values =
-                    {{node,
-                      {{"src0_addr", input0_dram_buffer->address()},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", input1_dram_buffer->address()},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
-                       {"src2_addr", input2_dram_buffer->address()},
-                       {"src2_bank_id", 0u}}}},
+                    {{.node = node,
+                      .args =
+                          {{"src0_addr", input0_dram_buffer->address()},
+                           {"src0_bank_id", 0u},
+                           {"src1_addr", input1_dram_buffer->address()},
+                           {"src1_bank_id", 0u},
+                           {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
+                           {"src2_addr", input2_dram_buffer->address()},
+                           {"src2_bank_id", 0u}}}},
             },
             make_writer_run_args(WRITER, node, output_dram_buffer->address(), test_config.num_tiles),
             experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},

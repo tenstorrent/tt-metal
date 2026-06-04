@@ -230,7 +230,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"batch_start", 0u}}}},
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -242,15 +242,15 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{node, {{"batch_start", 0u}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"batch_start", 0u}}}},
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
-        {SRC0_T, {tensors.src0}},
-        {SRC1_T, {tensors.src1}},
-        {DST_T, {tensors.dst}},
+        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
+        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
+        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -301,7 +301,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values =
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
             .common_runtime_arg_values =
                 {{"Mt", p.Mt},
                  {"Kt", p.Kt},
@@ -313,15 +314,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{node0, {{"batch_start", 0u}}}, {node1, {{"batch_start", 1u}}}},
+            .runtime_arg_values =
+                {{.node = node0, .args = {{"batch_start", 0u}}}, {.node = node1, .args = {{"batch_start", 1u}}}},
             .common_runtime_arg_values = {{"Mt", p.Mt}, {"Nt", p.Nt}, {"batch", p.B_per_core}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
-        {SRC0_T, {tensors.src0}},
-        {SRC1_T, {tensors.src1}},
-        {DST_T, {tensors.dst}},
+        {.tensor_parameter_name = SRC0_T, .tensor = tensors.src0},
+        {.tensor_parameter_name = SRC1_T, .tensor = tensors.src1},
+        {.tensor_parameter_name = DST_T, .tensor = tensors.dst},
     };
     experimental::SetProgramRunArgs(program, params);
 

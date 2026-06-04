@@ -131,24 +131,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         params.kernel_run_args.push_back(
             {.kernel_spec_name = dram_to_l1_names[i],
              .runtime_arg_values = {
-                 {node,
-                  {{"dram_addr", dram_address},
-                   {"l1_addr", l1_address},
-                   {"dram_buffer_size", 4u},
-                   {"dram_bank_id", 0u},
-                   {"signal_value", signal_value}}}}});
+                 {.node = node,
+                  .args = {
+                      {"dram_addr", dram_address},
+                      {"l1_addr", l1_address},
+                      {"dram_buffer_size", 4u},
+                      {"dram_bank_id", 0u},
+                      {"signal_value", signal_value}}}}});
         dram_address += 1024;
         signal_value++;
 
         params.kernel_run_args.push_back(
             {.kernel_spec_name = l1_to_dram_names[i],
              .runtime_arg_values = {
-                 {node,
-                  {{"dram_addr", dram_address},
-                   {"l1_addr", l1_address},
-                   {"dram_buffer_size", 4u},
-                   {"dram_bank_id", 0u},
-                   {"signal_value", signal_value}}}}});
+                 {.node = node,
+                  .args = {
+                      {"dram_addr", dram_address},
+                      {"l1_addr", l1_address},
+                      {"dram_buffer_size", 4u},
+                      {"dram_bank_id", 0u},
+                      {"signal_value", signal_value}}}}});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }

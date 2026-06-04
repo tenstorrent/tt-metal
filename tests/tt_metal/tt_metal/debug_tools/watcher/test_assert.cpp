@@ -191,8 +191,9 @@ static void RunTest(
             params.kernel_run_args = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
                 .runtime_arg_values =
-                    {{experimental::NodeCoord{logical_core},
-                      {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+                    {{.node = experimental::NodeCoord{logical_core},
+                      .args =
+                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
             experimental::SetProgramRunArgs(prog, params);
         }

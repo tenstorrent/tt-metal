@@ -158,8 +158,8 @@ void run_strided_dfb_copy_test(
     // Inject CTA define so TensorAccessorArgs<0, 0>() resolves at compile time
     reader.source = kReaderKernelPath;
     writer.source = kWriterKernelPath;
-    reader.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", input_cta_str);
-    writer.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", output_cta_str);
+    reader.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", input_cta_str});
+    writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
 
     // Runtime varargs: [0]=base_addr, [1]=total_pages
     reader.advanced_options.num_runtime_varargs = 2;
@@ -186,14 +186,14 @@ void run_strided_dfb_copy_test(
             .kernel_spec_name = "reader",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {{input_buffer->address(), total_pages}}}},
+                    .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "writer",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {{output_buffer->address(), total_pages}}}},
+                    .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
                 },
         },
     };

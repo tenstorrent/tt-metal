@@ -308,11 +308,11 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
                 },
         };
         for (const auto& c : core_range1) {
-            krp.advanced_options.runtime_varargs.insert({experimental::NodeCoord{c}, {default_rtas}});
+            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
         }
         if (!is_quasar) {
             for (const auto& c : core_range2) {
-                krp.advanced_options.runtime_varargs.insert({experimental::NodeCoord{c}, {rtas_range2}});
+                krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, rtas_range2});
             }
         }
         params.kernel_run_args = {krp};
@@ -384,9 +384,9 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
 
     experimental::KernelSpec::CompilerOptions::Defines m2_defines;
     if (params.test_rta) {
-        m2_defines.emplace("MAX_RTA_IDX", std::to_string(default_rtas.size()));
+        m2_defines.push_back({"MAX_RTA_IDX", std::to_string(default_rtas.size())});
     } else {
-        m2_defines.emplace("MAX_CRTA_IDX", std::to_string(default_crtas.size()));
+        m2_defines.push_back({"MAX_CRTA_IDX", std::to_string(default_crtas.size())});
     }
 
     // RTA test reads index == default_rtas.size() (one past the end), so the kernel must declare
@@ -440,7 +440,7 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = OOB_KERNEL_NAME};
     if (params.test_rta) {
         for (const auto& c : core_range) {
-            krp.advanced_options.runtime_varargs.insert({experimental::NodeCoord{c}, {default_rtas}});
+            krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
         }
     } else {
         krp.advanced_options.common_runtime_varargs = default_crtas;
@@ -499,7 +499,7 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     experimental::ProgramRunArgs params;
     experimental::ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = MULTI_DM_KERNEL_NAME};
     for (const auto& c : core_range) {
-        krp.advanced_options.runtime_varargs.insert({experimental::NodeCoord{c}, {default_rtas}});
+        krp.advanced_options.runtime_varargs.push_back({experimental::NodeCoord{c}, default_rtas});
     }
     params.kernel_run_args = {krp};
     experimental::SetProgramRunArgs(program, params);

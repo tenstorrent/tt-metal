@@ -150,7 +150,7 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
+        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -183,9 +183,9 @@ void run_single_core_copy_block_matmul_partials(
                 // Default is unpack via SrcA/B, ~19-bit precision.
                 .unpack_to_dest_mode =
                     test_config.fp32_dest_acc_en
-                        ? experimental::ComputeHardwareConfig::UnpackToDestModes{
-                              {SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
+                        ? std::vector<experimental::ComputeHardwareConfig::
+                                          DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : std::vector<experimental::ComputeHardwareConfig::DFBUnpackToDestMode>{},
             },
     };
 
@@ -217,22 +217,24 @@ void run_single_core_copy_block_matmul_partials(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_buffer->address()},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.reader_ublock},
-                   {"reader_only", 0u}}}},
+                {{.node = node,
+                  .args =
+                      {{"src_addr", src_dram_buffer->address()},
+                       {"src_dram_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"ublock_size_tiles", test_config.reader_ublock},
+                       {"reader_only", 0u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_dram_buffer->address()},
-                   {"dst_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.writer_ublock},
-                   {"writer_only", 0u}}}},
+                {{.node = node,
+                  .args =
+                      {{"dst_addr", dst_dram_buffer->address()},
+                       {"dst_dram_bank_id", 0u},
+                       {"num_tiles", num_tiles},
+                       {"ublock_size_tiles", test_config.writer_ublock},
+                       {"writer_only", 0u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
