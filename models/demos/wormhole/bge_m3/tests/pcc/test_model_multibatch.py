@@ -15,6 +15,7 @@ e.g. `-k "S512"`, `-k "batch8"`, or `-k "batch8 and S512"`.
 
 import pytest
 import torch
+from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
 from models.demos.wormhole.bge_m3.tests.test_utils import (
@@ -30,6 +31,16 @@ MODEL_ID = "BAAI/bge-m3"
 BATCH_SIZE_B32 = 32
 SEQ_LEN_B32 = 512
 PCC_THRESHOLD = 0.94
+
+# bf8_b everywhere on Blackhole; on Wormhole bf8_b up to S4096 and bf16 beyond
+# (the long SDPA reduction accumulates more bf8 error there). Matches test_model.py.
+_BF8_MAX_SEQ_LEN_WORMHOLE = 4096
+
+
+def _dtype_for(device, seq_len):
+    if ttnn_is_blackhole(device) or seq_len <= _BF8_MAX_SEQ_LEN_WORMHOLE:
+        return ttnn.bfloat8_b
+    return ttnn.bfloat16
 
 
 @pytest.fixture(scope="module")
@@ -58,7 +69,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
         mesh_device=device,
         max_batch_size=batch_size,
         max_seq_len=seq_len,
-        dtype=ttnn.bfloat8_b,
+        dtype=_dtype_for(device, seq_len),
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
     )
