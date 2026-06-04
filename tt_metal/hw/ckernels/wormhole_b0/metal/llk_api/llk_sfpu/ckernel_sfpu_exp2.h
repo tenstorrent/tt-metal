@@ -24,7 +24,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
-    i = sfpi::abs(sm);
+    i = sfpi::abs(sfpi::reinterpret<sfpi::vInt>(sm));
     y = r * f + sfpi::vConstFloatPrgm2;
     i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
     r = y * f + sfpi::vConstFloatPrgm1;
