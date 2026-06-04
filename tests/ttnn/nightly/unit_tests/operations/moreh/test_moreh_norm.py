@@ -369,6 +369,25 @@ def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
     )
 
 
+@pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("dim", [[], None], ids=["global_norm(dim=[])", "global_norm(dim=None)"])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_global_dim(p, dim, keepdim, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    run_moreh_norm(
+        [5],
+        p,
+        dim,
+        0.06,
+        0.06,
+        device,
+        keepdim=keepdim,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+
+
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
 @pytest.mark.parametrize(
     "dim_rtol_atol",
