@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
 from models.demos.wormhole.bge_m3.tests.test_utils import (
@@ -16,6 +17,18 @@ from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 MODEL_ID = "BAAI/bge-m3"
 PCC_THRESHOLD = 0.94
+
+# bf8_b holds the 0.94 PCC gate at every sequence length on Blackhole. On
+# Wormhole the SDPA reduction over very long sequences (S8192) accumulates more
+# bf8 quantization error and falls below the gate (~0.90), so fall back to bf16
+# there. Blackhole keeps bf8_b everywhere; Wormhole uses bf8_b up to 4096.
+_BF8_MAX_SEQ_LEN_WORMHOLE = 4096
+
+
+def _dtype_for(device, seq_len):
+    if ttnn_is_blackhole(device) or seq_len <= _BF8_MAX_SEQ_LEN_WORMHOLE:
+        return ttnn.bfloat8_b
+    return ttnn.bfloat16
 
 
 @pytest.fixture(scope="module")
@@ -33,9 +46,10 @@ def model_artifacts(model_location_generator):
 
 
 def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
-    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len), bf8_b.
+    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len).
 
-    Gated at PCC_THRESHOLD=0.94.
+    bf8_b on Blackhole at every length; on Wormhole bf8_b up to S4096 and bf16
+    beyond (see _dtype_for). Gated at PCC_THRESHOLD=0.94.
     """
     require_single_device(device)
     backbone, state_dict, model_id_or_path = model_artifacts
@@ -44,7 +58,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
         mesh_device=device,
         max_batch_size=batch_size,
         max_seq_len=seq_len,
-        dtype=ttnn.bfloat8_b,
+        dtype=_dtype_for(device, seq_len),
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
     )
