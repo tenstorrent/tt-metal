@@ -47,7 +47,10 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_m
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_seamless_m4t_v2_model_parameters
-from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    hf_aligned_generation_kwargs,
+    to_torch_replicated_first_shard,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
     TTSeamlessM4Tv2GenerationOutput,
     TTSeamlessM4Tv2GreedySearchOutput,
@@ -265,11 +268,30 @@ def _samples_generated(lengths_tt: ttnn.Tensor) -> int:
     return int(_readback_first_shard(lengths_tt).long().reshape(-1)[0].item())
 
 
-def _record_text_perf(perf: list, task: str, sequences_tt: ttnn.Tensor, elapsed_s: float) -> None:
+def _record_text_perf(
+    perf: list,
+    task: str,
+    sequences_tt: ttnn.Tensor,
+    elapsed_s: float,
+    *,
+    eos_token_id: int,
+    max_new_tokens: int,
+) -> None:
     n_tokens = _text_tokens_generated(sequences_tt)
     tps = n_tokens / elapsed_s if elapsed_s > 0 else 0.0
     perf.append((task, "tokens/s", tps, n_tokens, elapsed_s))
-    print(f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {tps:.2f} tokens/s ({n_tokens} new tokens)")
+    ids = _readback_first_shard(sequences_tt).long().reshape(-1).tolist()
+    last_id = int(ids[-1]) if ids else -1
+    if last_id == int(eos_token_id):
+        stop = f"EOS (id {eos_token_id})"
+    elif n_tokens >= max_new_tokens:
+        stop = f"max_new_tokens={max_new_tokens}"
+    else:
+        stop = "ended"
+    print(
+        f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {tps:.2f} tokens/s "
+        f"({n_tokens} new tokens, budget {max_new_tokens}, stopped at {stop})"
+    )
 
 
 def _record_speech_perf(perf: list, task: str, lengths_tt: ttnn.Tensor, elapsed_s: float) -> None:
@@ -323,31 +345,12 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     # 2CQ: CQ1 stages next-step H2D while CQ0 executes the trace.
     # Requires ``num_command_queues=2`` — set when ``enable_2cq=True`` in ``open_seamless_mesh_device``.
     use_2cq = True
-    # Long eng→hin needs ~50 decode tokens. Default was 48, but truncation at ~31 tokens is a
-    # text-decoder KV-cache issue (see ``use_kv_cache``); budget must be high enough once fixed.
-    gen_max_new = int(
-        getattr(cfg, "max_new_tokens", None) or getattr(model.generation_config, "max_new_tokens", 128) or 128
-    )
-    # Repetition penalty discourages the decoder from re-emitting recent tokens. HF default is 1.0
-    # (no penalty); 1.05–1.2 is the typical range when greedy decoding loops on near-tied logits
-    # (e.g. S2TT on TTS-roundtripped audio can produce "she was looking for a bookshop." n-gram
-    # repeats — TT bf16/bf8 precision plus TTS noise leaves the model unsure across many steps).
-    # 1.1 is a soft setting — strong enough to break loops but not so aggressive that it biases
-    # the decoder away from the target ``tgt_lang`` token in same-language tasks (e.g. ASR).
-    rep_penalty = float(getattr(model.generation_config, "repetition_penalty", 1.0) or 1.0)
-    if rep_penalty == 1.0:
-        rep_penalty = 1.1
-    gen_common = dict(
-        max_new_tokens=gen_max_new,
-        do_sample=False,
-        num_beams=1,
-        pad_token_id=cfg.pad_token_id,
-        eos_token_id=cfg.eos_token_id,
+    # HF ``GenerationConfig`` defaults for text decode; TT-only perf flags appended below.
+    gen_common = hf_aligned_generation_kwargs(
+        model.generation_config,
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
         use_2cq=use_2cq,
-        repetition_penalty=rep_penalty,
-        # Do not enable in-generate conv prewarm (see ``tt_seamless_m4t_v2_model.generate``).
     )
 
     try:
@@ -379,7 +382,14 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     tp = rows * cols
     trace_info = "trace+2CQ" if (use_decode_trace and use_2cq) else ("trace" if use_decode_trace else "eager")
     print(f"  Demo device: MeshShape({rows}, {cols}) — TP={tp} — decode: {trace_info}")
+    print(
+        f"  HF-aligned greedy: max_new_tokens={gen_common['max_new_tokens']} "
+        f"(cap), eos_token_id={gen_common['eos_token_id']}, "
+        f"repetition_penalty={gen_common['repetition_penalty']}, "
+        f"decode=trace+2CQ+ttnn_argmax"
+    )
 
+    tt_model = None
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)
         # Per-task throughput log — populated by ``_record_text_perf`` / ``_record_speech_perf``
@@ -407,7 +417,14 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         )
         if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
-        _record_text_perf(perf_log, "T2TT", t2tt_out.sequences, t2tt_elapsed)
+        _record_text_perf(
+            perf_log,
+            "T2TT",
+            t2tt_out.sequences,
+            t2tt_elapsed,
+            eos_token_id=gen_common["eos_token_id"],
+            max_new_tokens=gen_common["max_new_tokens"],
+        )
         print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
         ttnn.deallocate(t2tt_out.sequences)
 
@@ -515,7 +532,14 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         )
         if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
-        _record_text_perf(perf_log, "S2TT", s2tt_out.sequences, s2tt_elapsed)
+        _record_text_perf(
+            perf_log,
+            "S2TT",
+            s2tt_out.sequences,
+            s2tt_elapsed,
+            eos_token_id=gen_common["eos_token_id"],
+            max_new_tokens=gen_common["max_new_tokens"],
+        )
         print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
 
         tt_model.clear_runtime_program_cache()
@@ -557,10 +581,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
         # =========================================================================
-        # ASR is same-language transcription; ``repetition_penalty`` biases the decoder away from
-        # already-emitted tokens, which pushes a Hindi target toward the alternative-language
-        # vocabulary (output drifts to English). Disable penalty just for this task.
-        gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
+        gen_common_asr = gen_common
         _warm_speech_enc(input_features)
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
@@ -579,8 +600,18 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
-        _record_text_perf(perf_log, "ASR", asr_out.sequences, asr_elapsed)
+        _record_text_perf(
+            perf_log,
+            "ASR",
+            asr_out.sequences,
+            asr_elapsed,
+            eos_token_id=gen_common["eos_token_id"],
+            max_new_tokens=gen_common["max_new_tokens"],
+        )
         print(f"  Output text ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
+
+        # Free trace + pinned host readback buffers before mesh teardown (avoids abort on exit).
+        tt_model.release_generation_runtime()
 
         print()
         print("=" * 78)
@@ -621,6 +652,11 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             )
 
     finally:
+        if tt_model is not None:
+            try:
+                tt_model.release_generation_runtime()
+            except Exception:
+                pass
         if original_default is not None:
             ttnn.SetDefaultDevice(original_default)
         ttnn.close_mesh_device(device)
