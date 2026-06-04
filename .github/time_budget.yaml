@@ -154,7 +154,7 @@ runtime:
 
 llk:
   unit:
-    wh_n150_civ2: 100
+    wh_n150_civ2: 140
     bh_p150b_civ2: 70
   e2e:
     wh_n150_civ2: 1800

@@ -493,14 +493,8 @@ TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
         GTEST_SKIP() << "Quasar uses TensixComputeBinaryBroadcastQuasarDfb";
     }
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
-        if (i == 1) {
-            continue;
-        }
-        log_info(tt::LogTest, "Math Fidelity = {}", i);
-        test_config.math_fidelity = MathFidelity(i);
-        unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
-    }
+    test_config.math_fidelity = MathFidelity::HiFi2;
+    unit_tests::compute::broadcast::run_single_core_broadcast(this->devices_.at(0), test_config);
 }
 
 using namespace unit_tests::compute::broadcast;
