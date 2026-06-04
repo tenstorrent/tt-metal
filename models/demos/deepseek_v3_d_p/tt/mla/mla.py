@@ -223,12 +223,14 @@ class ttMLA:
         is_balanced: bool = False,
         topology=ttnn.Topology.Linear,
         weight_cache_path: Optional[Path] = None,
+        num_slots: int = 1,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
+        self.num_slots = num_slots
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -507,10 +509,15 @@ class ttMLA:
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
         actual_start: int = 0,
+        slot_id: int = 0,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
+        # kvpe_cache is allocated as [num_layers * num_slots, 1, seq_len_local, head_dim]
+        # so a single flat batch index addresses (layer, slot). batch_idx == cache_layer_idx
+        # when num_slots == 1 (single-user default), keeping prior behavior bit-for-bit.
+        cache_batch_idx = cache_layer_idx * self.num_slots + slot_id
 
         # q_projection
         tt_q = ttnn.linear(
@@ -675,7 +682,7 @@ class ttMLA:
         # of the device cache, where chunk_size_local = chunk_size / sp_factor.
         # actual_start is a global position, so per-device offset = actual_start // sp.
         ttnn.kv_cache.fill_cache_for_user_(
-            kvpe_cache, tt_kvpe, cache_layer_idx, update_idx=actual_start // self.sp_factor
+            kvpe_cache, tt_kvpe, cache_batch_idx, update_idx=actual_start // self.sp_factor
         )
         ttnn.deallocate(tt_kvpe)
 
@@ -703,8 +710,8 @@ class ttMLA:
 
         sdpa_k = ttnn.slice(
             kvpe_cache,
-            [cache_layer_idx, 0, 0, 0],
-            [cache_layer_idx + 1, 1, actual_end_local, kvpe_cache.shape[-1]],
+            [cache_batch_idx, 0, 0, 0],
+            [cache_batch_idx + 1, 1, actual_end_local, kvpe_cache.shape[-1]],
         )
         # The cache is NdSharded DRAM; the slice inherits that layout. Both the
         # wkv_b2 matmul (for V) and the SDPA op want interleaved DRAM input.

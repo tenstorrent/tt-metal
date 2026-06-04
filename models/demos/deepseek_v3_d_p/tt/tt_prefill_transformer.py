@@ -115,11 +115,13 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
         lm_head_is_column_parallel: bool = False,
+        num_slots: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
+        self.num_slots = num_slots
 
         # Log environment variables that define reference output cache and TTNN weights cache.
         # This is to prevent accidental cache creation at unusual places and fill disk space.
@@ -173,6 +175,7 @@ class TtPrefillTransformer(LightweightModule):
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
+                num_slots=num_slots,
             )
             self.layers.append(layer)
 
@@ -229,6 +232,7 @@ class TtPrefillTransformer(LightweightModule):
         temperature: Union[float, list[float]] = 0.0,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: int = 0,
+        slot_id: int = 0,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -284,6 +288,7 @@ class TtPrefillTransformer(LightweightModule):
                 on_layer_complete=on_layer_complete,
                 actual_isl=number_of_non_padded_tokens,
                 actual_start=actual_start,
+                slot_id=slot_id,
             )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:

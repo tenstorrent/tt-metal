@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 class TtPrefillPipelineConfig:
     num_layers: int
     max_seq_len: int
+    max_users: int = 1
     mesh_shape: tuple = (32, 4)
     is_balanced: bool = True
     sp_axis: int = 0
@@ -104,6 +105,7 @@ class TtDeepSeekPrefillPipeline:
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
             lm_head_is_column_parallel=True,
+            num_slots=self.config.max_users,
         )
         self.model_built = True
 
@@ -116,6 +118,7 @@ class TtDeepSeekPrefillPipeline:
             mesh_shape=list(self.config.mesh_shape),
             sp_axis=self.config.sp_axis,
             num_kvpe_cache_layers=self.config.num_layers,
+            num_slots=self.config.max_users,
         )
         self.kv_cache_allocated = True
 
@@ -183,6 +186,7 @@ class TtDeepSeekPrefillPipeline:
             on_layer_complete=on_layer_complete,
             temperature=0.0,
             actual_start=actual_start,
+            slot_id=slot_id,
         )
         return int(first_token_id)
 

@@ -147,7 +147,7 @@ def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_a
     return lookup_table
 
 
-def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers):
+def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_axis, num_kvpe_cache_layers, num_slots=1):
     """
     Initialize KVPE cache for MLA.
 
@@ -158,14 +158,17 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         mesh_shape: Shape of mesh device
         sp_axis: Sequence parallel axis
         num_kvpe_cache_layers: Number of layers for KVPE cache
+        num_slots: Number of per-user KV-cache slots. Layers and slots are
+            flattened into the leading dim as (layer*num_slots + slot) so
+            fill_cache_for_user_'s single batch index can address both.
 
     Returns:
         tt_kvpe_cache: Initialized KVPE cache on device
     """
-    # hack in num_layers into batch size, so they are contiguous in memory
-    num_layers = num_kvpe_cache_layers
+    # hack in num_layers * num_slots into batch size, so they are contiguous in memory
+    leading = num_kvpe_cache_layers * num_slots
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+    torch_kvpe_cache = torch.zeros(leading, 1, seq_len_local, kvpe_cache_head_dim)
 
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)

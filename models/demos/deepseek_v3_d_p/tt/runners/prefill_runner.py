@@ -5,6 +5,7 @@
 import os
 import signal
 from pathlib import Path
+from typing import Optional
 
 import torch
 from loguru import logger
@@ -67,15 +68,46 @@ PREFILL_KV_GOLDEN_INPUT_SOURCE = os.environ.get("PREFILL_KV_GOLDEN_INPUT_SOURCE"
 PREFILL_KV_GOLDEN_PAD_SIDE = os.environ.get("PREFILL_KV_GOLDEN_PAD_SIDE", "right")
 
 
+def _build_slot_input_source_map() -> dict[int, str]:
+    """Collect per-slot golden input_source overrides from env.
+
+    Each `PREFILL_KV_GOLDEN_INPUT_SOURCE_<N>=<input_source>` registers an
+    override for slot N. Slots without an override fall back to the shared
+    PREFILL_KV_GOLDEN_INPUT_SOURCE at lookup time, so the single-user path
+    stays a no-op.
+    """
+    prefix = "PREFILL_KV_GOLDEN_INPUT_SOURCE_"
+    out: dict[int, str] = {}
+    for k, v in os.environ.items():
+        if k.startswith(prefix) and k != "PREFILL_KV_GOLDEN_INPUT_SOURCE":
+            try:
+                out[int(k[len(prefix) :])] = v
+            except ValueError:
+                pass
+    return out
+
+
+SLOT_INPUT_SOURCES = _build_slot_input_source_map()
+
+
 def _validate_kv_against_golden(
     pipeline: TtDeepSeekPrefillPipeline,
     actual_start: int,
     actual_end: int,
+    slot_id: int = 0,
+    input_source: Optional[str] = None,
 ) -> None:
     """Read pipeline.kvpe_cache back, compare per-layer K/V + PE against the
     golden over the absolute slot window [actual_start, actual_end). For
     single-chunk-per-slot the window is [0, actual_isl); for multi-chunk-per-slot
     this validates the chunk that was just written.
+
+    `slot_id` selects which user's slot to validate when the cache is sized
+    for max_users > 1. Default 0 (single-user / standalone).
+
+    `input_source` selects which golden to load (each prompt has its own .pt
+    cache_key). When None (default), falls back to PREFILL_KV_GOLDEN_INPUT_SOURCE
+    — i.e. all slots compare against the same single-user golden.
 
     Logs per-layer PCC and a pass/fail summary at PREFILL_KV_PCC_THRESHOLD.
     Skips with WARNING if no golden exists for the current config — never raises.
@@ -84,7 +116,7 @@ def _validate_kv_against_golden(
     hf = pipeline.hf_config
     cache_key = ReferenceCacheKey(
         weight_type="pretrained",  # standalone runner always loads pretrained
-        input_source=PREFILL_KV_GOLDEN_INPUT_SOURCE,
+        input_source=input_source if input_source is not None else PREFILL_KV_GOLDEN_INPUT_SOURCE,
         isl_total=cfg.max_seq_len,
         num_layers=cfg.num_layers,
         n_routed_experts=hf.n_routed_experts,
@@ -101,14 +133,22 @@ def _validate_kv_against_golden(
     _ref_snapshots, ref_kvpe_list = load_reference_cache(cache_key)
 
     # Read device KV back. Mirrors test_prefill_transformer.py:606-613.
-    # Shape after concat: [num_layers, tp_factor, seq_total, head_dim].
+    # Cache is allocated as [num_layers * max_users, 1, seq_local, head_dim] (see
+    # kv_cache_utils.init_kvpe_cache); after ConcatMesh2dToTensor on (seq, tp) the
+    # host shape is [num_layers * max_users, tp_factor, seq_total, head_dim].
     tt_kvpe_all = ttnn.to_torch(
         pipeline.kvpe_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             pipeline.mesh_device, dims=(2, 1), mesh_shape=pipeline.mesh_device.shape
         ),
     ).to(torch.bfloat16)
-    tt_kvpe_all_layers = tt_kvpe_all[:, :1, :, :]  # take first TP replica
+    tt_kvpe_all = tt_kvpe_all[:, :1, :, :]  # take first TP replica -> [L*S, 1, T, D]
+    # Unflatten the leading (layer, slot) and select this user's slot.
+    num_slots = pipeline.config.max_users
+    num_layers_cfg = pipeline.config.num_layers
+    tt_kvpe_all_layers = tt_kvpe_all.reshape(num_layers_cfg, num_slots, *tt_kvpe_all.shape[1:])[
+        :, slot_id, :, :, :
+    ]  # -> [L, 1, T, D]
 
     kv_lora_rank = hf.kv_lora_rank
     n_validated = min(cfg.num_layers, len(ref_kvpe_list))
@@ -182,6 +222,7 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 3200 * _sp))
+MAX_USERS = int(os.environ.get("PREFILL_MAX_USERS", 1))
 # Per-chunk H2D push size. For single-chunk-per-slot this equals MAX_SEQ_LEN.
 # For multi-chunk-per-slot the scheduler sends chunk_size tokens per push, so
 # the H2D service must be sized to chunk_size (not max_seq_len). Defaults to
@@ -361,6 +402,10 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     multi_chunk = chunk_size < MAX_SEQ_LEN
 
     num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
+    slot_id_env = int(os.environ.get("PREFILL_STANDALONE_SLOT_ID", "0"))
+    assert (
+        0 <= slot_id_env < MAX_USERS
+    ), f"PREFILL_STANDALONE_SLOT_ID={slot_id_env} must be in [0, PREFILL_MAX_USERS={MAX_USERS})"
 
     if not multi_chunk:
         # Single-chunk path. Identical to the pre-multi-chunk standalone behavior.
@@ -369,7 +414,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         first_token = None
         for i in range(num_iterations):
             _t0 = _time.perf_counter()
-            first_token = pipeline.prefill(token_ids=token_ids, slot_id=0, actual_isl=actual_isl)
+            first_token = pipeline.prefill(token_ids=token_ids, slot_id=slot_id_env, actual_isl=actual_isl)
             _dt_ms = (_time.perf_counter() - _t0) * 1000.0
             iter_times_ms.append(_dt_ms)
             logger.info(
@@ -383,7 +428,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
                 val_start, val_end = 0, actual_isl
             else:
                 val_start, val_end = MAX_SEQ_LEN - actual_isl, MAX_SEQ_LEN
-            _validate_kv_against_golden(pipeline, actual_start=val_start, actual_end=val_end)
+            _validate_kv_against_golden(pipeline, actual_start=val_start, actual_end=val_end, slot_id=slot_id_env)
         print(f"[standalone] task_id={task_id} first_token={first_token}")
         return
 
@@ -403,7 +448,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             _t0 = _time.perf_counter()
             first_token = pipeline.prefill(
                 token_ids=chunk_tokens,
-                slot_id=0,
+                slot_id=slot_id_env,
                 actual_isl=chunk_size,
                 actual_start=chunk_start,
             )
@@ -423,7 +468,9 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             #   * Layer 1+ PCC will degrade for chunks 1+ (cascading wrongness
             #     from incorrect attention output at layer 0).
             if PREFILL_KV_VALIDATE:
-                _validate_kv_against_golden(pipeline, actual_start=chunk_start, actual_end=chunk_end)
+                _validate_kv_against_golden(
+                    pipeline, actual_start=chunk_start, actual_end=chunk_end, slot_id=slot_id_env
+                )
 
     logger.info(f"[iter timing summary] per-chunk ms = {[round(t,2) for t in iter_times_ms]}")
     # stdout, not a log line: callers (tests / orchestrators) parse this.
@@ -497,7 +544,13 @@ def run_request_loop(
         # for the current config; doesn't raise. Window slices at
         # [actual_start, actual_end) so this works for multi-chunk-per-slot.
         if PREFILL_KV_VALIDATE:
-            _validate_kv_against_golden(pipeline, actual_start=actual_start, actual_end=actual_end)
+            _validate_kv_against_golden(
+                pipeline,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                slot_id=slot_id,
+                input_source=SLOT_INPUT_SOURCES.get(slot_id, PREFILL_KV_GOLDEN_INPUT_SOURCE),
+            )
 
         i += 1
     logger.info(f"[request] loop exited after {i} requests")
@@ -514,6 +567,7 @@ def _print_config() -> None:
         ("PREFILL_TP", str(_tp), False),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS), False),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN), False),
+        ("PREFILL_MAX_USERS", str(MAX_USERS), False),
         ("PREFILL_IS_BALANCED", str(IS_BALANCED), False),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR), False),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name, False),
@@ -583,6 +637,7 @@ def main() -> None:
     pipeline_config = TtPrefillPipelineConfig(
         num_layers=NUM_LAYERS,
         max_seq_len=MAX_SEQ_LEN,
+        max_users=MAX_USERS,
         mesh_shape=GLOBAL_MESH_SHAPE,
         is_balanced=IS_BALANCED,
         num_links=2,

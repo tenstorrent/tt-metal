@@ -183,6 +183,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
+        num_slots: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -217,6 +218,7 @@ class TtPrefillBlock(LightweightModule):
             tp_axis=tp_axis,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
+            num_slots=num_slots,
         )
 
         # --- FFN norm ---
@@ -334,6 +336,7 @@ class TtPrefillBlock(LightweightModule):
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_isl: Optional[int] = None,
         actual_start: int = 0,
+        slot_id: int = 0,
     ):
         """
         Args:
@@ -361,6 +364,7 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
             actual_start=actual_start,
+            slot_id=slot_id,
         )
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
