@@ -3,8 +3,17 @@
 
 import pytest
 import torch
+import ttnn
 from loguru import logger
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
+
+try:  # ``tracy.signpost`` marks a region for ``tt-perf-report --start-signpost``; no-op when unavailable.
+    from tracy import signpost as _tracy_signpost
+except Exception:  # pragma: no cover
+
+    def _tracy_signpost(*_args, **_kwargs):
+        return None
+
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 
@@ -123,6 +132,94 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
         )
         assert ok_logits, msg_logits
         assert ok_pad, msg_pad
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_seamless_m4t_v2_text_to_unit_max_seq_perf(mesh_device, device_params, reset_seeds):
+    """Device-perf capture of the T2U forward at the MAX encoder seq (4096).
+
+    Warms the program cache (compiles every kernel on the warmup passes), then drops a tracy
+    ``signpost`` so the MEASURED forward is captured WITHOUT the cold JIT-compile op-to-op gaps that
+    dominate a single cold pass. No PCC check here — correctness is ``test_..._max_seq_pcc``; this
+    exists only to profile a warm forward. Run:
+
+        python -m tracy -r -v -m pytest \\
+            models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_to_unit.py::test_seamless_m4t_v2_text_to_unit_max_seq_perf
+        tt-perf-report <generated/.../ops_perf_results_*.csv> --start-signpost t2u_max_seq
+
+    ``--start-signpost t2u_max_seq`` restricts the report to the warm measured forward (steady-state
+    kernel + dispatch), so the op-count/dispatch numbers reflect real perf, not compilation.
+    """
+    _ = reset_seeds
+    _ = device_params
+
+    try:
+        weights_dir = ensure_seamless_m4t_v2_large_weights()
+    except ImportError as e:
+        pytest.skip(str(e))
+    except Exception as e:
+        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+
+    with mesh_default_device(mesh_device):
+        torch.manual_seed(1)
+        t2u, cfg = load_pretrained_text_to_unit(weights_dir, dtype=torch.bfloat16)
+
+        inputs_embeds, attention_mask, char_input_ids, char_count_per_id = synthetic_t2u_inputs(
+            cfg,
+            batch=1,
+            encoder_seq_len=MAX_ENCODER_SEQ,
+            chars_per_encoder_step=1,
+            seed=1,
+            dtype=torch.bfloat16,
+        )
+        dev = next(t2u.parameters()).device
+        char_count_per_id = char_count_per_id.to(dev)
+        mask_4d = _prepare_4d_attention_mask(attention_mask, inputs_embeds.dtype)
+        # HF discrete durations drive the upsampled unit length → deterministic shapes across passes,
+        # so the warmup compiles exactly what the measured pass replays.
+        ref_durs = hf_discrete_duration_counts_batch1(
+            t2u, inputs_embeds.to(dev), attention_mask.to(dev), char_input_ids.to(dev), char_count_per_id
+        )
+        durations = char_count_per_id.squeeze(0).tolist()
+
+        params = create_text_to_unit_condgen_parameters(t2u, device=mesh_device)
+        tt_full = TTSeamlessM4Tv2TextToUnitForConditionalGeneration(
+            mesh_device,
+            params,
+            layer_norm_eps=cfg.layer_norm_eps,
+            encoder_layers=cfg.encoder_layers,
+            encoder_attention_heads=cfg.encoder_attention_heads,
+            decoder_layers=cfg.decoder_layers,
+            decoder_attention_heads=cfg.decoder_attention_heads,
+            hidden_size=cfg.hidden_size,
+            pad_token_id=cfg.pad_token_id,
+            variance_predictor_embed_dim=cfg.variance_predictor_embed_dim,
+            variance_predictor_hidden_dim=cfg.variance_predictor_hidden_dim,
+            variance_predictor_kernel_size=cfg.variance_predictor_kernel_size,
+        )
+
+        def _one_forward():
+            ie = from_torch_bfloat16_tile(mesh_device, inputs_embeds)
+            am = from_torch_bfloat16_tile(mesh_device, mask_4d)
+            ci = from_torch_uint32_rm(mesh_device, char_input_ids)
+            logits_tt, pad_tt = tt_full.forward(ie, am, ci, durations, reference_discrete_durations=ref_durs)
+            return logits_tt, pad_tt
+
+        # Warm the program cache so the measured pass has no cold-compile op-to-op gaps.
+        for _ in range(2):
+            logits_tt, pad_tt = _one_forward()
+            ttnn.deallocate(logits_tt)
+            ttnn.deallocate(pad_tt)
+        ttnn.synchronize_device(mesh_device)
+
+        # Measured forward — everything after this signpost is the warm steady-state region.
+        _tracy_signpost("t2u_max_seq")
+        logits_tt, pad_tt = _one_forward()
+        ttnn.synchronize_device(mesh_device)
+        assert logits_tt is not None and pad_tt is not None
+        ttnn.deallocate(logits_tt)
+        ttnn.deallocate(pad_tt)
 
 
 @pytest.mark.timeout(1800)
