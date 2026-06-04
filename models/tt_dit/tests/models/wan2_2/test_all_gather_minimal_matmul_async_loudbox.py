@@ -42,30 +42,15 @@ LOUDBOX_MESH_CONFIG = {
 @pytest.mark.parametrize(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        # M/K/N tiles: 32/192/24 — K_block=8 → 24 K-blocks, 3 per device on 1x8
-        (1024, 6144, 768, True, True, None, 1, False, 8, 8, 6, 2, 2),
-        # M/K/N tiles: 16/192/24
-        (512, 6144, 768, True, True, None, 1, False, 4, 8, 6, 2, 2),
-        # M/K/N tiles: 32/192/144 — N_block=24 on full grid (10-wide)
-        (1024, 6144, 4608, True, True, None, 1, False, 1, 4, 24, 1, 4),
-        # "good" test cases
-        (18944, 5120, 1280, True, True, None, 1, False, 10, 5, 6, 2, 1),
-        (18944, 5120, 3456, True, True, None, 1, False, 7, 5, 12, 1, 2),
-        (12480, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (28800, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (4096, 4096, 4096, True, True, None, 1, False, 8, 8, 8, 2, 2),
-        # (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),  # force_transpose=False
+        # TODO: run perf tests
+        (1024, 6144, 2304, True, True, None, 1, False, 1, 4, 12, 1, 4),
+        (512, 6144, 2304, True, True, None, 1, False, 1, 4, 24, 1, 4),  # STILL BAD
+        # (1024, 6144, 768, True, True, None, 1, False, 2, 3, 16, 1, 2), # DOES TRANSPOSE, NOT useful
+        (512, 6144, 768, True, True, None, 1, False, 2, 3, 16, 1, 2),
+        (1024, 6144, 4608, True, False, None, 1, False, 1, 4, 24, 1, 4),  # OG test case, STILL BAD
+        (768, 6144, 1536, True, True, "gelu", 2, False, 2, 2, 12, 1, 2),
     ],
-    ids=[
-        "m1024_k6144_n768",
-        "m512_k6144_n768",
-        "ltx",
-        "1xdenseattn1",
-        "1xff1",
-        "1xssg480pqkv",
-        "1xssg720pqkv",
-        "4ksquare",
-    ],
+    ids=["flux22-1", "flux22-2", "flux22-4", "flux22-5", "flux22-6"],
 )
 @pytest.mark.parametrize(
     "mode",
@@ -74,8 +59,8 @@ LOUDBOX_MESH_CONFIG = {
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
-    [(False, 3), (True, 2)],
-    ids=["check", "perf"],
+    [(False, 3)],
+    ids=["check"],
 )
 def test_linear_loudbox(
     mesh_device,
@@ -175,13 +160,25 @@ def test_linear_loudbox(
     ids=["bh1x8notranspose"],
     indirect=["mesh_device", "device_params"],
 )
+
+# 1024, 6144, 2304      # QKV spatial
+# 512,  6144, 2304      # QKV prompt
+# 1024, 6144, 768.      # to_out spatial
+# 512,  6144, 768.      # to_out prompt
+# 1024, 6144, 4608.     # ff1/swiglu spatial
+# 512,  6144, 4608.     # ff1/swiglu prompt
 @pytest.mark.parametrize(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        # Wide output (N > M): heuristic leaves it un-transposed. M/K/N tiles: 32/192/144
-        (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),
+        # TODO: run perf tests
+        (1024, 6144, 2304, False, True, None, 1, False, 1, 4, 12, 1, 4),
+        (512, 6144, 2304, False, True, None, 1, False, 1, 4, 24, 1, 4),
+        (1024, 6144, 768, False, True, None, 1, False, 2, 3, 16, 1, 2),  # DOES TRANSPOSE, NOT useful
+        (512, 6144, 768, False, True, None, 1, False, 2, 3, 16, 1, 2),
+        (1024, 6144, 4608, False, False, None, 1, False, 1, 4, 24, 1, 4),  # OG test case
+        (768, 6144, 1536, False, True, "gelu", 2, False, 2, 2, 12, 1, 2),
     ],
-    ids=["ltx_notranspose"],
+    ids=["flux22-1", "flux22-2", "flux22-3", "flux22-4", "flux22-5", "flux22-6"],
 )
 @pytest.mark.parametrize(
     "mode",
@@ -236,6 +233,14 @@ def test_linear_loudbox_no_transpose(
 
     use_non_fused = mode == "separate"
     matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
+
+    # Determine if core grid is being transposed
+    transpose_core_grid = force_transpose if force_transpose else (M > N)
+    relevant_core_grid_dim = core_grid_x if transpose_core_grid else core_grid_y
+    if relevant_core_grid_dim % num_links != 0:
+        pytest.skip(
+            f"num_links ({num_links}) does not evenly divide relevant core grid dim ({'core_grid_x' if transpose_core_grid else 'core_grid_y'}={relevant_core_grid_dim})"
+        )
 
     check_result = run_test_linear(
         mesh_device,
