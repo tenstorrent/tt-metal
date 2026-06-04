@@ -95,35 +95,50 @@ Store as `before_sha`. The `after_sha` is `fix_commit_sha`.
 
 ## Step 3: Artifact Reuse Check
 
-For both `before_sha` and `after_sha`, check for existing Merge Gate build artifacts.
+### 3a: Determine tracy requirement for this workflow
 
-### 3a: Find Merge Gate runs
+First, check whether the workflow uses tracy:
+
+```bash
+gh api "repos/tenstorrent/tt-metal/contents/.github/workflows/{workflow_file}?ref=main" \
+  --jq '.content' | base64 -d | grep "tracy:" | head -5
+```
+
+Record `needs_tracy: true` if `tracy: true` appears under the build-artifact `with:` block, `false` otherwise.
+
+### 3b: Find a compatible run for each SHA
+
+The source run must have produced artifacts matching the tracy requirement:
+
+- **`needs_tracy: false`**: Search for `Merge Gate` runs (they build without tracy).
+- **`needs_tracy: true`**: Merge Gate builds do NOT include tracy artifacts. Search for any completed nightly or CI run on that SHA that DID build with tracy. Check all successful runs on the SHA:
 
 ```bash
 gh api "repos/tenstorrent/tt-metal/actions/runs?head_sha={sha}&per_page=100" \
-  --jq '.workflow_runs[] | select(.name == "Merge Gate") | {id, status, conclusion, created_at}'
+  --jq '.workflow_runs[] | select(.conclusion == "success") | {id, name, created_at}'
 ```
 
-Do this for both `before_sha` and `after_sha`. Record the run IDs if found and `conclusion == "success"`.
+For `needs_tracy: false`, filter to `name == "Merge Gate"`. For `needs_tracy: true`, check any run that looks like it would have built with tracy (nightly workflows, APC, etc.).
 
-### 3b: Check artifacts exist and are not expired
+### 3c: Verify artifacts exist and are not expired
 
 ```bash
-gh api "repos/tenstorrent/tt-metal/actions/runs/{merge_gate_run_id}/artifacts?per_page=30" \
+gh api "repos/tenstorrent/tt-metal/actions/runs/{source_run_id}/artifacts?per_page=30" \
   --jq '.artifacts[] | {name, expired, size_in_bytes}'
 ```
 
-You need ALL of these to be present and `expired: false`:
-- An artifact matching `TTMetal_build_any_22.04_amd64_*_{sha}_*` (the main build)
-- An artifact matching `packages-ubuntu-22.04-amd64-Release-*_{sha}_*` (packages)
+For `needs_tracy: false`, you need ALL of these present and `expired: false`:
+- `TTMetal_build_any_22.04_amd64_*_{sha}_*` (main build)
+- `packages-ubuntu-22.04-amd64-Release-*_{sha}_*` (packages)
 
-If any are missing or expired: **no artifact reuse**. Note: Merge Gate builds do NOT include tracy artifacts. You must set `tracy: false` when reusing.
+For `needs_tracy: true`, look for artifacts with `tracy` or `profiler` in the name in addition to the above.
+
+If no compatible run with non-expired artifacts is found: **no artifact reuse** for that SHA — it will build from scratch.
 
 Record:
-- `before_merge_gate_run_id`: the Merge Gate run ID for `before_sha` (or null)
-- `after_merge_gate_run_id`: the Merge Gate run ID for `after_sha` (or null)
-
-Artifact reuse is only possible for a given probe if its Merge Gate run ID is non-null.
+- `before_reuse_run_id`: compatible run ID for `before_sha` (or null)
+- `after_reuse_run_id`: compatible run ID for `after_sha` (or null)
+- `needs_tracy`: true/false (same for both probes — it's a property of the workflow)
 
 ---
 
@@ -212,7 +227,7 @@ Or for C++ LLK:
 }
 ```
 
-If artifact reuse is available for this branch, also add `"use-artifacts-from-run": "{merge_gate_run_id}"`.
+Artifact reuse is configured in the workflow file (Step 6), not via dispatch inputs. Do not pass `use-artifacts-from-run` as a dispatch input.
 
 ---
 
@@ -246,8 +261,11 @@ content = content.replace(
     '    uses: ./.github/workflows/build-artifact.yaml\n    permissions:\n      contents: read\n      packages: write\n      actions: read'
 )
 
-# 2. Set tracy: false (Merge Gate builds don't include tracy artifacts)
-content = content.replace('      tracy: true', '      tracy: false')
+# 2. Only change tracy if the source run doesn't support it.
+# If needs_tracy is True, leave tracy as-is — the source run already has tracy artifacts.
+# If needs_tracy is False (e.g. using Merge Gate artifacts), set tracy: false.
+if not needs_tracy:
+    content = content.replace('      tracy: true', '      tracy: false')
 
 # 3. Add use-artifacts-from-run directly under the with: block of build-artifact
 #    Insert after 'enable-lto:' line (last line of the with: block)
