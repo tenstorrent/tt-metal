@@ -560,16 +560,16 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 60
+      timeout: 75
       tier: 1
     wh_n300:
-      timeout: 60
+      timeout: 120
       tier: 1
     bh_p150:
-      timeout: 60
+      timeout: 75
       tier: 1
     bh_p300:
-      timeout: 60
+      timeout: 75
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
