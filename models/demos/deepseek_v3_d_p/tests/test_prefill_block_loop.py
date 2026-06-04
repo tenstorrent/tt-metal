@@ -68,7 +68,7 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize("isl_total", [1024, 6400, 25 * 1024], ids=["isl_1k", "isl_6k4", "isl_25k"])
+@pytest.mark.parametrize("isl_total", [1024, 5 * 1024, 6400, 25 * 1024], ids=["isl_1k", "isl_5k", "isl_6k4", "isl_25k"])
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
