@@ -134,7 +134,7 @@ struct EltwiseShape {
 // outside the named set are rejected.
 
 enum class WaitPolicy : uint8_t {
-    None,        // chain emits no cb_wait_front
+    None,        // chain emits no wait_front
     PerTile,     // wait 1 per iter
     PerChunk,    // wait K per K-iter chunk
     Upfront,     // wait M once at entry (M = kind's tile count)
@@ -142,7 +142,7 @@ enum class WaitPolicy : uint8_t {
 };
 
 enum class PopPolicy : uint8_t {
-    None,      // chain emits no cb_pop_front
+    None,      // chain emits no pop_front
     PerTile,   // pop 1 per iter
     PerChunk,  // pop K per K-iter chunk
     AtEnd,     // pop M once at exit

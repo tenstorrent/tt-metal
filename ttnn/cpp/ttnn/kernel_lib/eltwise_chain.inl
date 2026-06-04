@@ -15,6 +15,7 @@
 #include <tuple>
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/dataflow/dataflow_buffer.h"  // DataflowBuffer — chain routes CB sync (wait/pop/reserve/push) through it
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
@@ -475,10 +476,10 @@ struct CopyTile : CopyTileTag {
     /// only drives the inner DEST-lane loop and slot_offset.
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            cb_wait_front(Cb, 1);
+            DataflowBuffer(Cb).wait_front(1);
         } else if constexpr (Policy == InputLifecycle::Pipelined ||
                              Policy == InputLifecycle::HeldCumulative) {
-            cb_wait_front(Cb, cumulative_count);
+            DataflowBuffer(Cb).wait_front(cumulative_count);
         }
     }
 
@@ -486,7 +487,7 @@ struct CopyTile : CopyTileTag {
     /// inner_count == BlockSize for steady iters, == tail size for the last iter.
     ALWI void wait_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_wait_front(Cb, inner_count);
+            DataflowBuffer(Cb).wait_front(inner_count);
         }
     }
 
@@ -499,7 +500,7 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::HeldBulk ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).wait_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -512,7 +513,7 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::Pipelined ||
                       Policy == InputLifecycle::DeferredPop) {
-            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).pop_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -522,14 +523,14 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == InputLifecycle::Streaming ||
                       Policy == InputLifecycle::NoWaitPop ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_pop_front(Cb, 1);
+            DataflowBuffer(Cb).pop_front(1);
         }
     }
 
     /// Per-outer-iter pop of `inner_count` tiles (chunked streaming).
     ALWI void pop_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_pop_front(Cb, inner_count);
+            DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
 
@@ -591,14 +592,14 @@ struct PackTile : PackTileTag {
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == OutputLifecycle::Streaming ||
                       Policy == OutputLifecycle::HeldReserve) {
-            cb_reserve_back(Cb, 1);
+            DataflowBuffer(Cb).reserve_back(1);
         }
     }
 
     /// Per-outer-iter reserve of `inner_count` tiles (chunked streaming).
     ALWI void reserve_per_block(uint32_t inner_count) const {
         if constexpr (Policy == OutputLifecycle::Chunked) {
-            cb_reserve_back(Cb, inner_count);
+            DataflowBuffer(Cb).reserve_back(inner_count);
         }
     }
 
@@ -630,13 +631,13 @@ struct PackTile : PackTileTag {
         if constexpr (Policy == OutputLifecycle::Bulk ||
                       Policy == OutputLifecycle::BulkReservePerTile ||
                       Policy == OutputLifecycle::BulkReservePerChunk) {
-            cb_reserve_back(Cb, (Ht * Wt) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutputLifecycle::DeferredReserve ||
                       Policy == OutputLifecycle::Bulk) {
-            cb_push_back(Cb, (walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -645,7 +646,7 @@ struct PackTile : PackTileTag {
     ALWI void push_per_tile(uint32_t /*i*/) const {
         if constexpr (Policy == OutputLifecycle::Streaming ||
                       Policy == OutputLifecycle::BulkReservePerTile) {
-            cb_push_back(Cb, 1);
+            DataflowBuffer(Cb).push_back(1);
         }
     }
 
@@ -654,7 +655,7 @@ struct PackTile : PackTileTag {
     ALWI void push_per_block(uint32_t inner_count) const {
         if constexpr (Policy == OutputLifecycle::Chunked ||
                       Policy == OutputLifecycle::BulkReservePerChunk) {
-            cb_push_back(Cb, inner_count);
+            DataflowBuffer(Cb).push_back(inner_count);
         }
     }
 
@@ -796,17 +797,17 @@ struct BinaryFpu : BinaryFpuTag {
     // — caller passes `cumulative_count = (i_outer + 1) * block_size`.
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (APolicy == InputLifecycle::Streaming || APolicy == InputLifecycle::HeldStream) {
-            cb_wait_front(CbA, 1);
+            DataflowBuffer(CbA).wait_front(1);
         } else if constexpr (APolicy == InputLifecycle::Pipelined ||
                              APolicy == InputLifecycle::HeldCumulative) {
-            cb_wait_front(CbA, cumulative_count);
+            DataflowBuffer(CbA).wait_front(cumulative_count);
         }
         if constexpr (!same_dfb) {
             if constexpr (BPolicy == InputLifecycle::Streaming || BPolicy == InputLifecycle::HeldStream) {
-                cb_wait_front(CbB, 1);
+                DataflowBuffer(CbB).wait_front(1);
             } else if constexpr (BPolicy == InputLifecycle::Pipelined ||
                                  BPolicy == InputLifecycle::HeldCumulative) {
-                cb_wait_front(CbB, cumulative_count);
+                DataflowBuffer(CbB).wait_front(cumulative_count);
             }
         }
     }
@@ -815,10 +816,10 @@ struct BinaryFpu : BinaryFpuTag {
     /// per-block; same for B (same_dfb dedup).
     ALWI void wait_per_block(uint32_t inner_count) const {
         if constexpr (APolicy == InputLifecycle::Chunked) {
-            cb_wait_front(CbA, inner_count);
+            DataflowBuffer(CbA).wait_front(inner_count);
         }
         if constexpr (!same_dfb && BPolicy == InputLifecycle::Chunked) {
-            cb_wait_front(CbB, inner_count);
+            DataflowBuffer(CbB).wait_front(inner_count);
         }
     }
 
@@ -830,12 +831,12 @@ struct BinaryFpu : BinaryFpuTag {
                       APolicy == InputLifecycle::HeldBulk ||
                       APolicy == InputLifecycle::BulkDrain) {
             const uint32_t a_base = same_dfb ? same_dfb_base_max() : tile_base_value<OffsetA>(tile_base_a);
-            cb_wait_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
+            DataflowBuffer(CbA).wait_front(detail::window<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_dfb && (BPolicy == InputLifecycle::Bulk ||
                                    BPolicy == InputLifecycle::HeldBulk ||
                                    BPolicy == InputLifecycle::BulkDrain)) {
-            cb_wait_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
+            DataflowBuffer(CbB).wait_front(detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
 
@@ -854,21 +855,21 @@ struct BinaryFpu : BinaryFpuTag {
         if constexpr (APolicy == InputLifecycle::Streaming ||
                       APolicy == InputLifecycle::NoWaitPop ||
                       APolicy == InputLifecycle::BulkDrain) {
-            cb_pop_front(CbA, 1);
+            DataflowBuffer(CbA).pop_front(1);
         }
         if constexpr (!same_dfb && (BPolicy == InputLifecycle::Streaming ||
                                    BPolicy == InputLifecycle::NoWaitPop ||
                                    BPolicy == InputLifecycle::BulkDrain)) {
-            cb_pop_front(CbB, 1);
+            DataflowBuffer(CbB).pop_front(1);
         }
     }
 
     ALWI void pop_per_block(uint32_t inner_count) const {
         if constexpr (APolicy == InputLifecycle::Chunked) {
-            cb_pop_front(CbA, inner_count);
+            DataflowBuffer(CbA).pop_front(inner_count);
         }
         if constexpr (!same_dfb && BPolicy == InputLifecycle::Chunked) {
-            cb_pop_front(CbB, inner_count);
+            DataflowBuffer(CbB).pop_front(inner_count);
         }
     }
 
@@ -912,12 +913,12 @@ struct BinaryFpu : BinaryFpuTag {
                       APolicy == InputLifecycle::Pipelined ||
                       APolicy == InputLifecycle::DeferredPop) {
             const uint32_t a_base = same_dfb ? same_dfb_base_max() : tile_base_value<OffsetA>(tile_base_a);
-            cb_pop_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
+            DataflowBuffer(CbA).pop_front(detail::window<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_dfb && (BPolicy == InputLifecycle::Bulk ||
                                    BPolicy == InputLifecycle::Pipelined ||
                                    BPolicy == InputLifecycle::DeferredPop)) {
-            cb_pop_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
+            DataflowBuffer(CbB).pop_front(detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
 };
@@ -989,15 +990,15 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            cb_wait_front(Cb, 1);
+            DataflowBuffer(Cb).wait_front(1);
         } else if constexpr (Policy == InputLifecycle::Pipelined ||
                              Policy == InputLifecycle::HeldCumulative) {
-            cb_wait_front(Cb, cumulative_count);
+            DataflowBuffer(Cb).wait_front(cumulative_count);
         }
     }
     ALWI void wait_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_wait_front(Cb, inner_count);
+            DataflowBuffer(Cb).wait_front(inner_count);
         }
     }
 
@@ -1006,7 +1007,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::HeldBulk ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).wait_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
@@ -1023,7 +1024,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::Pipelined ||
                       Policy == InputLifecycle::DeferredPop) {
-            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
+            DataflowBuffer(Cb).pop_front(detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -1033,12 +1034,12 @@ struct DestReuseBinary : DestReuseBinaryTag {
         if constexpr (Policy == InputLifecycle::Streaming ||
                       Policy == InputLifecycle::NoWaitPop ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_pop_front(Cb, 1);
+            DataflowBuffer(Cb).pop_front(1);
         }
     }
     ALWI void pop_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_pop_front(Cb, inner_count);
+            DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
 };
@@ -1114,15 +1115,15 @@ struct UnaryBcast : UnaryBcastTag {
 
     ALWI void wait_per_tile(uint32_t cumulative_count) const {
         if constexpr (Policy == InputLifecycle::Streaming || Policy == InputLifecycle::HeldStream) {
-            cb_wait_front(Cb, 1);
+            DataflowBuffer(Cb).wait_front(1);
         } else if constexpr (Policy == InputLifecycle::Pipelined ||
                              Policy == InputLifecycle::HeldCumulative) {
-            cb_wait_front(Cb, cumulative_count);
+            DataflowBuffer(Cb).wait_front(cumulative_count);
         }
     }
     ALWI void wait_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_wait_front(Cb, inner_count);
+            DataflowBuffer(Cb).wait_front(inner_count);
         }
     }
 
@@ -1132,7 +1133,7 @@ struct UnaryBcast : UnaryBcastTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::HeldBulk ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_wait_front(Cb, Ht * Wt);
+            DataflowBuffer(Cb).wait_front(Ht * Wt);
         }
     }
     ALWI void exec(uint32_t /*i_flat*/, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
@@ -1143,7 +1144,7 @@ struct UnaryBcast : UnaryBcastTag {
         if constexpr (Policy == InputLifecycle::Bulk ||
                       Policy == InputLifecycle::Pipelined ||
                       Policy == InputLifecycle::DeferredPop) {
-            cb_pop_front(Cb, Ht * Wt);
+            DataflowBuffer(Cb).pop_front(Ht * Wt);
         }
     }
 
@@ -1152,12 +1153,12 @@ struct UnaryBcast : UnaryBcastTag {
         if constexpr (Policy == InputLifecycle::Streaming ||
                       Policy == InputLifecycle::NoWaitPop ||
                       Policy == InputLifecycle::BulkDrain) {
-            cb_pop_front(Cb, 1);
+            DataflowBuffer(Cb).pop_front(1);
         }
     }
     ALWI void pop_per_block(uint32_t inner_count) const {
         if constexpr (Policy == InputLifecycle::Chunked) {
-            cb_pop_front(Cb, inner_count);
+            DataflowBuffer(Cb).pop_front(inner_count);
         }
     }
 };
