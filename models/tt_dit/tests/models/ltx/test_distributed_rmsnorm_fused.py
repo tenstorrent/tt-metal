@@ -45,7 +45,7 @@ NUM_HEADS = 32  # LTX video and audio both use 32 attention heads
 )
 @pytest.mark.parametrize("dim", [4096, 2048], ids=["video4096", "audio2048"])
 @pytest.mark.parametrize("case", ["block", "qk"], ids=["block", "qk"])
-@pytest.mark.parametrize("seq_len", [512], ids=["seq512"])
+@pytest.mark.parametrize("seq_len", [512, 4096, 16384], ids=["seq512", "seq4k", "seq16k"])
 def test_distributed_rmsnorm_fused_parity(mesh_device, sp_axis, tp_axis, dim, case, seq_len):
     if mesh_device.get_num_devices() < 8:
         pytest.skip("needs 8 devices for a 2x4 mesh")
@@ -78,22 +78,47 @@ def test_distributed_rmsnorm_fused_parity(mesh_device, sp_axis, tp_axis, dim, ca
 
     # Activation: (1, B, N, dim), sequence sharded over the SP axis, hidden over the TP axis (= the norm's
     # mesh_axis). Each device holds (1, B, N/sp, dim/tp), matching the norm's expected last dim dim/tp.
-    x = (torch.randn(1, B, seq_len, dim) * 4 - 1).to(torch.bfloat16)
+    # Enumerated input: every 32-wide width-tile gets a distinct integer (tile_index+1), bf16-EXACT since
+    # dim/32 <= 128. After the RMS norm each width-tile becomes a distinct constant, so if the writer
+    # scatters tiles to the wrong head/position the misplacement is obvious and exact (not hidden in noise).
+    if os.environ.get("PARITY_ENUMERATED", "1") in ("1", "true", "True"):
+        d_tile = (torch.arange(dim) // 32 + 1).to(torch.float32)  # (dim,) 1-based per-tile index
+        x = d_tile.view(1, 1, 1, dim).expand(1, B, seq_len, dim).contiguous().to(torch.bfloat16)
+    else:
+        x = (torch.randn(1, B, seq_len, dim) * 4 - 1).to(torch.bfloat16)
     x_tt = bf16_tensor_2dshard(x, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
 
     def run(fused: bool):
         prev = os.environ.get("LTX_FUSED_AGRMS")
+        prev_qk = os.environ.get("LTX_FUSED_AGRMS_QK")
         os.environ["LTX_FUSED_AGRMS"] = "1" if fused else "0"
+        # Q/K head-split fusion is opt-in via LTX_FUSED_AGRMS_QK; set it so the qk case actually exercises
+        # the fused op (otherwise the "fused" run falls through to wan and we compare wan-vs-wan).
+        os.environ["LTX_FUSED_AGRMS_QK"] = "1" if fused else "0"
         try:
             return norm(x_tt, num_heads_per_device=num_heads_per_device)
         finally:
-            if prev is None:
-                os.environ.pop("LTX_FUSED_AGRMS", None)
-            else:
-                os.environ["LTX_FUSED_AGRMS"] = prev
+            for _k, _p in (("LTX_FUSED_AGRMS", prev), ("LTX_FUSED_AGRMS_QK", prev_qk)):
+                if _p is None:
+                    os.environ.pop(_k, None)
+                else:
+                    os.environ[_k] = _p
 
     out_ref = run(fused=False)  # wan pre/AG/post
     out_fused = run(fused=True)  # ttnn.all_gather_rms_norm
+
+    # On-device tensor SPECS (the value/PCC/allclose comparison below gathers to torch and CANNOT see these):
+    # if op and wan differ in memory_config / padded(tile) shape / dtype / layout, downstream model ops read
+    # the op's (value-correct) output wrong even though parity passes.
+    def _spec(t):
+        try:
+            pad = tuple(t.padded_shape)
+        except Exception:
+            pad = "?"
+        return f"shape={tuple(t.shape)} pad={pad} dtype={t.dtype} layout={t.layout} mem={t.memory_config()}"
+
+    logger.info(f"  SPEC wan: {_spec(out_ref)}")
+    logger.info(f"  SPEC op : {_spec(out_fused)}")
 
     # Output sharding: block -> (1,B,N,dim) [seq/SP, hidden/TP]; qk head-split -> (1,H,M,E) [heads/TP, seq/SP].
     if case == "qk":
@@ -110,13 +135,37 @@ def test_distributed_rmsnorm_fused_parity(mesh_device, sp_axis, tp_axis, dim, ca
     fused = ttnn.to_torch(out_fused, mesh_composer=composer).float()
 
     assert list(ref.shape) == list(fused.shape), f"shape mismatch: {tuple(ref.shape)} vs {tuple(fused.shape)}"
-    max_abs = (ref - fused).abs().max().item()
+    diff = (ref - fused).abs()
+    max_abs = diff.max().item()
+    mean_abs = diff.mean().item()
+    # Element-wise tolerance. Same algorithm, different bf16 kernels -> a few % is expected; a layout/
+    # permutation/value bug blows this up far past it (and PCC can stay ~1.0 through such bugs). Report the
+    # reference's own spread too, so a "heavy match" isn't just trivially low-variance data.
+    atol, rtol = 0.05, 0.02
+    frac_bad = (diff > atol).float().mean().item()
+    is_allclose = torch.allclose(ref, fused, rtol=rtol, atol=atol)
     logger.info(
         f"distributed_rmsnorm parity[{case} dim={dim} tp={tp} sp={sp} H/dev={num_heads_per_device} "
-        f"shape={tuple(fused.shape)}] max_abs_err={max_abs:.4f}"
+        f"shape={tuple(fused.shape)}] ref[std={ref.std():.3f} min={ref.min():.2f} max={ref.max():.2f}] "
+        f"max_abs={max_abs:.4f} mean_abs={mean_abs:.5f} frac>|{atol}|={frac_bad:.4f} allclose={is_allclose}"
     )
-    # Both paths implement the same RMSNorm (+ gamma, + head-split); differences are only kernel numerics.
+    # Structural dump (enumerated input): with per-tile-distinct input, after norm each tile is a distinct
+    # constant. For qk the per-head row-0 col-0 value should increase monotonically with head index (head h
+    # holds tiles starting at h*head_dim_tiles); for block, row-0 sampled every 32 cols should be the tile
+    # ramp. A wrong scatter shows up as out-of-order / mismatched values here.
+    if case == "qk":
+        logger.info(f"  qk per-head[row0,col0] ref  ={[round(v, 4) for v in ref[0, :, 0, 0].tolist()]}")
+        logger.info(f"  qk per-head[row0,col0] fused={[round(v, 4) for v in fused[0, :, 0, 0].tolist()]}")
+    else:
+        logger.info(f"  block per-tile[row0] ref  ={[round(v, 4) for v in ref[0, 0, 0, ::32][:16].tolist()]}")
+        logger.info(f"  block per-tile[row0] fused={[round(v, 4) for v in fused[0, 0, 0, ::32][:16].tolist()]}")
+
+    # Both paths implement the same RMSNorm (+ gamma, + head-split); differences should be only kernel numerics.
     assert_with_pcc(ref, fused, pcc=0.999)
+    assert is_allclose, (
+        f"allclose FAILED (rtol={rtol} atol={atol}): max_abs={max_abs:.4f} mean_abs={mean_abs:.5f} "
+        f"frac_bad={frac_bad:.4f} -- PCC passed but element-wise mismatch => layout/value divergence"
+    )
 
 
 @pytest.mark.parametrize("device_params", [line_params], indirect=True)

@@ -32,7 +32,7 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-#define AGRMS_TRACE_LOCAL 1  // TEMP: dump cb_local_stats at the compute's output (root-cause trace)
+// (AGRMS_TRACE_LOCAL disabled -- #define it to re-enable the cb tile-dump traces below)
 #ifdef AGRMS_TRACE_LOCAL
 #include "api/debug/dprint_pages.h"
 #endif
@@ -46,11 +46,16 @@ ALWI void REL() {
     tile_regs_release();
 }
 
-// x^2 over the resident Wt-tile input row, then AVG-reduce (scaler = 1/reduce_factor) over the row into a
-// single tile in cb_dst. For ring_size == 1, reduce_factor == Wt so cb_dst is the global mean E[x^2]; for
-// ring_size > 1, reduce_factor == total_W so cb_dst is the per-device partial sum(x^2_local)/total_W.
-// `base` is the tile offset of this row within cb_inp (0 unless the caller keeps a whole chunk resident and
-// indexes rows at base = r*Wt without popping between rows).
+// x^2 over the resident Wt-tile input row, AVG-reduced (scaler = 1/reduce_factor) into a single tile in
+// cb_dst. For ring_size == 1, reduce_factor == Wt so cb_dst is the global mean E[x^2]; for ring_size > 1,
+// reduce_factor == total_W so cb_dst is the per-device partial sum(x^2_local)/total_W. `base` is the tile
+// offset of this row within cb_inp (0 unless the caller keeps a whole chunk resident and indexes rows at
+// base = r*Wt without popping between rows).
+//
+// Accumulation order MIRRORS wan's rmsnorm_pre_allgather.cpp exactly: each column-tile's x^2 is
+// L1-accumulated element-wise onto a SINGLE intermediate tile (cb_x2[0]) -- i.e. sum-across-tiles FIRST --
+// then one REDUCE_ROW sums the 32 columns. Float add is non-associative, so this ordering (not the
+// reduce-library's per-tile-then-across-tiles order) is what makes the bf16 output bit-identical to wan.
 ALWI void reduce_x2(
     uint32_t cb_inp,
     uint32_t cb_x2,
@@ -61,20 +66,31 @@ ALWI void reduce_x2(
     uint32_t base = 0) {
     reconfig_data_format(cb_inp, cb_inp);
     pack_reconfig_data_format(cb_x2);
+    PACK((llk_pack_reconfig_l1_acc(0)));  // overwrite (not accumulate) when starting this row
     mul_tiles_init(cb_inp, cb_inp);
+    cb_reserve_back(cb_x2, 1);
     for (uint32_t wt = 0; wt < Wt; wt += blk) {
-        cb_reserve_back(cb_x2, blk);
-        ACQ();
+        tile_regs_acquire();
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
             mul_tiles(cb_inp, cb_inp, base + wt + wtr, base + wt + wtr, wtr);
-            pack_tile(wtr, cb_x2, wt + wtr);
         }
-        REL();
-        cb_push_back(cb_x2, blk);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t wtr = 0; wtr < blk; wtr++) {
+            // accumulate every x^2 column-tile onto the single intermediate tile cb_x2[0]
+            pack_tile<true>(wtr, cb_x2, 0);
+            if (wt == 0 && wtr == 0) {
+                PACK((llk_pack_reconfig_l1_acc(1)));  // enable L1 accumulation after the first packed tile
+            }
+        }
+        tile_regs_release();
     }
+    cb_push_back(cb_x2, 1);
+    PACK((llk_pack_reconfig_l1_acc(0)));  // disable L1 accumulation
+
     compute_kernel_lib::
         reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            cb_x2, cb_reduce, cb_dst, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            cb_x2, cb_reduce, cb_dst, compute_kernel_lib::ReduceInputBlockShape::single());
 }
 
 // 1/sqrt(E[x^2] + eps) then the fused per-block normalize: x * recip (-> * gamma) (-> + beta) -> cb_out.

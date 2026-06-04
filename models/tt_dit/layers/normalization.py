@@ -187,6 +187,50 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
+    # --- TEMP debug: dump each norm's input/output (gathered to torch) for a wan-vs-fused A/B in the model.
+    # Set DUMP_NORM_DIR to enable; only the first DUMP_NORM_MAX (default 40) calls are dumped. The class-level
+    # counter makes idx a global sequence of norm calls in invocation order, identical across wan/fused runs.
+    _dump_idx = 0
+
+    def _dump_norm(self, t, tag, idx, num_heads_per_device):
+        ddir = os.environ.get("DUMP_NORM_DIR")
+        fpfile = os.environ.get("DUMP_NORM_FP")
+        if not ddir and not fpfile:
+            return
+        import pathlib
+
+        other = 1 - self.mesh_axis
+        cd = [0, 0]
+        # input + block output: hidden on mesh_axis (last dim); qk output: heads on mesh_axis (dim 1). seq=dim2.
+        cd[self.mesh_axis] = 1 if (tag == "out" and num_heads_per_device > 1) else (len(t.shape) - 1)
+        cd[other] = 2
+        comp = ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=tuple(cd))
+        arr = ttnn.to_torch(t, mesh_composer=comp).float()
+        # Compact per-norm fingerprint (no env cap): bit-sensitive summary so EVERY norm can be scanned to find
+        # the first divergence vs the wan baseline. fp64 sum + sumsq catch any single-element bf16 difference.
+        if fpfile:
+            a64 = arr.double()
+            flat = a64.reshape(-1)
+            n = flat.numel()
+            # Position-SENSITIVE checksum: split into K regions, weight each region's sum by its index. sum/sumsq
+            # above are permutation-invariant (only catch value changes); this catches a LAYOUT/permutation
+            # change (e.g. a head-split scatter writing correct values to wrong positions). Deterministic, so
+            # an element-wise-identical tensor yields an identical poschk.
+            K = 64
+            m = (n // K) * K
+            reg = flat[:m].reshape(K, -1).sum(dim=1)
+            poschk = (reg * torch.arange(1, K + 1, dtype=torch.float64)).sum().item()
+            line = (
+                f"{idx:04d} {tag} nh={num_heads_per_device} shape={tuple(arr.shape)} "
+                f"sum={a64.sum().item():.10e} sumsq={(flat * flat).sum().item():.10e} "
+                f"max={arr.max().item():.8e} min={arr.min().item():.8e} poschk={poschk:.10e}\n"
+            )
+            with open(fpfile, "a") as f:
+                f.write(line)
+        if ddir and idx < int(os.environ.get("DUMP_NORM_MAX", "40")):
+            pathlib.Path(ddir).mkdir(parents=True, exist_ok=True)
+            torch.save(arr, pathlib.Path(ddir) / f"{idx:04d}_{tag}.pt")
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -205,6 +249,10 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
+        _dump_idx = DistributedRMSNorm._dump_idx
+        DistributedRMSNorm._dump_idx += 1
+        self._dump_norm(x, "in", _dump_idx, num_heads_per_device)
+
         # Optional fused single-op path: ttnn.all_gather_rms_norm fuses pre-stats -> all-gather -> post (and
         # the per-head head-split via num_heads) into one op. Valid for the plain norm AND the Q/K norm
         # (which head-splits) -- i.e. every way the LTX norms (norm1/2/3, audio_norm*, norm_q/norm_k) are
@@ -216,10 +264,14 @@ class DistributedRMSNorm(Module):
             and rope_cos is None
             and rope_sin is None
             and trans_mat is None
+            # Q/K (head-split, num_heads>1) fusion is opt-in via LTX_FUSED_AGRMS_QK; with just LTX_FUSED_AGRMS
+            # only the block norms (num_heads==1) fuse, and Q/K falls through to the wan path. Lets us A/B
+            # whether the head-split path is what corrupts the model.
+            and (num_heads_per_device == 1 or os.environ.get("LTX_FUSED_AGRMS_QK") in ("1", "true", "True"))
         ):
             if getattr(self, "_agrms_sem", None) is None:
                 self._agrms_sem = ttnn.create_global_semaphore(self.mesh_device, self.ccl_manager.ccl_cores, 0)
-            return ttnn.all_gather_rms_norm(
+            _agrms_out = ttnn.all_gather_rms_norm(
                 x,
                 cluster_axis=self.mesh_axis,
                 mesh_device=self.mesh_device,
@@ -232,6 +284,8 @@ class DistributedRMSNorm(Module):
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
                 num_heads=num_heads_per_device,
             )
+            self._dump_norm(_agrms_out, "out", _dump_idx, num_heads_per_device)
+            return _agrms_out
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
@@ -256,6 +310,7 @@ class DistributedRMSNorm(Module):
             rope_sin=rope_sin,
             dtype=dtype,
         )
+        self._dump_norm(x, "out", _dump_idx, num_heads_per_device)
         return x
 
 
