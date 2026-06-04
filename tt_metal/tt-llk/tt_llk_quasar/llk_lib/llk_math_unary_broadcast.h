@@ -104,7 +104,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TileShape& tile_
     {
         const std::uint32_t num_rows = (BROADCAST_TYPE == BroadcastType::SCALAR) ? tile_shape.num_faces * tile_shape.face_r_dim : tile_shape.face_r_dim;
         const std::uint32_t outer    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : static_cast<std::uint32_t>(tile_shape.num_faces);
-        const std::uint32_t inner    = num_rows >> math_rows_log2(ELTWISE_MATH_ROWS);
+        const std::uint32_t inner    = num_rows >> rows_log2(ELTWISE_MATH_ROWS);
 
         const std::uint32_t dst_lo     = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
         constexpr std::uint32_t bcast0 = (BROADCAST_TYPE == BroadcastType::COL || BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : 0U;
@@ -155,7 +155,7 @@ inline void _llk_math_eltwise_unary_broadcast_d2b_mop_config_(const TileShape& t
     {
         // SCALAR: all faces × rows. COL: column broadcast touches two faces in dest (mirrors unpack UNPACR_DEST_FACE 0 and 2), so row count is 2× face_r_dim.
         const std::uint32_t rows_sel  = (BROADCAST_TYPE == BroadcastType::SCALAR) ? tile_shape.num_faces * tile_shape.face_r_dim : tile_shape.face_r_dim * 2;
-        const std::uint32_t inner_d2b = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : (rows_sel >> math_rows_log2(ELTWISE_MATH_ROWS));
+        const std::uint32_t inner_d2b = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : (rows_sel >> rows_log2(ELTWISE_MATH_ROWS));
 
         const auto f = [](std::uint8_t am, std::uint32_t d32) { return TT_OP_MOVD2B(d32, 0, am, p_mov_src_to_dest::MOV_8_ROWS, 0, 0); };
 

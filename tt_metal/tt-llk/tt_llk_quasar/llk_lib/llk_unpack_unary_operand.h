@@ -46,7 +46,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
         TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
 
     std::uint32_t dest_tile_idx_inc = (static_cast<std::uint32_t>(tensor_shape.face_r_dim) < (FACE_R_DIM >> 1))
-                                          ? (FACE_R_DIM >> (ckernel::math::math_rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
+                                          ? (FACE_R_DIM >> (rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
                                           : 1;
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)

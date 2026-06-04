@@ -28,7 +28,7 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop, const std::uint32_t num_rows_per_move_instrn)
 {
     // Divide number of rows by how many rows are output per fpu instruction
-    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> math_rows_log2(num_rows_per_move_instrn);
+    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
     const std::uint32_t mov_rows_instn = (num_rows_per_move_instrn == 8)
                                              ? p_mov_src_to_dest::MOV_8_ROWS
                                              : ((num_rows_per_move_instrn == 4) ? p_mov_src_to_dest::MOV_4_ROWS : p_mov_src_to_dest::MOV_1_ROW);
