@@ -5,6 +5,7 @@ import math
 import ttnn
 import torch
 
+
 def tst_attention(
     device,
     hidden_states,
@@ -32,40 +33,44 @@ def tst_attention(
     h = to_torch_strip(hidden_states)
     kv = to_torch_strip(key_value_states) if is_cross_attention else h
 
-    def w(t):
+    def get_w(t):
         x = ttnn.to_torch(t).float()
-        if x.shape[0] > true_d_model:
-            x = x[:true_d_model, :]
-        if x.shape[1] > true_d_model:
-            x = x[:, :true_d_model]
-        return x
+        return x[:true_d_model, :true_d_model]
 
-    def b(t):
+    def get_b(t):
         x = ttnn.to_torch(t).float().squeeze()
         return x[:true_d_model]
 
-    Wq, Wk, Wv, Wo = w(q_proj_weight), w(k_proj_weight), w(v_proj_weight), w(out_proj_weight)
-    bq, bk, bv, bo = b(q_proj_bias), b(k_proj_bias), b(v_proj_bias), b(out_proj_bias)
+    Wq = get_w(q_proj_weight)
+    Wk = get_w(k_proj_weight)
+    Wv = get_w(v_proj_weight)
+    Wo = get_w(out_proj_weight)
+    bq = get_b(q_proj_bias)
+    bk = get_b(k_proj_bias)
+    bv = get_b(v_proj_bias)
+    bo = get_b(out_proj_bias)
 
     B, tgt_len, _ = h.shape
     src_len = kv.shape[1]
 
-    # Compute transformations using float64 to ensure high fidelity
-    q = (h @ Wq + bq).double()
-    k = (kv @ Wk + bk).double()
-    v = (kv @ Wv + bv).double()
+    q = h @ Wq + bq
+    k = kv @ Wk + bk
+    v = kv @ Wv + bv
 
     q = q.view(B, tgt_len, num_heads, head_dim).transpose(1, 2)
     k = k.view(B, src_len, num_heads, head_dim).transpose(1, 2)
     v = v.view(B, src_len, num_heads, head_dim).transpose(1, 2)
 
     scale = 1.0 / math.sqrt(head_dim)
-    attn_scores = (q @ k.transpose(-2, -1)) * scale
-    attn_weights = torch.softmax(attn_scores, dim=-1)
-    
-    out = (attn_weights @ v).float()
+    attn = (q @ k.transpose(-2, -1)) * scale
+    attn = torch.softmax(attn, dim=-1)
+    out = attn @ v
+
     out = out.transpose(1, 2).contiguous().view(B, tgt_len, true_d_model)
     out = out @ Wo + bo
 
-    tt_tensor = ttnn.from_torch(out, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    return ttnn.to_layout(tt_tensor, ttnn.TILE_LAYOUT)
+    pad = 32 - (true_d_model % 32)
+    if pad < 32:
+        out = torch.nn.functional.pad(out, (0, pad))
+
+    return ttnn.from_torch(out, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
