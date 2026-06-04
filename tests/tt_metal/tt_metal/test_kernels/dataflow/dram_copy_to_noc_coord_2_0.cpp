@@ -139,9 +139,9 @@ void kernel_main() {
         // Exercises DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE, which must reconstruct the
         // destination from NOC_RET_ADDR (not the sender's own coordinate in NOC_TARG_ADDR). buffer_size is kept
         // <= NOC_MAX_BURST_SIZE by the host so this takes the one-packet path with a deterministic length.
-        noc.set_async_write_state<Noc::ResponseMode::NON_POSTED, NOC_MAX_BURST_SIZE>(
+        noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
-        noc.async_write_with_state<Noc::ResponseMode::NON_POSTED, NOC_MAX_BURST_SIZE>(
+        noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             local_buffer,
             dst_unicast_endpoint,
             buffer_size,

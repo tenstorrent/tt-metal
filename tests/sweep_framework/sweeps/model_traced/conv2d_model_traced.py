@@ -164,8 +164,11 @@ _SLICE_TYPE_MAP = {
     "L1Full": "L1Full",
     "DRAMSliceHeight": "DRAMSliceHeight",
     "DRAM_SLICE_HEIGHT": "DRAMSliceHeight",
+    # C++ SliceType enum repr (what the tracer records): SliceType::DRAM_HEIGHT / DRAM_WIDTH.
+    "DRAM_HEIGHT": "DRAMSliceHeight",
     "DRAMSliceWidth": "DRAMSliceWidth",
     "DRAM_SLICE_WIDTH": "DRAMSliceWidth",
+    "DRAM_WIDTH": "DRAMSliceWidth",
 }
 
 
