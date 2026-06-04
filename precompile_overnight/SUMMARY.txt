@@ -1,0 +1,35 @@
+===================================================================
+Overnight precompile A/B — FULL groupnorm golden suite
+started : Tue Jun  2 16:50:38 UTC 2026
+host    : bgd-lab-t3003-special-mstaletovic-for-reservation-23771
+cgroup  : limit 126 GB
+suite   : .claude/eval/golden_tests/groupnorm_sc_N_1_HW_C/test_golden.py (all RUN cases, no size cap)
+===================================================================
+
+>>> RUN A  normal (cold, no precompile)  start Tue Jun  2 16:50:38 UTC 2026
+RUN A  normal       : exit=1  total_wall=5325s (88m)  session=in 5308.52s
+RUN A  test counts  : 140 failed 2808 passed 3552 skipped 737 xfailed
+RUN A  cache size   : 28G
+
+>>> RUN B  new workers=8 greedy (cold -> precompile -> warm)  start Tue Jun  2 18:19:30 UTC 2026
+RUN B  new(w8)      : exit=1  total_wall=2774s (46m)  session=in 2767.80s
+RUN B  precompile   : EVAL_PRECOMPILE: 2948 unique programs compiled in 2557.3s (captured 2948/2948, non-generic 0, capture-errs 0, compile-errs 0)
+RUN B  test counts  : 140 failed 2808 passed 3552 skipped 737 xfailed
+RUN B  OOM/killed?  : 0 hits
+
+>>> RUN C  new workers=4 (fallback, B8 exit=1)  start Tue Jun  2 19:05:50 UTC 2026
+RUN C  new(w4)      : exit=1  total_wall=2750s (45m)  session=in 2743.15s
+RUN C  precompile   : EVAL_PRECOMPILE: 2948 unique programs compiled in 2532.0s (captured 2948/2948, non-generic 0, capture-errs 0, compile-errs 0)
+RUN C  test counts  : 140 failed 2808 passed 3552 skipped 737 xfailed
+RUN C  OOM/killed?  : 0 hits
+
+=== memory peak during the night ===
+peak usage = 125.9 GB (rss 3.5, cache 115.5)  /  limit 126 GB
+memory.failcnt (end) = 217412
+
+=== A/B verdict ===
+A normal (cold, sequential)         : 5325s (88m)  exit=1
+B new    (cold, precompile w8)       : FAILED exit=1 (see B_new_w8.log; likely OOM)
+
+finished: Tue Jun  2 19:51:48 UTC 2026
+logs: A_normal.log  B_new_w8.log  C_new_w4.log  mem.log
