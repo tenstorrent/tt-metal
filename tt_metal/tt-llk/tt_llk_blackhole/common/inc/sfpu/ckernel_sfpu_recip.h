@@ -79,7 +79,7 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations)
 #endif
 }
 
-// BF16 reciprocal, with throughput of 3c/32.
+// BF16 reciprocal using a Newton correction on the BF16 LSB.
 inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
 {
 #ifdef DISABLE_SFPLOADMACRO
@@ -98,89 +98,61 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
     }
 #else
-    // We use SFPMAD_MOD1_INDIRECT_VD to schedule SFPMAD and write to L[L7],
-    // with L7=x throughout.
-    //
-    // We also set L0=0x80000000 throughout, which allows us to store it as
-    // 0x8000 (BF16), and then load using MOD0_LO16_ONLY to write this to the
-    // low bits of y.
-    //
-    // For all macros, we disable UsesLoadMod0ForStore, and set
-    // StoreMod0=MOD0_FMT_SRCB.
-    //
-    // In pseudocode, the following steps allow the LSB of the BF16 result to
-    // be corrected using the sign bit of the error term:
-    //
-    // y = load()
-    // x = 0*0 + y
-    // y = arecip(y)
-    // y = y | (1<<15) # via load of 0x8000 with MOD0_LO16_ONLY
-    // z = x * y - 1   # compute Newton-Raphson error term
-    // t = z >> 16     # via load with MOD0_LO16
-    // y += t          # integer add, not FP32 add
-    // store(y)
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    //   | Load           | Simple                 | MAD                    | Store   |
-    // - | -------------- | ---------------------- | ---------------------- |-------- |
-    // 0 | [y] SRCB       |                        |                        |         |
-    // 1 |                | [y] = arecip([y])      | [y] x = mad(0, 0, [y]) | [y] L0  |
-    // 2 | [y1] LO16_ONLY |                        |                        |         |
-    // 0 |                |                        | [y1] = mad(x, y1, -1)  |         |
-    // 1 |                |                        |                        |         |
-    // 2 |                |                        |                        | [y1]    |
-    // 0 |                |                        |                        |         |
-    // 1 | [t] LO16       |                        |                        |         |
-    // 2 |                | [y1] L16 = iadd(t, y1) |                        |         |
-    // 0 |                |                        |                        | [t] L16 |
+    constexpr int y = p_sfpu::LREG0;
+    constexpr int x = p_sfpu::LREG1;
 
-    constexpr int x           = p_sfpu::LREG1;
-    constexpr int t           = p_sfpu::LREG1;
-    constexpr int offset      = 0;
-    constexpr int prev_offset = -4 & 0x3ff;
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
+    // Macro template 0 uses SFPMAD_MOD1_INDIRECT_VD, so LREG7 selects where
+    // the source x copy lands.
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, x);
 
-    // Prologue (first two iterations): 2nd instruction is SFPNOP.
-    const int fill_end = iterations < 2 ? iterations : 2;
-#pragma GCC unroll 2
-    for (int d = 0; d < fill_end; d++)
+    // Pseudocode for the BF16 correction:
+    //
+    // y = load()
+    // x = y
+    // y = arecip(y)
+    // y[15:0] = 0x8000
+    // e = x * y - 1
+    // t = e >> 16
+    // y += t          # integer add, not FP32 add
+    // store(y)
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
     {
-        int y = 3 + (d % 3);
-        TT_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2)); // MOD0_FMT_SRCB
+        TT_SFPLOADMACRO(
+            /*lreg_ind*/ (0 << 2) | y,
+            /*instr_mod0*/ InstrModLoadStore::DEFAULT,
+            /*sfpu_addr_mode*/ ADDR_MOD_7,
+            /*dest_reg_addr*/ 0);
+        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
+        // Wait before writing y's low 16 bits directly.
         TTI_SFPNOP;
-        TT_SFPLOADMACRO((1 << 2) | (y & 3), 14, ADDR_MOD_6, offset | (y >> 2)); // MOD0_FMT_LO16_ONLY
-    }
-
-    // Main (d = 2 to iterations-1): all three SFPLOADMACROs are active.
-#pragma GCC unroll 6
-    for (int d = 2; d < iterations; d++)
-    {
-        int y = 3 + (d % 3);
-        TT_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2));      // MOD0_FMT_SRCB
-        TT_SFPLOADMACRO((2 << 2) | (t & 3), 9, ADDR_MOD_7, prev_offset | (t >> 2)); // MOD0_FMT_LO16
-        TT_SFPLOADMACRO((1 << 2) | (y & 3), 14, ADDR_MOD_6, offset | (y >> 2));     // MOD0_FMT_LO16_ONLY
-    }
-
-    // Fill gap with SFPNOPs when iterations < 2.
-#pragma GCC unroll 2
-    for (int d = iterations; d < 2; d++)
-    {
-        TTI_SFPNOP;
-        TTI_SFPNOP;
-        TTI_SFPNOP;
-    }
-
-    // Epilogue (final two iterations): 1st and 3rd instructions are SFPNOP; 2nd instruction uses ADDR_MOD_6.
-    const int drain_start = iterations < 2 ? 2 : iterations;
-#pragma GCC unroll 2
-    for (int d = drain_start; d < iterations + 2; d++)
-    {
-        TTI_SFPNOP;
-        TT_SFPLOADMACRO((2 << 2) | (t & 3), 9, ADDR_MOD_6, prev_offset | (t >> 2)); // MOD0_FMT_LO16
-        TTI_SFPNOP;
+        // Keep the patch and correction in LReg space; macro store/reload
+        // scheduling can read a just-written Dst block too soon on Blackhole.
+        TTI_SFPLOADI(
+            /*lreg_ind*/ y,
+            /*instr_mod0*/ sfpi::SFPLOADI_MOD0_LOWER,
+            /*imm16*/ 0x8000);
+        TTI_SFPMAD(
+            /*lreg_src_a*/ x,
+            /*lreg_src_b*/ y,
+            /*lreg_src_c*/ p_sfpu::LCONST_neg1,
+            /*lreg_dest*/ x,
+            /*instr_mod1*/ 0);
+        TTI_SFPSHFT(
+            /*imm12_math*/ (-16) & 0xFFF,
+            /*lreg_c*/ x,
+            /*lreg_dest*/ x,
+            /*instr_mod1*/ 5);
+        TTI_SFPIADD(
+            /*imm12_math*/ 0,
+            /*lreg_c*/ x,
+            /*lreg_dest*/ y,
+            /*instr_mod1*/ sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSTORE(
+            /*lreg_ind*/ y,
+            /*instr_mod0*/ InstrModLoadStore::DEFAULT,
+            /*sfpu_addr_mode*/ ADDR_MOD_6,
+            /*dest_reg_addr*/ 0);
     }
 
     TTI_SFPNOP;
@@ -316,58 +288,40 @@ inline void _init_reciprocal_fast_7b_()
 inline void _init_reciprocal_fast_8b_3c_()
 {
 #ifndef DISABLE_SFPLOADMACRO
-    constexpr int x = p_sfpu::LREG1;
-    constexpr int t = p_sfpu::LREG1;
-
     // InstructionTemplate[0]
-    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPARECIP(
+        /*imm12_math*/ 0,
+        /*lreg_c*/ 0,
+        /*lreg_dest*/ 12,
+        /*instr_mod1*/ sfpi::SFPARECIP_MOD1_RECIP);
 
     // InstructionTemplate[1]
-    TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, 0, 13, 8); // SFPMAD_MOD1_INDIRECT_VD
+    TTI_SFPMAD(
+        /*lreg_src_a*/ p_sfpu::LCONST_0,
+        /*lreg_src_b*/ p_sfpu::LCONST_0,
+        /*lreg_src_c*/ 0,
+        /*lreg_dest*/ 13,
+        /*instr_mod1*/ 8); // SFPMAD_MOD1_INDIRECT_VD
 
-    // InstructionTemplate[2]
-    TTI_SFPMAD(x, 0, p_sfpu::LCONST_neg1, 14, 0);
-
-    // InstructionTemplate[3]
-    TTI_SFPIADD(0, t, 15, sfpi::SFPIADD_MOD1_CC_NONE);
-
+    // Macro 0: [y]
+    // Loads y, schedules y = arecip(y), and copies y to L[LREG7].
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
         constexpr std::uint32_t mad_bits    = 0x00 | 0x00 | (0 << 3) | (4 + 1);
         constexpr std::uint32_t round_bits  = 0;
-        constexpr std::uint32_t store_bits  = 0x80 | 0x00 | (0 << 3) | 3;
+        constexpr std::uint32_t store_bits  = 0;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
         TTI_SFPCONFIG(0, 4 + 0, 0);
     }
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x40 | (5 << 3) | (4 + 3);
-        constexpr std::uint32_t mad_bits    = 0x80 | 0x40 | (0 << 3) | (4 + 2);
-        constexpr std::uint32_t round_bits  = 0;
-        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (2 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
-    }
-    {
-        constexpr std::uint32_t simple_bits = 0;
-        constexpr std::uint32_t mad_bits    = 0;
-        constexpr std::uint32_t round_bits  = 0;
-        constexpr std::uint32_t store_bits  = 0x00 | 0x40 | (1 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 2, 0);
-    }
 
     // Misc: {
-    //   StoreMod0: MOD0_FMT_SRCB,
-    //   UsesLoadMod0ForStore: {0,0,0},
-    //   UnitDelayKind: {1,1,1}, (WaitForElapsedInstructions=1)
+    //   StoreMod0: 0, unused
+    //   UsesLoadMod0ForStore: {0,0,0,0},
+    //   UnitDelayKind: Simple + MAD use WaitForElapsedInstructions
     // }
-    TTI_SFPCONFIG(0x700, 8, 1);
+    TTI_SFPCONFIG(0x300, 8, 1);
 #endif
 }
 

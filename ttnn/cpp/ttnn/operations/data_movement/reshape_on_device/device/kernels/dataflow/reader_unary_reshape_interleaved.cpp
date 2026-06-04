@@ -6,6 +6,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 using uint32_t = std::uint32_t;
 
@@ -31,11 +33,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
-    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    constexpr uint32_t cb_id_intermed = 1;
+    CircularBuffer cb_intermed(cb_id_intermed);
+    uint32_t intermed_l1_scratch = MISALIGNED ? cb_intermed.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
+    Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
 
     // Sticks are a row of elements in a single tile (32 elements)
@@ -56,11 +61,9 @@ void kernel_main() {
                         uint32_t input_tile_sub_row_to_read =
                             output_stick_id % num_sticks_per_input_tile_row / input_Wt;
 
-                        uint64_t banked_addr = s0.get_noc_addr(input_tile_to_read);
-                        banked_addr +=
-                            (((input_tile_sub_row_to_read >> 4) << 1)
-                             << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
-                        banked_addr += ((input_tile_sub_row_to_read & 15) << 5);  // 16 * 2 bytes per face row
+                        // intra-tile offset within the source tile
+                        uint32_t intra_tile_offset =
+                            (((input_tile_sub_row_to_read >> 4) << 1) << 9) + ((input_tile_sub_row_to_read & 15) << 5);
 
                         uint32_t dest_tr0_l1 = cb_in0.get_write_ptr();
                         dest_tr0_l1 +=
@@ -69,39 +72,50 @@ void kernel_main() {
 
                         for (uint8_t i = 0; i < 2; ++i) {
                             if (MISALIGNED) {
-                                // if banked addr and dest addr don't share alignment then we need to read to the
-                                // intermediate buffer and then copy it to the correct location
+                                // Need the absolute noc addr to compute alignment relative to source.
+                                uint64_t banked_addr = s0.get_noc_addr(input_tile_to_read) + intra_tile_offset;
                                 uint32_t banked_alignment = banked_addr % ALIGNMENT;
                                 if (dest_tr0_l1 % ALIGNMENT != banked_alignment) {
-                                    // we write to the top of the intermediate buffer as that's aligned, and we write
-                                    // from the closest align source address if source is not aligned to ALIGNMENT then
-                                    // we go to the nearest address that is aligned and copy from there
-                                    noc_async_read(banked_addr - (banked_alignment), intermed_l1_scratch, ALIGNMENT);
+                                    CoreLocalMem<uint32_t> scratch_dst(intermed_l1_scratch);
+                                    noc.async_read(
+                                        s0,
+                                        scratch_dst,
+                                        ALIGNMENT,
+                                        {.page_id = input_tile_to_read,
+                                         .offset_bytes = intra_tile_offset - banked_alignment},
+                                        {.offset_bytes = 0});
                                     volatile tt_l1_ptr uint8_t* dest_tr0_l1_ptr = (volatile uint8_t*)dest_tr0_l1;
-                                    // need the barrier to ensure that we can copy from the intermediate buffer
-                                    noc_async_read_barrier();
-                                    // if source is not aligned to ALIGNMENT then we need to skip forward by the amount
-                                    // needed to align to get to the correct data
+                                    noc.async_read_barrier();
                                     for (uint32_t i = 0; i < SUBTILE_LINE_BYTES; i++) {
                                         dest_tr0_l1_ptr[i] = intermed_l1_scratch_ptr[i + banked_alignment];
                                     }
                                 } else {
-                                    // if source and destination alignment are equivalent then we can read directly to
-                                    // the destination
-                                    noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                                    CoreLocalMem<uint32_t> dst(dest_tr0_l1);
+                                    noc.async_read(
+                                        s0,
+                                        dst,
+                                        SUBTILE_LINE_BYTES,
+                                        {.page_id = input_tile_to_read, .offset_bytes = intra_tile_offset},
+                                        {.offset_bytes = 0});
                                 }
                             } else {
-                                noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                                CoreLocalMem<uint32_t> dst(dest_tr0_l1);
+                                noc.async_read(
+                                    s0,
+                                    dst,
+                                    SUBTILE_LINE_BYTES,
+                                    {.page_id = input_tile_to_read, .offset_bytes = intra_tile_offset},
+                                    {.offset_bytes = 0});
                             }
                             // Read the 16 elements for the row of the face directly adjacent since this comes from the
                             // same input tile
                             dest_tr0_l1 += 512;  // 16 subtile rows of 16 elements of 2 bytes for bfloat16 (16 * 16 * 2)
-                            banked_addr += 512;
+                            intra_tile_offset += 512;
                         }
 
                         output_stick_id += output_Wt;
                     }
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                     // notifies the unpacker that the buffer is populated
                     cb_in0.push_back(onetile);
 

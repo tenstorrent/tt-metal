@@ -71,6 +71,8 @@ ttnn::Tensor reduce(
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate = false,
-    float post_mul_scaler = 1.0f);
+    float post_mul_scaler = 1.0f,
+    bool row_major_w_dense_path = false,
+    bool row_major_h_dense_path = false);
 
 }  // namespace ttnn::prim

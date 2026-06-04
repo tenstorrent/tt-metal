@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Define the sentinel value for a page table entry that indicates a skip.
 constexpr uint32_t SKIP_PAGE_TABLE_ENTRY = (uint32_t)-1;
@@ -29,6 +33,8 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 }
 
 void kernel_main() {
+    Noc noc;
+
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(1);
     constexpr uint32_t num_heads = get_compile_time_arg_val(2);
@@ -68,6 +74,10 @@ void kernel_main() {
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
+    CircularBuffer cb_in(cb_id_in);
+    CircularBuffer cb_page_table(cb_id_page_table);
+    CircularBuffer cb_batch_idx(cb_id_batch_idx);
+
     // Resolve batch_idx source. For use_batch_idx_tensor=true we load the
     // (small) 1D tensor into an L1 CB once so per-row lookups stay local.
     // For use_batch_idx_tensor=false the scalar fallback in arg 4 is used.
@@ -75,13 +85,17 @@ void kernel_main() {
     uint32_t scalar_batch_idx = 0;
     if constexpr (use_batch_idx_tensor) {
         const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_arg);
-        cb_reserve_back(cb_id_batch_idx, 1);
-        const uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
+        cb_batch_idx.reserve_back(1);
+        const uint32_t batch_idx_cb_wr_ptr = cb_batch_idx.get_write_ptr();
         // The tensor is a contiguous 1D int (uint32/int32) tensor in DRAM with
         // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
-        const uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
-        noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size * batch_idx_num_elements);
-        noc_async_read_barrier();
+        noc.async_read(
+            batch_idx_gen,
+            CoreLocalMem<uint32_t>(batch_idx_cb_wr_ptr),
+            batch_idx_stick_size * batch_idx_num_elements,
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
         batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
     } else {
         scalar_batch_idx = batch_arg;
@@ -93,8 +107,8 @@ void kernel_main() {
     const auto out_gen = TensorAccessor(s0_args, dst_addr);
     const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
 
-    cb_reserve_back(cb_id_page_table, 1);
-    const uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
+    cb_page_table.reserve_back(1);
+    const uint32_t page_table_cb_wr_ptr = cb_page_table.get_write_ptr();
     volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 
     // Cache the last batch for which page_table was loaded. Legacy path loads
@@ -134,8 +148,8 @@ void kernel_main() {
         // later iteration anyway. The input CB still has to be drained so the
         // reader doesn't stall, but no NOC writes go out.
         if (seq_tile_id < skip_tiles) {
-            cb_wait_front(cb_id_in, Wt);
-            cb_pop_front(cb_id_in, Wt);
+            cb_in.wait_front(Wt);
+            cb_in.pop_front(Wt);
             continue;
         }
 
@@ -148,9 +162,13 @@ void kernel_main() {
 
         // Reload page_table row only on batch boundary.
         if (batch_idx != cached_batch) {
-            const uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
-            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-            noc_async_read_barrier();
+            noc.async_read(
+                page_table_gen,
+                CoreLocalMem<uint32_t>(page_table_cb_wr_ptr),
+                page_table_stick_size,
+                {.page_id = batch_idx},
+                {});
+            noc.async_read_barrier();
             cached_batch = batch_idx;
         }
 
@@ -165,19 +183,20 @@ void kernel_main() {
 
         if (physical_tile_id == SKIP_PAGE_TABLE_ENTRY) {
             // Block should be skipped. Consume the input tiles from the CB and discard.
-            cb_wait_front(cb_id_in, Wt);
-            cb_pop_front(cb_id_in, Wt);
+            cb_in.wait_front(Wt);
+            cb_in.pop_front(Wt);
         } else {
             // Valid block, proceed with writing.
-            cb_wait_front(cb_id_in, Wt);
-            uint32_t l1_read_addr = get_read_ptr(cb_id_in);
+            cb_in.wait_front(Wt);
+            uint32_t l1_read_addr = cb_in.get_read_ptr();
             for (uint32_t w = 0; w < Wt; ++w) {
-                noc_async_write_tile(physical_tile_id, out_gen, l1_read_addr);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr), out_gen, tile_bytes, {}, {.page_id = physical_tile_id});
                 l1_read_addr += tile_bytes;
                 physical_tile_id += 1;
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_id_in, Wt);
+            noc.async_write_barrier();
+            cb_in.pop_front(Wt);
         }
     }
 }

@@ -139,6 +139,8 @@ enum class EthDebugReg : uint8_t {
     ERISC1_RESET_PC,
     // RISC soft reset register
     RISC_SOFT_RESET,
+    // ETH_CTRL ERR_STAT register (link error status)
+    ERR_STAT,
     // Number of debug register entries
     COUNT,
 };
@@ -381,6 +383,7 @@ private:
 
     uint32_t eth_interrupt_mode_base_reg_{};
     uint32_t eth_interrupt_num_vecs_{};
+    uint32_t noc_max_burst_size_bytes_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -480,6 +483,8 @@ public:
     uint32_t get_arch_num_circular_buffers() const {
         return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
     }
+
+    uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
