@@ -13,6 +13,7 @@ import torchaudio
 
 from models.experimental.audiox.demo.demo import (
     _HF_CONFIG,
+    _resolve_duration_seconds,
     run_demo,
 )
 from models.experimental.audiox.demo.media import make_synthetic_video_prompt
@@ -132,7 +133,7 @@ def _build_synthetic_video_prompt(args: argparse.Namespace) -> torch.Tensor | No
     if not args.synthetic_video:
         return None
     return make_synthetic_video_prompt(
-        target_frames=5 * _HF_CONFIG["duration_seconds"],
+        target_frames=5 * _resolve_duration_seconds(args.duration_seconds),
         image_size=224,
         seed=args.seed,
     )
@@ -173,6 +174,7 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_
         steps=args.steps,
         seed=args.seed,
         device=args.cpu_device,
+        duration_seconds=args.duration_seconds,
         return_details=True,
     )
     elapsed_seconds = time.perf_counter() - started_at
@@ -201,6 +203,7 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
                 video_prompt_tensor=synthetic_video_prompt,
                 steps=args.steps,
                 seed=args.seed,
+                duration_seconds=args.duration_seconds,
                 return_details=True,
             )
             elapsed_seconds = time.perf_counter() - started_at
@@ -233,6 +236,7 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
                     cross_attn_cond_torch=shared_cross_attn_cond,
                     steps=args.steps,
                     seed=args.seed,
+                    duration_seconds=args.duration_seconds,
                     return_details=True,
                 )
                 run_elapsed_seconds = time.perf_counter() - started_at
@@ -285,8 +289,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--mode-label", type=str, help="Optional explicit conditioning mode label")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--duration-seconds", type=int, default=_HF_CONFIG["duration_seconds"])
     p.add_argument("--cpu-device", type=str, default="cpu", choices=("cpu", "cuda"))
     p.add_argument("--tt", action="store_true", help="Also run the TT path and compare with CPU output")
+    p.add_argument("--tt-only", action="store_true", help="Skip CPU reference and run only the TT path")
     p.add_argument("--tt-device-id", type=int, default=0)
     p.add_argument("--tt-warm-runs", type=int, default=1, help="Optional number of additional warm TT runs")
     p.add_argument("--report-json", type=Path, help="Optional explicit report path")
@@ -295,6 +301,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         p.error("pass at most one of --synthetic-video, --video, or --image")
     if not args.prompt and args.video is None and args.image is None and args.audio is None and not args.synthetic_video:
         p.error("at least one of --prompt, --video, --image, or --audio is required")
+    if args.tt_only and not args.tt:
+        p.error("--tt-only requires --tt")
     return args
 
 
@@ -316,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoint": str(args.checkpoint),
         "steps": args.steps,
         "seed": args.seed,
-        "cpu": _run_cpu_reference(args, cpu_output, synthetic_video_prompt=synthetic_video_prompt),
+        "duration_seconds": int(args.duration_seconds),
+        "cpu": None if args.tt_only else _run_cpu_reference(args, cpu_output, synthetic_video_prompt=synthetic_video_prompt),
         "tt": None,
         "comparison": None,
         "latent_comparison": None,
@@ -326,14 +335,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.tt:
         gc.collect()
         report["tt"] = _run_tt_reference(args, tt_output, synthetic_video_prompt=synthetic_video_prompt)
-        report["comparison"] = _compare_audio_files(cpu_output, tt_output)
-        report["latent_comparison"] = _compare_tensors(report["cpu"]["_latent"], report["tt"]["_latent"])
+        if report["cpu"] is not None:
+            report["comparison"] = _compare_audio_files(cpu_output, tt_output)
+            report["latent_comparison"] = _compare_tensors(report["cpu"]["_latent"], report["tt"]["_latent"])
 
     tt_perf_summary = report["tt"]
 
     report["stage1_checks"] = {
-        "valid_16khz": bool(report["cpu"]["valid_16khz"]) and (
-            report["tt"] is None or bool(report["tt"]["valid_16khz"])
+        "valid_16khz": (
+            bool(report["tt"]["valid_16khz"]) if report["cpu"] is None else bool(report["cpu"]["valid_16khz"]) and (
+                report["tt"] is None or bool(report["tt"]["valid_16khz"])
+            )
         ),
         "tt_runs_without_error": report["tt"] is not None,
         "same_shape": None if report["comparison"] is None else report["comparison"]["same_shape"],
@@ -349,23 +361,26 @@ def main(argv: list[str] | None = None) -> int:
         else report["latent_comparison"]["pcc"] >= 0.95,
     }
 
-    report["cpu"].pop("_latent", None)
+    if report["cpu"] is not None:
+        report["cpu"].pop("_latent", None)
     if report["tt"] is not None:
         report["tt"].pop("_latent", None)
 
     report_path.write_text(json.dumps(report, indent=2) + "\n")
 
     print(f"conditioning_mode: {report['conditioning_mode']}")
-    print(f"cpu_output: {cpu_output}")
-    print(f"cpu_elapsed_seconds: {report['cpu']['elapsed_seconds']:.3f}")
-    print(f"cpu_valid_16khz: {report['cpu']['valid_16khz']}")
+    if report["cpu"] is not None:
+        print(f"cpu_output: {cpu_output}")
+        print(f"cpu_elapsed_seconds: {report['cpu']['elapsed_seconds']:.3f}")
+        print(f"cpu_valid_16khz: {report['cpu']['valid_16khz']}")
     if report["tt"] is not None:
         print(f"tt_output: {tt_output}")
         print(f"tt_elapsed_seconds: {report['tt']['elapsed_seconds']:.3f}")
         print(f"tt_generation_seconds: {report['tt']['generation_seconds']:.3f}")
         print(f"tt_valid_16khz: {report['tt']['valid_16khz']}")
-        print(f"tt_same_shape: {report['comparison']['same_shape']}")
-        print(f"tt_same_sample_rate: {report['comparison']['same_sample_rate']}")
+        if report["comparison"] is not None:
+            print(f"tt_same_shape: {report['comparison']['same_shape']}")
+            print(f"tt_same_sample_rate: {report['comparison']['same_sample_rate']}")
         print(f"tt_diffusion_tokens_per_second: {report['tt']['diffusion_tokens_per_second']:.3f}")
         if report["tt"].get("warm_runs"):
             warm_summary = report["tt"]["warm_runs"][-1]

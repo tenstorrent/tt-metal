@@ -73,6 +73,10 @@ _HF_CONFIG = {
 }
 
 
+def _resolve_duration_seconds(duration_seconds: int | None) -> int:
+    return _HF_CONFIG["duration_seconds"] if duration_seconds is None else int(duration_seconds)
+
+
 class _ZeroPretransform(torch.nn.Module):
     """Stand-in for the Oobleck VAE encoder used by the audio-prompt
     conditioner. The text-to-audio path always feeds zero audio so the
@@ -127,16 +131,17 @@ def _build_decoder() -> OobleckDecoder:
     )
 
 
-def _empty_video_for_text_only(batch: int) -> torch.Tensor:
+def _empty_video_for_text_only(batch: int, *, duration_seconds: int | None = None) -> torch.Tensor:
     """All-zero video that triggers the CLIPConditioner empty-feat shortcut."""
     fps = 5
-    duration = _HF_CONFIG["duration_seconds"]
+    duration = _resolve_duration_seconds(duration_seconds)
     return torch.zeros(batch, fps * duration, 3, 224, 224)
 
 
-def _empty_audio_for_text_only(batch: int) -> torch.Tensor:
+def _empty_audio_for_text_only(batch: int, *, duration_seconds: int | None = None) -> torch.Tensor:
     """All-zero audio that triggers the AudioAutoencoderConditioner shortcut."""
-    samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
+    duration = _resolve_duration_seconds(duration_seconds)
+    samples = _HF_CONFIG["sample_rate"] * duration
     return torch.zeros(batch, 2, samples)
 
 
@@ -149,12 +154,17 @@ def _build_metadata_batch_with_inputs(
     *,
     video_prompt: torch.Tensor | None = None,
     audio_prompt: torch.Tensor | None = None,
+    duration_seconds: int | None = None,
 ) -> list:
     return [
         {
             "text_prompt": prompt,
-            "video_prompt": video_prompt if video_prompt is not None else _empty_video_for_text_only(1),
-            "audio_prompt": audio_prompt if audio_prompt is not None else _empty_audio_for_text_only(1),
+            "video_prompt": video_prompt
+            if video_prompt is not None
+            else _empty_video_for_text_only(1, duration_seconds=duration_seconds),
+            "audio_prompt": audio_prompt
+            if audio_prompt is not None
+            else _empty_audio_for_text_only(1, duration_seconds=duration_seconds),
         }
     ]
 
@@ -162,22 +172,25 @@ def _build_metadata_batch_with_inputs(
 def _load_visual_prompt(
     video_path: Path | None,
     image_path: Path | None,
+    *,
+    duration_seconds: int | None = None,
 ) -> torch.Tensor | None:
     if video_path is not None and image_path is not None:
         raise ValueError("pass at most one of --video or --image")
     if video_path is None and image_path is None:
         return None
 
-    target_frames = 5 * _HF_CONFIG["duration_seconds"]
+    target_frames = 5 * _resolve_duration_seconds(duration_seconds)
     if video_path is not None:
         return load_video_prompt(video_path, target_frames=target_frames)
     return load_image_prompt(image_path, target_frames=target_frames)
 
 
-def _load_audio_prompt(audio_path: Path | None) -> torch.Tensor | None:
+def _load_audio_prompt(audio_path: Path | None, *, duration_seconds: int | None = None) -> torch.Tensor | None:
     if audio_path is None:
         return None
-    target_samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
+    duration = _resolve_duration_seconds(duration_seconds)
+    target_samples = _HF_CONFIG["sample_rate"] * duration
     return load_audio_prompt(
         audio_path,
         target_sample_rate=_HF_CONFIG["sample_rate"],
@@ -189,10 +202,12 @@ def _load_audio_prompt(audio_path: Path | None) -> torch.Tensor | None:
 def _resolve_audio_prompt(
     audio_path: Path | None,
     audio_prompt_tensor: torch.Tensor | None,
+    *,
+    duration_seconds: int | None = None,
 ) -> torch.Tensor | None:
     if audio_prompt_tensor is not None:
         return audio_prompt_tensor
-    return _load_audio_prompt(audio_path)
+    return _load_audio_prompt(audio_path, duration_seconds=duration_seconds)
 
 
 def _make_cross_attn_cond(multi_out: dict) -> torch.Tensor:
@@ -216,10 +231,12 @@ def run_demo(
     steps: int = 100,
     seed: int = 0,
     device: str = "cpu",
+    duration_seconds: int | None = None,
     return_details: bool = False,
 ) -> Path | dict:
     """Generate one stereo audio clip for ``prompt`` and save to ``output``.
     Returns the output path on success."""
+    duration_seconds = _resolve_duration_seconds(duration_seconds)
     torch.manual_seed(seed)
     if video_prompt_tensor is not None and (video_path is not None or image_path is not None):
         raise ValueError("pass either a visual path or video_prompt_tensor, not both")
@@ -235,7 +252,7 @@ def run_demo(
     # Build modules and load weights. Conditioners get only the matching id;
     # T5/CLIP HF visual encoder weights live outside state_dict, so missing
     # keys for them are expected.
-    audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
+    audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor, duration_seconds=duration_seconds)
     audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
     if audio_pretransform is not None:
         load_into(audio_pretransform, encoder_sd, label="encoder")
@@ -256,15 +273,23 @@ def run_demo(
     decoder = decoder.to(device)
 
     # Build cross-attn context once per generation.
-    visual_prompt = video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
+    visual_prompt = (
+        video_prompt_tensor
+        if video_prompt_tensor is not None
+        else _load_visual_prompt(video_path, image_path, duration_seconds=duration_seconds)
+    )
     cond_out = multi(
-        _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
+        _build_metadata_batch_with_inputs(
+            prompt=prompt,
+            video_prompt=visual_prompt,
+            audio_prompt=audio_prompt,
+            duration_seconds=duration_seconds,
+        ),
         device,
     )
     cross_attn_cond = _make_cross_attn_cond(cond_out)
 
-    # 10s @ 44.1 kHz / 2048 downsample = 216 latent frames.
-    samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
+    samples = _HF_CONFIG["sample_rate"] * duration_seconds
     t_latent = -(-samples // _HF_CONFIG["downsample"])  # ceil division
     noise = torch.randn(1, _HF_CONFIG["io_channels"], t_latent, device=device)
 
@@ -289,6 +314,7 @@ def run_demo(
             "cross_attn_cond": cross_attn_cond.detach().cpu(),
             "conditioning_tokens": int(cross_attn_cond.shape[1]),
             "t_latent": int(t_latent),
+            "duration_seconds": int(duration_seconds),
         }
     return output
 
@@ -305,6 +331,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
     p.add_argument("--steps", type=int, default=100, help="Number of diffusion steps")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", type=str, default="cpu", choices=("cpu", "cuda"))
+    p.add_argument("--duration-seconds", type=int, default=_HF_CONFIG["duration_seconds"])
     args = p.parse_args(argv)
     if not args.prompt and args.video is None and args.image is None and args.audio is None:
         p.error("at least one of --prompt, --video, --image, or --audio is required")
@@ -323,6 +350,7 @@ def main(argv: list = None) -> int:
         steps=args.steps,
         seed=args.seed,
         device=args.device,
+        duration_seconds=args.duration_seconds,
     )
     print(f"wrote {out}")
     return 0

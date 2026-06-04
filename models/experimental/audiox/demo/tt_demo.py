@@ -36,6 +36,7 @@ from models.experimental.audiox.demo.demo import (
     _build_metadata_batch_with_inputs,
     _load_visual_prompt,
     _make_cross_attn_cond,
+    _resolve_duration_seconds,
     _resolve_audio_prompt,
 )
 from models.experimental.audiox.demo.media import resample_output_audio
@@ -224,6 +225,7 @@ class TtAudioXSession:
         audio_path: Path | None,
         video_prompt_tensor: torch.Tensor | None,
         audio_prompt_tensor: torch.Tensor | None,
+        duration_seconds: int,
     ) -> tuple:
         return (
             prompt,
@@ -232,6 +234,7 @@ class TtAudioXSession:
             None if audio_path is None else str(audio_path),
             None if video_prompt_tensor is None else (id(video_prompt_tensor), tuple(video_prompt_tensor.shape)),
             None if audio_prompt_tensor is None else (id(audio_prompt_tensor), tuple(audio_prompt_tensor.shape)),
+            int(duration_seconds),
         )
 
     def prepare_conditioning(
@@ -243,7 +246,9 @@ class TtAudioXSession:
         audio_path: Path | None = None,
         video_prompt_tensor: torch.Tensor | None = None,
         audio_prompt_tensor: torch.Tensor | None = None,
+        duration_seconds: int | None = None,
     ) -> torch.Tensor:
+        duration_seconds = _resolve_duration_seconds(duration_seconds)
         conditioning_key = self._conditioning_key(
             prompt=prompt,
             video_path=video_path,
@@ -251,18 +256,32 @@ class TtAudioXSession:
             audio_path=audio_path,
             video_prompt_tensor=video_prompt_tensor,
             audio_prompt_tensor=audio_prompt_tensor,
+            duration_seconds=duration_seconds,
         )
         if conditioning_key == self._conditioning_cache_key and self._conditioning_cache_value is not None:
             return self._conditioning_cache_value
 
-        audio_prompt = _resolve_audio_prompt(audio_path, audio_prompt_tensor)
+        audio_prompt = _resolve_audio_prompt(
+            audio_path,
+            audio_prompt_tensor,
+            duration_seconds=duration_seconds,
+        )
         if audio_prompt is not None and self.audio_pretransform is None:
             self.audio_pretransform = _build_audio_pretransform()
             load_into(self.audio_pretransform, self.encoder_sd, label="encoder")
             self.multi.conditioners["audio_prompt"].pretransform = self.audio_pretransform
-        visual_prompt = video_prompt_tensor if video_prompt_tensor is not None else _load_visual_prompt(video_path, image_path)
+        visual_prompt = (
+            video_prompt_tensor
+            if video_prompt_tensor is not None
+            else _load_visual_prompt(video_path, image_path, duration_seconds=duration_seconds)
+        )
         cond_out = self.multi(
-            _build_metadata_batch_with_inputs(prompt=prompt, video_prompt=visual_prompt, audio_prompt=audio_prompt),
+            _build_metadata_batch_with_inputs(
+                prompt=prompt,
+                video_prompt=visual_prompt,
+                audio_prompt=audio_prompt,
+                duration_seconds=duration_seconds,
+            ),
             "cpu",
         )
         cross_attn_cond_torch = _make_cross_attn_cond(cond_out)
@@ -283,8 +302,10 @@ class TtAudioXSession:
         cross_attn_cond_torch: torch.Tensor | None = None,
         steps: int = 100,
         seed: int = 0,
+        duration_seconds: int | None = None,
         return_details: bool = False,
     ) -> Path | dict:
+        duration_seconds = _resolve_duration_seconds(duration_seconds)
         if video_prompt_tensor is not None and (video_path is not None or image_path is not None):
             raise ValueError("pass either a visual path or video_prompt_tensor, not both")
         if audio_prompt_tensor is not None and audio_path is not None:
@@ -301,13 +322,14 @@ class TtAudioXSession:
                 audio_path=audio_path,
                 video_prompt_tensor=video_prompt_tensor,
                 audio_prompt_tensor=audio_prompt_tensor,
+                duration_seconds=duration_seconds,
             )
             timings["conditioning_seconds"] = time.perf_counter() - started_at
         else:
             timings["conditioning_seconds"] = 0.0
 
         started_at = time.perf_counter()
-        samples = _HF_CONFIG["sample_rate"] * _HF_CONFIG["duration_seconds"]
+        samples = _HF_CONFIG["sample_rate"] * duration_seconds
         t_latent = -(-samples // _HF_CONFIG["downsample"])
         noise = torch.randn(1, _HF_CONFIG["io_channels"], t_latent)
 
@@ -349,8 +371,17 @@ class TtAudioXSession:
         )
 
         started_at = time.perf_counter()
-        audio = _tt_to_torch(tt_audio_nhwc, self.device).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
-        _deallocate_tt(tt_audio_nhwc)
+        if isinstance(tt_audio_nhwc, list):
+            audio_chunks = []
+            for tt_chunk in tt_audio_nhwc:
+                audio_chunks.append(
+                    _tt_to_torch(tt_chunk, self.device).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
+                )
+                _deallocate_tt(tt_chunk)
+            audio = torch.cat(audio_chunks, dim=2)
+        else:
+            audio = _tt_to_torch(tt_audio_nhwc, self.device).squeeze(2).transpose(1, 2).clamp(-1.0, 1.0).detach().float().cpu()
+            _deallocate_tt(tt_audio_nhwc)
         audio = resample_output_audio(
             audio,
             input_sample_rate=_HF_CONFIG["sample_rate"],
@@ -366,6 +397,7 @@ class TtAudioXSession:
                 "cross_attn_cond": cross_attn_cond_torch.detach().cpu(),
                 "conditioning_tokens": int(cross_attn_cond_torch.shape[1]),
                 "t_latent": int(t_latent),
+                "duration_seconds": int(duration_seconds),
                 "timings": timings,
             }
         return output
@@ -383,6 +415,7 @@ def run_tt_demo(
     audio_prompt_tensor: torch.Tensor | None = None,
     steps: int = 100,
     seed: int = 0,
+    duration_seconds: int | None = None,
     return_details: bool = False,
 ) -> Path | dict:
     """Generate one stereo audio clip on TT and save to ``output``.
@@ -399,6 +432,7 @@ def run_tt_demo(
         audio_prompt_tensor=audio_prompt_tensor,
         steps=steps,
         seed=seed,
+        duration_seconds=duration_seconds,
         return_details=return_details,
     )
 
@@ -414,6 +448,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
     p.add_argument("--audio", type=Path, help="Optional audio prompt for audio-conditioned generation")
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--duration-seconds", type=int, default=_HF_CONFIG["duration_seconds"])
     args = p.parse_args(argv)
     if not args.prompt and args.video is None and args.image is None and args.audio is None:
         p.error("at least one of --prompt, --video, --image, or --audio is required")
@@ -434,6 +469,7 @@ def main(argv: list = None) -> int:
             audio_path=args.audio,
             steps=args.steps,
             seed=args.seed,
+            duration_seconds=args.duration_seconds,
         )
     finally:
         close_tt_device(device)

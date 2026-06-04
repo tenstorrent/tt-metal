@@ -43,6 +43,12 @@ def test_metadata_batch_preserves_provided_audio_prompt():
     assert batch[0]["text_prompt"] == "hello"
 
 
+def test_metadata_batch_uses_requested_duration_for_empty_inputs():
+    batch = demo_mod._build_metadata_batch_with_inputs("hello", duration_seconds=30)
+    assert batch[0]["video_prompt"].shape == (1, 150, 3, 224, 224)
+    assert batch[0]["audio_prompt"].shape == (1, 2, demo_mod._HF_CONFIG["sample_rate"] * 30)
+
+
 def test_resolve_audio_prompt_prefers_direct_tensor():
     audio = torch.randn(1, 2, 32)
     resolved = demo_mod._resolve_audio_prompt(None, audio)
@@ -92,3 +98,10 @@ def test_parse_args_requires_at_least_one_conditioner_input():
 def test_parse_args_accepts_audio_only():
     args = demo_mod._parse_args(["--checkpoint", "/tmp/fake.safetensors", "--audio", "/tmp/fake.wav"])
     assert str(args.audio) == "/tmp/fake.wav"
+
+
+def test_parse_args_accepts_duration_override():
+    args = demo_mod._parse_args(
+        ["--checkpoint", "/tmp/fake.safetensors", "--prompt", "hello", "--duration-seconds", "30"]
+    )
+    assert args.duration_seconds == 30
