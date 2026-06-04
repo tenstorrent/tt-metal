@@ -6,7 +6,7 @@
 //
 // Chain shape: CopyTile(CbA, D0) -> CopyTile(CbB, D0) -> PackTile(CbOut).
 // CopyTile only touches srca. At element 1: prev_a=CbA, curr_a=CbB, prev set → reconf_a=true,
-// emits reconfig_data_format_srca(prev_a, curr_a) (2-arg per-side _with_dt). srcb stays NO_PREV_CB
+// emits reconfig_data_format_srca(prev_a, curr_a) (2-arg per-side _with_dt). srcb stays NO_PREV_DFB
 // throughout, so no srcb emission. Pack stays the same dtype across both PackTile-less intermediate
 // CopyTiles; pack reconfig fires only at the final PackTile (first-emit single-arg).
 //

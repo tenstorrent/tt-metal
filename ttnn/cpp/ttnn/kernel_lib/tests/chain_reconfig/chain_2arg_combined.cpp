@@ -5,8 +5,8 @@
 // Case B — 2-arg combined reconfig_data_format(curr_a, curr_b) (no _with_dt; unconditional reprogram).
 //
 // Chain shape: BinaryFpu(CbA, CbB) -> PackTile(CbOut).
-// Element 0 BinaryFpu is the first chain element, so srca and srcb both have NO_PREV_CB.
-// emit_pre_element_transitions sees reconf_a=true, reconf_b=true, both prev==NO_PREV_CB and emits the
+// Element 0 BinaryFpu is the first chain element, so srca and srcb both have NO_PREV_DFB.
+// emit_pre_element_transitions sees reconf_a=true, reconf_b=true, both prev==NO_PREV_DFB and emits the
 // 2-arg combined overload at element 0. CbA=bfp8, CbB=fp32 produces max format delta so any srca/srcb
 // argument-routing regression surfaces immediately.
 

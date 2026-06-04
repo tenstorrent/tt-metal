@@ -6,7 +6,7 @@
 //
 // Chain shape: CopyTile(CbA, D0) -> BinaryFpu(CbB, CbC, D0) -> PackTile(CbOut).
 // At BinaryFpu (element 1): prev_a=CbA (set by element 0's CopyTile), curr_a=CbB → reconf_a=true,
-// prev_a known. prev_b=NO_PREV_CB (element 0's CopyTile doesn't touch srcb), curr_b=CbC →
+// prev_a known. prev_b=NO_PREV_DFB (element 0's CopyTile doesn't touch srcb), curr_b=CbC →
 // reconf_b=true, prev_b first-emit. emit_pre_element_transitions takes the mixed-prev branch:
 // reconfig_data_format_srca(prev_a, curr_a) (2-arg _with_dt) plus reconfig_data_format_srcb(curr_b) (1-arg).
 //
