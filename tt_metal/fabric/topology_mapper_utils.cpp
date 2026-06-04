@@ -1907,18 +1907,10 @@ void add_pinning_constraints(
 
         if (!asic_ids.empty()) {
             if (!intra_mesh_constraints.add_required_constraint(fabric_node, asic_ids)) {
-                // Reconcile pinnings with rank bindings. The rank-binding constraint added earlier
-                // already restricts each fabric node to the ASICs owned by its host rank, so a pinned
-                // position can only be honored if it lies inside that node's rank slice. When none do
-                // -- e.g. auto-generated Galaxy corner pinnings whose physical corner ASIC is owned by
-                // a different host rank under per-host mesh slicing -- the intersection is empty and the
-                // constraint is unsatisfiable. If rank bindings are active, drop the pin and let the
-                // rank binding govern placement instead of failing the mapping (or, with the pin
-                // expanded into the rank pool, getting the node's domain emptied by arc-consistency
-                // during the solve). add_required_constraint rolls back its state when it returns false,
-                // so the node keeps its rank-binding domain. Pins that ARE satisfiable are added exactly
-                // as before, so consistent topologies (single-host, self-consistent multi-host galaxies)
-                // are unaffected and need no golden regeneration.
+                // Pin unsatisfiable within the node's rank slice (e.g. an auto Galaxy corner pin whose
+                // ASIC is owned by another host rank under per-host slicing). If rank bindings are active,
+                // drop the pin and let the rank binding govern placement instead of failing the mapping.
+                // add_required_constraint already rolled back, so the node keeps its rank-binding domain.
                 if (!config.disable_rank_bindings) {
                     log_warning(
                         tt::LogFabric,
