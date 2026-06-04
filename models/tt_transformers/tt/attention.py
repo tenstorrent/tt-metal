@@ -282,14 +282,10 @@ class Attention(LightweightModule):
                 cache_file_name=cache_name(cache_key),
             )
 
+        # One copy: recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded. Both
+        # prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor reads
+        # ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
         self.wqkv = _make_wqkv(wqkv_mem_config, "wqkv_sharded_2d")
-        # Receiver-contiguous (DRAM-core) wqkv is decode-only; prefill's direct QKV matmul needs the
-        # width-sharded layout. Keep a width-sharded prefill copy (mirrors WO's self.wo vs
-        # wo_sharded_ring). The worker-core path is already width-sharded, so it just aliases wqkv.
-        if self.prefetcher is not None and getattr(self.prefetcher, "uses_recv_contig", False):
-            self.wqkv_prefill = _make_wqkv(wqkv_width_sharded_mem_config, "wqkv_prefill_width_sharded")
-        else:
-            self.wqkv_prefill = self.wqkv
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -941,14 +937,14 @@ class Attention(LightweightModule):
         if self.args.use_minimal_qkv_prefill_matmul(seq_len):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
-                self.wqkv_prefill,
+                self.wqkv,
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
         else:
             xqkv_fused = ttnn.linear(
                 x_11SH,
-                self.wqkv_prefill,
+                self.wqkv,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
