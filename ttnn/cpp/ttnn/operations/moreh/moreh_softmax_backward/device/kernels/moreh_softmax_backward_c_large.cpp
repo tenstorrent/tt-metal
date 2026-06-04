@@ -67,23 +67,18 @@ void kernel_main() {
         // Per-tile result: exp(y) * sum then dy - that.
         for (uint32_t i = 0; i < dim_size; ++i) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::CopyTile<
-                    cb_y,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::unary<
                 compute_kernel_lib::Exp<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_exp,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::Dst::D0>,
+                cb_y,
+                cb_exp,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>(onetile);
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
             constexpr auto cb_inter2 = tt::CBIndex::c_26;

@@ -141,23 +141,18 @@ void kernel_main() {
         // cb_sum held outside loop (InputLifecycle::CallerManaged). cb_y / cb_dy streaming pop=1.
         for (uint32_t h = 0; h < Ht; ++h) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::CopyTile<
-                    cb_y,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::unary<
                 compute_kernel_lib::Exp<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_exp,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::Dst::D0>,
+                cb_y,
+                cb_exp,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>(onetile);
             compute_kernel_lib::eltwise_chain(
                 onetile,
                 compute_kernel_lib::BinaryFpu<

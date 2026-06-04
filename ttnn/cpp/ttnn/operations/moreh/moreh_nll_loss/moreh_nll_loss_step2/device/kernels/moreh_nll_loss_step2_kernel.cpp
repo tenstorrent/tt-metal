@@ -6,6 +6,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"     // BinaryFpu, CopyTile, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"      // Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"      // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
@@ -59,16 +60,15 @@ void kernel_main() {
 
     if constexpr (has_divisor) {
         // recip(divisor) -> cb_divisor_recip (one tile, consumed Bulk by the loop chain).
-        ckl::eltwise_chain(
-            1,
-            ckl::CopyTile<
-                cb_divisor,
-                D::D0,
-                ckl::InputLifecycle::Bulk,
-                ckl::OperandKind::Scalar,
-                ckl::CopyTileReconfig::Input>{},
-            ckl::Recip<D::D0>{},
-            ckl::PackTile<cb_divisor_recip, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+        ckl::unary<
+            ckl::Recip<D::D0>,
+            cb_divisor,
+            cb_divisor_recip,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Streaming,
+            ckl::PackTileReconfig::Output>(1);
     }
 
     // Full-tile weight multiply (DEST-reuse), gated on has_weight — collapses to a no-op tag when

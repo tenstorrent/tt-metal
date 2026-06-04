@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Abs, Sign
 #include "ttnn/kernel/compute/moreh_common.hpp"
@@ -60,20 +61,15 @@ void kernel_main() {
 
         // sign(x) -> cb_sign. cb_x held (waited outside, no pop here).
         // Matches sign_tile_to_cb(cb_x, cb_sign, 0, pop=0) macro.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_x,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::Sign<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_sign,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary<
+            compute_kernel_lib::Sign<compute_kernel_lib::Dst::D0>,
+            cb_x,
+            cb_sign,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::HeldStream,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::Output>(onetile);
 
         // |x|^(p-1) — power_tile_with_abs_x_to_cb inlined as 4 chain stages.
         // Stage A: cb_x -> Abs -> Power(p-1) -> [Recip if neg] -> cb_xpow. InputLifecycle::HeldStream (no pop).
@@ -249,20 +245,15 @@ void kernel_main() {
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_y,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::NoWaitPop,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_logx,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary<
+            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
+            cb_y,
+            cb_logx,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::NoWaitPop,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::Output>(onetile);
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<

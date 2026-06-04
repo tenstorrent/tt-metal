@@ -12,6 +12,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // for scale+mask+softmax:
@@ -295,23 +296,18 @@ void kernel_main() {
             // reconfig_data_format outside this block, so CopyTileReconfig::Input matches
             // copy_tile_init's reconfig. PackTileReconfig::None — pack format set by
             // binary_op_init_common at line 70 to cb_exps already.
-            compute_kernel_lib::eltwise_chain(
-                Wt,
-                compute_kernel_lib::CopyTile<
-                    cb_in0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::unary<
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
                     compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_exps,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+                    compute_kernel_lib::Dst::D0>,
+                cb_in0,
+                cb_exps,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(Wt);
 #endif
         }
 #endif

@@ -158,35 +158,25 @@ void kernel_main() {
 
         // log(sum) or 1/sum: single chain on cb_add -> cb_recipsumexps.
 #ifdef LOG
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_add,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_recipsumexps,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary<
+            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
+            cb_add,
+            cb_recipsumexps,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::Output>(onetile);
 #else
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_add,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_recipsumexps,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary<
+            compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>,
+            cb_add,
+            cb_recipsumexps,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::Output>(onetile);
 #endif
 
         // step 3, compute final result per C tile.

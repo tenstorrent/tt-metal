@@ -119,20 +119,15 @@ void kernel_main() {
 
     // Stage B: log(x). cb_x already waited (Stage A's InputLifecycle::HeldStream did wait but no pop);
     //   now pop it via InputLifecycle::NoWaitPop.
-    compute_kernel_lib::eltwise_chain(
-        onetile,
-        compute_kernel_lib::CopyTile<
-            cb_x,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::NoWaitPop,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::Input>{},
-        compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_logx,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+    compute_kernel_lib::unary<
+        compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
+        cb_x,
+        cb_logx,
+        compute_kernel_lib::CopyTileReconfig::Input,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::InputLifecycle::NoWaitPop,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::PackTileReconfig::Output>(onetile);
 
     // Stage C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel.
     compute_kernel_lib::eltwise_chain(

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // SubBinary, MulBinary, AddBinary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Typecast
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
@@ -68,16 +69,15 @@ template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcC
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
         // src (the updated stat just written) -> typecast -> writer-facing CB.
-        ckl::eltwise_chain(
-            1,
-            ckl::CopyTile<
-                SrcCb,
-                D::D0,
-                ckl::InputLifecycle::Streaming,
-                ckl::OperandKind::Scalar,
-                ckl::CopyTileReconfig::Input>{},
-            ckl::Typecast<TcInFmt, TcOutFmt, D::D0>{},
-            ckl::PackTile<DstCb, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+        ckl::unary<
+            ckl::Typecast<TcInFmt, TcOutFmt, D::D0>,
+            SrcCb,
+            DstCb,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::PackTileReconfig::Output>(1);
     }
 }
 

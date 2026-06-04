@@ -6,6 +6,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // unary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "api/dataflow/circular_buffer.h"
@@ -38,16 +39,15 @@ void kernel_main() {
 
 #if defined(DIVISOR)
     // recip(divisor) -> cb_tmp1 (held scalar, one tile).
-    ckl::eltwise_chain(
-        1,
-        ckl::CopyTile<
-            cb_divisor,
-            D::D0,
-            ckl::InputLifecycle::Bulk,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::Input>{},
-        ckl::Recip<D::D0>{},
-        ckl::PackTile<cb_tmp1, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+    ckl::unary<
+        ckl::Recip<D::D0>,
+        cb_divisor,
+        cb_tmp1,
+        ckl::CopyTileReconfig::Input,
+        ckl::OperandKind::Scalar,
+        ckl::InputLifecycle::Bulk,
+        ckl::OutputLifecycle::Streaming,
+        ckl::PackTileReconfig::Output>(1);
 
     cb_wait_front(cb_tmp1, 1);         // held recip
     cb_wait_front(cb_output_grad, 1);  // held output_grad
