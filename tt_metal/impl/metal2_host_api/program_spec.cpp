@@ -155,6 +155,31 @@ inline bool is_gen1_arch() {
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
+// Resolve the effective Gen1 hardware knobs (processor, NOC, NOC mode) for a DM kernel.
+// When the user supplies a READER/WRITER role hint, the runtime fills in the conventional
+// triple, mirroring the legacy ReaderDataMovementConfig / WriterDataMovementConfig
+// convention (see kernel_types.cpp):
+//   READER -> NCRISC (RISCV_1) on NOC_0
+//   WRITER -> BRISC  (RISCV_0) on NOC_1
+// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only
+// via RoleHint::UNSPECIFIED + an explicit gen1_config, which is returned verbatim.
+//
+// Precondition (guaranteed by validation on Gen1): exactly one of {a READER/WRITER role,
+// an explicit gen1_config} is present.
+DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardwareConfig& dm_config) {
+    using Gen1Config = DataMovementHardwareConfig::Gen1Config;
+    switch (dm_config.role) {
+        case DataMovementRoleHint::READER:
+            return Gen1Config{
+                .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        case DataMovementRoleHint::WRITER:
+            return Gen1Config{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
+        case DataMovementRoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
+    }
+    TT_THROW("Unhandled RoleHint in ResolveGen1Config");
+}
+
 NodeRangeSet to_node_range_set(const Nodes& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
@@ -673,20 +698,26 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
+            // A role hint and an explicit Gen1 config are mutually exclusive: a READER/WRITER
+            // hint already fills in the Gen1 config, so also supplying one is contradictory.
             TT_FATAL(
-                data_movement_config.gen1_config.has_value() ||
-                    data_movement_config.gen2_config.has_value(),
-                "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
+                data_movement_config.role == DataMovementRoleHint::UNSPECIFIED ||
+                    !data_movement_config.gen1_config.has_value(),
+                "KernelSpec '{}' sets both a READER/WRITER role hint and an explicit Gen1 config. "
+                "A role hint fills the Gen1 config for you; either drop the explicit config, or use "
+                "RoleHint::UNSPECIFIED to take manual control.",
                 kernel.unique_id);
 
-            // Gen1 builds still require an explicit Gen1 config (its fields — processor, NOC,
-            // NOC mode — have no universally-safe defaults). Gen2 is fully optional even on
-            // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
+            // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
+            // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
+            // absence is treated as "use defaults" (empty disable_implicit_sync_for).
             if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.gen1_config.has_value(),
-                    "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
+                    data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
+                        data_movement_config.gen1_config.has_value(),
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but specifies neither a role hint "
+                    "(READER/WRITER) nor an explicit Gen1 config. One is required.",
                     kernel.unique_id);
             }
         }
@@ -702,7 +733,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 continue;
             }
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto& gen1 = dm_config.gen1_config.value();
+            const auto gen1 = ResolveGen1Config(dm_config);
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
@@ -1873,8 +1904,9 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     return result;
 }
 
-// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1Config
-// and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
+// Gen1 (WH/BH) processor assignment: read the effective processor (explicit, or derived
+// from the role hint via ResolveGen1Config) and return a KernelRiscMaskMap using the Gen1
+// bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
 KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
 
@@ -1882,7 +1914,7 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
     for (const KernelSpec& kernel : spec.kernels) {
         if (kernel.is_data_movement_kernel()) {
             const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
-            const auto& gen1 = dm_config.gen1_config.value();
+            const auto gen1 = ResolveGen1Config(dm_config);
             result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
         } else {
             result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
@@ -2231,6 +2263,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
+        .unpack_face_geometry = dfb_spec->unpack_face_geometry_metadata,
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime.
@@ -2278,7 +2311,7 @@ std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOpti
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_data_movement_kernel(), "Expected a DM kernel");
     const auto& dm_config = std::get<DataMovementHardwareConfig>(kernel_spec.hw_config);
-    const auto& gen1 = dm_config.gen1_config.value();
+    const auto gen1 = ResolveGen1Config(dm_config);
 
     return DataMovementConfig{
         .processor = gen1.processor,

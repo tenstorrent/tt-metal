@@ -381,12 +381,7 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
         tt_cpu = x[:, :, :, :, idx]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, [dev_idx], [index_dim])
-    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-
-    cpu_5d_shape = to_output_5d_shape(shape, [index_dim], index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(cpu_5d_shape)
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)
@@ -474,12 +469,7 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
         tt_cpu = x[:, :, :, indices[0], indices[1]]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-
-    output_5d_shape = to_output_5d_shape(shape, index_dims, index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(output_5d_shape)
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)
@@ -561,12 +551,7 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
         tt_cpu = x[:, :, indices[0], indices[1], indices[2]]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-
-    output_5d_shape = to_output_5d_shape(shape, index_dims, index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(output_5d_shape)
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)
@@ -643,13 +628,7 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
         tt_cpu = x[:, indices[0], indices[1], indices[2], indices[3]]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR)
-
-    output_5d_shape = to_output_5d_shape(shape, index_dims, index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(output_5d_shape)
-
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)
@@ -721,13 +700,7 @@ def test_getitem_tilized_five_indices(shape_index_dims, dtype, index_size, row_m
     tt_cpu = x[indices[0], indices[1], indices[2], indices[3], indices[4]]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, dev_indices, index_dims)
-    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-
-    output_5d_shape = to_output_5d_shape(shape, index_dims, index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(output_5d_shape)
-
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)
@@ -773,12 +746,7 @@ def run_moreh_geitem_tilized_one_index(shape_index_dim, dtype, index_size, row_m
         tt_cpu = x[:, :, :, :, idx]
 
     tt_npu = ttnn.operations.moreh.getitem(dev_x, [dev_idx], [index_dim])
-    tt_npu = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-
-    cpu_5d_shape = to_output_5d_shape(shape, [index_dim], index_size)
-
-    tt_npu = tt_npu.unpad_from_tile(cpu_5d_shape)
-    tt_dev = tt_npu.to_torch().reshape(tt_cpu.shape).to(dtype)
+    tt_dev = ttnn.to_torch(tt_npu).reshape(tt_cpu.shape).to(dtype)
 
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev)
     logger.info(out)

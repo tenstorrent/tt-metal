@@ -212,7 +212,7 @@ def _perf_param(
     if dtype_filter:
         k_filter += f" and {dtype_filter}"
     return (
-        f"pytest models/demos/deepseek_v3_d_p/tests/pcc/{worker_file}::{worker_test} " f"-k '{k_filter}'",
+        f"pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/{worker_file}::{worker_test} " f"-k '{k_filter}'",
         expected_ns,
         f"deepseek_v3_{op}",
         model_name,

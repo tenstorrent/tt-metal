@@ -924,10 +924,8 @@ def test_demo_text(
     can_sample_on_device = model_supports_device_sampling and not token_accuracy
     if model_supports_device_sampling and token_accuracy:
         logger.info("token_accuracy=True: using host logits / host sampling (device sampling disabled)")
-    non_greedy_decoding_on_device = can_sample_on_device and sampling_params.get("temperature", 0) > 0
-    logger.info(
-        f"Gemma3 decode sampling: device={can_sample_on_device}, non_greedy_warmup={non_greedy_decoding_on_device}"
-    )
+    greedy_only = sampling_params.get("temperature", 0) <= 0
+    logger.info(f"Gemma3 decode sampling: device={can_sample_on_device}, greedy_only_warmup={greedy_only}")
 
     logger.info("Warming up model...")
     # Must match paged_attention: non-paged KV uses a single logical block; decode warmup cannot use a 1024-wide page table.
@@ -940,7 +938,7 @@ def test_demo_text(
         kv_cache=tt_kv_cache,
         enable_trace=enable_trace,
         can_sample_on_device=can_sample_on_device,
-        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+        greedy_only=greedy_only,
     )
     generator.warmup_model_decode(
         kv_cache=tt_kv_cache,
@@ -948,7 +946,7 @@ def test_demo_text(
         max_batch_size=global_batch_size,
         num_blocks=num_blocks,
         can_sample_on_device=can_sample_on_device,
-        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+        greedy_only=greedy_only,
     )
     logger.info("Warmup complete")
 

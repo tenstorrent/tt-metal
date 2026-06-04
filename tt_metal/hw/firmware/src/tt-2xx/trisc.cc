@@ -108,6 +108,14 @@ void init_sync_registers() {
     // }
 }
 
+inline void enable_cc_stack() {
+#if defined(UCK_CHLKC_MATH)
+    constexpr uint32_t SFPENCC_IMM12_BOTH = 3;
+    constexpr uint32_t SFPENCC_MOD1_EI_RI = 10;
+    TTI_SFPENCC(SFPENCC_IMM12_BOTH, SFPENCC_MOD1_EI_RI);  // Enable all the SFPU lanes
+#endif
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
@@ -129,6 +137,7 @@ extern "C" uint32_t _start1() {
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
     setup_isr_csrs();
+    enable_cc_stack();
     DeviceProfilerInit();
     DPRINT("TRISC-FW: initialized\n");
     while (1) {

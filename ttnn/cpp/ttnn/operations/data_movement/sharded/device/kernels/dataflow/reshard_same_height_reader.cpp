@@ -4,10 +4,16 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
     constexpr bool read_from_dram = get_compile_time_arg_val(1);
+    constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
 
     const uint32_t total_num_sticks = get_arg_val<uint32_t>(0);
     const uint32_t local_stride_bytes = get_arg_val<uint32_t>(1);
@@ -18,7 +24,11 @@ void kernel_main() {
     uint32_t args_idx = 0;
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
 
-    uint32_t base_write_addr = get_write_ptr(shard_cb_id);
+    CircularBuffer shard_cb(shard_cb_id);
+    Noc noc;
+    AllocatorBank<bank_type> bank;
+
+    uint32_t base_write_addr = shard_cb.get_write_ptr();
 
     for (uint32_t i = 0; i < num_segments; ++i) {
         uint32_t read_size = args[args_idx++];
@@ -28,13 +38,13 @@ void kernel_main() {
 
         uint32_t bank_id = args[args_idx++];
         uint32_t read_offset = base_read_addr + args[args_idx++];
-        uint64_t noc_read_addr = get_noc_addr_from_bank_id<read_from_dram>(bank_id, read_offset);
 
         for (uint32_t j = 0; j < total_num_sticks; ++j) {
-            noc_async_read(noc_read_addr, l1_write_addr, read_size);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(bank, dst, read_size, {.bank_id = bank_id, .addr = read_offset}, {.offset_bytes = 0});
             l1_write_addr += local_stride_bytes;
-            noc_read_addr += remote_stride_bytes;
+            read_offset += remote_stride_bytes;
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
