@@ -47,9 +47,6 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
 }
 
 inline void _llk_math_reconfig_remap_(const bool remap_enable)
