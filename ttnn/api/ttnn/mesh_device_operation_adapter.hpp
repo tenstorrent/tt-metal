@@ -650,8 +650,10 @@ public:
                 const auto& adv = kernel.advanced_options;
                 TT_FATAL(
                     schema.runtime_arg_names.empty() && schema.common_runtime_arg_names.empty() &&
-                        adv.num_runtime_varargs == 0 && adv.num_common_runtime_varargs == 0 &&
-                        adv.num_runtime_varargs_per_node.empty(),
+                        adv.num_runtime_varargs == 0 && adv.num_common_runtime_varargs == 0,
+                    // technically should also be checking adv.num_runtime_varargs_per_node,
+                    // but it's [[deprecated]] and will cause build spam...
+                    // so catch this corner case in the ProgramRunArgs check below instead.
                     "Kernel '{}' declares runtime arguments in its ProgramSpec. "
                     "TTNN ProgramSpecFactoryConcept restricts factories using the basic "
                     "create_program_artifacts to tensor-only per-dispatch mutation. "
