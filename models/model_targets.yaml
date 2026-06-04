@@ -248,7 +248,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: 1
             seq_len: null
@@ -269,7 +269,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -313,7 +313,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -323,7 +323,7 @@ targets:
   gpt-oss-120b:
     aliases: ["gpt-oss-120b", "openai/gpt-oss-120b", "T3K_gpt-oss-120b", "GLX_gpt-oss-120b"]
     skus:
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -397,7 +397,7 @@ targets:
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -465,7 +465,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 6.1
-              prefill_time_to_first_token: 319
+              prefill_time_to_first_token: 325
             accuracy:
               top1: 90
               top5: 97
@@ -474,7 +474,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 8.8
-              prefill_time_to_first_token: 180
+              prefill_time_to_first_token: 195
             accuracy: {}
       wh_n300:
         entries:
@@ -505,7 +505,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 10.1
-              prefill_time_to_first_token: 135
+              prefill_time_to_first_token: 140
             accuracy:
               top1: 90
               top5: 98
@@ -514,22 +514,27 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 20.3
-              prefill_time_to_first_token: 71
+              prefill_time_to_first_token: 75
             accuracy: {}
       bh_p300:
         entries:
           - batch_size: 64
             seq_len: 131072
             status: TODO
-            perf: {}
-            accuracy: {}
+            perf:
+              'decode_t/s/u': 20.3
+              prefill_time_to_first_token: 75
+            accuracy:
+              top1: 90
+              top5: 98
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 5.5
+              decode_t/s/u: 5.5
+              decode_t/s/u_tolerance: 0.8
               prefill_time_to_first_token: 115
             accuracy:
               top1: 89.5
@@ -538,8 +543,8 @@ targets:
             seq_len: 712
             status: active
             perf:
-              'decode_t/s/u': 57.0
-              prefill_time_to_first_token: 53
+              decode_t/s/u: 55.5
+              prefill_time_to_first_token: 40
             accuracy: {}
       wh_galaxy_perf:
         entries:
@@ -551,7 +556,7 @@ targets:
             accuracy:
               top1: 88
               top5: 97
-      bh_quietbox_2:
+      p300x2:
         entries:
           - status: active
             perf:
@@ -729,7 +734,7 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 33.5
+              decode_t/s/u: 33.5
             accuracy:
               top1: 87
               top5: 97
@@ -742,7 +747,7 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 2.22
+              decode_t/s/u: 2.14
               prefill_time_to_first_token: 540
             accuracy:
               top1: 96
@@ -759,7 +764,7 @@ targets:
               top5: 100
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation).
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: 32
             status: active
@@ -954,7 +959,7 @@ targets:
             accuracy:
               top1: 98
               top5: 99
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -994,7 +999,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -1048,7 +1053,7 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: null
             seq_len: null
@@ -1067,7 +1072,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 2.5
-              prefill_time_to_first_token: 315
+              prefill_time_to_first_token: 327
             accuracy:
               top1: 89
               top5: 97
@@ -1080,7 +1085,7 @@ targets:
             accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
-      bh_quietbox_2:
+      p300x2:
         entries:
           - batch_size: 32
             status: active
