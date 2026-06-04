@@ -51,6 +51,17 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_shape[3] != 0 && input_shape[3] % 32 == 0,
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
         input_shape[3]);
+    // The top-k stage processes the W/32 candidate tiles with a pairwise local sort followed by a
+    // bitonic merge tree whose schedule assumes a power-of-2 tile count. A non-power-of-2 Wt hangs
+    // the device (odd Wt) or silently drops candidate tiles (even non-power-of-2 Wt), so reject it
+    // here instead of timing out. See https://github.com/tenstorrent/tt-metal/issues/44558.
+    const uint32_t Wt = input_shape[3] / 32;
+    TT_FATAL(
+        (Wt & (Wt - 1)) == 0,
+        "Input inner dim ({}) must yield a power-of-2 number of tiles (Wt = W/32 = {}); pad W up to the "
+        "next power-of-2 multiple of 32 (e.g. with -inf values and dummy indices) if needed!",
+        input_shape[3],
+        Wt);
 
     if (args.sub_core_grids.has_value()) {
         ReduceOpDeviceGridValidationOptions sampling_grid_opts;
@@ -93,7 +104,9 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Check size, layout and dtype of k, p, temp
-    TT_FATAL(k.dtype() == DataType::UINT32, "Only UINT32 dtypes are supported for k!");
+    TT_FATAL(
+        k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
+        "Only UINT32 & INT32 dtypes are supported for k!");
     TT_FATAL(p.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for p!");
     TT_FATAL(temp.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for temp!");
     TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
