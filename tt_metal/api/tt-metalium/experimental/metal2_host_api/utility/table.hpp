@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
-#include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <optional>
@@ -25,45 +24,34 @@ namespace tt::tt_metal::experimental {
 //
 //  - Each key appears at most once.
 //  - Iteration order is unspecified.
-//  - Iterates as std::pair<const K, mapped>, so keys can't be mutated through an
+//  - Iterates as std::pair<const K, V>, so keys can't be mutated through an
 //    iterator. Structured bindings (`for (const auto& [k, v] : table)`) and
 //    std::map / std::unordered_map range construction
 //    (`std::map<K, V>(t.begin(), t.end())`) work directly.
 //  - The interface mirrors std::map: find() / get() look a key up, insert() and
 //    emplace() add an entry only if the key is absent, and operator[] inserts a
 //    key or overwrites the existing value.
-//  - V may be an object type or an lvalue reference type (e.g. Table<K, T&>).
-//    Reference values are stored as a rebindable std::reference_wrapper, so the
-//    `mapped` exposed by iteration is that wrapper; get() unwraps it and returns
-//    an optional_reference to the referent; and operator[] is unavailable (a
-//    reference can't be default-inserted).
 template <typename K, typename V>
 class Table {
+    // Reference mapped types (e.g. Table<K, T&>) are not supported: the backing
+    // vector relocates elements via assignment (erase/copy-assign), and assigning a
+    // pair with a reference member writes through the reference rather than
+    // repointing it. Use a value type or a pointer instead.
+    static_assert(!std::is_reference_v<V>, "Table does not support reference mapped types (V)");
+
 public:
     using key_type = K;
     using mapped_type = V;
-
-private:
-    static constexpr bool kMappedIsReference = std::is_reference_v<V>;
-
-    // The referent type (V itself for value mappeds; the referred-to type, which
-    // may be const, for reference mappeds).
-    using referent_type = std::remove_reference_t<V>;
-
-    // A reference mapped is stored as a rebindable std::reference_wrapper so the
-    // backing vector element stays a regular (assignable, growable) object; a
-    // value mapped is stored as-is.
-    using stored_mapped_type = std::conditional_t<kMappedIsReference, std::reference_wrapper<referent_type>, V>;
-
-    // Entries are stored as a mutable std::pair<K, stored_mapped_type> (so the
-    // backing vector stays easy to grow, erase, and assign), but exposed through
-    // the iterators below as the const-key value_type.
-    using Storage = std::vector<std::pair<K, stored_mapped_type>>;
-
-public:
-    using value_type = std::pair<const K, stored_mapped_type>;
+    using value_type = std::pair<const K, V>;
     using size_type = std::size_t;
 
+private:
+    // Entries are stored as a mutable std::pair<K, V> (so the backing vector stays
+    // easy to grow, erase, and assign), but exposed through the iterators below as
+    // the const-key value_type.
+    using Storage = std::vector<std::pair<K, V>>;
+
+public:
     // Wraps a backing iterator and re-presents the stored pair it points at as the
     // const-key value_type, so a key can't be mutated through an iterator.
     // ExposedPair is value_type for the mutable iterator and const value_type for
@@ -181,11 +169,9 @@ public:
 
     // Returns a reference to the value for `key`, inserting a default-constructed
     // value if the key is absent (so `table[key] = value;` works). Overwrite an
-    // existing value by assigning through the reference. (Requires V to be a
-    // default-constructible object type; unavailable when V is a reference.)
-    V& operator[](const K& key)
-        requires(!kMappedIsReference)
-    {
+    // existing value by assigning through the reference. (Requires V to be
+    // default-constructible.)
+    V& operator[](const K& key) {
         if (auto it = find(key); it != end()) {
             return it->second;
         }
@@ -203,32 +189,17 @@ public:
     // Looks `key` up without inserting: returns an optional reference to its
     // value, or an empty optional_reference if the key is absent. Never throws.
     // Usage: `if (auto v = table.get(key)) { use(*v); }`.
-    // For reference mappeds the reference_wrapper is unwrapped, so get() yields an
-    // optional_reference to the referent (whose const-ness comes from V, not from
-    // the const-ness of the table).
-    [[nodiscard]] ttsl::optional_reference<referent_type> get(const K& key) noexcept {
+    [[nodiscard]] ttsl::optional_reference<V> get(const K& key) noexcept {
         if (auto it = find(key); it != end()) {
-            if constexpr (kMappedIsReference) {
-                return it->second.get();
-            } else {
-                return it->second;
-            }
+            return it->second;
         }
         return std::nullopt;
     }
-    [[nodiscard]] auto get(const K& key) const noexcept {
-        using Result = std::conditional_t<
-            kMappedIsReference,
-            ttsl::optional_reference<referent_type>,
-            ttsl::optional_reference<const V>>;
+    [[nodiscard]] ttsl::optional_reference<const V> get(const K& key) const noexcept {
         if (auto it = find(key); it != end()) {
-            if constexpr (kMappedIsReference) {
-                return Result{it->second.get()};
-            } else {
-                return Result{it->second};
-            }
+            return it->second;
         }
-        return Result{std::nullopt};
+        return std::nullopt;
     }
 
     // Equal iff both hold the same key/value pairs (iteration order is ignored).

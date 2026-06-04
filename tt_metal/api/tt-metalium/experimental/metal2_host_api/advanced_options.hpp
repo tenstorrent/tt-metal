@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 
 namespace tt::tt_metal::experimental {
 

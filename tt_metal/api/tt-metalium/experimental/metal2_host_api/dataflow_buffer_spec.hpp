@@ -13,7 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>

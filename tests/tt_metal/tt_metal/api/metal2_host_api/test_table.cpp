@@ -15,14 +15,11 @@
 #include <map>
 #include <span>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include <tt_stl/optional_reference.hpp>
-
-#include <tt-metalium/experimental/metal2_host_api/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 
 namespace {
 
@@ -290,49 +287,6 @@ TEST(TableMiscTest, IntKeyStringValue) {
     EXPECT_EQ(*t.get(1), "one");
     EXPECT_EQ(*t.get(2), "two");
     EXPECT_FALSE(t.get(3));
-}
-
-// ---- reference-valued tables (V is a reference) ------------------------------
-
-TEST(TableRefTest, StoresAndGetsReferences) {
-    int a = 1;
-    int b = 2;
-    m2::Table<std::string, int&> t;
-    t.emplace("a", a);
-    t.emplace("b", b);
-    EXPECT_EQ(t.size(), 2u);
-    ASSERT_TRUE(t.get("a"));
-    EXPECT_EQ(*t.get("a"), 1);
-    EXPECT_EQ(*t.get("b"), 2);
-    EXPECT_FALSE(t.get("missing"));
-}
-
-TEST(TableRefTest, GetYieldsLiveReference) {
-    int a = 1;
-    m2::Table<std::string, int&> t;
-    t.emplace("a", a);
-    *t.get("a") = 42;           // mutate the referent through the table
-    EXPECT_EQ(a, 42);           // underlying object changed
-    a = 7;                      // change the object directly
-    EXPECT_EQ(*t.get("a"), 7);  // table observes it (live reference, not a copy)
-}
-
-TEST(TableRefTest, ConstReferenceMappedYieldsConstReferent) {
-    const int x = 5;
-    m2::Table<std::string, const int&> t;
-    t.emplace("x", x);
-    static_assert(std::is_same_v<decltype(t.get("x")), ttsl::optional_reference<const int>>);
-    EXPECT_EQ(*t.get("x"), 5);
-}
-
-TEST(TableRefTest, EraseThenRebindViaEmplace) {
-    int a = 1;
-    int b = 2;
-    m2::Table<std::string, int&> t;
-    t.emplace("a", a);
-    EXPECT_EQ(t.erase("a"), 1u);
-    t.emplace("a", b);  // rebind the key to a different object
-    EXPECT_EQ(*t.get("a"), 2);
 }
 
 }  // namespace
