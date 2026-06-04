@@ -24,13 +24,13 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            tile_regs_wait();
             copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
-            pack_tile(fused_act_dst_id, out_cb);
             tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(fused_act_dst_id, out_cb);
             tile_regs_release();
             tile_id++;
         }
@@ -57,13 +57,13 @@ void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            tile_regs_wait();
             add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
-            pack_tile(fused_act_dst_id, out_cb);
             tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(fused_act_dst_id, out_cb);
             tile_regs_release();
             tile_id++;
         }
@@ -111,7 +111,6 @@ void add_bias_and_addcmul_block(
             add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, intermediate_cb);
             tile_regs_release();
@@ -249,7 +248,6 @@ void add_bias_and_addcmul_block(
             add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
 
             tile_regs_commit();
-
             tile_regs_wait();
             pack_tile(DST_ID, out_cb);
             tile_regs_release();
@@ -300,7 +298,6 @@ void matmul_blocks(
                 in1_index += full_N_block_tiles;
             }
             tile_regs_commit();
-
             tile_regs_wait();
             uint32_t write_dst_index = 0;
             for (uint32_t h = 0; h < subblock_h; h++) {

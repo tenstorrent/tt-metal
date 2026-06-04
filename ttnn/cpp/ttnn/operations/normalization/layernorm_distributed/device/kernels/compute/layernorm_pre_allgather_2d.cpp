@@ -18,14 +18,8 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
@@ -71,6 +65,10 @@ void kernel_main() {
 
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_x2, wt + wtr);
             }
             REL();
@@ -117,6 +115,8 @@ void kernel_main() {
         }
 
         // Pack result
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst0, cb_out_final);
         REL();
 

@@ -22,14 +22,8 @@
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -153,12 +147,14 @@ void kernel_main() {
         for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
         }
-        pack_tile(0, cb_stats_reduced);
 
         // Reduce sum(x) next
         for (uint32_t i = 1; i < stats_tiles_cols; i += stats_tile_stride) {
             reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 1);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_stats_reduced);
         pack_tile(1, cb_stats_reduced);
 
         REL();
@@ -177,6 +173,8 @@ void kernel_main() {
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
         ACQ();
         mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cb_mean_squared);
         REL();
 
@@ -193,6 +191,8 @@ void kernel_main() {
         cb_wait_front(cb_mean_squared, 1);
         ACQ();
         sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cb_var);
         REL();
         cb_push_back(cb_var, 1);
@@ -211,6 +211,8 @@ void kernel_main() {
         add_tiles(cb_var, cb_eps, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

@@ -19,10 +19,10 @@ void kernel_main() {
         cb_reserve_back(tt::CBIndex::c_16, 1);
 
         tile_regs_acquire();
-        tile_regs_wait();
         transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
-        pack_tile(0, tt::CBIndex::c_16);
         tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, tt::CBIndex::c_16);
         tile_regs_release();
 
         cb_push_back(tt::CBIndex::c_16, 1);

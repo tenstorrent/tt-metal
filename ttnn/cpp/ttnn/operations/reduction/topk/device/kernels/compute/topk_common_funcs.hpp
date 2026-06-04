@@ -26,7 +26,6 @@ void process_and_sort_tiles(
     // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
         tile_regs_acquire();
-        tile_regs_wait();
         // local sort into k groups
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
@@ -47,6 +46,8 @@ void process_and_sort_tiles(
         }
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
+        tile_regs_commit();
+        tile_regs_wait();
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
         pack_tile(0, input_transposed_cb_index);
@@ -61,7 +62,6 @@ void process_and_sort_tiles(
         }
         input_cb.pop_front(tiles_to_wait);
         index_cb.pop_front(tiles_to_wait);
-        tile_regs_commit();
         tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
     }
@@ -85,7 +85,6 @@ void process_tile_pair(
     uint32_t logk,
     bool target_tiles_is_one) {
     tile_regs_acquire();
-    tile_regs_wait();
 
     copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
     copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
@@ -104,6 +103,8 @@ void process_tile_pair(
     // sort within the larger 32 values
     ckernel::topk_rebuild(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
+    tile_regs_commit();
+    tile_regs_wait();
     // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32
     // values for topk, which was in input_dest_start
     pack_reconfig_data_format(input_transposed_cb_index);
@@ -119,7 +120,6 @@ void process_tile_pair(
     if (!target_tiles_is_one) {
         pack_tile<true>(index_dest_end, index_transposed_cb_index, right_ind);
     }
-    tile_regs_commit();
     tile_regs_release();
 }
 
@@ -151,7 +151,6 @@ void process_tiles(
             }
 
             tile_regs_acquire();
-            tile_regs_wait();
 
             copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
             copy_tile(input_transposed_cb_index, left_tile_id, input_dest_start);
@@ -171,6 +170,8 @@ void process_tiles(
 
             // ckernel::topk_merge(0, m_iter, K);
 
+            tile_regs_commit();
+            tile_regs_wait();
             // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values
             // for topk, which was in input_dest_start
             pack_reconfig_data_format(input_transposed_cb_index);
@@ -182,7 +183,6 @@ void process_tiles(
             pack_reconfig_data_format(index_transposed_cb_index);
             pack_tile<true>(index_dest_start, index_transposed_cb_index, left_tile_id);
             pack_tile<true>(index_dest_end, index_transposed_cb_index, right_tile_id);
-            tile_regs_commit();
             tile_regs_release();
         }
     }
@@ -299,12 +299,12 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     transposed_cb.wait_front(Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
         tile_regs_acquire();
-        tile_regs_wait();
         dest_cb.reserve_back(1);
         transpose_wh_tile(transposed_cb_index, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, dest_cb_index);
         dest_cb.push_back(1);
-        tile_regs_commit();
         tile_regs_release();
     }
     transposed_cb.wait_front(Wt);

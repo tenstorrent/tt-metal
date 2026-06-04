@@ -5,14 +5,8 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -33,6 +27,8 @@ void kernel_main() {
             cb_c2.wait_front(onetile);
             ACQ();
             mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_2, tt::CBIndex::c_0, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, tt::CBIndex::c_16);
             cb_c16.push_back(onetile);
             cb_c2.pop_front(onetile);
@@ -43,6 +39,8 @@ void kernel_main() {
             cb_c1.wait_front(onetile);
             ACQ();
             mul_tiles_bcast<BroadcastType::SCALAR>(tt::CBIndex::c_1, tt::CBIndex::c_0, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, tt::CBIndex::c_17);
             cb_c17.push_back(onetile);
             cb_c1.pop_front(onetile);

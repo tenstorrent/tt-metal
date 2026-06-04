@@ -192,12 +192,12 @@ void kernel_main() {
         input_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            tile_regs_wait();
             values_cb.reserve_back(1);
             copy_tile(input_transposed_cb_index, i, 0);  // Copy i-th sorted value tile
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, values_cb_index);               // Pack for output transmission
             values_cb.push_back(1);
-            tile_regs_commit();
             tile_regs_release();
         }
         // Clean up remaining tiles in transposed buffer
@@ -211,12 +211,12 @@ void kernel_main() {
         index_transposed_cb.wait_front(Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
-            tile_regs_wait();
             output_ind_cb.reserve_back(1);
             copy_tile(index_transposed_cb_index, i, 0);  // Copy i-th sorted index tile
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, output_ind_cb_index);           // Pack for output transmission
             output_ind_cb.push_back(1);
-            tile_regs_commit();
             tile_regs_release();
         }
         // Clean up remaining tiles in transposed buffer

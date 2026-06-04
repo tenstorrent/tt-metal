@@ -130,12 +130,14 @@ void kernel_main() {
                                 pack_reconfig_data_format(addcmul_temp_cb);
 
                                 tile_regs_acquire();
-                                tile_regs_wait();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, addcmul_temp_cb);
                                 }
                                 tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, addcmul_temp_cb);
+                                }
                                 tile_regs_release();
                                 cb_pop_front(input_cb, tile_granularity);
                                 cb_pop_front(intermediate_cb, tile_granularity);
@@ -189,12 +191,14 @@ void kernel_main() {
                                 pack_reconfig_data_format(output_cb);
 
                                 tile_regs_acquire();
-                                tile_regs_wait();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(addcmul_temp_cb, addcmul_a_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, output_cb);
                                 }
                                 tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, output_cb);
+                                }
                                 tile_regs_release();
                                 cb_pop_front(addcmul_temp_cb, tile_granularity);
                                 cb_pop_front(addcmul_a_cb, tile_granularity);
@@ -206,12 +210,14 @@ void kernel_main() {
                                 cb_wait_front(intermediate_cb, tile_granularity);
                                 cb_reserve_back(output_cb, tile_granularity);
                                 tile_regs_acquire();
-                                tile_regs_wait();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, output_cb);
                                 }
                                 tile_regs_commit();
+                                tile_regs_wait();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, output_cb);
+                                }
                                 tile_regs_release();
                                 cb_pop_front(input_cb, tile_granularity);
                                 cb_pop_front(intermediate_cb, tile_granularity);

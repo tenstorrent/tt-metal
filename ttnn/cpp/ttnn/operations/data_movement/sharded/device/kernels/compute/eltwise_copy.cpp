@@ -19,19 +19,19 @@ void kernel_main() {
     copy_tile_init(tt::CBIndex::c_0);
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         tile_regs_acquire();
-        tile_regs_wait();
 
         // Pop tile after tile, copy to DST and pack
         cb_in.wait_front(1);
         cb_out.reserve_back(1);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, tt::CBIndex::c_16);
 
         cb_in.pop_front(1);
         cb_out.push_back(1);
 
-        tile_regs_commit();
         tile_regs_release();
     }
 }

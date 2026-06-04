@@ -35,16 +35,16 @@ FORCE_INLINE void transpose_and_pack(
     input_cb.wait_front(2 * total_tiles);
     for (uint32_t i = 0; i < total_tiles; ++i) {
         tile_regs_acquire();
-        tile_regs_wait();
         dest_cb.reserve_back(1);
 
         // Transpose tile from WH to HW format
         transpose_wh_tile(input_cb_index, i, 0);
 
         // Pack transposed tile to destination
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, dest_cb_index);
         dest_cb.push_back(1);
-        tile_regs_commit();
         tile_regs_release();
     }  // i loop
     // Pop in two halves so a single pop never crosses the circular buffer
@@ -240,7 +240,6 @@ void kernel_main() {
                 read_cb_and_transpose(input_ind_cb_index, DST_IND);  // Indices: dest regs 2,3
 
                 tile_regs_commit();
-
                 tile_regs_wait();
 
                 // Pack transposed values
@@ -320,7 +319,6 @@ void kernel_main() {
                 transposed_ind_cb.reserve_back(1);
 
                 tile_regs_acquire();
-                tile_regs_wait();
 
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
@@ -358,6 +356,8 @@ void kernel_main() {
                 result_prep_ind_cb.reserve_back(incr);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
                 pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
 
@@ -374,7 +374,6 @@ void kernel_main() {
                 result_prep_val_cb.push_back(incr);
                 result_prep_ind_cb.push_back(incr);
 
-                tile_regs_commit();
                 tile_regs_release();
 
                 // Clean up transposed buffers if we consumed from them

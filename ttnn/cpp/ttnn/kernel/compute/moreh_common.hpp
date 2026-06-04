@@ -22,15 +22,8 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 
-// Deprecated
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 namespace ckernel {
 
@@ -163,7 +156,6 @@ ALWI void mul_tiles_to_cb(
     mul_tiles_init_with_dt(icb0, icb1);
     mul_tiles(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -200,7 +192,6 @@ ALWI void mul_tiles_and_negative_to_cb(
     negative_tile_init();
     negative_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -245,7 +236,6 @@ ALWI void mul_tiles_and_mask_tile_to_cb(
     mask_tile_init();
     mask_tile(dst0, dst_mask);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -285,7 +275,6 @@ ALWI void mul_tiles_log_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -323,7 +312,6 @@ ALWI void mul_tiles_bcast_rows_to_cb(
     mul_bcast_rows_init_short(icb0, icb1);
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -364,7 +352,6 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -402,7 +389,6 @@ ALWI void mul_tiles_bcast_cols_to_cb(
     mul_bcast_cols_init_short(icb0, icb1);
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -443,7 +429,6 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -469,7 +454,6 @@ ALWI void copy_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     copy_tile_init_with_dt(icb);
     copy_tile(icb, itile, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -494,7 +478,6 @@ ALWI void sign_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     sign_tile_init();
     sign_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -524,7 +507,6 @@ ALWI void add_tiles_to_cb(
     add_tiles_init_with_dt(icb0, icb1);
     add_tiles(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -565,7 +547,6 @@ ALWI void mask_tile_to_cb(
     mask_tile_init();
     mask_tile(dst0, dst_mask);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -603,7 +584,6 @@ ALWI void sub_tiles_bcast_cols_to_cb(
     sub_bcast_cols_init_short(icb0, icb1);
     sub_tiles_bcast<BroadcastType::COL>(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -645,7 +625,6 @@ ALWI void sub_tiles_bcast_rows_to_cb(
     }
     sub_tiles_bcast<BroadcastType::ROW>(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -679,7 +658,6 @@ ALWI void sub_tiles_to_cb(
     sub_tiles_init_with_dt(icb0, icb1);
     sub_tiles(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -707,7 +685,6 @@ ALWI void exp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     exp_tile_init();
     exp_tile(dst);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst, ocb);
     tile_regs_release();
@@ -734,7 +711,6 @@ ALWI void rexp_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32
     exp_tile_init();
     exp_tile(dst);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst, ocb);
     tile_regs_release();
@@ -852,7 +828,6 @@ ALWI void recip_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint3
     recip_tile_init();
     recip_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -877,7 +852,6 @@ ALWI void log_tile_to_cb(uint32_t icb, uint32_t ocb, uint32_t itile = 0, uint32_
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, ocb);
     tile_regs_release();
@@ -917,7 +891,6 @@ ALWI void power_tile_to_cb(
         recip_tile(dst0);
     }
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_xpow);
     tile_regs_release();
@@ -935,7 +908,6 @@ ALWI void power_tile_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_logx);
     tile_regs_release();
@@ -954,7 +926,6 @@ ALWI void power_tile_to_cb(
     exp_tile_init();
     exp_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_exp_lxmd);
     tile_regs_release();
@@ -971,7 +942,6 @@ ALWI void power_tile_to_cb(
     mul_tiles_init_with_dt(cb_xpow, cb_exp_lxmd);
     mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_correct_xpow);
     tile_regs_release();
@@ -1012,7 +982,6 @@ ALWI void power_tile_with_abs_x_to_cb(
         recip_tile(dst0);
     }
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_xpow);
     tile_regs_release();
@@ -1033,7 +1002,6 @@ ALWI void power_tile_with_abs_x_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_logx);
     tile_regs_release();
@@ -1052,7 +1020,6 @@ ALWI void power_tile_with_abs_x_to_cb(
     exp_tile_init();
     exp_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_exp_lxmd);
     tile_regs_release();
@@ -1069,7 +1036,6 @@ ALWI void power_tile_with_abs_x_to_cb(
     mul_tiles_init_with_dt(cb_xpow, cb_exp_lxmd);
     mul_tiles(cb_xpow, cb_exp_lxmd, 0, 0, dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_correct_xpow);
     tile_regs_release();
@@ -1107,7 +1073,6 @@ ALWI void power_and_recip_tile_to_cb(
         recip_tile(dst0);
     }
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_xpow);
     tile_regs_release();
@@ -1125,7 +1090,6 @@ ALWI void power_and_recip_tile_to_cb(
     log_tile_init();
     log_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_logx);
     tile_regs_release();
@@ -1144,7 +1108,6 @@ ALWI void power_and_recip_tile_to_cb(
     exp_tile_init();
     exp_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_exp_lxmd);
     tile_regs_release();
@@ -1164,7 +1127,6 @@ ALWI void power_and_recip_tile_to_cb(
     recip_tile_init();
     recip_tile(dst0);
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile_with_dt(dst0, cb_recip_xpow);
     tile_regs_release();

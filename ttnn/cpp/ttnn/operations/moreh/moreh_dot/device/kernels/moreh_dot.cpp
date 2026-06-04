@@ -8,14 +8,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -36,6 +30,8 @@ void kernel_main() {
         cb_c24.reserve_back(onetile);
         mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
         mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, tt::CBIndex::c_24);
         cb_c24.push_back(onetile);
 

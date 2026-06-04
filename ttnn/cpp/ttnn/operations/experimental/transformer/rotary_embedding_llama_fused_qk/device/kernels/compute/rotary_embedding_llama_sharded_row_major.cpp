@@ -10,14 +10,8 @@
 #include "api/compute/matmul.h"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
@@ -82,6 +76,8 @@ void kernel_main() {
         ACQ();
 
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, rotated_in_interm_cb, 0);
 
         REL();
@@ -92,6 +88,8 @@ void kernel_main() {
         ACQ();
         // sin_interim = rotated * sin
         mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, sin_interm_cb, 0);
         REL();
         sin_interm_cb_obj.push_back(Wt);
@@ -101,6 +99,8 @@ void kernel_main() {
         ACQ();
         // cos_interim = x * cos
         mul_tiles(in_cb, cos_cb, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cos_interm_cb, 0);
         REL();
         cos_interm_cb_obj.push_back(Wt);
@@ -112,6 +112,8 @@ void kernel_main() {
         ACQ();
         // out = cos_interim + sin_interim
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb, 0);
         REL();
         out_cb_obj.push_back(Wt);

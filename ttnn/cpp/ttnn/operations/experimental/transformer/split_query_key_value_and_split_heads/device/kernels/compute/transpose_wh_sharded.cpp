@@ -27,10 +27,10 @@ void kernel_main() {
         cb_out1_obj.reserve_back(1);
 
         tile_regs_acquire();
-        tile_regs_wait();
         transpose_wh_tile(cb_im0, 0, 0);
-        pack_tile(0, cb_out1);
         tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_out1);
         tile_regs_release();
 
         cb_out1_obj.push_back(1);

@@ -10,14 +10,8 @@
 #include "api/compute/matmul.h"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -76,6 +70,10 @@ void kernel_main() {
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, rotated_in_interm_cb, j);
         }
         REL();
@@ -87,6 +85,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             // sin_interim = rotated * sin
             mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, sin_interm_cb, j);
         }
         REL();
@@ -97,6 +99,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             // cos_interim = x * cos
             mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, cos_interm_cb, j);
         }
         REL();
@@ -110,6 +116,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim
             add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < Wt; ++j) {
             pack_tile(j, out_cb, j);
         }
         REL();

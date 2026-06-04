@@ -12,14 +12,8 @@
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { tile_regs_acquire(); }
+ALWI void REL() { tile_regs_release(); }
 
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos
@@ -31,6 +25,8 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     ACQ();
     mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
     REL();
     cb_push_back(out_cb, num_tiles);
@@ -40,6 +36,8 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     ACQ();
     mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(0, out_cb);
     REL();
     cb_push_back(out_cb, num_tiles);
@@ -127,6 +125,8 @@ void kernel_main() {
                 ACQ();
                 mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(0, rotated_in_interm_cb);
                 REL();
                 cb_push_back(rotated_in_interm_cb, onetile);
@@ -155,6 +155,8 @@ void kernel_main() {
             ACQ();
             add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, out_cb);
             REL();
 
