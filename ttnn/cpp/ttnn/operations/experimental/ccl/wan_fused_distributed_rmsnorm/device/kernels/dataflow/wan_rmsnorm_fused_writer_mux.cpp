@@ -39,6 +39,10 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+// Fabric-canonical addrgen: addrgen_detail::get_noc_address() for fabric
+// destination addresses (handles the Wormhole DRAM-coord -> noc0 flip the
+// fabric EDM expects; plain get_noc_addr() does not).
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
@@ -350,7 +354,18 @@ void kernel_main() {
             // Fabric mcast: the SAME page index lands at the same DRAM address
             // on every chip; my_device_index ensures my data goes to my pages.
             const uint32_t my_dram_page_idx = my_device_index * num_chunks_per_device + chunk_idx_on_device;
-            const uint64_t dram_dest_noc_addr = get_noc_addr(my_dram_page_idx, stats_dram_accessor);
+            // Fabric destination address MUST be built with the fabric addrgen
+            // helper, not plain get_noc_addr(): the latter encodes the DRAM bank
+            // using this writer kernel's NOC, whereas the EDM fabric router
+            // issues the write on its own NOC. On Wormhole the two NOCs mirror
+            // coordinates AND DRAM cores have no virtual coords, so a plain
+            // get_noc_addr() resolves on the remote chip to a Tensix core L1 ->
+            // "NOC target address overflow" (watcher) -> device hang. The
+            // addrgen helper flips DRAM coords into the canonical noc0 system
+            // the fabric APIs expect (no-op on Blackhole, which is why this
+            // only bit the Wormhole Galaxy). Mirrors all_gather_async's writers.
+            const uint64_t dram_dest_noc_addr =
+                tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram_accessor, my_dram_page_idx, 0);
             if constexpr (num_targets_forward > 0) {
                 if (fwd_mux_args.connection_valid) {
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
