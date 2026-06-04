@@ -3,6 +3,80 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-04 — local vLLM server: live on BH galaxy through prefill; vLLM-version drift fixes in tt-vllm-plugin
+
+Stood up the **local** vLLM server (`run.py --workflow server --local-server
+--tt-device blackhole_galaxy`) for batch-1. The server now **starts, opens the
+32-chip mesh (grid 8×4), loads the 27B model on device (64/64 layers),
+registers our class, schedules, and runs prefill.** Remaining: a cascade of
+vLLM-API-drift fixes in the request hot-path before a clean batch-1 generation,
+then ISL-256k benchmarks. Device validation is **paused** (not yet a clean
+end-to-end completion). All fixes committed in the `tt-inference-server` repo
+(separate git repo nested under tt-metal).
+
+### Environment (one-time, into `python_env`)
+
+- vLLM clone at `tt-metal/vllm`, checked out to **`8f36910`** (Llama70B-galaxy
+  pin; the plugin pins `vllm==0.10.1.1` and `f4b029385`/main is too new — see
+  drift list). Installed editable: `VLLM_TARGET_DEVICE=empty uv pip install
+  --no-deps -e .`.
+- `tt-inference-server/tt-vllm-plugin` installed editable (`uv pip install
+  --no-deps -e .`) — provides the `tt` platform + `tt_model_registry` entry
+  points vLLM discovers.
+- **transformers pinned `>=4.56,<5`** → 4.57.6 (vLLM needs ≥4.56; 5.x breaks
+  config promotion / "too new for tenstorrent"; hf-hub dropped to 0.36.2).
+- See memory `qwen36-vllm-local-server-setup` for the full recipe.
+
+### Launch (offline, batch-1)
+
+    cd tt-inference-server
+    SNAP=~/.cache/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots/6a9e13bd6fc8f0983b9b99948120bc37f49c13e9
+    export TT_METAL_HOME=$(cd .. && pwd) HF_HOME=~/.cache/huggingface \
+      HF_TOKEN=hf_placeholder HF_HUB_OFFLINE=1 MODEL_WEIGHTS_DIR=$SNAP HF_MODEL=$SNAP
+    MODEL_SPECS_ENV=dev python run.py --model Qwen3.6-27B --workflow server \
+      --local-server --tt-device blackhole_galaxy --skip-system-sw-validation \
+      --no-auth --tt-metal-python-venv-dir $(cd .. && pwd)/python_env
+
+Launcher gates cleared: short model name `Qwen3.6-27B`; `HF_TOKEN` set
+(placeholder, weights cached); `--no-auth` (skip JWT); catalog `version`
+`>=0.11.0` floor → `0.11.1`; `MODEL_WEIGHTS_DIR`+`HF_MODEL`→snapshot for offline
+weights; `mesh_grid_dict["BH-Galaxy"]=(8,4)`.
+
+### vLLM-API-drift fixes in tt-vllm-plugin (commits in tt-inference-server repo)
+
+The plugin targets vLLM ~0.10.1.1; the clone is newer, so each of these drifted:
+
+| area | fix |
+|---|---|
+| platform.py imports | `ProcessorInputs`/`SamplingParams` deferred to TYPE_CHECKING (circular import) |
+| platform.py | `getattr(envs,"VLLM_USE_V1",True)` (env removed) |
+| native MM qwen3_5 vs runner check | `hf_overrides:{"architectures":["Qwen3ForCausalLM"]}` + register `TTQwen3ForCausalLM`→qwen3.6 class (shadows embedding fallback) |
+| qwen3_5 config | drop `text_config`/`vision_config` sub-dicts so `get_text_config()` returns self (patch_rope_parameters) |
+| worker/model_runner/scheduler imports | `cdiv`→`utils.math_utils`, `STR_DTYPE_TO_TORCH_DTYPE`→`utils.torch_utils`; `LayerBlockType` now a `Literal` (pass `"attention"`) |
+| FullAttentionSpec | drop removed `use_mla` kwarg |
+| MultiGroupBlockTable | add required `kernel_block_sizes` (=block_sizes) |
+| AscendScheduler.__init__ | `*args,**kwargs` passthrough (`block_size` added) |
+| KVCacheManager | `get_num_common_prefix_blocks(request_id)` single-arg |
+| encoder cache | `get_freed_mm_hashes()` + SchedulerOutput `free_encoder_mm_hashes` (scheduler + model_runner consume) |
+| CachedRequestState | `mm_features` vs `mm_kwargs`/`mm_positions` (pick via `dataclasses.fields`) |
+
+### Remaining (when device runs resume)
+
+1. **`tt-smi -r` before each launch** — a dirty engine death leaves the mesh
+   ethernet hung (`Timed out waiting for active ethernet core`); confirmed that
+   skipping the reset reproduces it. (Galaxy CPLD warns to use `-glx_reset` if
+   `-r` fails.)
+2. Relaunch → retry `curl /v1/chat/completions` → fix any further
+   `model_runner.execute_model`/sampling drift (cascade is converging; each
+   iteration ≈ 4–5 min: reset + cache-load + request).
+3. Once batch-1 generates cleanly: accuracy parity vs demo, then **ISL sweep to
+   256k** (`BENCHMARK_ISL_OSL_PAIRS` extended; note `isl+osl ≤ 262144`).
+4. Then raise dev catalog `max_concurrency` 1→32 and re-validate.
+
+**Root-cause note:** none of the failures are in the qwen3.6 model code — all
+are tt-vllm-plugin↔vLLM-version skew. A plugin built against the clone's exact
+vLLM (or pinning the clone to the plugin's 0.10.1.1) would avoid the cascade.
+
 ## 2026-06-03 — tt-inference-server integration (text-only, BH Galaxy) — code landed, device validation pending
 
 Wired Qwen3.6-27B (text-only LM tower) into `tt-inference-server`'s vLLM
