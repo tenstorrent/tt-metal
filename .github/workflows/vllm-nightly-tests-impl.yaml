@@ -224,21 +224,6 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[BH-DB] Llama-3.1-8B-Instruct with sampling-tests",
-              "model": "meta-llama/Llama-3.1-8B-Instruct",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
-              "runner-label": "BH-DeskBox",
-              "arch": "arch-blackhole",
-              "mesh-device": "P150x2",
-              "tt-llama-text-ver": "tt_transformers",
-              "additional-server-args": "--data_parallel_size 2 --async-scheduling",
-              "structured-output": true,
-              "sampling-tests": true,
-              "multimodal": false,
-              "owner_id": "U08GELBB1AP"
-            },
-            {
               "name": "[BH-QB-2] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,

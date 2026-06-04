@@ -49,9 +49,9 @@ on:
         default: true
         type: boolean
       bh-runner-deskbox:
-        description: "Run tests on BH-DeskBox"
+        description: "Run tests on BH-DeskBox (disabled per MINFRA-658)"
         required: false
-        default: true
+        default: false
         type: boolean
       bh-runner-loudbox:
         description: "Run tests on BH-LoudBox"
@@ -149,7 +149,7 @@ jobs:
             run_wh_6u="true"
             run_bh="true"
             bh_llmbox="true"
-            bh_deskbox="true"
+            bh_deskbox="false"  # disabled per MINFRA-658
             bh_loudbox="true"
             bh_p300="true"
             bh_quietbox_2="true"

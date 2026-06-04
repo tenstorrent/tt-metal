@@ -23,7 +23,6 @@ on:
           - n300-llmbox
           - topology-6u
           - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       load-to-db:
