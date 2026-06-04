@@ -28,11 +28,13 @@ def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
     """All prefill is model-owned. traced -> chunk-outer trace; non-traced -> paged.
     Both fill the paged KV cache + finalize GDN state, so decode continues correctly.
 
-    Short prompts (T < one chunk, i.e. the whole prompt would otherwise take the eager
-    tail) route to the masked fixed-bucket path: it runs at one of a few pre-warmed bucket
-    lengths, so it never compiles a new program at request time and can't clobber the parked
-    trace — the short-prompt hang fix. Longer prompts keep the chunk-outer trace (the final
-    partial chunk still takes the eager tail; bounding that is a follow-up).
+    The traced path has a single entry, prefill_traced_chunked, for EVERY input length up to
+    128k: it replays the captured 2048-token chunk trace for each full chunk, then runs the
+    final partial chunk (or a whole short prompt, when there are no full chunks) through the
+    masked fixed-bucket path. The masked path runs at one of a few pre-warmed bucket lengths, so
+    it never compiles a new program at request time and can't clobber the parked trace — the
+    short-prompt / long-tail hang fix. Defining the short/long seam inside prefill_traced_chunked
+    (num_full==0 -> masked bucket) keeps it in one place.
 
     NOTE (vLLM block allocation): the masked path writes K/V for the full bucket, so the
     page_table must map enough blocks to cover the rounded-up bucket length (<= 2048 -> 32
@@ -40,23 +42,28 @@ def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
     """
     T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
     if use_trace:
-        chunk = getattr(model, "_chunked_chunk_size", None) or 2048
-        if T < chunk:
-            return model.prefill_masked_bucket(tokens, page_table, actual_len=T)
         return model.prefill_traced_chunked(tokens, page_table, actual_len=T)
     return model.prefill_paged(tokens, page_table)
 
 
 def prime_decode_trace(generator, model, tokens, current_pos, page_table):
-    """Capture the Generator decode trace WITHOUT corrupting GDN recurrent state.
+    """DORMANT FALLBACK — only reached under QWEN35_DECODE_PRIME=1 (see qwen35_vllm.decode_forward).
 
-    The stock Generator decode-trace capture runs the forward twice (a compile run +
-    the capture run) on this first token before any real replay. For ordinary models
-    that's harmless (re-writing the same paged KV slot is idempotent), but GDN's
-    recurrent state is a running accumulation, so those extra passes advance it
-    non-idempotently. Snapshot the DeltaNet state, drive one ``decode_forward`` with
-    ``enable_trace=True`` (which performs the capture), then restore the snapshot — so
-    the subsequent traced decode loop replays from the correct post-prefill state.
+    By default Qwen35 decode conforms to the standard path: the decode trace is captured at
+    position 0 during warmup by the inherited WarmupForwardMixin and replayed at serving. That is
+    safe because the model re-zeros the GDN state at the start of every sequence
+    (model._reset_gdn_state_for_new_sequence), so the warmup capture's residue never leaks into a
+    real request. This helper exists so that, if the pos-0 warmup capture ever proves insufficient
+    for GDN, the post-prefill capture can be re-enabled by flipping one env flag rather than
+    re-deriving the workaround.
+
+    Capture the Generator decode trace WITHOUT corrupting GDN recurrent state. The stock Generator
+    decode-trace capture runs the forward twice (a compile run + the capture run) on this first
+    token before any real replay. For ordinary models that's harmless (re-writing the same paged KV
+    slot is idempotent), but GDN's recurrent state is a running accumulation, so those extra passes
+    advance it non-idempotently. Snapshot the DeltaNet state, drive one ``decode_forward`` with
+    ``enable_trace=True`` (which performs the capture), then restore the snapshot — so the
+    subsequent traced decode loop replays from the correct post-prefill state.
 
     Call once after prefill, before the decode loop. Inputs match ``decode_forward``:
     ``tokens`` [B,1], ``current_pos`` a [B] tensor, ``page_table`` host tensor.

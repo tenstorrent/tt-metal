@@ -207,3 +207,67 @@ def test_masked_bucket_after_trace_capture(device):
             f"logit_pcc={p:.6f} tok={int(out.argmax())} ref_tok={int(ref[L].argmax())}"
         )
         assert p > LOGIT_PCC, f"L={L}: post-trace masked logit PCC {p:.6f} < {LOGIT_PCC} (in-place state corruption?)"
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+@pytest.mark.parametrize(
+    "actual_len",
+    [2098, 2748, 3548],
+    ids=["chunk1_tail50_b128", "chunk1_tail700_b1024", "chunk1_tail1500_b2048"],
+)
+def test_traced_chunked_tail_matches_reference(device, actual_len):
+    """Long-prompt path: prefill_traced_chunked replays the parked chunk trace for the full
+    2048-token chunk, then runs the partial FINAL chunk through the masked-bucket path with the
+    GDN/KV state carried in place (chunk_start > 0). This tail previously took the eager
+    per-length path, which compiled a fresh program at request time and clobbered the parked
+    trace (the device hang). Assert the tail now (1) runs with a trace parked and (2) stays
+    faithful to the trusted exact-length prefill_paged reference — next-token logits AND the
+    carried GDN recurrent/conv state, which decode continues from.
+    """
+    device.enable_program_cache()
+
+    from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
+
+    model = Qwen35Model.from_pretrained(device, max_batch_size=1, max_seq_len=MAX_NUM_BLOCKS * BLOCK_SIZE, n_layers=4)
+    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+    kv_shape = [MAX_NUM_BLOCKS, model.args.n_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+
+    torch.manual_seed(0)
+    real_tokens = torch.randint(0, 2000, (1, actual_len), dtype=torch.long)
+
+    # ---- Reference: trusted non-traced exact-length paged prefill (captured BEFORE the trace
+    #      reassigns the GDN to its in-place external state buffers). ----
+    ref = ttnn.to_torch(model.prefill_paged(real_tokens, page_table)).squeeze().float()
+    ref_states = model._save_deltanet_states()
+
+    # ---- Park the chunk trace + warm the masked buckets (what vLLM warmup does), then run the
+    #      long traced-chunked path on the SAME tokens. ----
+    model.capture_prefill_trace_chunked(device, page_table, chunk_size=2048)
+    test = ttnn.to_torch(model.prefill_traced_chunked(real_tokens, page_table, actual_len=actual_len)).squeeze().float()
+    test_states = model._save_deltanet_states()
+
+    assert torch.isfinite(test).all(), f"non-finite logits at L={actual_len}"
+    logit_pcc = compute_pcc(ref, test)
+
+    assert len(ref_states) == len(test_states) and len(ref_states) > 0
+    rec_pccs, conv_pccs = [], []
+    for rs, ts in zip(ref_states, test_states):
+        rec_pccs.append(compute_pcc(rs["recurrent"], ts["recurrent"]))
+        if rs["conv"] is not None and ts["conv"] is not None:
+            conv_pccs.append(compute_pcc(rs["conv"], ts["conv"]))
+
+    tail = actual_len % 2048
+    logger.info(
+        f"traced-chunked L={actual_len} tail={tail} bucket={model._mask_bucket_for(tail)} "
+        f"| logit_pcc={logit_pcc:.6f} tok={int(test.argmax())} ref_tok={int(ref.argmax())} "
+        f"| rec_pcc(min)={min(rec_pccs):.6f} conv_pcc(min)={min(conv_pccs) if conv_pccs else float('nan'):.6f}"
+    )
+    assert logit_pcc > LOGIT_PCC, f"L={actual_len}: traced-chunked logit PCC {logit_pcc:.6f} < {LOGIT_PCC}"
+    assert (
+        min(rec_pccs) > STATE_PCC
+    ), f"L={actual_len}: carried GDN recurrent-state PCC {min(rec_pccs):.6f} < {STATE_PCC}"
+    if conv_pccs:
+        assert (
+            min(conv_pccs) > STATE_PCC
+        ), f"L={actual_len}: carried GDN conv-state PCC {min(conv_pccs):.6f} < {STATE_PCC}"
