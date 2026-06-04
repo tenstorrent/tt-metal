@@ -46,6 +46,9 @@ void kernel_main() {
     const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    // Number of row-tiles per batch element (= sequence_length / TILE_HEIGHT). Leading
+    // (batch) dims are folded into tile_row, so ROPE must cycle every rows_per_batch_tiles.
+    const uint32_t rows_per_batch_tiles = get_arg_val<uint32_t>(arg_idx++);
 
     // ublocks size defined in tiles
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
@@ -136,7 +139,9 @@ void kernel_main() {
                     /**
                      * When processing the first column of a specific row, read the sin/cos inputs for rope.
                      */
-                    uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
+                    // Cycle rope per batch: each batch element reuses the same
+                    // per-position rope tiles (rope buffer holds only seq_len positions).
+                    uint32_t rope_tile_start_idx = (tile_row % rows_per_batch_tiles) * head_dim_tiles;
                     cb_reserve_back(rope_cos_cb, head_dim_tiles);
                     uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
                     for (uint32_t i = 0; i < head_dim_tiles; i++) {

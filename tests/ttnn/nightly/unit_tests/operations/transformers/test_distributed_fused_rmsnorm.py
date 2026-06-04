@@ -225,6 +225,39 @@ def test_distributed_fused_rmsnorm_sweep_fusions(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize("batch", [2, 3, 4], ids=["batch2", "batch3", "batch4"])
+@pytest.mark.parametrize("seqlen", [256, 2048], ids=["seqlen256", "seqlen2048"])
+@pytest.mark.parametrize("hidden_dim", [2048, 5120], ids=["hidden_dim2048", "hidden_dim5120"])
+@pytest.mark.parametrize("num_heads_per_device", [1, 5], ids=["num_heads1", "num_heads5"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])
+@pytest.mark.parametrize("num_simulated_devices", [8], ids=["num_simulated_devices8"])
+def test_distributed_fused_rmsnorm_batched(
+    device,
+    num_simulated_devices,
+    batch,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    num_heads_per_device,
+    use_weight,
+    use_rope,
+    reset_seeds,
+):
+    """Batch > 1: leading (batch) dims fold into the row dimension; ROPE cycles per
+    batch and the head-split output is written into each batch element's own slice.
+    Mirrors the wan2.x attention norm (40 heads / 8 devices -> 5 heads/device)."""
+    num_heads = num_heads_per_device * num_simulated_devices
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
+    inp_shape = (batch, 1, seqlen, hidden_dim)
+    run_distributed_fused_rmsnorm(
+        device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
     [128, 256, 8192],
