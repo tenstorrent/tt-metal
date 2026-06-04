@@ -61,9 +61,9 @@ using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
 
-static int g_world_rank = -1;
-static int g_world_size = -1;
-static std::shared_ptr<::tt::tt_metal::distributed::multihost::DistributedContext> g_cross_rank_world;
+int g_world_rank = -1;
+int g_world_size = -1;
+std::shared_ptr<::tt::tt_metal::distributed::multihost::DistributedContext> g_cross_rank_world;
 
 // Deterministic per-iter source data; identical formula on both ranks so no
 // IPC is needed for seeds.

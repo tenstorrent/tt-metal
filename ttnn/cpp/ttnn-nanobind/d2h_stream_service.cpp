@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -45,7 +46,7 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::D2HStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
-                    .composer_config = composer_config,
+                    .composer_config = std::move(composer_config),
                     .fifo_size_bytes = fifo_size_bytes,
                     .scratch_cb_size_bytes = scratch_cb_size_bytes,
                     .worker_cores = worker_cores,

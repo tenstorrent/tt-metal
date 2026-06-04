@@ -1015,7 +1015,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const auto mesh_claimed = svc.claimed_cores(mesh_device_->id());
         std::unordered_set<CoreCoord> registered;
         for (const auto& [coord, core] : service_cores_) {
-            if (mesh_claimed.count(core) == 0 && registered.count(core) == 0) {
+            if (!mesh_claimed.contains(core) && !registered.contains(core)) {
                 svc.claim(mesh_device_.get(), {core});
                 registered.insert(core);
             }
@@ -1582,7 +1582,7 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
         "D2HStreamService::read_from_tensor: expected a preallocated host tensor");
 
     const auto& host_mesh_tensor = host_tensor.host_storage().host_tensor();
-    auto& dhb = host_mesh_tensor.buffer();
+    const auto& dhb = host_mesh_tensor.buffer();
     TT_FATAL(
         host_mesh_tensor.tensor_spec() == *per_shard_spec_,
         "D2HStreamService::read_from_tensor: host tensor per-shard spec mismatch");

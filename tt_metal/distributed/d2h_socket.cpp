@@ -149,7 +149,7 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* sender_device = mesh_device->get_device(sender_core_.device_coord);
-    if (svc.claimed_cores(sender_device->id()).count(sender_core_.core_coord) > 0) {
+    if (svc.claimed_cores(sender_device->id()).contains(sender_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
     }
