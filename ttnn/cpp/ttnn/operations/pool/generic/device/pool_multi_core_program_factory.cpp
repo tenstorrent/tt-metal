@@ -674,43 +674,50 @@ static tt::tt_metal::ProgramDescriptor pool2d_multi_core_sharded_with_halo_v2_im
         }
     }
     KernelDescriptor::CompileTimeArgs reader0_ct_args = {
-        max_out_nhw_per_core,                                  // 0
-        kernel_h,                                              // 1
-        kernel_w,                                              // 2
-        pad_w,                                                 // 3
-        in_nbytes_leftover,                                    // 4
-        in_w,                                                  // 5
-        in_c_per_shard_ceil,                                   // 6
-        params.split_reader,                                   // enable split reader //7
-        0,                                                     // split reader id //8
-        bf16_scalar,                                           // 9
-        bf16_init_value,                                       // 10
-        in_nblocks_c,                                          // 11
-        cb_sizes.in_cb_raw_size,                               // 12
-        params.max_rows_for_reduction,                         // 13
-        ceil_pad_w,                                            // 14
-        in_cb_id_0,                                            // 15
-        in_cb_id_1,                                            // 16
-        raw_in_cb_id,                                          // 17
-        in_reader_indices_cb_id,                               // 18
-        in_scalar_cb_id_0,                                     // 19
-        in_scalar_cb_id_1,                                     // 20
-        clear_value_cb_id,                                     // 21
-        static_cast<uint32_t>(pool_type),                      // 22
-        one_scalar_per_core,                                   // 23
-        config_cb_id,                                          // 24
-        in_nbytes_c,                                           // 25
-        shard_width_bytes,                                     // 26
-        params.multi_buffering_factor,                         // 27
-        stride_w,                                              // 28
-        dilation_h,                                            // 29
-        dilation_w,                                            // 30
-        static_cast<uint32_t>(zero_pages),                     // 31
-        config_tensor_in_dram,                                 // 32
-        one_scalar_per_core ? 0 : config_buffer->address(),    // 33
-        one_scalar_per_core ? 0 : config_buffer->page_size(),  // 34
-        reader_indices_buffer->address(),                      // 35
-        reader_indices_buffer->page_size(),                    // 36
+        max_out_nhw_per_core,               // 0
+        kernel_h,                           // 1
+        kernel_w,                           // 2
+        pad_w,                              // 3
+        in_nbytes_leftover,                 // 4
+        in_w,                               // 5
+        in_c_per_shard_ceil,                // 6
+        params.split_reader,                // enable split reader //7
+        0,                                  // split reader id //8
+        bf16_scalar,                        // 9
+        bf16_init_value,                    // 10
+        in_nblocks_c,                       // 11
+        cb_sizes.in_cb_raw_size,            // 12
+        params.max_rows_for_reduction,      // 13
+        ceil_pad_w,                         // 14
+        in_cb_id_0,                         // 15
+        in_cb_id_1,                         // 16
+        raw_in_cb_id,                       // 17
+        in_reader_indices_cb_id,            // 18
+        in_scalar_cb_id_0,                  // 19
+        in_scalar_cb_id_1,                  // 20
+        clear_value_cb_id,                  // 21
+        static_cast<uint32_t>(pool_type),   // 22
+        one_scalar_per_core,                // 23
+        config_cb_id,                       // 24
+        in_nbytes_c,                        // 25
+        shard_width_bytes,                  // 26
+        params.multi_buffering_factor,      // 27
+        stride_w,                           // 28
+        dilation_h,                         // 29
+        dilation_w,                         // 30
+        static_cast<uint32_t>(zero_pages),  // 31
+        config_tensor_in_dram,              // 32
+        // 33/35: the config/reader-indices buffer ADDRESSES are only read by the kernel inside
+        // `if constexpr (config_in_dram)` (reader_pool_2d.cpp / reader_mpwi.cpp). When the config
+        // lives in L1 (the default), that branch is compiled out and the address is dead — so
+        // baking the real address only pollutes the kernel's compile-time-arg hash with a
+        // runtime-varying value, making the kernel un-warmable by up-front precompile (the
+        // address differs per process/allocation). Gate the bake on config_tensor_in_dram so the
+        // L1 case is address-independent (0). Behaviorally identical (dead in the L1 branch).
+        (config_tensor_in_dram && !one_scalar_per_core) ? config_buffer->address() : 0,  // 33
+        one_scalar_per_core ? 0 : config_buffer->page_size(),                            // 34
+        config_tensor_in_dram ? reader_indices_buffer->address() : 0,                    // 35
+        reader_indices_buffer->page_size(),                                              // 36
         // MPWI-only args start here (for reader_mpwi.cpp, not used by reader_pool_2d.cpp)
         in_idx_cb_id,                           // 37
         pack_tmp_cb_id,                         // 38
