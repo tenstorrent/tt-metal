@@ -498,3 +498,73 @@ def test_wan_rmsnorm_bench_composite_tp4_ring_galaxy(mesh_device: ttnn.MeshDevic
 
     _write_csv(rows, CSV_FILENAME_TP4_RING_GALAXY)
     _format_summary_table(rows, "Wan2.2 DistributedRMSNorm (TP=4 LINE, WH Galaxy 1x4, 4 links): composite vs fused")
+
+
+# ---------------------------------------------------------------------------
+# Correctness: fused vs composite on the galaxy (read-overlap opt guard).
+# ---------------------------------------------------------------------------
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a = a.flatten().float()
+    b = b.flatten().float()
+    if torch.allclose(a, b):
+        return 1.0
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+FUSED_REF_DIR = Path("generated/galaxy_fused_ref")
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((4, 8), {**line_params, "trace_region_size": 131072})],
+    indirect=True,
+    ids=["wh_galaxy_4x8_line"],
+)
+def test_wan_rmsnorm_correctness_tp4_galaxy(mesh_device: ttnn.MeshDevice) -> None:
+    """Guard for read-overlap optimizations: the fused output must not change.
+
+    Compares the current fused chip-0 output against a saved fused baseline
+    (record with WAN_CORR_RECORD=1 on the committed/unoptimized kernel; subsequent
+    runs assert PCC ~1.0). A pure read-reorder reads identical bytes -> identical
+    output. Missing ref auto-records (CI-safe). NOT a fused-vs-composite check:
+    those two use different AG impls and diverge ~0.94 on this randn bench.
+    """
+    submesh = _make_ring_submesh_tp4(mesh_device)
+    topology = ttnn.Topology.Linear
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=GALAXY_NUM_LINKS, topology=topology)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(TP_AXIS)
+    n_local_heads = NUM_HEADS // 4
+
+    record = _os.getenv("WAN_CORR_RECORD") == "1"
+    FUSED_REF_DIR.mkdir(parents=True, exist_ok=True)
+    worst = 1.0
+    for cfg_id, seq_len, use_rope in _select_configs():
+        inp = _build_inputs(submesh, seq_len, use_rope)
+        pob = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+            inp.tt_input, TP_AXIS, submesh, num_heads_per_device=n_local_heads
+        )
+        out_fused = _run(
+            inp,
+            submesh,
+            ag_sem,
+            topology,
+            n_local_heads,
+            use_device_op=True,
+            persistent_output_buffer=pob,
+            num_links_override=GALAXY_NUM_LINKS,
+        )
+        f0 = ttnn.to_torch(ttnn.get_device_tensors(out_fused)[0]).float()
+        ref_path = FUSED_REF_DIR / f"{cfg_id}.pt"
+        if record or not ref_path.exists():
+            torch.save(f0, ref_path)
+            logger.info(f"CORRECTNESS {cfg_id}: RECORDED fused baseline {tuple(f0.shape)}")
+            continue
+        ref = torch.load(ref_path)
+        pcc = _pcc(ref, f0)
+        logger.info(f"CORRECTNESS {cfg_id}: fused-vs-baseline PCC = {pcc:.6f}")
+        worst = min(worst, pcc)
+        assert pcc > 0.999, f"{cfg_id} fused output changed vs baseline (PCC {pcc})"
+    if not record:
+        logger.info(f"CORRECTNESS worst fused-vs-baseline PCC = {worst:.6f}")
