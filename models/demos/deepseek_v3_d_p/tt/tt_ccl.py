@@ -118,6 +118,36 @@ class TT_CCL:
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
 
+        # Shared, stable-address reduce_scatter INTERMEDIATE accumulator buffers, keyed by
+        # (shape, dtype). Allocated once and reused by ALL layers' shared experts (they run
+        # sequentially, so one buffer per shape is sufficient). Giving the shared-expert
+        # reduce_scatter a persistent, fixed-address intermediate (a) keeps it alive across the
+        # shared-expert||dispatch sub-device overlap so the concurrent dispatch can't reuse its
+        # freed slot mid-flight, and (b) fixes the DRAM layout every iteration so the op's fabric
+        # reduction order is identical -> bit-exact determinism. One buffer/mesh instead of one
+        # per layer keeps the memory cost flat. See TtSharedExpert.forward.
+        self._shared_rs_intermediate_cache = {}
+
+    def get_shared_rs_intermediate(self, input_tensor):
+        """Lazily allocate (once per mesh, per shape) and return the shared reduce_scatter
+        intermediate accumulator. Line (Linear) topology needs a double-sized leading dim for the
+        forward/backward halves: shape = [2, *input_shape]. Interleaved DRAM, input dtype/layout,
+        replicated across the mesh. Reused at a stable address by every shared-expert reduce_scatter
+        (layers run sequentially, so a single buffer per shape is safe)."""
+        import torch
+
+        key = (tuple(input_tensor.shape), input_tensor.dtype, input_tensor.layout)
+        if key not in self._shared_rs_intermediate_cache:
+            self._shared_rs_intermediate_cache[key] = ttnn.from_torch(
+                torch.zeros([2] + list(input_tensor.shape)),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._shared_rs_intermediate_cache[key]
+
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
         current_idx = self.barrier_semaphore_idx[semaphore_index]
