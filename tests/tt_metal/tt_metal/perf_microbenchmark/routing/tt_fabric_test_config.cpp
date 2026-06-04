@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_constants.hpp"
+#include <algorithm>
 #include <optional>
 #include <variant>
 #include "routing/tt_fabric_test_common_types.hpp"
@@ -517,304 +518,300 @@ std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     return std::nullopt;
 }
 
-bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
-    if (filter_type.has_value()) {
-        if (filter_type.value() == "name" || filter_type.value() == "Name") {
-            return test_config.name == filter_value;
-        }
-        if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
-            auto topo = tt::tt_fabric::Topology::Linear;  // Default value
-            if (filter_value == "Ring") {
-                topo = tt::tt_fabric::Topology::Ring;
-            } else if (filter_value == "Linear") {
-                topo = tt::tt_fabric::Topology::Linear;
-            } else if (filter_value == "Mesh") {
-                topo = tt::tt_fabric::Topology::Mesh;
-            } else if (filter_value == "Torus") {
-                topo = tt::tt_fabric::Topology::Torus;
-            } else {
-                log_info(
-                    tt::LogTest,
-                    "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
-                    filter_value);
-                return false;
-            }
-            return test_config.fabric_setup.topology == topo;
-        }
-        if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
-            if (filter_value == "true") {
-                return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
-            }
-            if (filter_value == "false") {
-                return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
-            }
-            log_info(
-                tt::LogTest,
-                "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
-                filter_value);
-            return false;
-        }
-        if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
-            if (filter_value == "true") {
-                return test_config.global_sync;
-            }
-            if (filter_value == "false") {
-                return !test_config.global_sync;
-            }
-            log_info(
-                tt::LogTest, "Unsupported sync filter value: '{}'. Supported values are: true, false", filter_value);
-            return false;
-        }
-        if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
-            if (fine_grained) {
-                if (test_config.parametrization_params.has_value() &&
-                    !test_config.parametrization_params.value().empty()) {
-                    auto& params = test_config.parametrization_params.value();
-                    auto it = params.find("num_links");
-                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
-                        const auto& num_links_vec = std::get<std::vector<uint32_t>>(it->second);
-                        for (const auto& num_links : num_links_vec) {
-                            if (num_links == stoi(filter_value.value())) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            return test_config.fabric_setup.num_links == stoi(filter_value.value());
-        }
-        if (filter_type.value() == "ntype") {
-            if (fine_grained) {
-                if (test_config.parametrization_params.has_value() &&
-                    !test_config.parametrization_params.value().empty()) {
-                    auto& params = test_config.parametrization_params.value();
-                    auto it = params.find("ntype");
-                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
-                        const auto& ntype_vec = std::get<std::vector<std::string>>(it->second);
-                        for (const auto& ntype : ntype_vec) {
-                            if (ntype == filter_value.value()) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            // soft filter
-            std::optional<tt::tt_fabric::NocSendType> ntype;
-            ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
-            bool checker = false;
-            for (const auto& sender : test_config.senders) {
-                for (const auto& pattern : sender.patterns) {
-                    if (pattern.ntype.has_value()) {
-                        if (pattern.ntype.value() == ntype.value()) {
-                            checker = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (checker) {
-                for (auto& sender : test_config.senders) {
-                    sender.patterns.erase(
-                        std::remove_if(
-                            sender.patterns.begin(),
-                            sender.patterns.end(),
-                            [&](const auto& pattern) {
-                                return pattern.ntype.has_value() && pattern.ntype.value() != ntype;
-                            }),
-                        sender.patterns.end());
-                }
-            }
-            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
-                checker = test_config.defaults.value().ntype.value() == ntype.value();
-            }
-            return checker;
-        }
-        if (filter_type.value() == "ftype") {
-            // soft filter
-            if (fine_grained) {
-                if (test_config.parametrization_params.has_value() &&
-                    !test_config.parametrization_params.value().empty()) {
-                    auto& params = test_config.parametrization_params.value();
-                    auto it = params.find("ftype");
-                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
-                        const auto& ftype_vec = std::get<std::vector<std::string>>(it->second);
-                        for (const auto& ftype : ftype_vec) {
-                            if (ftype == filter_value.value()) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            std::optional<tt::tt_fabric::ChipSendType> ftype;
-            ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
-            bool checker = false;
-            for (const auto& sender : test_config.senders) {
-                for (const auto& pattern : sender.patterns) {
-                    if (pattern.ftype.has_value()) {
-                        if (pattern.ftype.value() == ftype.value()) {
-                            checker = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (checker) {
-                for (auto& sender : test_config.senders) {
-                    sender.patterns.erase(
-                        std::remove_if(
-                            sender.patterns.begin(),
-                            sender.patterns.end(),
-                            [&](const auto& pattern) {
-                                return pattern.ftype.has_value() && pattern.ftype.value() != ftype.value();
-                            }),
-                        sender.patterns.end());
-                }
-            }
-            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
-                checker = test_config.defaults.value().ftype.value() == ftype.value();
-            }
-            return checker;
-        }
-        if (filter_type.value() == "num_packets") {
-            if (fine_grained) {
-                if (test_config.parametrization_params.has_value() &&
-                    !test_config.parametrization_params.value().empty()) {
-                    auto& params = test_config.parametrization_params.value();
-                    auto it = params.find("num_packets");
-                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
-                        const auto& num_packets_vec = std::get<std::vector<uint32_t>>(it->second);
-                        for (const auto& num_packets : num_packets_vec) {
-                            if (num_packets == stoi(filter_value.value())) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            // soft filter
-            uint32_t num_packets = stoi(filter_value.value());
-            bool checker = false;
-            for (const auto& sender : test_config.senders) {
-                for (const auto& pattern : sender.patterns) {
-                    if (pattern.num_packets.has_value()) {
-                        if (pattern.num_packets.value() == num_packets) {
-                            checker = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (checker) {
-                for (auto& sender : test_config.senders) {
-                    sender.patterns.erase(
-                        std::remove_if(
-                            sender.patterns.begin(),
-                            sender.patterns.end(),
-                            [&](const auto& pattern) {
-                                return pattern.num_packets.has_value() && pattern.num_packets.value() != num_packets;
-                            }),
-                        sender.patterns.end());
-                }
-            }
-            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
-                checker = test_config.defaults.value().num_packets.value() == num_packets;
-            }
-            return checker;
-        }
-        if (filter_type.value() == "size") {
-            if (fine_grained) {
-                if (test_config.parametrization_params.has_value() &&
-                    !test_config.parametrization_params.value().empty()) {
-                    auto& params = test_config.parametrization_params.value();
-                    auto it = params.find("size");
-                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
-                        const auto& size_vec = std::get<std::vector<uint32_t>>(it->second);
-                        for (const auto& size : size_vec) {
-                            if (size == stoi(filter_value.value())) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            uint32_t size = stoi(filter_value.value());
-            bool checker = false;
-            for (const auto& sender : test_config.senders) {
-                for (const auto& pattern : sender.patterns) {
-                    if (pattern.size.has_value()) {
-                        if (pattern.size.value() == size) {
-                            checker = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (checker) {
-                for (auto& sender : test_config.senders) {
-                    sender.patterns.erase(
-                        std::remove_if(
-                            sender.patterns.begin(),
-                            sender.patterns.end(),
-                            [&](const auto& pattern) {
-                                return pattern.size.has_value() && pattern.size.value() != size;
-                            }),
-                        sender.patterns.end());
-                }
-            }
-            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
-                checker = test_config.defaults.value().size.value() == size;
-            }
-            return checker;
-        }
-        if (filter_type.value() == "pattern") {
-            bool checker = false;
-            if (test_config.patterns.has_value()) {
-                for (auto& high_level_pattern : test_config.patterns.value()) {
-                    if (high_level_pattern.type == filter_value.value()) {
-                        checker = true;
-                        break;
-                    }
-                }
-            }
-            return checker;
-        }
-        if (filter_type.value() == "mesh_scope") {
-            TT_FATAL(
-                detail::mesh_scope_mapper.to_enum.contains(filter_value.value()),
-                "Unsupported mesh_scope filter value: '{}'. Supported values are: all, intra_mesh, inter_mesh.",
-                filter_value.value());
-            const MeshTrafficScope mesh_scope = detail::mesh_scope_mapper.to_enum.at(filter_value.value());
-            bool checker = false;
-            if (test_config.patterns.has_value()) {
-                auto& patterns = test_config.patterns.value();
-                for (const auto& high_level_pattern : patterns) {
-                    if (high_level_pattern.mesh_scope == mesh_scope) {
-                        checker = true;
-                        break;
-                    }
-                }
-                if (checker) {
-                    patterns.erase(
-                        std::remove_if(
-                            patterns.begin(),
-                            patterns.end(),
-                            [&](const auto& p) { return p.mesh_scope != mesh_scope; }),
-                        patterns.end());
-                }
-            }
-            return checker;
-        }
-        log_info(
-            tt::LogTest,
-            "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
-            "sync, num_links, ntype, ftype, num_packets, size, pattern, mesh_scope",
-            filter_type.value());
+// Returns true if the fine-grained parametrization params contain `value` for `key`.
+static bool fine_grained_contains_uint(const ParsedTestConfig& test_config, const std::string& key, uint32_t value) {
+    if (!test_config.parametrization_params.has_value() || test_config.parametrization_params.value().empty()) {
         return false;
     }
-    return true;
+    const auto& params = test_config.parametrization_params.value();
+    auto it = params.find(key);
+    if (it == params.end() || !std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+        return false;
+    }
+    const auto& vec = std::get<std::vector<uint32_t>>(it->second);
+    return std::find(vec.begin(), vec.end(), value) != vec.end();
+}
+
+// Returns true if the fine-grained parametrization params contain `value` for `key`.
+static bool fine_grained_contains_string(
+    const ParsedTestConfig& test_config, const std::string& key, const std::string& value) {
+    if (!test_config.parametrization_params.has_value() || test_config.parametrization_params.value().empty()) {
+        return false;
+    }
+    const auto& params = test_config.parametrization_params.value();
+    auto it = params.find(key);
+    if (it == params.end() || !std::holds_alternative<std::vector<std::string>>(it->second)) {
+        return false;
+    }
+    const auto& vec = std::get<std::vector<std::string>>(it->second);
+    return std::find(vec.begin(), vec.end(), value) != vec.end();
+}
+
+static bool check_topology_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
+    auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+    if (filter_value == "Ring") {
+        topo = tt::tt_fabric::Topology::Ring;
+    } else if (filter_value == "Linear") {
+        topo = tt::tt_fabric::Topology::Linear;
+    } else if (filter_value == "Mesh") {
+        topo = tt::tt_fabric::Topology::Mesh;
+    } else if (filter_value == "Torus") {
+        topo = tt::tt_fabric::Topology::Torus;
+    } else {
+        log_info(
+            tt::LogTest,
+            "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+            filter_value);
+        return false;
+    }
+    return test_config.fabric_setup.topology == topo;
+}
+
+static bool check_benchmark_mode_filter(
+    const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
+    if (filter_value == "true") {
+        return test_config.performance_test_mode == PerformanceTestMode::BANDWIDTH;
+    }
+    if (filter_value == "false") {
+        return test_config.performance_test_mode != PerformanceTestMode::BANDWIDTH;
+    }
+    log_info(tt::LogTest, "Unsupported benchmark filter value: '{}'. Supported values are: true, false", filter_value);
+    return false;
+}
+
+static bool check_sync_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
+    if (filter_value == "true") {
+        return test_config.global_sync;
+    }
+    if (filter_value == "false") {
+        return !test_config.global_sync;
+    }
+    log_info(tt::LogTest, "Unsupported sync filter value: '{}'. Supported values are: true, false", filter_value);
+    return false;
+}
+
+static bool check_num_links_filter(
+    const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+    if (fine_grained && fine_grained_contains_uint(test_config, "num_links", stoi(filter_value.value()))) {
+        return true;
+    }
+    return test_config.fabric_setup.num_links == stoi(filter_value.value());
+}
+
+static bool check_ntype_filter(
+    ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+    if (fine_grained && fine_grained_contains_string(test_config, "ntype", filter_value.value())) {
+        return true;
+    }
+    // soft filter
+    std::optional<tt::tt_fabric::NocSendType> ntype =
+        detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+    bool checker = false;
+    for (const auto& sender : test_config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.ntype.has_value() && pattern.ntype.value() == ntype.value()) {
+                checker = true;
+                break;
+            }
+        }
+    }
+    if (checker) {
+        for (auto& sender : test_config.senders) {
+            sender.patterns.erase(
+                std::remove_if(
+                    sender.patterns.begin(),
+                    sender.patterns.end(),
+                    [&](const auto& pattern) { return pattern.ntype.has_value() && pattern.ntype.value() != ntype; }),
+                sender.patterns.end());
+        }
+    }
+    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
+        checker = test_config.defaults.value().ntype.value() == ntype.value();
+    }
+    return checker;
+}
+
+static bool check_ftype_filter(
+    ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+    // soft filter
+    if (fine_grained && fine_grained_contains_string(test_config, "ftype", filter_value.value())) {
+        return true;
+    }
+    std::optional<tt::tt_fabric::ChipSendType> ftype =
+        detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
+    bool checker = false;
+    for (const auto& sender : test_config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.ftype.has_value() && pattern.ftype.value() == ftype.value()) {
+                checker = true;
+                break;
+            }
+        }
+    }
+    if (checker) {
+        for (auto& sender : test_config.senders) {
+            sender.patterns.erase(
+                std::remove_if(
+                    sender.patterns.begin(),
+                    sender.patterns.end(),
+                    [&](const auto& pattern) {
+                        return pattern.ftype.has_value() && pattern.ftype.value() != ftype.value();
+                    }),
+                sender.patterns.end());
+        }
+    }
+    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
+        checker = test_config.defaults.value().ftype.value() == ftype.value();
+    }
+    return checker;
+}
+
+static bool check_num_packets_filter(
+    ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+    uint32_t num_packets = stoi(filter_value.value());
+    if (fine_grained && fine_grained_contains_uint(test_config, "num_packets", num_packets)) {
+        return true;
+    }
+    // soft filter
+    bool checker = false;
+    for (const auto& sender : test_config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.num_packets.has_value() && pattern.num_packets.value() == num_packets) {
+                checker = true;
+                break;
+            }
+        }
+    }
+    if (checker) {
+        for (auto& sender : test_config.senders) {
+            sender.patterns.erase(
+                std::remove_if(
+                    sender.patterns.begin(),
+                    sender.patterns.end(),
+                    [&](const auto& pattern) {
+                        return pattern.num_packets.has_value() && pattern.num_packets.value() != num_packets;
+                    }),
+                sender.patterns.end());
+        }
+    }
+    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
+        checker = test_config.defaults.value().num_packets.value() == num_packets;
+    }
+    return checker;
+}
+
+static bool check_size_filter(
+    ParsedTestConfig& test_config, const std::optional<std::string>& filter_value, bool fine_grained) {
+    uint32_t size = stoi(filter_value.value());
+    if (fine_grained && fine_grained_contains_uint(test_config, "size", size)) {
+        return true;
+    }
+    bool checker = false;
+    for (const auto& sender : test_config.senders) {
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.size.has_value() && pattern.size.value() == size) {
+                checker = true;
+                break;
+            }
+        }
+    }
+    if (checker) {
+        for (auto& sender : test_config.senders) {
+            sender.patterns.erase(
+                std::remove_if(
+                    sender.patterns.begin(),
+                    sender.patterns.end(),
+                    [&](const auto& pattern) { return pattern.size.has_value() && pattern.size.value() != size; }),
+                sender.patterns.end());
+        }
+    }
+    if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
+        checker = test_config.defaults.value().size.value() == size;
+    }
+    return checker;
+}
+
+static bool check_pattern_filter(const ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
+    if (!test_config.patterns.has_value()) {
+        return false;
+    }
+    for (const auto& high_level_pattern : test_config.patterns.value()) {
+        if (high_level_pattern.type == filter_value.value()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool check_mesh_scope_filter(ParsedTestConfig& test_config, const std::optional<std::string>& filter_value) {
+    TT_FATAL(
+        detail::mesh_scope_mapper.to_enum.contains(filter_value.value()),
+        "Unsupported mesh_scope filter value: '{}'. Supported values are: all, intra_mesh, inter_mesh.",
+        filter_value.value());
+    const MeshTrafficScope mesh_scope = detail::mesh_scope_mapper.to_enum.at(filter_value.value());
+    bool checker = false;
+    if (test_config.patterns.has_value()) {
+        auto& patterns = test_config.patterns.value();
+        for (const auto& high_level_pattern : patterns) {
+            if (high_level_pattern.mesh_scope == mesh_scope) {
+                checker = true;
+                break;
+            }
+        }
+        if (checker) {
+            patterns.erase(
+                std::remove_if(
+                    patterns.begin(), patterns.end(), [&](const auto& p) { return p.mesh_scope != mesh_scope; }),
+                patterns.end());
+        }
+    }
+    return checker;
+}
+
+bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
+    if (!filter_type.has_value()) {
+        return true;
+    }
+    const std::string& type = filter_type.value();
+    if (type == "name" || type == "Name") {
+        return test_config.name == filter_value;
+    }
+    if (type == "topology" || type == "Topology") {
+        return check_topology_filter(test_config, filter_value);
+    }
+    if (type == "benchmark_mode" || type == "Benchmark_Mode") {
+        return check_benchmark_mode_filter(test_config, filter_value);
+    }
+    if (type == "sync" || type == "Sync") {
+        return check_sync_filter(test_config, filter_value);
+    }
+    if (type == "num_links" || type == "Num_Links") {
+        return check_num_links_filter(test_config, filter_value, fine_grained);
+    }
+    if (type == "ntype") {
+        return check_ntype_filter(test_config, filter_value, fine_grained);
+    }
+    if (type == "ftype") {
+        return check_ftype_filter(test_config, filter_value, fine_grained);
+    }
+    if (type == "num_packets") {
+        return check_num_packets_filter(test_config, filter_value, fine_grained);
+    }
+    if (type == "size") {
+        return check_size_filter(test_config, filter_value, fine_grained);
+    }
+    if (type == "pattern") {
+        return check_pattern_filter(test_config, filter_value);
+    }
+    if (type == "mesh_scope") {
+        return check_mesh_scope_filter(test_config, filter_value);
+    }
+    log_info(
+        tt::LogTest,
+        "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
+        "sync, num_links, ntype, ftype, num_packets, size, pattern, mesh_scope",
+        type);
+    return false;
 }
 
 void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
