@@ -10,7 +10,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
 )
 
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla"
+_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
 
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-2x4'"
 _CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced-skip_check-seq100k-scaled_sl-random-line-8x4'"
