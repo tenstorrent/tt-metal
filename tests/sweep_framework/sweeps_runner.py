@@ -759,6 +759,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(e)
+                # This path breaks before the common footer that stamps this; set it here
+                # so the abort record carries original_vector_data like every other result.
+                result["original_vector_data"] = original_vector_data
                 result["e2e_perf"] = None
                 result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")

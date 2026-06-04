@@ -320,6 +320,41 @@ def _run_gather_in0_ring_matmul(
             pass
 
 
+# The sweeps runner opens ONE device (via mesh_device_fixture) and reuses it across
+# every vector in a suite — it never re-enters the fixture per vector. The gather_in0
+# reconstruction has to open its OWN full-galaxy COL mesh, so it must close that shared
+# device first; doing so would otherwise leave the runner handing a CLOSED device to all
+# subsequent vectors. We track that closure here and transparently (re)open a managed
+# replacement so following vectors keep working.
+_LIVE_DEVICE = None
+_FIXTURE_DEVICE_CLOSED = False
+
+
+def _live_device(fixture_device):
+    """Device to use for this vector: the fixture's until a gather_in0 vector closes it,
+    then a module-managed mesh we (re)open lazily and reuse."""
+    global _LIVE_DEVICE
+    if not _FIXTURE_DEVICE_CLOSED:
+        return fixture_device
+    if _LIVE_DEVICE is None:
+        _LIVE_DEVICE = create_mesh_device(get_mesh_shape())
+    return _LIVE_DEVICE
+
+
+def _close_shared_device(fixture_device):
+    """Close whichever shared device is currently open so gather_in0 can open its own."""
+    global _LIVE_DEVICE, _FIXTURE_DEVICE_CLOSED
+    target = _LIVE_DEVICE if _FIXTURE_DEVICE_CLOSED else fixture_device
+    if target is not None:
+        try:
+            ttnn.close_mesh_device(target)
+        except Exception as e:
+            # Best-effort: a failed close must not mask the test result, but log it.
+            print(f"SWEEPS: best-effort close of shared device before gather_in0 failed: {e}")
+    _LIVE_DEVICE = None
+    _FIXTURE_DEVICE_CLOSED = True
+
+
 def mesh_device_fixture():
     """
     Override default device fixture.
@@ -339,6 +374,12 @@ def mesh_device_fixture():
                 # The gather_in0 ring path closes this device itself (it opens its
                 # own COL mesh); a double-close here is expected and harmless.
                 pass
+            # Close the managed replacement device, if a gather_in0 vector reopened one.
+            if _LIVE_DEVICE is not None:
+                try:
+                    ttnn.close_mesh_device(_LIVE_DEVICE)
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
             device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
@@ -375,6 +416,10 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
+    # A prior gather_in0 vector may have closed the shared fixture device; use the
+    # managed replacement when so (see _live_device).
+    device = _live_device(device)
+
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
 
@@ -382,15 +427,13 @@ def run(
     # partials finished by a cross-mesh all-reduce); the generic path produces
     # garbage PCC (0.001-0.15). Detect on the RAW program_config dict and run the
     # faithful reconstruction (mirrors the linear sweep). It opens its own
-    # full-galaxy COL mesh + sub-devices, so release the fixture device first.
+    # full-galaxy COL mesh + sub-devices, so release the shared device first (and
+    # mark it closed so subsequent vectors get a reopened one).
     _pc_raw = kwargs.get("program_config")
     _ib_shape = input_b_shape if input_b_shape is not None else kwargs.get("input_tensor_b_shape")
     if is_mesh_device and isinstance(_pc_raw, dict) and _pc_raw.get("gather_in0") and _ib_shape is not None:
         _ib_plac = input_b_tensor_placement or kwargs.get("input_tensor_b_tensor_placement")
-        try:
-            ttnn.close_mesh_device(device)
-        except Exception:
-            pass
+        _close_shared_device(device)
         return _run_gather_in0_ring_matmul(
             input_a_shape=input_a_shape,
             input_b_shape=_ib_shape,

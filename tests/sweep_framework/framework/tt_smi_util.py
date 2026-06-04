@@ -184,9 +184,12 @@ class ResetUtil:
 
                 # Surface tt-smi output on the final attempt of the final mechanism.
                 show_output = mech_idx == n_mech and attempt == self.reset_attempts
+                # Suppress BOTH streams on non-final attempts — tt-smi reports failures
+                # largely on stderr, so silencing only stdout still spams intermediate retries.
                 result = subprocess.run(
                     [command, *args],
                     stdout=None if show_output else subprocess.DEVNULL,
+                    stderr=None if show_output else subprocess.DEVNULL,
                 )
                 last_rc = result.returncode
                 if last_rc == 0:

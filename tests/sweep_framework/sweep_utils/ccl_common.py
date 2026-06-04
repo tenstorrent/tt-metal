@@ -55,17 +55,18 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
         yield None, f"Device error {e}"
     finally:
         logger.info("Tearing down device")
-        # Closing the parent (full) mesh tears down its submeshes; only close the
-        # standalone mesh directly when no parent was opened.
-        if parent_device is not None:
-            ttnn.close_mesh_device(parent_device)
+        try:
+            # Closing the parent (full) mesh tears down its submeshes; only close the
+            # standalone mesh directly when no parent was opened.
+            if parent_device is not None:
+                ttnn.close_mesh_device(parent_device)
+            elif mesh_device:
+                ttnn.close_mesh_device(mesh_device)
+        finally:
+            # Always restore fabric to DISABLED — even if open_mesh_device /
+            # create_submesh failed before a device was assigned, or close_mesh_device
+            # raised. Leaving fabric enabled would break every subsequent suite.
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-            del parent_device
-            mesh_device = None
-        elif mesh_device:
-            ttnn.close_mesh_device(mesh_device)
-            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-            del mesh_device
 
 
 def get_serializable_shard_specs(
