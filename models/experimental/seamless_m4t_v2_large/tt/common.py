@@ -1106,3 +1106,46 @@ def pad_n_for_dram_align(n: int, dram_cores: int) -> int:
     """Round ``n`` up to a multiple of ``TILE * dram_cores`` so weights split evenly across DRAM banks."""
     align = TILE * dram_cores
     return ((n + align - 1) // align) * align
+
+
+def hf_aligned_generation_kwargs(generation_config: Any = None, **overrides: Any) -> dict[str, Any]:
+    """Build ``generate()`` text kwargs from HF ``GenerationConfig`` (SeamlessM4T v2 defaults).
+
+    Matches what Hugging Face uses when callers omit optional generation arguments:
+    greedy decode (``do_sample=False``, ``num_beams=1``), checkpoint ``max_new_tokens`` (256),
+    ``repetition_penalty=1.0``, and ``eos_token_id`` / ``pad_token_id`` from the config.
+
+    Pass ``**overrides`` for TT-only options (``use_decode_trace``, ``use_2cq``, …) or tests that
+    need a smaller ``max_new_tokens`` budget.
+    """
+    if generation_config is None:
+        base: dict[str, Any] = {
+            "do_sample": False,
+            "num_beams": 1,
+            "max_new_tokens": 256,
+            "repetition_penalty": 1.0,
+            "eos_token_id": 3,
+            "pad_token_id": 0,
+        }
+    else:
+        gc = generation_config
+        base = {
+            "do_sample": bool(getattr(gc, "do_sample", False)),
+            "num_beams": int(getattr(gc, "num_beams", 1) or 1),
+            "max_new_tokens": int(getattr(gc, "max_new_tokens", 256) or 256),
+            "repetition_penalty": float(getattr(gc, "repetition_penalty", 1.0) or 1.0),
+            "eos_token_id": int(getattr(gc, "eos_token_id", 3)),
+            "pad_token_id": int(getattr(gc, "pad_token_id", 0)),
+        }
+        for key in ("temperature", "top_p", "top_k", "length_penalty", "early_stopping"):
+            if hasattr(gc, key):
+                val = getattr(gc, key)
+                if val is not None:
+                    base[key] = val
+    base.update(overrides)
+    return base
+
+
+def apply_hf_generation_defaults(kwargs_text: dict[str, Any], generation_config: Any) -> dict[str, Any]:
+    """Merge HF ``GenerationConfig`` defaults into ``kwargs_text``; explicit caller keys win."""
+    return {**hf_aligned_generation_kwargs(generation_config), **kwargs_text}

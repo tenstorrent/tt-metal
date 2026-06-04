@@ -33,6 +33,7 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_encoder import TTSeamlessM4Tv2Encoder
 from models.experimental.seamless_m4t_v2_large.tt.common import (
+    apply_hf_generation_defaults,
     build_causal_with_padding_4d,
     build_cross_attn_mask_4d,
     build_encoder_self_mask_4d,
@@ -93,6 +94,10 @@ class TextDecoderKvDecodeRuntime:
     # only when the winner is a prior token).
     tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None
     tok_tt_by_cache_seq_len: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = field(default_factory=dict)
+    tok_li_host: Optional[ttnn.Tensor] = None
+    tok_cm_host: Optional[ttnn.Tensor] = None
+    token_read_host_a: Optional[ttnn.Tensor] = None
+    token_read_host_b: Optional[ttnn.Tensor] = None
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
     trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
@@ -216,8 +221,13 @@ def _read_int_scalar(scalar_tt: ttnn.Tensor) -> int:
 
     if scalar_tt.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         scalar_tt = ttnn.to_layout(scalar_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    host = to_torch_replicated_first_shard(scalar_tt).to(_torch.int64).reshape(-1)
-    return int(host[0].item())
+    host = to_torch_replicated_first_shard(scalar_tt).reshape(-1)
+    if host.dtype == _torch.uint32:
+        return int(host[0].item())
+    val = int(host.to(_torch.int64)[0].item())
+    if val < 0:
+        val &= 0xFFFFFFFF
+    return val
 
 
 def _eos_id_set(value: Any) -> set:
@@ -480,6 +490,7 @@ class TTSeamlessM4Tv2Model:
         # until the on-device argmax tie-break is made first-index (matching ``torch.argmax``).
         self._ondevice_decode_feedback = os.environ.get("SEAMLESS_ONDEVICE_DECODE_FEEDBACK", "0") != "0"
         self._argmax_off_sharded: Optional[ttnn.Tensor] = None  # cached [nd,1,nch] global-offset table
+        self._argmax_tok_mesh_composer: Optional[ttnn.MeshComposer] = None
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
@@ -551,6 +562,15 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(mask)
         ttnn.synchronize_device(self.device)
 
+    def release_generation_runtime(self) -> None:
+        """Release decode trace, host readback buffers, and KV-decode runtime.
+
+        Call before ``close_mesh_device`` (e.g. demo shutdown) so ``allocate_tensor_on_host``
+        mirrors do not trip ``PinnedMemoryCache::release_for_device`` on mesh teardown.
+        """
+        self._release_kv_decode_runtime()
+        ttnn.synchronize_device(self.device)
+
     def clear_runtime_program_cache(self) -> None:
         """Release the decode trace + per-shape prep caches and reset the device program cache.
 
@@ -605,6 +625,8 @@ class TTSeamlessM4Tv2Model:
 
     # Number of vocab chunks for the fused decode argmax (tile-aligned so multicore argmax is valid).
     _ARGMAX_CHUNKS = 32
+    # Host tie-break bias (lowest flat index wins on equal chunk maxes); used by argmax parity tests.
+    _ARGMAX_TIE_BREAK_UPL = 1e-6
 
     def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
@@ -698,6 +720,210 @@ class TTSeamlessM4Tv2Model:
         token_rm = ttnn.to_layout(token_u, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(token_u)
         return token_rm
+
+    @staticmethod
+    def _global_greedy_token_from_chunk_tensors(
+        chunk_max: "torch.Tensor",
+        local_idx: "torch.Tensor",
+        *,
+        v_loc: int,
+        nch: int = 32,
+    ) -> int:
+        """Host combine for width-sharded decode argmax — ``torch.argmax`` over flat chunk maxes."""
+        flat = int(chunk_max.reshape(-1).argmax())
+        d, c = divmod(flat, nch)
+        chunk_w = (((v_loc + nch - 1) // nch) + 31) // 32 * 32
+        return d * v_loc + c * chunk_w + int(local_idx[d, c])
+
+    @staticmethod
+    def _free_kv_host_readback_buffers(rt: TextDecoderKvDecodeRuntime) -> None:
+        """Release host mirrors for chunk-argmax D2H (avoids PinnedMemoryCache errors on device close)."""
+        for attr in ("tok_li_host", "tok_cm_host", "token_read_host_a", "token_read_host_b"):
+            host_t = getattr(rt, attr, None)
+            if host_t is not None:
+                ttnn.deallocate(host_t)
+            setattr(rt, attr, None)
+
+    def _ensure_tok_host_readback_buffers(
+        self, rt: TextDecoderKvDecodeRuntime, tok_tt: tuple[ttnn.Tensor, ttnn.Tensor]
+    ) -> None:
+        if rt.tok_li_host is not None and rt.tok_cm_host is not None:
+            return
+        li_tt, cm_tt = tok_tt
+        # ``from_device`` pins host memory tied to the mesh; must ``deallocate`` on trace release.
+        rt.tok_li_host = ttnn.allocate_tensor_on_host(li_tt.spec, self.device)
+        rt.tok_cm_host = ttnn.allocate_tensor_on_host(cm_tt.spec, self.device)
+
+    def _start_chunk_argmax_d2h(
+        self,
+        tok_tt: tuple[ttnn.Tensor, ttnn.Tensor],
+        *,
+        cq_id: int = 0,
+        blocking: bool = True,
+    ) -> Optional[object]:
+        """Issue D2H for trace-fused ``(local_idx, chunk_max)``; return a CQ event when ``blocking=False``."""
+        rt = self._kv_decode_rt
+        if rt is None:
+            raise RuntimeError("KV decode runtime missing for tok_tt readback.")
+        self._ensure_tok_host_readback_buffers(rt, tok_tt)
+        li_tt, cm_tt = tok_tt
+        ttnn.copy_device_to_host_tensor(li_tt, rt.tok_li_host, blocking=blocking, cq_id=cq_id)
+        ttnn.copy_device_to_host_tensor(cm_tt, rt.tok_cm_host, blocking=blocking, cq_id=cq_id)
+        if blocking:
+            return None
+        return ttnn.record_event(self.device, cq_id)
+
+    @staticmethod
+    def _host_greedy_argmax_requested(*, hf_exact_greedy: bool) -> bool:
+        """Host ``torch.argmax`` on the full logits row (opt-in parity / rep-penalty fallback)."""
+        if hf_exact_greedy:
+            return True
+        return os.environ.get("SEAMLESS_HOST_ARGMAX", "").strip().lower() in ("1", "true", "yes")
+
+    def _ttnn_greedy_token_id(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional["Collection[int]"] = None,
+    ) -> int:
+        """Greedy next token via device ``ttnn`` ops; scalar readback only (no host ``argmax``)."""
+        hf_exact = getattr(self, "_decode_hf_exact_greedy", False)
+        if repetition_penalty > 1.0 or self._host_greedy_argmax_requested(hf_exact_greedy=hf_exact):
+            return self._host_argmax_from_logits_row(
+                logits,
+                dec_len,
+                repetition_penalty=repetition_penalty,
+                prev_token_ids=prev_token_ids,
+                sharded=self._tp > 1,
+            )
+        rank = len(tuple(logits.shape))
+        if rank == 3 and int(logits.shape[1]) == 1 and self._tp > 1:
+            rt = self._kv_decode_rt
+            # Never allocate fresh argmax ops on trace-backed logits while a trace is active.
+            if rt is not None and rt.trace_id is not None and rt.tok_tt is not None:
+                self._start_chunk_argmax_d2h(rt.tok_tt, blocking=True)
+                return self._chunk_argmax_from_host_buffers(
+                    logits,
+                    dec_len,
+                    repetition_penalty=repetition_penalty,
+                    prev_token_ids=prev_token_ids,
+                )
+            token_tt = self._ondevice_global_argmax_token(logits)
+            token_id = _read_int_scalar(token_tt)
+            ttnn.deallocate(token_tt)
+            return token_id
+        _, next_id = self._greedy_next_token(
+            logits,
+            dec_len,
+            repetition_penalty=repetition_penalty,
+            prev_token_ids=list(prev_token_ids) if prev_token_ids else None,
+        )
+        return next_id
+
+    def _host_argmax_from_logits_row(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional["Collection[int]"] = None,
+        sharded: bool = False,
+    ) -> int:
+        """HF ``argmax`` on the full last-step logits row (gathered on host)."""
+        import torch as _torch
+
+        host = self._logits_row_to_host(logits, dec_len, sharded=sharded)
+        if repetition_penalty > 1.0 and prev_token_ids:
+            ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
+            vocab_w = int(host.shape[-1])
+            ids = ids[(ids >= 0) & (ids < vocab_w)]
+            if ids.numel() > 0:
+                scores = host[0, ids]
+                penalized = _torch.where(
+                    scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty)
+                )
+                host[0, ids] = penalized
+        return int(host[0].argmax().item())
+
+    def _chunk_argmax_from_host_buffers(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional["Collection[int]"] = None,
+    ) -> int:
+        """HF-exact combine from cached host mirrors (after :meth:`_start_chunk_argmax_d2h`)."""
+        import torch as _torch
+
+        rt = self._kv_decode_rt
+        if rt is None or rt.tok_li_host is None or rt.tok_cm_host is None:
+            raise RuntimeError("Chunk argmax host buffers not initialized.")
+        if self._argmax_tok_mesh_composer is None:
+            self._argmax_tok_mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        nch = self._ARGMAX_CHUNKS
+        nd = self._lm_num_devices
+        v_loc = int(logits.shape[-1])
+        local_idx = (
+            ttnn.to_torch(rt.tok_li_host, mesh_composer=self._argmax_tok_mesh_composer)
+            .reshape(nd, nch)
+            .to(_torch.int64)
+        )
+        chunk_max = (
+            ttnn.to_torch(rt.tok_cm_host, mesh_composer=self._argmax_tok_mesh_composer)
+            .reshape(nd, nch)
+            .to(_torch.float32)
+        )
+        token = self._global_greedy_token_from_chunk_tensors(chunk_max, local_idx, v_loc=v_loc, nch=nch)
+        if not (repetition_penalty > 1.0 and prev_token_ids and token in prev_token_ids):
+            return token
+        host = self._logits_row_to_host(logits, dec_len, sharded=True)
+        if repetition_penalty > 1.0 and prev_token_ids:
+            ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
+            vocab_w = int(host.shape[-1])
+            ids = ids[(ids >= 0) & (ids < vocab_w)]
+            if ids.numel() > 0:
+                scores = host[0, ids]
+                penalized = _torch.where(
+                    scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty)
+                )
+                host[0, ids] = penalized
+        return int(host[0].argmax().item())
+
+    def _greedy_token_after_traced_step(
+        self,
+        logits: ttnn.Tensor,
+        dec_len: int,
+        *,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional["Collection[int]"] = None,
+        read_cq_id: int = 0,
+        d2h_event: Optional[object] = None,
+    ) -> int:
+        """Greedy next token after a traced step (chunk D2H + host combine when trace is active)."""
+        rt = self._kv_decode_rt
+        tok_tt = rt.tok_tt if rt is not None else None
+        if tok_tt is not None:
+            if d2h_event is not None:
+                ttnn.event_synchronize(d2h_event)
+            elif read_cq_id:
+                self._start_chunk_argmax_d2h(tok_tt, cq_id=read_cq_id, blocking=True)
+            else:
+                self._start_chunk_argmax_d2h(tok_tt, blocking=True)
+            return self._chunk_argmax_from_host_buffers(
+                logits,
+                dec_len,
+                repetition_penalty=repetition_penalty,
+                prev_token_ids=prev_token_ids,
+            )
+        return self._ttnn_greedy_token_id(
+            logits,
+            dec_len,
+            repetition_penalty=repetition_penalty,
+            prev_token_ids=prev_token_ids,
+        )
 
     def _encode_text(
         self,
@@ -918,7 +1144,7 @@ class TTSeamlessM4Tv2Model:
             rt.tok_tt = None
 
     def release_text_decoder_decode_trace(self) -> None:
-        """Release all captured decode traces (keeps ``logits_tt`` and H2D buffers)."""
+        """Release captured decode traces and trace output tensors (keeps H2D staging buffers)."""
         if self._kv_decode_rt is None:
             return
         rt = self._kv_decode_rt
@@ -929,10 +1155,18 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(logits)
         rt.logits_tt_by_cache_seq_len.clear()
         rt.logits_tt = None
+        for tok in rt.tok_tt_by_cache_seq_len.values():
+            for _t in tok:
+                ttnn.deallocate(_t)
+        rt.tok_tt_by_cache_seq_len.clear()
+        rt.tok_tt = None
+        self._free_kv_host_readback_buffers(rt)
         rt.trace_id = None
         rt.trace_cache_seq_len = None
 
     def _release_kv_decode_runtime(self) -> None:
+        if self._kv_decode_rt is not None:
+            self._free_kv_host_readback_buffers(self._kv_decode_rt)
         self.release_text_decoder_decode_trace()
         self._kv_decode_rt = None
         self._decode_trace_kernels_warmed = False
@@ -994,7 +1228,7 @@ class TTSeamlessM4Tv2Model:
             cq_id=cq_id,
         )
 
-    def _upload_single_token_to_decode_rt(self, token_id: int, batch_size: int) -> None:
+    def _upload_single_token_to_decode_rt(self, token_id: int, batch_size: int, *, cq_id: int = 0) -> None:
         """Upload one greedy-decode token id into the pre-allocated ``[B, 1]`` decode buffer."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         st = self._decode_h2d_staging(batch_size)
@@ -1002,6 +1236,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(st["tok_cpu"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.token_tt,
+            cq_id=cq_id,
         )
 
     def _upload_kv_decode_step_inputs(
@@ -1227,6 +1462,8 @@ class TTSeamlessM4Tv2Model:
         rt.logits_tt = capture_logits
         rt.tok_tt_by_cache_seq_len[config_cache_len] = capture_tok
         rt.tok_tt = capture_tok
+        self._free_kv_host_readback_buffers(rt)
+        self._ensure_tok_host_readback_buffers(rt, capture_tok)
         rt.trace_ids_by_cache_seq_len[config_cache_len] = trace_id
         rt.trace_id = trace_id
         rt.trace_cache_seq_len = config_cache_len
@@ -1319,7 +1556,7 @@ class TTSeamlessM4Tv2Model:
         self._reset_kv_decode_cur_pos(position, batch_size)
         self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
 
-    def _decode_loop_selffed(
+    def _decode_loop_selffed_ondevice(
         self,
         enc_tt: ttnn.Tensor,
         cross_4d: ttnn.Tensor,
@@ -1331,11 +1568,12 @@ class TTSeamlessM4Tv2Model:
         eos_ids: set,
         batch_size: int,
     ) -> list:
-        """Phase-1b 2CQ self-feed decode. Step 0 captures the trace and seeds ``token_tt`` from the host
-        combine; thereafter the trace runs back-to-back on CQ0 (token self-fed on-device, position
-        host-uploaded) while the next-token readback is issued on CQ1 (gated by the execute event) and
-        collected one step late, so the ~0.5 ms/step device→host transfer hides behind the next trace.
-        The trailing extra step (lag) is discarded at EOS."""
+        """Experimental on-device token self-feed (``SEAMLESS_ONDEVICE_DECODE_FEEDBACK=1`` only).
+
+        Step 0 captures the trace and seeds ``token_tt`` from the host combine; thereafter the trace runs
+        back-to-back on CQ0 (token self-fed on-device, position host-uploaded) while the next-token readback
+        is issued on CQ1 (gated by the execute event) and collected one step late. Not HF-exact on
+        speech-input near-ties — use :meth:`_decode_loop_selffed` for production."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         dev = self.device
 
@@ -1350,8 +1588,10 @@ class TTSeamlessM4Tv2Model:
             return seq_host
 
         # --- Pipelined replay: execute back-to-back; read the self-fed token on CQ1 one step late.
-        # Host buffers must mirror ``token_tt``'s replicated mesh layout — allocate from the device tensor.
-        host_bufs = [ttnn.from_device(rt.token_tt) for _ in range(2)]
+        if rt.token_read_host_a is None:
+            rt.token_read_host_a = ttnn.allocate_tensor_on_host(rt.token_tt.spec, dev)
+            rt.token_read_host_b = ttnn.allocate_tensor_on_host(rt.token_tt.spec, dev)
+        host_bufs = [rt.token_read_host_a, rt.token_read_host_b]
         bi = 0
         pending: Optional[Tuple[Any, Any]] = None  # (host_buf, read_event) from the previous step
         stop = False
@@ -1385,6 +1625,180 @@ class TTSeamlessM4Tv2Model:
             ttnn.event_synchronize(pev)
             seq_host.append(_read(pbuf))
         return seq_host
+
+    def _decode_loop_selffed(
+        self,
+        enc_tt: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        seq_host: list,
+        cur_pos: int,
+        max_steps: int,
+        eos_ids: set,
+        batch_size: int,
+        *,
+        use_2cq: bool = False,
+        repetition_penalty: float = 1.0,
+        prev_token_ids: Optional["Collection[int]"] = None,
+    ) -> list:
+        """HF-exact traced greedy decode: 2CQ trace replay + pipelined chunk D2H + host combine + token upload.
+
+        When ``use_2cq``, CQ1 stages position (and token) H2D while CQ0 replays the trace; chunk scalar D2H
+        on CQ1 starts after each trace completes and can overlap the next step's position staging.
+        """
+        import os as _os_prof
+        import time as _t_prof
+
+        _profile = bool(
+            _os_prof.environ.get("SEAMLESS_SELFFEED_PROFILE") or _os_prof.environ.get("SEAMLESS_DECODE_PROFILE")
+        )
+        _sums = {
+            "h2d_pos_ms": 0.0,
+            "trace_ms": 0.0,
+            "chunk_d2h_ms": 0.0,
+            "ttnn_argmax_ms": 0.0,
+            "host_combine_ms": 0.0,
+            "token_h2d_ms": 0.0,
+            "total_ms": 0.0,
+        }
+        _prof_n = 0
+
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        dev = self.device
+        prev_set = prev_token_ids if prev_token_ids is not None else set(seq_host)
+        h2d_cq = 1 if use_2cq else 0
+        cache_seq_len = self._fixed_decode_trace_sdpa_len()
+
+        cur_tok = int(seq_host[cur_pos])
+        if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
+            self.capture_text_decoder_decode_trace(
+                cur_tok,
+                cur_pos,
+                enc_tt,
+                cross_4d,
+                kv_cache,
+                cross_attn_cache,
+                batch_size=batch_size,
+                cache_seq_len=cache_seq_len,
+                selffeed=False,
+            )
+        else:
+            self._upload_kv_decode_step_inputs(cur_tok, cur_pos, batch_size, cq_id=h2d_cq)
+            self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=h2d_cq)
+            if use_2cq:
+                write_event = ttnn.record_event(dev, 1)
+                ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
+
+        t0 = _t_prof.perf_counter() if _profile else 0.0
+        next_id = self._greedy_token_after_traced_step(
+            rt.logits_tt,
+            1,
+            repetition_penalty=repetition_penalty,
+            prev_token_ids=prev_set,
+            read_cq_id=0,
+        )
+        if _profile:
+            _sums["chunk_d2h_ms"] += (_t_prof.perf_counter() - t0) * 1000.0
+            _sums["host_combine_ms"] += _sums["chunk_d2h_ms"]
+        prev_set.add(next_id)
+        seq_host.append(next_id)
+        cur_pos += 1
+        if eos_ids and next_id in eos_ids:
+            if _profile:
+                self._print_selffeed_profile(_sums, _prof_n)
+            return seq_host
+
+        t_upload = _t_prof.perf_counter() if _profile else 0.0
+        self._upload_single_token_to_decode_rt(next_id, batch_size, cq_id=h2d_cq)
+        if _profile:
+            _sums["token_h2d_ms"] += (_t_prof.perf_counter() - t_upload) * 1000.0
+
+        cq0_idle = ttnn.record_event(dev, 0) if use_2cq else None
+
+        for _ in range(max_steps - 1):
+            step_t0 = _t_prof.perf_counter() if _profile else 0.0
+            d2h_event = None
+            if use_2cq:
+                if cq0_idle is not None:
+                    ttnn.wait_for_event(1, cq0_idle)
+                t_h2d = _t_prof.perf_counter() if _profile else 0.0
+                self._upload_pos_only(cur_pos, batch_size, cq_id=1)
+                self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=1)
+                if _profile:
+                    _sums["h2d_pos_ms"] += (_t_prof.perf_counter() - t_h2d) * 1000.0
+                write_event = ttnn.record_event(dev, 1)
+                ttnn.wait_for_event(0, write_event)
+                t_tr = _t_prof.perf_counter() if _profile else 0.0
+                # Blocking trace: non-blocking replay + H2D while a trace is active can trip the
+                # allocator warning and corrupt trace-backed logits/tok buffers on BH.
+                ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
+                cq0_idle = ttnn.record_event(dev, 0)
+                if _profile:
+                    _sums["trace_ms"] += (_t_prof.perf_counter() - t_tr) * 1000.0
+                t_d2h = _t_prof.perf_counter() if _profile else 0.0
+                d2h_event = self._start_chunk_argmax_d2h(rt.tok_tt, cq_id=1, blocking=False)
+                if _profile:
+                    _sums["chunk_d2h_ms"] += (_t_prof.perf_counter() - t_d2h) * 1000.0
+            else:
+                self._upload_pos_only(cur_pos, batch_size)
+                self._reset_kv_decode_cur_pos(cur_pos, batch_size)
+                t_tr = _t_prof.perf_counter() if _profile else 0.0
+                ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
+                if _profile:
+                    _sums["trace_ms"] += (_t_prof.perf_counter() - t_tr) * 1000.0
+
+            t_cmb = _t_prof.perf_counter() if _profile else 0.0
+            next_id = self._greedy_token_after_traced_step(
+                rt.logits_tt,
+                1,
+                repetition_penalty=repetition_penalty,
+                prev_token_ids=prev_set,
+                read_cq_id=0,
+                d2h_event=d2h_event,
+            )
+            if _profile:
+                _sums["host_combine_ms"] += (_t_prof.perf_counter() - t_cmb) * 1000.0
+                _sums["total_ms"] += (_t_prof.perf_counter() - step_t0) * 1000.0
+                _prof_n += 1
+            prev_set.add(next_id)
+            seq_host.append(next_id)
+            cur_pos += 1
+            if eos_ids and next_id in eos_ids:
+                break
+            t_up = _t_prof.perf_counter() if _profile else 0.0
+            self._upload_single_token_to_decode_rt(next_id, batch_size, cq_id=h2d_cq)
+            if _profile:
+                _sums["token_h2d_ms"] += (_t_prof.perf_counter() - t_up) * 1000.0
+
+        if _profile:
+            self._print_selffeed_profile(_sums, _prof_n)
+        return seq_host
+
+    @staticmethod
+    def _print_selffeed_profile(sums: dict, n_steps: int) -> None:
+        if n_steps <= 0:
+            return
+        avg = {k: v / n_steps for k, v in sums.items() if k != "total_ms"}
+        tot = sums["total_ms"] / n_steps if sums["total_ms"] else sum(avg.values())
+        print("\n=== Selffeed decode profile (ms/step, steady) ===", flush=True)
+        print(f"steps: {n_steps}", flush=True)
+        print(f"  h2d_pos      : {avg.get('h2d_pos_ms', 0):.3f}", flush=True)
+        print(f"  trace_exec   : {avg.get('trace_ms', 0):.3f}", flush=True)
+        print(f"  ttnn_argmax  : {avg.get('ttnn_argmax_ms', 0):.3f}", flush=True)
+        print(f"  token_h2d    : {avg.get('token_h2d_ms', 0):.3f}", flush=True)
+        print(f"  total (wall) : {tot:.3f}", flush=True)
+        if tot > 0:
+            argmax_ms = avg.get("ttnn_argmax_ms", 0) + avg.get("chunk_d2h_ms", 0) + avg.get("host_combine_ms", 0)
+            print(
+                f"  share        : trace={avg.get('trace_ms', 0) / tot * 100:.1f}%  "
+                f"argmax={argmax_ms / tot * 100:.1f}%  "
+                f"h2d={avg.get('h2d_pos_ms', 0) / tot * 100:.1f}%  "
+                f"token={avg.get('token_h2d_ms', 0) / tot * 100:.1f}%",
+                flush=True,
+            )
+        print("=" * 50, flush=True)
 
     def _prefill_text_decoder_kv_cache(
         self,
@@ -1767,51 +2181,39 @@ class TTSeamlessM4Tv2Model:
         prev_token_ids: Optional["Collection[int]"] = None,
         tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> int:
-        """Greedy next-token id for traced KV decode.
+        """Greedy next-token id for traced KV decode (chunk D2H when trace outputs ``tok_tt``)."""
+        rt = self._kv_decode_rt
+        if tok_tt is not None or (rt is not None and rt.trace_id is not None and rt.tok_tt is not None):
+            return self._greedy_token_after_traced_step(
+                logits,
+                dec_len,
+                repetition_penalty=repetition_penalty,
+                prev_token_ids=prev_token_ids,
+            )
+        return self._ttnn_greedy_token_id(
+            logits,
+            dec_len,
+            repetition_penalty=repetition_penalty,
+            prev_token_ids=prev_token_ids,
+        )
 
-        Fast path: when ``tok_tt`` is given (argmax fused into the decode trace, see
-        ``_decode_argmax_token``), read back only the per-(device, chunk) ``(local_idx, chunk_max)`` pair
-        and combine on host. The width-sharded ``lm_head`` gives each device a different ``V/tp`` vocab
-        slice, so each device emits 32 per-chunk maxes; the global winner is ``argmax`` over all
-        ``tp * 32`` chunk maxes → device ``d``, chunk ``c`` → token ``d*V_loc + c*chunk_width +
-        local_idx[d, c]``. A few hundred scalars vs the full 256k-vocab logits row (~4.4 ms).
+    def _fused_global_greedy_token_id(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device global greedy token tensor (no active trace). Used by argmax parity tests."""
+        return self._ondevice_global_argmax_token(logits)
 
-        Speculative rep-penalty: the device argmax ignores the penalty. If the (unpenalized) winner is a
-        previously-emitted token, the penalty could demote it → recompute exactly on host from
-        ``logits``. Otherwise the device token is provably correct (the penalty only *lowers* prev-token
-        logits, never raising a non-prev token above the unpenalized max).
-        """
+    @staticmethod
+    def _read_kv_decode_token_tt(token_tt: ttnn.Tensor) -> int:
+        return _read_int_scalar(token_tt)
+
+    @staticmethod
+    def _torch_greedy_from_width_sharded_logits(logits_tt: ttnn.Tensor, mesh_device: ttnn.Device) -> int:
+        """Host ``torch.argmax`` on concatenated width-sharded ``[1,1,V/tp]`` logits."""
         import torch as _torch
 
-        if tok_tt is not None:
-            local_idx_tt, chunk_max_tt = tok_tt
-            nch = self._ARGMAX_CHUNKS
-            nd = self._lm_num_devices
-            composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
-            local_idx = ttnn.to_torch(local_idx_tt, mesh_composer=composer).reshape(nd, nch).to(_torch.int64)
-            chunk_max = ttnn.to_torch(chunk_max_tt, mesh_composer=composer).reshape(nd, nch).to(_torch.float32)
-            v_loc = int(logits.shape[-1])  # per-device vocab slice width
-            chunk_w = ((v_loc + nch - 1) // nch + 31) // 32 * 32
-            flat = int(chunk_max.reshape(-1).argmax())
-            d, c = flat // nch, flat % nch
-            token = d * v_loc + c * chunk_w + int(local_idx[d, c])
-            # ``prev_token_ids`` is the persistent decode set → O(1) membership, no per-step rebuild.
-            if not (repetition_penalty > 1.0 and prev_token_ids and token in prev_token_ids):
-                return token
-            host = self._logits_row_to_host(logits, dec_len, sharded=True)
-        else:
-            host = self._logits_row_to_host(logits, dec_len)
-        if repetition_penalty > 1.0 and prev_token_ids:
-            ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
-            vocab_w = int(host.shape[-1])
-            ids = ids[(ids >= 0) & (ids < vocab_w)]
-            if ids.numel() > 0:
-                scores = host[0, ids]
-                penalized = _torch.where(
-                    scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty)
-                )
-                host[0, ids] = penalized
-        return int(host[0].argmax().item())
+        nd = int(mesh_device.get_num_devices())
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+        row = ttnn.to_torch(logits_tt, mesh_composer=composer).reshape(nd, -1).to(_torch.float32)
+        return int(row.reshape(-1).argmax().item())
 
     def _greedy_next_token(
         self,
@@ -1964,6 +2366,8 @@ class TTSeamlessM4Tv2Model:
         if text_sequences is not None and not generate_speech:
             raise ValueError("`text_sequences` is only valid when `generate_speech=True`.")
         kwargs_text, kwargs_speech = format_speech_generation_kwargs(kwargs)
+        if self.generation_config is not None:
+            kwargs_text = apply_hf_generation_defaults(kwargs_text, self.generation_config)
 
         num_beams = int(kwargs_text.get("num_beams", 1) or 1)
         if num_beams < 1:
@@ -1978,14 +2382,18 @@ class TTSeamlessM4Tv2Model:
         length_penalty = float(kwargs_text.get("length_penalty", 1.0) or 1.0)
         early_stopping = bool(kwargs_text.get("early_stopping", True))
 
-        max_new_tokens = int(kwargs_text.get("max_new_tokens", 20))
+        max_new_tokens = int(kwargs_text.get("max_new_tokens", 256))
         repetition_penalty = float(kwargs_text.get("repetition_penalty", 1.0) or 1.0)
-        if self.generation_config is not None and "repetition_penalty" not in kwargs_text:
-            rp_cfg = getattr(self.generation_config, "repetition_penalty", None)
-            if rp_cfg is not None:
-                repetition_penalty = float(rp_cfg)
         if repetition_penalty < 1.0:
             raise ValueError(f"repetition_penalty must be >= 1.0 (got {repetition_penalty})")
+        # Default greedy: on-device ``ttnn`` argmax + scalar readback. Set ``hf_exact_greedy=True`` or
+        # ``SEAMLESS_HOST_ARGMAX=1`` for host ``torch.argmax`` on the full logits row.
+        self._decode_hf_exact_greedy = bool(
+            kwargs_text.get(
+                "hf_exact_greedy",
+                os.environ.get("SEAMLESS_HOST_ARGMAX", "").strip().lower() in ("1", "true", "yes"),
+            )
+        )
         eos_ids = _eos_id_set(kwargs_text.get("eos_token_id"))
         if self.generation_config is not None:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
@@ -2166,16 +2574,19 @@ class TTSeamlessM4Tv2Model:
             # traced decode path doesn't rebuild ``set(seq_host)`` (O(n)) every step.
             seq_host_set = set(seq_host)
 
-            # Phase-1b: host-out-of-loop self-feed. The trace runs the cross-shard argmax combine and
-            # writes the next token into ``token_tt`` on-device, so replays chain back-to-back with no
-            # per-step token readback→combine→upload. Greedy + rep<=1.0 + TP only (rep>1.0 needs the
-            # on-device penalty of Phase 2; sampling/beam keep the host path).
-            selffeed = (
-                self._ondevice_decode_feedback and decode_trace_ready and self._tp > 1 and repetition_penalty <= 1.0
+            # Fast traced greedy on TP>1: host-exact selffeed (chunk D2H + torch combine) with optional 2CQ
+            # overlap. Experimental on-device token self-write only when
+            # ``SEAMLESS_ONDEVICE_DECODE_FEEDBACK=1`` (greedy + rep<=1.0; not HF-exact on speech near-ties).
+            host_selffeed = decode_trace_ready and self._tp > 1 and not do_sample
+            ondevice_selffeed = (
+                self._ondevice_decode_feedback
+                and host_selffeed
+                and repetition_penalty <= 1.0
+                and not self._decode_hf_exact_greedy
             )
 
-            if selffeed:
-                seq_host = self._decode_loop_selffed(
+            if ondevice_selffeed:
+                seq_host = self._decode_loop_selffed_ondevice(
                     enc_tt,
                     decode_cross_4d,
                     kv_cache,
@@ -2186,7 +2597,23 @@ class TTSeamlessM4Tv2Model:
                     eos_ids,
                     batch_size,
                 )
-                decode_steps_remaining = 0  # consumed by the self-feed loop
+                decode_steps_remaining = 0
+            elif host_selffeed:
+                seq_host = self._decode_loop_selffed(
+                    enc_tt,
+                    decode_cross_4d,
+                    kv_cache,
+                    cross_attn_cache,
+                    seq_host,
+                    cur_pos,
+                    decode_steps_remaining,
+                    eos_ids,
+                    batch_size,
+                    use_2cq=use_2cq,
+                    repetition_penalty=repetition_penalty,
+                    prev_token_ids=seq_host_set,
+                )
+                decode_steps_remaining = 0
 
             for _decode_step in range(decode_steps_remaining):
                 if _decode_step_profile:
