@@ -180,68 +180,9 @@ constexpr uint32_t cb_for_side() {
     }
 }
 
-// =============================================================================
-// prev_cb_for_idx<Side, I, Es...>()
-//
-// Walks Es[0..I-1] backwards, returning the most recent non-NO_PREV_CB on `Side`.
-// Implemented as a constexpr fold using std::index_sequence.
-// =============================================================================
-
-template <Side S, std::size_t I, class... Es>
-constexpr uint32_t prev_cb_for_idx() {
-    // Pack into an array; walk indices [0..I) backwards and pick the first non-sentinel.
-    if constexpr (I == 0) {
-        return NO_PREV_CB;
-    } else {
-        constexpr uint32_t cbs[] = { cb_for_side<S, Es>()... };
-        for (std::size_t k = I; k-- > 0; ) {
-            if (cbs[k] != NO_PREV_CB) return cbs[k];
-        }
-        return NO_PREV_CB;
-    }
-}
-
-// =============================================================================
-// Pack-side chain-shape predicates (pack_reconfig hoisting refinement)
-//
-// `last_pack_cb<Es...>()` — last opt-in pack CB in chain order; used as the
-// wraparound `prev` for site 0's per-stage emission (the iter-to-iter cycle).
-//
-// `chain_has_heterogeneous_pack_cbs<Es...>()` — true iff ≥2 opt-in pack sites
-// declare different CBs. Boot-only hoisting silently miscompiles this shape
-// (last reconfig wins, earlier sites pack with wrong descriptors). When true,
-// the chain defers pack reconfig from boot to per-stage with the 2-arg cache-
-// checked LLK form. See `docs/pack_reconfig_hoisting_proposal.html` §4.2.
-// =============================================================================
-
-template <class... Es>
-constexpr uint32_t last_pack_cb() {
-    constexpr uint32_t cbs[] = { cb_for_side<Side::Pack, Es>()... };
-    uint32_t last = NO_PREV_CB;
-    for (std::size_t k = 0; k < sizeof...(Es); ++k) {
-        if (cbs[k] != NO_PREV_CB) last = cbs[k];
-    }
-    return last;
-}
-
-template <class... Es>
-constexpr bool chain_has_heterogeneous_pack_cbs() {
-    if constexpr (sizeof...(Es) == 0) {
-        return false;
-    } else {
-        constexpr uint32_t cbs[] = { cb_for_side<Side::Pack, Es>()... };
-        uint32_t first_seen = NO_PREV_CB;
-        for (std::size_t k = 0; k < sizeof...(Es); ++k) {
-            if (cbs[k] == NO_PREV_CB) continue;
-            if (first_seen == NO_PREV_CB) {
-                first_seen = cbs[k];
-            } else if (first_seen != cbs[k]) {
-                return true;
-            }
-        }
-        return false;
-    }
-}
+// Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
+// now single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_hetero), computed
+// once from the reflected ElemDesc array instead of re-walked per emit site (was O(N²)).
 
 }  // namespace detail
 
@@ -1138,11 +1079,12 @@ template <class E> constexpr Dst pack_dst_slot_of() {
 struct ElemDesc {
     bool is_cb_reader;
     bool is_pack;
-    uint32_t srca_cb;   // cb_for_side<SrcA> (NO_PREV_CB when not programmed)  — G1 input
-    uint32_t srcb_cb;   // cb_for_side<SrcB>
-    uint32_t cb_a;      // cb_a_of (kNoCb when n/a)  — reader-collision input
-    uint32_t cb_b;      // cb_b_of (kNoCb when n/a)
-    uint32_t pack_cb;   // pack_cb_of (kNoCb when n/a) — writer-collision input
+    uint32_t srca_cb;      // cb_for_side<SrcA> (NO_PREV_CB when not programmed)  — G1 + prev input
+    uint32_t srcb_cb;      // cb_for_side<SrcB>
+    uint32_t pack_side_cb; // cb_for_side<Pack> (reconfig_pack_cb) — prev / last_pack / hetero input
+    uint32_t cb_a;         // cb_a_of (kNoCb when n/a)  — reader-collision input
+    uint32_t cb_b;         // cb_b_of (kNoCb when n/a)
+    uint32_t pack_cb;      // pack_cb_of (kNoCb when n/a) — writer-collision input
     Dst pack_dst_slot;
     bool is_upfront;
     uint32_t lane_width;
@@ -1156,6 +1098,7 @@ constexpr ElemDesc describe() {
         is_pack_tile_op_v<E>,
         cb_for_side<Side::SrcA, E>(),
         cb_for_side<Side::SrcB, E>(),
+        cb_for_side<Side::Pack, E>(),
         cb_a_of<E>(),
         cb_b_of<E>(),
         pack_cb_of<E>(),
@@ -1209,6 +1152,48 @@ constexpr bool ct_writer_collide(const ElemDesc* d, int n) {
     return false;
 }
 
+// Per-side "previous programmed CB at each index" tables, built in ONE forward sweep:
+// carry a running prev per side, record it BEFORE each element, update it when the
+// element programs that side. prev.srca[I] equals the old back-scan prev_cb_for_idx<SrcA,I>
+// (verified byte-identical for all I / all sides) but computed once instead of O(N²).
+template <int M>
+struct PrevTable {
+    uint32_t srca[M];
+    uint32_t srcb[M];
+    uint32_t pack[M];
+};
+template <int M>
+constexpr PrevTable<M> ct_build_prev(const ElemDesc* d, int n) {
+    PrevTable<M> t{};
+    uint32_t pa = NO_PREV_CB, pb = NO_PREV_CB, pp = NO_PREV_CB;
+    for (int i = 0; i < n; ++i) {
+        t.srca[i] = pa;
+        t.srcb[i] = pb;
+        t.pack[i] = pp;
+        if (d[i].srca_cb != NO_PREV_CB) pa = d[i].srca_cb;
+        if (d[i].srcb_cb != NO_PREV_CB) pb = d[i].srcb_cb;
+        if (d[i].pack_side_cb != NO_PREV_CB) pp = d[i].pack_side_cb;
+    }
+    return t;
+}
+// Last opt-in pack CB in chain order (iter-to-iter wraparound prev for pack site 0).
+constexpr uint32_t ct_last_pack_cb(const ElemDesc* d, int n) {
+    uint32_t last = NO_PREV_CB;
+    for (int i = 0; i < n; ++i)
+        if (d[i].pack_side_cb != NO_PREV_CB) last = d[i].pack_side_cb;
+    return last;
+}
+// True iff ≥2 opt-in pack sites declare different CBs (boot can't program all).
+constexpr bool ct_pack_hetero(const ElemDesc* d, int n) {
+    uint32_t first = NO_PREV_CB;
+    for (int i = 0; i < n; ++i) {
+        if (d[i].pack_side_cb == NO_PREV_CB) continue;
+        if (first == NO_PREV_CB) first = d[i].pack_side_cb;
+        else if (first != d[i].pack_side_cb) return true;
+    }
+    return false;
+}
+
 template <class... Es>
 struct ChainTraits {
     static constexpr int N = int(sizeof...(Es));
@@ -1220,6 +1205,12 @@ struct ChainTraits {
     static constexpr bool srcb_consistent = ct_side_consistent(d, N, &ElemDesc::srcb_cb);
     static constexpr bool reader_collide = ct_reader_collide(d, N);
     static constexpr bool writer_collide = ct_writer_collide(d, N);
+
+    // Per-side prev-CB history (one sweep), + pack-side metadata. Replaces the O(N²)
+    // per-site prev_cb_for_idx and the two standalone pack scans.
+    static constexpr PrevTable<N ? N : 1> prev = ct_build_prev<N ? N : 1>(d, N);
+    static constexpr uint32_t last_pack_cb = ct_last_pack_cb(d, N);
+    static constexpr bool pack_hetero = ct_pack_hetero(d, N);
 };
 
 }  // namespace detail
@@ -1521,11 +1512,11 @@ ALWI void emit_pre_element_transitions() {
     constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
 
     constexpr uint32_t prev_a =
-        (curr_a != NO_PREV_CB) ? prev_cb_for_idx<Side::SrcA, I, Es...>() : NO_PREV_CB;
+        (curr_a != NO_PREV_CB) ? ChainTraits<Es...>::prev.srca[I] : NO_PREV_CB;
     constexpr uint32_t prev_b =
-        (curr_b != NO_PREV_CB) ? prev_cb_for_idx<Side::SrcB, I, Es...>() : NO_PREV_CB;
+        (curr_b != NO_PREV_CB) ? ChainTraits<Es...>::prev.srcb[I] : NO_PREV_CB;
     constexpr uint32_t prev_p =
-        (curr_p != NO_PREV_CB) ? prev_cb_for_idx<Side::Pack, I, Es...>() : NO_PREV_CB;
+        (curr_p != NO_PREV_CB) ? ChainTraits<Es...>::prev.pack[I] : NO_PREV_CB;
 
     constexpr bool reconf_a = (curr_a != NO_PREV_CB) && (curr_a != prev_a);
     constexpr bool reconf_b = (curr_b != NO_PREV_CB) && (curr_b != prev_b);
@@ -1537,7 +1528,7 @@ ALWI void emit_pre_element_transitions() {
     // handles intra-stage transitions cheaply and the per-iter wraparound from
     // last-pack-cb to first-pack-cb is correctly programmed.
     constexpr bool defer_pack_to_per_stage =
-        chain_has_heterogeneous_pack_cbs<Es...>() && (prev_p != NO_PREV_CB);
+        ChainTraits<Es...>::pack_hetero && (prev_p != NO_PREV_CB);
 
     // ---- srca + srcb: coalesce when both sides share prev-state ----
     if constexpr (reconf_a && reconf_b) {
@@ -1595,15 +1586,15 @@ ALWI void emit_pre_element_transitions() {
 // a few cycles when adjacent stages happen to share a dtype.
 template <class E, std::size_t I, class... Es>
 ALWI void emit_per_stage_pack_reconfig() {
-    if constexpr (!chain_has_heterogeneous_pack_cbs<Es...>()) return;
+    if constexpr (!ChainTraits<Es...>::pack_hetero) return;
     constexpr uint32_t curr_p = cb_for_side<Side::Pack, E>();
     if constexpr (curr_p == NO_PREV_CB) return;
-    constexpr uint32_t prev_chain = prev_cb_for_idx<Side::Pack, I, Es...>();
+    constexpr uint32_t prev_chain = ChainTraits<Es...>::prev.pack[I];
     // Wraparound: first opt-in pack site has no in-chain prev; on iter ≥ 1 the
     // packer ended the previous iter on `last_pack_cb`. The LLK 2-arg form does
     // the right thing on iter 0 too (cache check vs. boot-initialized state).
     constexpr uint32_t prev_p =
-        (prev_chain != NO_PREV_CB) ? prev_chain : last_pack_cb<Es...>();
+        (prev_chain != NO_PREV_CB) ? prev_chain : ChainTraits<Es...>::last_pack_cb;
     if constexpr (prev_p != NO_PREV_CB) {
         pack_reconfig_data_format(prev_p, curr_p);
     }
