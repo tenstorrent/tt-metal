@@ -37,6 +37,13 @@ Limitations (see MODEL_PRECOMPILE_DESIGN.md §8.1):
     we capture the ops before that point; the rest cold-compile in pass 2.
   * Ops that pick their program from live allocator state see empty L1 under
     NO_DISPATCH and may collect a different variant than the real run uses.
+  * Multi-device: collect + compile work across a mesh (verified on a 2-chip N300 —
+    one compile warms both, since coord virtualization excludes harvesting from the
+    build_key). BUT the session-end compile below opens a single CreateDevice with
+    num_hw_cqs=1 / default dispatch; if the suite ran on a fabric mesh or num_hw_cqs=2
+    its build_key differs, so pass 2 cold-misses (correctness fine, no warm benefit).
+    For such suites set UP_FRONT_COLLECT_DEVICE_ID and/or extend this to compile on a
+    device/mesh matching the run's config. See MODEL_PRECOMPILE_DESIGN.md §8.
 """
 
 from __future__ import annotations
