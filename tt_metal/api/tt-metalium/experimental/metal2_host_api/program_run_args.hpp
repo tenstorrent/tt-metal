@@ -118,7 +118,7 @@ struct ProgramRunArgs {
 struct ProgramRunArgsView {
     struct KernelRunArgsView {
         // Direct views into per-node vararg runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
+        Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
 
         // Direct view into common vararg runtime args
         std::span<uint32_t> common_runtime_varargs;
@@ -127,7 +127,7 @@ struct ProgramRunArgsView {
     //       Would eliminate the lookup indirection.
     //       ...But would mess up all the implicit RTAs....
     //       Look into this when implementing.
-    std::unordered_map<KernelSpecName, KernelRunArgsView> kernel_run_args;
+    Table<KernelSpecName, KernelRunArgsView> kernel_run_args;
 
     struct DFBRunOverridesView {
         // DFB size overrides
@@ -139,7 +139,7 @@ struct ProgramRunArgsView {
         // Note: borrowed-memory DFBs update their backing L1 SRAM address from
         // the corresponding tensor_arg.
     };
-    std::unordered_map<DFBSpecName, DFBRunOverridesView> dfb_run_overrides;
+    Table<DFBSpecName, DFBRunOverridesView> dfb_run_overrides;
 };
 
 // TODO: Consider a const version of the view object, for debug/test use?

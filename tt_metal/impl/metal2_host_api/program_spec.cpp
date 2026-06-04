@@ -208,7 +208,7 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
 }
 
 // Helper: return a kernel's dfb-compute-self-loop-scopes map.
-const Table<DFBSpecName, DFBSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+const Table<DFBSpecName, DFBSelfLoopConnectivity>& kernel_self_loop_scopes(const KernelSpec& kernel) {
     return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 
@@ -1146,7 +1146,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
                 auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
-                return conn ? *conn : DFBSelfLoopScope::INTRA;
+                return conn ? *conn : DFBSelfLoopConnectivity::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1158,7 +1158,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 TT_FATAL(
                     scope_for_kernel(rec.kernel) == first_scope,
                     "DFB '{}' is self-looped; all self-loop participants must agree on "
-                    "DFBSelfLoopScope, but kernel '{}' specifies a different scope "
+                    "DFBSelfLoopConnectivity, but kernel '{}' specifies a different scope "
                     "than kernel '{}'.",
                     dfb.unique_id,
                     rec.kernel->unique_id,
@@ -1373,7 +1373,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb_spec_name);
 
             TT_FATAL(
-                scope != DFBSelfLoopScope::INTER,
+                scope != DFBSelfLoopConnectivity::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
@@ -2204,8 +2204,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
         auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
-        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopScope::INTRA;
-        tensix_scope = (user_scope == DFBSelfLoopScope::INTRA)
+        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopConnectivity::INTRA;
+        tensix_scope = (user_scope == DFBSelfLoopConnectivity::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
     }
