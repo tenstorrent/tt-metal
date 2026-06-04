@@ -231,10 +231,9 @@ struct CopyTile : CopyTileTag {
                                                       (Policy == InputLifecycle::Pipelined);
     static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
-    // Prev-CB fold (D2): CopyTile loads CbA only.
+    // Prev-CB fold (D2): CopyTile loads CbA only. srcb/pack sides are absent -> cb_for_side
+    // defaults them to NO_PREV_CB.
     static constexpr uint32_t       reconfig_srca_cb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_CB;
-    static constexpr uint32_t       reconfig_srcb_cb = NO_PREV_CB;
-    static constexpr uint32_t       reconfig_pack_cb = NO_PREV_CB;
 
     uint32_t tile_base = 0;
 
@@ -353,8 +352,7 @@ struct PackTile : PackTileTag {
     // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
     // emitted — fold keeps prior pack target.
-    static constexpr uint32_t          reconfig_srca_cb    = NO_PREV_CB;
-    static constexpr uint32_t          reconfig_srcb_cb    = NO_PREV_CB;
+    // srca/srcb absent -> cb_for_side defaults them to NO_PREV_CB; PackTile programs pack only.
     static constexpr uint32_t          reconfig_pack_cb    =
         (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_CB;
 
@@ -523,7 +521,7 @@ struct BinaryFpu : BinaryFpuTag {
     static constexpr uint32_t      reconfig_srcb_cb =
         (DfReconfig == BinaryDataFormatReconfig::Input ||
          DfReconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_CB;
-    static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
+    // pack side absent -> cb_for_side defaults to NO_PREV_CB (downstream PackTile owns pack).
 
     uint32_t tile_base_a = 0;
     uint32_t tile_base_b = 0;
@@ -752,7 +750,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static constexpr uint32_t       reconfig_srcb_cb  =
         ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ||
          Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_CB;
-    static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
+    // pack side absent -> cb_for_side defaults to NO_PREV_CB.
 
     uint32_t tile_base = 0;
 
@@ -861,7 +859,7 @@ struct UnaryBcast : UnaryBcastTag {
     // like BinaryFpu — UnaryBcast never configures pack.
     static constexpr uint32_t       reconfig_srca_cb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_srcb_cb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_CB;
-    static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
+    // pack side absent -> cb_for_side defaults to NO_PREV_CB.
 
     static ALWI void init() {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
