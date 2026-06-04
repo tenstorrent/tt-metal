@@ -217,6 +217,8 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
 
     const bool reuse_a = ct_dim >= rt_dim;
 
+    constexpr std::uint32_t replay_buf_len = EN_X2 ? (8 - 1) : (16 - 1);
+
     if constexpr (EN_X2)
     {
         // Non-DI MXFP4_2x: 7-MVMUL replay + matmul_op = 8 MVMULs per tile (vs 16 in plain non-DI).
@@ -229,7 +231,6 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
         //   #5 (0, 24, 40)  B1[8:15]*A0
         //   #6 (16,16, 48)  B1[0:7]*A1     <- ADDR_MOD_3 (srca+=16, srcb cr->16)
         //   #7 (16,24, 56)  B1[8:15]*A1    <- matmul_op (ADDR_MOD_4) / matmul_op_last (ADDR_MOD_5)
-        constexpr std::uint32_t replay_buf_len = 8 - 1;
         load_replay_buf<0, replay_buf_len>(
             []
             {
@@ -241,48 +242,42 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // #5 -> srca+=16, srcb cr->16, dest+=8
                 TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #6 -> srcb+=8, dest+=8
             });
+    }
+    else
+    {
+        load_replay_buf<0, replay_buf_len>(
+            // Lambda function to load reply buffer
+            []
+            {
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8  // A1 -> A2 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0,    srcb=32,  dest+=8  // A1 -> A2 if transposed
 
-        constexpr static std::uint32_t matmul_op = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
-        const std::uint32_t matmul_op_last       = reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_5, 0);
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8,  dest+=8 // A1 -> A2 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1 // srca=32/16,srcb=16,  dest=0  // A1 -> A2 && srca=16 if transposed
 
-        ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
-        temp.set_last_outer_loop_instr(matmul_op_last);
-        temp.program_bank0_sw_cntl(instrn_buffer);
-        return;
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32,   srcb=48,  dest+=8
+
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
+            });
     }
 
-    constexpr std::uint32_t replay_buf_len = 16 - 1;
-
-    load_replay_buf<0, replay_buf_len>(
-        // Lambda function to load reply buffer
-        []
-        {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A0 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B0A0 // srca+=16/32, srcb=0, dest+=8  // srca+=32 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B0A1 // srca=srca, srcb+=8,  dest+=8  // A1 -> A2 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B0A1 // srca=0,    srcb=32,  dest+=8  // A1 -> A2 if transposed
-
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A0 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B2A0 // srca+=16/32, srcb=0, dest+=8 // srca+=32 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B2A1 // srca=srca, srcb+=8,  dest+=8 // A1 -> A2 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0); // B2A1 // srca=32/16,srcb=16,  dest=0  // A1 -> A2 && srca=16 if transposed
-
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B1A2 // srca+=16,  srcb=16,  dest+=8 // A2 -> A1 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B1A3 // srca=srca, srcb+=8,  dest+=8
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // B1A3 // srca=32,   srcb=48,  dest+=8
-
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A2 // srca=srca, srcb+=8,  dest+=8 // A2 -> A1 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // B3A2 // srca+=16,  srcb=0,   dest+=8 // A2 -> A1 if transposed
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // B3A3 // srca=srca, srcb+=8,  dest+=8
-        });
-
-    constexpr static std::uint32_t matmul_op = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
-    const std::uint32_t matmul_op_last       = reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, 0);
+    constexpr std::uint32_t matmul_op_addr_mod      = EN_X2 ? ADDR_MOD_4 : ADDR_MOD_5;
+    constexpr std::uint32_t matmul_op_last_addr_mod = EN_X2 ? ADDR_MOD_5 : ADDR_MOD_3;
+    constexpr static std::uint32_t matmul_op        = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, matmul_op_addr_mod, 0);
+    const std::uint32_t matmul_op_last =
+        reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, matmul_op_last_addr_mod, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, matmul_op_last_addr_mod, 0);
 
     ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
     temp.set_last_outer_loop_instr(matmul_op_last);
-
     temp.program_bank0_sw_cntl(instrn_buffer);
 }
 
@@ -414,19 +409,10 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
         _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
     }
-    else if constexpr (EN_X2)
-    {
-        // Non-DI MXFP4_2x: regular MVMUL + auto-incrementing addr_mods, but a halved
-        // 8-MVMUL traversal that covers only A0/A1 and B0/B1 (the 2x sub-element
-        // expansion in the SrcA format-mux fires whenever the unpack-dst format is
-        // MxFp4_2x_A/B and the issued op is in the op_mmul set, which MVMUL is).
-        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, /*EN_X2=*/true>(ct_dim, rt_dim);
-        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, /*EN_X2=*/true>(ct_dim, rt_dim);
-    }
     else
     {
-        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
-        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
+        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
+        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
     }
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
