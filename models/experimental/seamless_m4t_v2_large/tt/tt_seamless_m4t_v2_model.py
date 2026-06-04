@@ -467,9 +467,18 @@ class TTSeamlessM4Tv2Model:
         self._lm_cluster_axis = mesh_cluster_axis(self.device)
         # Phase-1b host-out-of-loop decode: the trace itself runs the cross-shard greedy argmax combine
         # and writes the next token into ``token_tt`` (self-feed), so the greedy loop replays the decode
-        # trace back-to-back with no per-step token readback→combine→upload roundtrip. Greedy + rep<=1.0
-        # only (rep>1.0 needs an on-device penalty — Phase 2); falls back to the host path otherwise.
-        self._ondevice_decode_feedback = os.environ.get("SEAMLESS_ONDEVICE_DECODE_FEEDBACK", "1") != "0"
+        # trace back-to-back with no per-step token readback→combine→upload roundtrip (rep<=1.0 greedy
+        # + TP only; rep>1.0/sampling/beam keep the host path).
+        #
+        # DEFAULT OFF — NOT token-exact with the host path on speech-input decode. The self-feed's global
+        # argmax is ``ttnn.argmax`` over the per-chunk maxes; the host combine is ``torch.argmax``. They
+        # compare identical values but tie-break differently, so on the noisier speech-decode logits
+        # (S2TT/ASR) they pick different tokens at near-ties, flipping the greedy trajectory early — ASR
+        # cascaded to English instead of Hindi, S2TT diverged from HF (verified: with self-feed off,
+        # S2TT/ASR match HF for ~50+ tokens). It was token-exact on text-input (T2TT) where ties are
+        # rare. Demo gain is ~nil anyway (decode-bound tasks run rep=1.1 → host path), so leave it off
+        # until the on-device argmax tie-break is made first-index (matching ``torch.argmax``).
+        self._ondevice_decode_feedback = os.environ.get("SEAMLESS_ONDEVICE_DECODE_FEEDBACK", "0") != "0"
         self._argmax_off_sharded: Optional[ttnn.Tensor] = None  # cached [nd,1,nch] global-offset table
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
