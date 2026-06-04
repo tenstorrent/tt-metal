@@ -32,9 +32,7 @@ def _hash_request_seed_to_device_seed(seed: int, counter: int) -> int:
     a deterministic but well-mixed device seed without relying on mutable
     per-slot RNG state. The constants below are the SplitMix64 finalizer.
     """
-    value = (int(seed) & _UINT64_MASK) ^ (
-        (int(counter) + 0x9E3779B97F4A7C15) & _UINT64_MASK
-    )
+    value = (int(seed) & _UINT64_MASK) ^ ((int(counter) + 0x9E3779B97F4A7C15) & _UINT64_MASK)
     value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _UINT64_MASK
     value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _UINT64_MASK
     value = (value ^ (value >> 31)) & _UINT64_MASK
@@ -371,9 +369,7 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = (
-            enable_trace
-            and self.enable_internal_trace
-            and not self.seed_manager.has_active_request_seed()
+            enable_trace and self.enable_internal_trace and not self.seed_manager.has_active_request_seed()
         )
 
         if not use_internal_trace:

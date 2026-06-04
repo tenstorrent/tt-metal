@@ -453,9 +453,7 @@ class Generator(WarmupForwardMixin):
         sampling_prompt_tokens = None
         if sampling_params is not None:
             source_prompt_tokens = prompt_tokens if prompt_tokens is not None else tokens
-            max_prompt_tokens_len = (
-                max(int(prompt_lens[idx]) for idx in range(batch)) if batch > 0 else batch_seq_len
-            )
+            max_prompt_tokens_len = max(int(prompt_lens[idx]) for idx in range(batch)) if batch > 0 else batch_seq_len
             sampling_prompt_tokens = torch.full(
                 (self.model_args.max_batch_size, max_prompt_tokens_len),
                 -1,
@@ -1283,9 +1281,7 @@ class Generator(WarmupForwardMixin):
                 temperature_values = [temperature_values]
             if start_pos is not None:
                 active_slots = [
-                    idx
-                    for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist())
-                    if int(pos) >= 0
+                    idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
                 ]
                 temperature_values = [
                     temperature_values[idx]
@@ -1314,9 +1310,7 @@ class Generator(WarmupForwardMixin):
         active_seed_slots = None
         if start_pos is not None:
             active_seed_slots = [
-                idx
-                for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist())
-                if int(pos) >= 0
+                idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
         decode_kwargs = {
             "current_pos": start_pos,
@@ -1354,9 +1348,7 @@ class Generator(WarmupForwardMixin):
             seed_values = getattr(sampling_params, "seed", None)
             if _seed_debug_enabled():
                 debug_slots = (
-                    active_seed_slots
-                    if active_seed_slots is not None
-                    else list(range(seed_manager.max_batch_size))
+                    active_seed_slots if active_seed_slots is not None else list(range(seed_manager.max_batch_size))
                 )
                 seed_values_list = _as_list(seed_values)
                 seed_slot_pairs = [

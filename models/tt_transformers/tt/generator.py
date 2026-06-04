@@ -1283,9 +1283,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 if start_pos[i] is not None:
                     max_seed_slots = sampling_module.seed_manager.max_batch_size
                     start_values = torch.as_tensor(start_pos[i]).reshape(-1).tolist()
-                    active_seed_slots = [
-                        idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0
-                    ]
+                    active_seed_slots = [idx for idx, pos in enumerate(start_values[:max_seed_slots]) if int(pos) >= 0]
                 # Apply slot remap from condense before advancing seeds.
                 if slot_remap is not None:
                     sm_bs = sampling_module.seed_manager.max_batch_size
