@@ -35,9 +35,10 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
         if constexpr (RECIPROCAL)
         {
             sfpi::vInt x_bits                = sfpi::reinterpret<sfpi::vInt>(x);
+            sfpi::vInt x_abs_bits            = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(x, 0));
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
-            v_if (infinity_minus_x_bits != 0 && x_bits != 0)
+            v_if (x_abs_bits != infinity_bits && x_abs_bits != 0)
             {
                 y = y * t;
             }
@@ -76,9 +77,10 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
         {
             sfpi::vFloat half_y              = sfpi::addexp(y, -1);
             sfpi::vInt x_bits                = sfpi::reinterpret<sfpi::vInt>(x);
+            sfpi::vInt x_abs_bits            = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(x, 0));
             sfpi::vInt infinity_minus_x_bits = infinity_bits - x_bits;
             // If x != inf and x != 0.
-            v_if (infinity_minus_x_bits != 0 && x_bits != 0)
+            v_if (x_abs_bits != infinity_bits && x_abs_bits != 0)
             {
                 y = one_minus_xyy * half_y + y;
             }
@@ -102,7 +104,16 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x)
     }
     if constexpr (!FAST_APPROX)
     {
-        v_if (x < 0.0F)
+        sfpi::vInt x_abs_bits = sfpi::reinterpret<sfpi::vInt>(sfpi::setsgn(x, 0));
+        if constexpr (!RECIPROCAL)
+        {
+            v_if (x_abs_bits == 0)
+            {
+                y = x;
+            }
+            v_endif;
+        }
+        v_if (x < 0.0F && x_abs_bits != 0)
         {
             y = std::numeric_limits<float>::quiet_NaN(); // returns nan for fp32 and inf for bf16
         }
