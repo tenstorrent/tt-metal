@@ -112,7 +112,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -131,12 +131,12 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type, &service_claims](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
                 // Claimed service cores are permitted to run user kernels in FD mode.
-                if (service_claims.is_service_core(dispatch_core)) {
+                if (service_claims.is_service_core(device_id, dispatch_core)) {
                     return false;
                 }
                 return kernel->is_on_logical_core(dispatch_core);
@@ -1473,7 +1473,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         // from L1_END. CBs grow up from DEFAULT_UNRESERVED. Min frontier across the CB range catches
         // the most constrained core - collision if any frontier sits below the CB region end
         const bool on_service_core =
-            !devices_for_svc_check.empty() && svc.is_service_core(cb_allocator.core_range.start_coord);
+            std::any_of(devices_for_svc_check.begin(), devices_for_svc_check.end(), [&](const IDevice* dev) {
+                return svc.is_service_core(dev->id(), cb_allocator.core_range.start_coord);
+            });
 
         if (on_service_core) {
             std::optional<DeviceAddr> svc_lowest;
@@ -2134,7 +2136,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 coordinator.submit(kernel_hash, [&]() {
                     generate_kernel_source_files(device, build_options, kernel);
@@ -2156,7 +2158,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);

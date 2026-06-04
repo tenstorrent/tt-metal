@@ -1,6 +1,6 @@
 # tt::tt_metal::internal
 
-**For Tenstorrent-internal use. Unstable. Incomplete. Subject to change without notice.**
+**For Tenstorrent-internal use. Unstable. Incomplete. Subject to frequent change.**
 
 This directory exposes APIs under the `tt::tt_metal::internal` namespace that are used across
 internal components of tt-metal but are **not part of the public contract**. External users and

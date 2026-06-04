@@ -25,23 +25,61 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         return;
     }
 
-    // Service programs target FD-idle dispatch-column cores and are dispatched via SD MMIO,
-    // independently of the FD command queue. Common case: no service programs, skip entirely.
+    // Route programs targeting claimed service cores to the SD path. Done here, not in add_program,
+    // because the physical device needed to device-scope the service-core check is only known at
+    // enqueue. Common case - no service claimed so skip entirely.
+    auto& svc = internal::ServiceCoreManager::get();
+    auto& programs = mesh_workload.impl().get_programs();
     auto& service_programs = mesh_workload.impl().get_service_programs();
-    if (!service_programs.empty()) {
-        for (auto& [device_range, program] : service_programs) {
-            for (const auto& coord : device_range) {
+    if (svc.has_any_claims()) {
+        for (auto it = programs.begin(); it != programs.end();) {
+            bool targets_service_core = false;
+            for (const auto& coord : it->first) {
                 auto* device = mesh_cq.device()->impl().get_device(coord);
-                TT_FATAL(
-                    device != nullptr,
-                    "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
-                    coord);
-                tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+                if (device == nullptr) {
+                    continue;
+                }
+                for (const auto& per_type : it->second.impl().logical_cores()) {
+                    for (const auto& core : per_type) {
+                        targets_service_core |= svc.is_service_core(device->id(), core);
+                    }
+                }
+            }
+            if (targets_service_core) {
+                service_programs[it->first] = std::move(it->second);
+                it = programs.erase(it);
+            } else {
+                ++it;
             }
         }
     }
 
-    if (mesh_workload.impl().get_programs().empty()) {
+    // Service programs are dispatched via SD, independently of the FD command queue.
+    for (auto& [device_range, program] : service_programs) {
+        for (const auto& coord : device_range) {
+            auto* device = mesh_cq.device()->impl().get_device(coord);
+            TT_FATAL(
+                device != nullptr,
+                "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
+                coord);
+            for (const auto& per_type : program.impl().logical_cores()) {
+                for (const auto& core : per_type) {
+                    // Every core must be claimed on the device it launches on, else an SD service
+                    // kernel would collide with FD using that core on this device.
+                    TT_FATAL(
+                        svc.is_service_core(device->id(), core),
+                        "Service program targets core {} on device {} where it is not claimed. "
+                        "Claim service cores on every device in the workload's range.",
+                        core,
+                        device->id());
+                    svc.mark_launched(device->id(), core);  // launch-once
+                }
+            }
+            tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+        }
+    }
+
+    if (programs.empty()) {
         return;
     }
 

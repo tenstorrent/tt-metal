@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <mesh_buffer.hpp>
-#include <internal/service/service_core_manager.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
@@ -94,21 +93,6 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         device_range,
         *potential_intersection);
     Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
-
-    // Route to service_programs_ if any core in this program is a claimed service core.
-    const auto& claims = internal::ServiceCoreManager::get();
-    if (claims.has_any_claims()) {
-        // Only do per core checks if a service is running
-        for (const auto& per_type : program.impl().logical_cores()) {
-            for (const auto& core : per_type) {
-                if (claims.is_service_core(core)) {
-                    service_programs_[device_range] = std::move(program);
-                    return;
-                }
-            }
-        }
-    }
-
     programs_[device_range] = std::move(program);
 }
 

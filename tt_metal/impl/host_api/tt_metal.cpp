@@ -66,11 +66,11 @@
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
-#include <internal/service/service_core_manager.hpp>
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;

@@ -97,8 +97,8 @@ protected:
 };
 
 // Sanity test: Verify TT_FATAL fires on every documented misuse path:
-//   - get_claimable_cores / claim before FD is active
-//   - allocate_l1 / deallocate_l1 / bytes_available on an unclaimed core
+//   1. get_claimable_cores / claim before FD is active
+//   2. allocate_l1 / deallocate_l1 / bytes_available on an unclaimed core
 TEST_F(ServiceCoreSdFixture, ServiceCoreFatalGuards) {
     auto& mesh_device = this->devices_[0];
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
@@ -384,6 +384,9 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     auto svc_workload = std::make_shared<MeshWorkload>();
     svc_workload->add_program(MeshCoordinateRange(MeshCoordinate{0, 0}, MeshCoordinate{0, 0}), std::move(svc_prog));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *svc_workload, false);
+
+    // Launch-once: re-enqueuing the same (already-launched) service workload must TT_FATAL.
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *svc_workload, false), std::exception);
 
     // Pick a single representative service workload core for sanity checks
     const CoreCoord rep_core = claimable[0];

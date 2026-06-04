@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -16,17 +17,17 @@
 #include <tt-metalium/device.hpp>
 
 #include <llrt/hal.hpp>
-#include "llrt/llrt.hpp"
-#include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_metal::internal {
 
 // Per-Device state holds:
 // 1. Per-core allocator for all cores per device
 // 2. Snapshot of FD worker grid per device
+// 3. If a core already has a service on launched on it
 struct ServiceCoreManager::Impl {
     struct CoreState {
         std::unique_ptr<allocator::FreeListOpt> alloc;
+        bool launched = false;  // a service workload has been enqueued on this core (launch-once)
     };
     struct DeviceServiceState {
         std::unordered_map<CoreCoord, CoreState> cores;
@@ -125,16 +126,7 @@ std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) 
     auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
     // Filter out cores already claimed in this session so consecutive calls reflect current state.
     const auto claimed = claimed_cores(device->id());
-    if (!claimed.empty()) {
-        std::vector<CoreCoord> out;
-        out.reserve(available.size());
-        for (const auto& c : available) {
-            if (!claimed.count(c)) {
-                out.push_back(c);
-            }
-        }
-        available = std::move(out);
-    }
+    std::erase_if(available, [&claimed](const CoreCoord& c) { return claimed.count(c) > 0; });
     TT_FATAL(
         !available.empty(),
         "No claimable dispatch-column cores on device {}. "
@@ -154,19 +146,27 @@ bool ServiceCoreManager::has_any_claims() const {
     return false;
 }
 
-bool ServiceCoreManager::is_service_core(CoreCoord core) const {
-    for (const auto& [id, state] : impl_->devices) {
-        if (state.cores.contains(core)) {
-            return true;
-        }
+void ServiceCoreManager::mark_launched(ChipId device_id, CoreCoord core) {
+    auto dit = impl_->devices.find(device_id);
+    if (dit == impl_->devices.end()) {
+        return;
     }
-    return false;
+    auto cit = dit->second.cores.find(core);
+    if (cit == dit->second.cores.end()) {
+        return;  // not a claimed service core on this device
+    }
+    TT_FATAL(
+        !cit->second.launched,
+        "A service workload is already running on core {} (device {}). A claimed service core accepts a single "
+        "enqueue; release() it before enqueueing again.",
+        core,
+        device_id);
+    cit->second.launched = true;
 }
 
-void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const {
-    auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
-    std::unordered_set<CoreCoord> cores{physical_core};
-    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, cores);
+bool ServiceCoreManager::is_service_core(ChipId device_id, CoreCoord core) const {
+    auto it = impl_->devices.find(device_id);
+    return it != impl_->devices.end() && it->second.cores.contains(core);
 }
 
 DeviceAddr ServiceCoreManager::allocate_l1(IDevice* device, CoreCoord core, size_t size) {
@@ -212,15 +212,9 @@ std::optional<DeviceAddr> ServiceCoreManager::lowest_allocated_address(ChipId de
     if (cit == dit->second.cores.end()) {
         return std::nullopt;
     }
-    const auto ranges = cit->second.alloc->allocated_addresses();
-    if (ranges.empty()) {
-        return std::nullopt;
-    }
-    DeviceAddr lo = ranges.front().first;
-    for (const auto& [start, end] : ranges) {
-        lo = std::min(lo, start);
-    }
-    return lo;
+    // FreeListOpt tracks this directly (updated on allocate, recomputed on deallocate), so no
+    // need to scan allocated_addresses() ourselves.
+    return cit->second.alloc->lowest_occupied_address();
 }
 
 }  // namespace tt::tt_metal::internal

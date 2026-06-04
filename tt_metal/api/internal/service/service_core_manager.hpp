@@ -20,6 +20,9 @@ using DeviceAddr = uint64_t;
 
 namespace tt::tt_metal::internal {
 
+// Internal, unstable API - read the stability/usage conditions in tt_metal/api/internal/README.md
+// before depending on anything here.
+//
 // Manages reservation of free FD dispatch-column cores for long-running service kernels,
 // and per-core L1 allocation for those cores.
 //
@@ -34,6 +37,11 @@ namespace tt::tt_metal::internal {
 // NOTE: not thread-safe api. Expected usage is sequential calls from the main thread during
 // application setup/teardown.
 //
+// Launch once contract: For now, a claimed service core accepts exactly ONE service workload
+// enqueue. A second EnqueueMeshWorkload targeting an already launched core TT_FATALs, until the
+// core is released - regardless of whether the service kernel on it has actually finished.
+// Re-enqueue therefore requires release() then claim() again. This will most likely change in the future.
+//
 // Runtime flow:
 //
 //   // 1. Launch App in FD
@@ -47,8 +55,9 @@ namespace tt::tt_metal::internal {
 //   for (auto& core : claimable)
 //       counter_addrs[core] = svc.allocate_l1(device, core, sizeof(uint32_t));
 //
-//   // add_program internally routes to the SD path because cores are claimed.
-//   // EnqueueMeshWorkload dispatches service programs via SD, regular programs via FD.
+//   // add_program just records the program; it has no device handle so it does no routing.
+//   // EnqueueMeshWorkload knows the device, so that is where programs targeting claimed service
+//   // cores are split off to the SD path while regular programs go via FD.
 //   // User is responsible for service kernel lifetime (fire and forget).
 //   service_workload.add_program(device_range, std::move(service_program));
 //   EnqueueMeshWorkload(mesh_cq, service_workload, false);
@@ -86,6 +95,11 @@ public:
     // Release one or more claimed cores and destroy their L1 allocators. All addresses
     // handed out by allocate_l1() for these cores become invalid after this call.
     // Silent no-op for unclaimed cores — safe to call in teardown/destructor paths.
+    // Caller contract: the service kernel must already be stopped before release() - the
+    // runtime cannot detect completion of a persistent (looping) kernel.
+    // TODO: accept an optional user completion predicate (e.g. polls an L1 done-signal that the
+    // kernel sets on exit) so release() can verify/wait for termination instead of relying on
+    // caller ordering.
     void release(IDevice* device, const std::vector<CoreCoord>& cores);
 
     // Returns the set of currently claimed cores for a device.
@@ -118,16 +132,16 @@ public:
     // disjoint worker-set invariant between the regular worker grid and service cores.
     std::optional<CoreCoord> get_safe_compute_grid(ChipId device_id) const;
 
-    // Block until the service kernel on the given core signals completion (RUN_MSG_DONE).
-    // Only meaningful for non-persistent kernels that are expected to return;.
-    //  NOTE: Will hang indefinitely if the kernel loops forever.
-    void wait_done(IDevice* device, CoreCoord core) const;
-
     // NOTE: Internal dispatch routing (not user-facing)
     // Called on every EnqueueMeshWorkload
     bool has_any_claims() const;
-    // Called at add_program time to route programs targeting service cores to the SD path.
-    bool is_service_core(CoreCoord core) const;
+    // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
+    // programs to the SD path and to device-scope placement/CB validation.
+    bool is_service_core(ChipId device_id, CoreCoord core) const;
+    // Enforces launch-once: marks a claimed service core as launched, TT_FATALing if it
+    // already was. A claimed core accepts a single service-workload enqueue until release()
+    // clears the claim. No-op for cores not claimed on device_id (e.g. worker cores).
+    void mark_launched(ChipId device_id, CoreCoord core);
 
     ServiceCoreManager(const ServiceCoreManager&) = delete;
     ServiceCoreManager& operator=(const ServiceCoreManager&) = delete;
