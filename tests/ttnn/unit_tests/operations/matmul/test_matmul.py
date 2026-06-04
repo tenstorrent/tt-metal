@@ -3814,14 +3814,12 @@ _ND_IN1_NUM_DRAM_SHARD_CORES = 4
         (512, 512, 512, (4, 4)),
         (256, 1024, 768, (4, 2)),
     ],
-    ids=["square_4x4", "rect_4x2"],
 )
 @pytest.mark.parametrize(
     # (K-splits, N-splits): 8 shards over 4 cores. Either wrapping the N dim
     # round-robin or a 2D K-by-N split keeps the layout genuinely ND_SHARDED.
     "k_splits, n_splits",
     [(1, 8), (2, 4)],
-    ids=["rr_wrap_8n", "nd_2k_4n"],
 )
 def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits):
     """2D-multicast matmul with an ND_SHARDED (NdShardSpec) DRAM in1.
