@@ -1530,15 +1530,27 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core. Mirrors validate_circular_buffer_region.
     const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
-    const auto claimed_on_device = svc.claimed_cores(device->id());
+    std::unordered_set<CoreCoord> claimed;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                auto chip_claimed = svc.claimed_cores(dev->id());
+                claimed.insert(chip_claimed.begin(), chip_claimed.end());
+            }
+        } else {
+            claimed = svc.claimed_cores(device->id());
+        }
+    }
     auto entirely_on_service_cores = [&](const CoreRange& cr) {
-        if (claimed_on_device.empty()) {
+        if (claimed.empty()) {
             return false;
         }
         for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
             for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
-                if (claimed_on_device.count(CoreCoord{x, y}) == 0) {
+                if (!claimed.contains(CoreCoord{x, y})) {
                     return false;
                 }
             }

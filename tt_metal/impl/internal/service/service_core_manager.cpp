@@ -126,7 +126,7 @@ std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) 
     auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
     // Filter out cores already claimed in this session so consecutive calls reflect current state.
     const auto claimed = claimed_cores(device->id());
-    std::erase_if(available, [&claimed](const CoreCoord& c) { return claimed.count(c) > 0; });
+    std::erase_if(available, [&claimed](const CoreCoord& c) { return claimed.contains(c); });
     TT_FATAL(
         !available.empty(),
         "No claimable dispatch-column cores on device {}. "

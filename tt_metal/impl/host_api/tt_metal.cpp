@@ -841,7 +841,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             auto& dm = MetalContext::instance().device_manager();
             const bool fd_active = dm->is_dispatch_firmware_active();
             const bool rt_done = dm->is_rt_profiler_device_init_complete(device->id());
-            const bool service_active = tt::tt_metal::internal::ServiceCoreManager::get().has_any_claims();
+            // Scope the service bypass to this device
+            const bool service_active =
+                !tt::tt_metal::internal::ServiceCoreManager::get().claimed_cores(device->id()).empty();
             TT_ASSERT(
                 !(fd_active && rt_done) || service_active,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "

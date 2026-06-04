@@ -41,7 +41,7 @@ static void assert_counter_incrementing(const std::function<uint32_t()>& read_fn
 }
 
 // Builds a trivial workload to exercise the FD/SD dispatch pipeline
-static std::shared_ptr<MeshWorkload> make_trivial_workload(IDevice* device, MeshDevice* mesh_device) {
+static std::shared_ptr<MeshWorkload> make_trivial_workload(IDevice* device) {
     const uint32_t l1_scratch = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const CoreCoord grid = device->compute_with_storage_grid_size();
     Program prog;
@@ -263,8 +263,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
         assert_counter_incrementing(read_counter, "after FD terminate (cycle " + std::to_string(cycle) + ")");
 
-        // Dispatch a trivial workload to stress the dispatch path and dirty compute state.
-        auto stressor = make_trivial_workload(device, mesh_device.get());
+        // Dispatch a trivial workload to stress the dispatch path
+        auto stressor = make_trivial_workload(device);
         for (uint32_t i = 0; i < num_programs; i++) {
             EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
         }
@@ -401,7 +401,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     assert_counter_incrementing(read_counter, "after service launch");
 
     // Launch FD workloads on the regular worker grid while the service kernel runs.
-    auto fd_workload = make_trivial_workload(device, mesh_device.get());
+    auto fd_workload = make_trivial_workload(device);
     constexpr uint32_t num_programs = 5;
     for (uint32_t i = 0; i < num_programs; i++) {
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
