@@ -72,10 +72,10 @@ class Pi0_5OptionCSuffixSlice:
             key = f"{name}.bias"
             if key not in suffix:
                 return None
-            # TODO(full-l1): suffix biases (action_in/out, time_mlp_in/out)
-            # moved bf16 -> bf8_b. Tiny tensors (~1 KB each), negligible
-            # memory win — but the user asked for all biases bf8_b.
-            return tensor_1d_to_2d_ttnn(suffix[key], submesh, dtype=ttnn.bfloat8_b)
+            # Keep biases at bf16. bf8_b on the suffix MLP biases compounds
+            # PCC drift across 10 denoise steps × 18 expert-layer feedback —
+            # cost is ~8 KB total so the L1 saving is negligible.
+            return tensor_1d_to_2d_ttnn(suffix[key], submesh, dtype=ttnn.bfloat16)
 
         self.action_in_w = upload_w("action_in_proj")
         self.action_in_b = upload_b("action_in_proj")

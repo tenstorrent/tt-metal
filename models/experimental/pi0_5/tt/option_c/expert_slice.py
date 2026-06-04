@@ -127,17 +127,15 @@ def _load_expert_block_weights_l1(
             value = value.T
 
         if len(value.shape) == 1:
-            # TODO(full-l1): LN bias/scale (norm 1D) now bf8_b — was bf16. Tiny
-            # numerics drift expected; the LN bias is added directly to the
-            # residual stream so check PCC against the bf16 baseline.
-            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, submesh, dtype=ttnn.bfloat8_b)
+            # Keep LN 1D bias at bf16. bf8_b compounds a measurable PCC drop
+            # at depth=18 (validated by bisect: 0.40 with bf8 vs target ≥0.85).
+            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, submesh, dtype=ttnn.bfloat16)
         else:
-            # TODO(full-l1): norm 2D weights moved bf16 -> bf8_b. Same caveat
-            # as above; rms_norm tolerance has held in practice but verify.
+            # Keep LN 2D weights at bf16 (same rationale as the 1D case).
             block_weights[new_key] = _upload_l1_replicated(
                 value.contiguous(),
                 submesh,
-                ttnn.bfloat8_b if is_norm else ttnn.bfloat8_b,
+                ttnn.bfloat16 if is_norm else ttnn.bfloat8_b,
             )
 
     # Fused adaRMS modulation weight = concat([pre_attn.dense, pre_ffw.dense], dim=0).
@@ -155,17 +153,20 @@ def _load_expert_block_weights_l1(
         # Shard the 6144 output axis across `submesh.get_num_devices()` chips.
         # Each chip holds [1024, 6144/N]; an all_gather at forward time
         # reconstitutes the full mod output before the per-token modulation.
+        # Keep bf16 (not bf8_b) for numerics — the mod weight scales the
+        # residual stream per token and bf8_b compounds a PCC drop across
+        # depth.
         block_weights["adarms_mod.weight"] = _upload_l1_sharded(
             fused_w.T.contiguous(),
             submesh,
             dim=-1,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
     else:
         block_weights["adarms_mod.weight"] = _upload_l1_replicated(
             fused_w.T.contiguous(),
             submesh,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
         )
 
     b_keys = [
@@ -179,18 +180,16 @@ def _load_expert_block_weights_l1(
         if mod_sharded:
             # Bias must match the sharded mod output: shape [1, 6144] sharded
             # on its last axis. Use a separate path because `tensor_1d_to_2d_ttnn`
-            # is replicate-only.
-            # TODO(full-l1): shard 1D bias along last dim. Need to reshape to
-            # 2D first because shard_tensor_to_mesh_mapper expects rank>=2.
+            # is replicate-only. Keep bf16 (matches mod_weight dtype).
             fused_b_2d = fused_b.reshape(1, -1).contiguous()
             block_weights["adarms_mod.bias"] = _upload_l1_sharded(
                 fused_b_2d,
                 submesh,
                 dim=-1,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
         else:
-            block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, submesh, dtype=ttnn.bfloat8_b)
+            block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, submesh, dtype=ttnn.bfloat16)
 
     return block_weights
 
@@ -264,19 +263,16 @@ class Pi0_5OptionCExpertSlice:
         # Final adaRMS norm Dense.
         if "model.norm.dense.weight" not in ae:
             raise KeyError("expert checkpoint missing 'model.norm.dense.weight'")
-        # TODO(full-l1): final_norm_mod_weight + bias moved bf16 -> bf8_b.
-        # Shape [1024, 3072] (3 channels not 6 — final norm only emits scale,
-        # shift, gate-discarded). Not sharded today; tiny weight (~0.4 MB at
-        # bf8_b replicated 6 chips), keep it simple. Could shard later if the
-        # 6144 mod sharding works.
+        # Keep final_norm_mod_weight + bias at bf16. bf8_b on these compounds
+        # PCC drift with the per-block mod weight changes (see paired path).
         self.final_norm_mod_weight = _upload_l1_replicated(
             ae["model.norm.dense.weight"].T.contiguous(),
             submesh,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
         )
         self.final_norm_mod_bias = None
         if "model.norm.dense.bias" in ae:
-            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], submesh, dtype=ttnn.bfloat8_b)
+            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], submesh, dtype=ttnn.bfloat16)
 
         device_grid = submesh.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
@@ -468,14 +464,16 @@ def _load_expert_block_weights_single_chip_l1(
             value = value.T
 
         if len(value.shape) == 1:
-            # TODO(full-l1): paired LN bias (norm 1D) bf16 -> bf8_b.
-            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, micro_submesh, dtype=ttnn.bfloat8_b)
+            # Keep LN 1D bias at bf16 — bf8_b on tensors that scale the residual
+            # stream accumulates a measurable PCC drop at depth=18 (0.40 vs 0.99
+            # at depth=2). LN bias is tiny (kBs) so the L1 cost is negligible.
+            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, micro_submesh, dtype=ttnn.bfloat16)
         else:
-            # TODO(full-l1): paired norm 2D weights bf16 -> bf8_b.
+            # Keep LN 2D weights at bf16 (same rationale as the 1D case).
             block_weights[new_key] = _upload_single_chip_l1(
                 value.contiguous(),
                 micro_submesh,
-                ttnn.bfloat8_b if is_norm else ttnn.bfloat8_b,
+                ttnn.bfloat16 if is_norm else ttnn.bfloat8_b,
             )
 
     w_keys = [
@@ -486,8 +484,12 @@ def _load_expert_block_weights_single_chip_l1(
         if wk not in full_weights:
             raise KeyError(f"expert layer {layer_idx} missing adaRMS weight '{wk}'")
     fused_w = torch.cat([full_weights[wk] for wk in w_keys], dim=0).contiguous()
-    # TODO(full-l1): paired adarms_mod.weight bf16 -> bf8_b.
-    block_weights["adarms_mod.weight"] = _upload_single_chip_l1(fused_w.T.contiguous(), micro_submesh, ttnn.bfloat8_b)
+    # Keep adarms_mod.weight at bf16 — its output is the per-token scale/shift
+    # for every layer's residual stream, so bf8_b quantization compounds across
+    # 18 layers × 10 denoise steps into a ~0.4 PCC drift. ~6 MB / layer / chip
+    # extra (= 18 MB / chip across 3 layers per paired chip) — still well
+    # under the L1 cap with vision/prefill/denoise at 83 / 108 / ~100 MB.
+    block_weights["adarms_mod.weight"] = _upload_single_chip_l1(fused_w.T.contiguous(), micro_submesh, ttnn.bfloat16)
 
     b_keys = [
         f"{prefix}input_layernorm.dense.bias",
@@ -497,8 +499,8 @@ def _load_expert_block_weights_single_chip_l1(
     if biases:
         assert len(biases) == 2, "expected both adaRMS biases or neither"
         fused_b = torch.cat(biases, dim=0).contiguous()
-        # TODO(full-l1): paired adarms_mod.bias bf16 -> bf8_b.
-        block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, micro_submesh, dtype=ttnn.bfloat8_b)
+        # Keep adarms_mod.bias at bf16 (same rationale as the weight).
+        block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, micro_submesh, dtype=ttnn.bfloat16)
 
     return block_weights
 
@@ -594,15 +596,17 @@ class Pi0_5OptionCExpertSlicePaired:
         last_sm = micro_submeshes[-1]
         if "model.norm.dense.weight" not in ae:
             raise KeyError("expert checkpoint missing 'model.norm.dense.weight'")
-        # TODO(full-l1): paired final_norm_mod_weight + bias bf16 -> bf8_b.
+        # Keep final_norm_mod_weight + bias at bf16 — same rationale as the
+        # per-block mod weight; the final norm is applied once but its scale
+        # multiplies the accumulated 18-layer residual.
         self.final_norm_mod_weight = _upload_single_chip_l1(
             ae["model.norm.dense.weight"].T.contiguous(),
             last_sm,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
         )
         self.final_norm_mod_bias = None
         if "model.norm.dense.bias" in ae:
-            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], last_sm, dtype=ttnn.bfloat8_b)
+            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], last_sm, dtype=ttnn.bfloat16)
         last_grid = last_sm.compute_with_storage_grid_size()
         self.last_core_grid = ttnn.CoreGrid(y=last_grid.y, x=last_grid.x)
 
