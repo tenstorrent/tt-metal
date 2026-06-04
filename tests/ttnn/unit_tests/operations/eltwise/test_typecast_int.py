@@ -94,7 +94,7 @@ def test_typecast_subcore_grid(device, shape, sub_core_grid):
     torch.manual_seed(0)
 
     in_data1 = torch.randint(0, 65500, (shape), dtype=torch.int32)
-    in_data2 = torch.randint(0, 128000, (shape), dtype=torch.int32)
+    in_data2 = torch.randint(-1000, 128000, (shape), dtype=torch.int32)
 
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 

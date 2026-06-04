@@ -17,7 +17,13 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     reconcile_golden_to_actual,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args, parse_dict_value
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
+from tests.ttnn.python_api_testing.typecast_test_helpers import (
+    make_traced_typecast_input,
+    uses_exact_integer_typecast_check,
+)
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
@@ -114,39 +120,13 @@ def run(
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    if input_a_dtype == ttnn.uint16:
-        # Use torch.int32 for uint16 input — torch.int16 causes sign-extension
-        # corruption for values >32767 during from_torch conversion.
-        # Note: ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh)
-        # has a known data-mangling bug on mesh devices (PCC drops to 0.1-0.8) but
-        # we still run the op so the trace records the UINT16 input and matches
-        # the master config — PCC pass/fail is a secondary signal.
-        torch_input_tensor_a = torch.randint(0, 65536, shape, dtype=torch.int32).clamp(0, 65535)
-    elif input_a_dtype == ttnn.uint32:
-        torch_input_tensor_a = torch.randint(0, 2**32, shape, dtype=torch.int64)
-    else:
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(shape)
-
-    if output_dtype == ttnn.float32:
-        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
-    elif output_dtype == ttnn.bfloat16:
-        torch_output_tensor = torch_input_tensor_a.to(torch.bfloat16).to(torch.float32)
-    elif output_dtype == ttnn.bfloat8_b:
-        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
-    elif output_dtype == ttnn.uint16:
-        torch_output_tensor = torch_input_tensor_a.clamp(0, 65535).to(torch.int32)
-    elif output_dtype == ttnn.uint32:
-        if input_a_dtype == ttnn.uint32:
-            torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1)
-        else:
-            torch_output_tensor = torch_input_tensor_a.clamp(0, 2**32 - 1).to(torch.int64)
-    elif output_dtype == ttnn.int32:
-        # Input is already torch.int32 for uint16 (values 0-65535), so direct cast is fine.
-        torch_output_tensor = torch_input_tensor_a.to(torch.int32)
-    else:
-        torch_output_tensor = torch_input_tensor_a.to(torch.float32)
+    float_input_fn = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )
+    torch_input_tensor_a = make_traced_typecast_input(shape, input_a_dtype, output_dtype, float_input_fn=float_input_fn)
+    torch_output_tensor = eltwise_typecast(
+        torch_input_tensor_a, tt_input_dtype=input_a_dtype, tt_output_dtype=output_dtype
+    )
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -193,40 +173,36 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:
-        if torch_output_tensor.dtype != torch.int64:
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
+
+    lossy_dtypes = {ttnn.bfloat8_b, ttnn.bfloat4_b}
+    mesh_uint16_input = is_mesh_device and input_a_dtype == ttnn.uint16
+
+    if uses_exact_integer_typecast_check(input_a_dtype, output_dtype) and not mesh_uint16_input:
+        result = comp_equal(torch_output_tensor.to(torch.int64), output_tensor.to(torch.int64))
+    elif (
+        output_dtype in (ttnn.float32, ttnn.bfloat16)
+        and input_a_dtype not in lossy_dtypes
+        and output_dtype not in lossy_dtypes
+    ):
+        result = comp_equal(torch_output_tensor, output_tensor)
+    else:
+        if output_dtype == ttnn.uint32 or input_a_dtype == ttnn.uint32:
             torch_output_tensor_f32 = torch_output_tensor.to(torch.int64).to(torch.float32)
-        else:
-            torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
-        if output_tensor.dtype != torch.int64:
             output_tensor_f32 = output_tensor.to(torch.int64).to(torch.float32)
         else:
+            torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
             output_tensor_f32 = output_tensor.to(torch.float32)
-    else:
-        torch_output_tensor_f32 = torch_output_tensor.to(torch.float32)
-        output_tensor_f32 = output_tensor.to(torch.float32)
 
-    # Block floating-point formats (bfloat8_b, bfloat4_b) have significant
-    # quantisation loss, especially for wide value ranges.  Use a relaxed PCC
-    # threshold when either the input or output dtype is one of these formats.
-    lossy_dtypes = {ttnn.bfloat8_b, ttnn.bfloat4_b}
-    if input_a_dtype in lossy_dtypes or output_dtype in lossy_dtypes:
-        pcc_threshold = 0.79
-    elif input_a_dtype == ttnn.uint16:
-        # ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh)
-        # has a known data-mangling bug on mesh devices that drops PCC into the
-        # 0.1-0.8 range on certain Galaxy systems (passes on others — appears
-        # tied to user-mode driver / silicon variant rather than firmware
-        # bundle). Trace coverage is the primary signal for this dtype; relax
-        # the PCC bar so the vector still runs without aborting the batch.
-        # Catastrophic regressions (PCC near 0) still fail.
-        pcc_threshold = 0.05
-    else:
-        pcc_threshold = 0.999
+        if input_a_dtype in lossy_dtypes or output_dtype in lossy_dtypes:
+            pcc_threshold = 0.79
+        elif mesh_uint16_input:
+            # ttnn.from_torch(int32, dtype=uint16, mesh_mapper=ReplicateTensorToMesh) can
+            # mangle inputs on some mesh devices; keep relaxed PCC until that is fixed.
+            pcc_threshold = 0.05
+        else:
+            pcc_threshold = 0.999
+        result = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, pcc_threshold)
 
-    if is_mesh_device:
-        torch_output_tensor_f32 = reconcile_golden_to_actual(
-            torch_output_tensor_f32, output_tensor_f32, input_a_tensor_placement
-        )
-    pcc = check_with_pcc(torch_output_tensor_f32, output_tensor_f32, pcc_threshold)
-    return [pcc, e2e_perf]
+    return [result, e2e_perf]
