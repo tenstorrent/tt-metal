@@ -93,9 +93,18 @@ private:
 };
 
 // Begin a collect pass: enables NO_DISPATCH graph capture (buffers mocked,
-// nothing dispatched) and marks the collector active on this thread. Clears any
-// previously collected programs.
-void begin_collect();
+// nothing dispatched) and marks the collector active on this thread.
+//
+// clear=true (default) drops any previously collected programs first — the
+// model-forward usage (one begin/end around a single run). clear=false
+// ACCUMULATES into the existing set — the cross-test usage: a pytest plugin
+// wraps each test body in begin_collect(clear=false)/end_collect(), so programs
+// from every test pile into one deduped set, then a single parallel_compile at
+// session end. (begin/end_collect push/pop a NO_DISPATCH graph-capture frame
+// per call and the hook is cleanly removed on end, so per-test wrapping is safe;
+// only the clear must be suppressed to accumulate — clear the collector once up
+// front via ProgramCollector::clear() / up_front_clear instead.)
+void begin_collect(bool clear = true);
 
 // End the collect pass: stops NO_DISPATCH capture and deactivates the collector.
 // Collected programs remain in ProgramCollector::instance() until parallel_compile

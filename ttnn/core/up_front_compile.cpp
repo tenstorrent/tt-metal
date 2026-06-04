@@ -75,8 +75,10 @@ std::vector<tt::tt_metal::Program*> ProgramCollector::program_pointers() {
     return out;
 }
 
-void begin_collect() {
-    ProgramCollector::instance().clear();
+void begin_collect(bool clear) {
+    if (clear) {
+        ProgramCollector::instance().clear();
+    }
     ProgramCollector::set_active(true);
     // NO_DISPATCH: buffer allocations are mocked (addr 0) and nothing dispatches,
     // so the collect pass uses no real device memory. The funnel's stash + early
