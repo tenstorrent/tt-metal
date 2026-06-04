@@ -1355,8 +1355,10 @@ class LTXPipeline:
         )
 
         if sigmas is None:
-            # Scheduler shift is keyed on the logical token count, not padded.
-            sigmas = compute_sigmas(steps=num_inference_steps, num_tokens=video_N_real + audio_N_real)
+            # Match the LTX-2 reference: the scheduler shift uses the fixed
+            # MAX_SHIFT_ANCHOR (default num_tokens), not the real token count
+            # (ltx_pipelines.ti2vid_two_stages / ti2vid_one_stage).
+            sigmas = compute_sigmas(steps=num_inference_steps)
         else:
             assert (
                 len(sigmas) == num_inference_steps + 1
