@@ -584,6 +584,11 @@ public:
     //     TensorParameters) in the returned Program Spec. Runtime arguments
     //     are forbidden because the infrastructure DELIBERATELY excludes
     //     fast-path patching of non-tensor runtime arguments.
+    //  3. The returned ProgramRunArgs must not contain any DFB size overrides.
+    //     Same reason as #2 — fast-path patching of DFB sizes is deliberately
+    //     excluded. Sizes that vary should be set on the ProgramSpec directly
+    //     (and attr-derived variation is naturally specialised via the cache
+    //     key).
     //
     // Unhandled use cases:
     //  - Ops that need op-owned resources (single-program or multi-program)
@@ -658,6 +663,27 @@ public:
             }
         }
 
+        // Same reasoning as assert_no_runtime_args, applied to DFB size overrides.
+        // ProgramRunArgs::dfb_run_overrides lets the factory resize a DFB per
+        // dispatch (entry_size / num_entries). On a Ryan-shaped factory those
+        // overrides would be frozen at cache-miss time and run stale on every
+        // cache hit — the same silent-corruption bug class.
+        //
+        // DFB sizes that depend on attrs are naturally specialised via the cache
+        // key (different attrs → different cache entry → fresh ProgramSpec with
+        // the right sizes). Sizes that need to vary within a single cache entry
+        // require a factory concept with per-dispatch mutable state.
+        static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+            TT_FATAL(
+                run_args.dfb_run_overrides.empty(),
+                "ProgramRunArgs returned by create_program_artifacts contains {} DFB size "
+                "override entries, but a ProgramSpecFactoryConcept factory has no per-dispatch "
+                "update path for them. Set DFB sizes directly in the ProgramSpec (attr-derived "
+                "sizes are already specialised via the cache key), or move the op to a factory "
+                "concept with explicit per-dispatch mutable state.",
+                run_args.dfb_run_overrides.size());
+        }
+
         // Match each TensorArgument's MeshTensor reference back to its index in the
         // io_tensor enumeration. Cache-miss path only.
         // TT_FATALs on a TensorArgument that doesn't reference an io_tensor — see
@@ -716,6 +742,7 @@ public:
             // per range into the cached shared state.
             auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             assert_no_runtime_args(artifacts.spec);
+            assert_no_dfb_size_overrides(artifacts.run_params);
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
