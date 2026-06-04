@@ -216,12 +216,23 @@ class DramCorePrefetcher(LightweightModule):
         self.prefetch_done: bool = False
         self._started: bool = False  # Tracks lazy StartDramCorePrefetcher
         self._stopped: bool = False  # Set by teardown(); blocks re-entry
+        # QueueDramCorePrefetcherRequest writes a one-shot H2D socket payload; keep it outside
+        # decode traces and queue it explicitly before each trace capture/replay.
+        self.requires_external_trace_run: bool = True
+        self.skip_run_in_forward: bool = False
 
         logger.info(
             f"[DramCorePrefetcher] model={self.model_name} banks={self.num_senders} recv/bank={self.num_receiver_cores} ring={self.ring_size}"
         )
 
     # ---- Public surface compatible with Prefetcher ----
+
+    # Prefetched weights use the receiver-contiguous (ND_SHARDED) DRAM layout, which the
+    # decode gather_in0 matmul consumes via the GCB but which prefill's direct matmuls reject
+    # (they require WIDTH/HEIGHT_SHARDED). Model code keys on this to keep a width-sharded
+    # prefill copy of each prefetched weight (the worker-core Prefetcher needs no such copy,
+    # since its prefetched weights are already width-sharded — see uses_recv_contig=False there).
+    uses_recv_contig: bool = True
 
     def register_callback(self, callback: Callable[[], None]) -> None:
         self.callbacks.append(callback)
@@ -289,6 +300,8 @@ class DramCorePrefetcher(LightweightModule):
 
     def run(self) -> None:
         """Start DRISC daemon (lazy, first call) and queue one request per call."""
+        if self.skip_run_in_forward:
+            return
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode."
         assert not self._stopped, "DramCorePrefetcher has been torn down; cannot run again."
         # The model registers num_tensors weights per decoder layer, so prefetch() collects

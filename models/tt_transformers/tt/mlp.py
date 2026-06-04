@@ -48,24 +48,30 @@ class MLP(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
 
-        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        w1_w3_width_sharded = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
+        w2_width_sharded = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
-        # The prefetcher picks the weight layout: the DRAM-core backend returns its
+        # The prefetcher picks the decode/prefetch weight layout: the DRAM-core backend returns its
         # receiver-contiguous layout, the worker-core backend returns the width-sharded default
         # above (and galaxy/TG always keeps the default).
+        w1_w3_mem_config = w1_w3_width_sharded
+        w2_mem_config = w2_width_sharded
         if prefetcher is not None:
             w1_w3_mem_config = prefetcher.weight_mem_config(
-                args.dim, args.hidden_dim // args.num_devices, w1_w3_mem_config, is_galaxy=args.is_galaxy
+                args.dim, args.hidden_dim // args.num_devices, w1_w3_width_sharded, is_galaxy=args.is_galaxy
             )
             w2_mem_config = prefetcher.weight_mem_config(
-                args.hidden_dim // args.num_devices, args.dim, w2_mem_config, is_galaxy=args.is_galaxy
+                args.hidden_dim // args.num_devices, args.dim, w2_width_sharded, is_galaxy=args.is_galaxy
             )
+        # Receiver-contiguous (DRAM-core) weights are decode-only; prefill's direct matmuls need the
+        # width-sharded layout, so keep a width-sharded prefill copy of each FF weight (mirrors the
+        # attention wqkv/wqkv_prefill split). The worker path is already width-sharded -> just alias.
+        _use_rc = prefetcher is not None and getattr(prefetcher, "uses_recv_contig", False)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
         # This is required for the dram_prefetcher to correctly interpret all weights
-        def as_sharded_tensor(name, type, dims):
+        def as_sharded_tensor(name, type, dims, mem_config, cache_key):
             # First get the raw weight and transpose it
             raw_weight = torch_weight(name[:2])  # This is 2D: [H, W]
             # Pad if needed
@@ -79,10 +85,8 @@ class MLP(LightweightModule):
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=(
-                    ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
-                ),
-                cache_file_name=cache_name(name),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else mem_config,
+                cache_file_name=cache_name(cache_key),
             )
             return result
 
@@ -105,11 +109,23 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
+        # Decode/prefetch copies (receiver-contiguous for the DRAM-core backend, else width-sharded).
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
+            "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w1_sharded"
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_mem_config, "w2_sharded")
+        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w3_sharded")
+        # Width-sharded prefill copies (only built when decode weights are receiver-contiguous).
+        if _use_rc:
+            self.w1_prefill = as_sharded_tensor(
+                "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_width_sharded, "w1_ws_prefill"
+            )
+            self.w2_prefill = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_width_sharded, "w2_ws_prefill")
+            self.w3_prefill = as_sharded_tensor(
+                "w3_sharded", ff1_3_dtype, w1_dims, w1_w3_width_sharded, "w3_ws_prefill"
+            )
+        else:
+            self.w1_prefill, self.w2_prefill, self.w3_prefill = self.w1, self.w2, self.w3
 
         # Default activation is SILU
         self.activation_type = (
@@ -158,9 +174,15 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
+        # Decode consumes the receiver-contiguous weights via the prefetcher GCB; prefill's direct
+        # matmuls need the width-sharded prefill copies (== self.wN for the worker / no-prefetcher).
+        w1_w = self.w1 if mode == Mode.DECODE else self.w1_prefill
+        w2_w = self.w2 if mode == Mode.DECODE else self.w2_prefill
+        w3_w = self.w3 if mode == Mode.DECODE else self.w3_prefill
+
         w1_out = ttnn.linear(
             x,
-            self.w1,
+            w1_w,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -173,7 +195,7 @@ class MLP(LightweightModule):
         )
         w3_out = ttnn.linear(
             x,
-            self.w3,
+            w3_w,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -291,14 +313,14 @@ class MLP(LightweightModule):
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
-                self.w2,
+                w2_w,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
             )
         else:
             w2_out = ttnn.linear(
                 w2_in,
-                self.w2,
+                w2_w,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
                 program_config=pc_2,

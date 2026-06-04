@@ -258,6 +258,11 @@ class PrefetcherSubDevice:
 
 
 class Prefetcher(LightweightModule):
+    # Worker-core prefetched weights are width-sharded, which both prefill's direct matmuls and
+    # the decode matmul accept — so no separate prefill weight copy is needed (unlike the
+    # receiver-contiguous DRAM-core path; see DramCorePrefetcher.uses_recv_contig).
+    uses_recv_contig: bool = False
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
