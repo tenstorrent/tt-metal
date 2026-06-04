@@ -25,9 +25,11 @@ from models.tt_transformers.tt.model_config import (
 from models.tt_transformers.tt.rope import HfRotarySetup, HfRotarySetupOld, get_rot_mats_hf
 
 
-def test_phi1_accuracy_uses_bf16_hifi4_attention_tensors():
+def test_phi1_accuracy_uses_bf16_tensors_with_hifi4_attention():
     opt = ModelOptimizations.accuracy("phi-1")
 
+    assert opt.tensor_dtype_settings[TensorGroup.FF1_FF3] == PrecisionSetting.BF16
+    assert opt.tensor_dtype_settings[TensorGroup.FF2] == PrecisionSetting.BF16
     assert opt.tensor_dtype_settings[TensorGroup.WQKV] == PrecisionSetting.BF16
     assert opt.tensor_dtype_settings[TensorGroup.KV_CACHE] == PrecisionSetting.BF16
     assert opt.tensor_dtype_settings[TensorGroup.WO] == PrecisionSetting.BF16

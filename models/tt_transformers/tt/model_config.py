@@ -156,6 +156,8 @@ class ModelOptimizations:
                 )
                 settings = {
                     "TensorPrecision": {
+                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                        TensorGroup.FF2: PrecisionSetting.BF16,
                         TensorGroup.WQKV: PrecisionSetting.BF16,
                         TensorGroup.KV_CACHE: PrecisionSetting.BF16,
                         TensorGroup.WO: PrecisionSetting.BF16,
