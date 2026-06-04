@@ -695,8 +695,7 @@ def test_embedding_perf_dp_2cq(mesh_device, per_device_batch):
 # D2H uses the optimized stack:
 #   untilize_with_unpadding (device, multicore)
 #   -> on-device copy into a persistent DRAM staging slot
-#   -> copy_device_to_host_tensor into a pre-allocated host_staging
-#   -> host_staging.batch_to_torch(dest, physical=True, n_threads=0)
+#   -> copy_device_to_torch (direct PCIe DMA into the pre-allocated torch tensor)
 #
 # H2D uses the existing copy_host_to_device_tensor pattern: pre-build the
 # 4 input ttnn tensors once on host, then per-iter overwrite the 4 device
@@ -749,8 +748,7 @@ def test_embedding_perf_h2d_forward_d2h(mesh_device, batch_size):
 
     Customer-facing perf report. No CQ-overlap. Pure sequential cost of
     each stage in a single-stream serving pipeline. Uses the optimized
-    D2H stack (untilize_with_unpadding + copy_device_to_host_tensor +
-    batch_to_torch(n_threads=0)).
+    D2H stack (untilize_with_unpadding + copy_device_to_torch).
     """
     dtype = ttnn.bfloat8_b
     device_name = determine_device_name(mesh_device)[0]
