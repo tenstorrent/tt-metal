@@ -36,3 +36,30 @@ reads are the two big exposed costs; fabric + gather/scatter are hidden. Ideas A
 read overlap. Each idea below: implement → correctness (PCC) → measure → keep if faster.
 
 ---
+
+## Idea A — decouple cos/sin reads from the input barrier (reader)
+
+Issue the input row first and barrier it alone (cos/sin not yet in flight) so
+compute's PRE starts immediately; issue cos/sin reads + their own barrier AFTER
+the input push, so cos/sin DRAM latency overlaps the PRE pass instead of gating
+it. Reader-only change (JIT, no rebuild).
+
+Correctness: fused-vs-baseline PCC = 1.000000 (worst 0.999997) — pure reorder,
+output unchanged. PASS.
+
+Perf (fused µs/iter, two runs, vs baseline):
+
+| config | baseline | A (run1/run2) | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 981.7 | 956.6 / 954.0 | **−2.8%** |
+| N9472 RoPE  | 497.4 | 497.3 / 495.7 | ~flat |
+| N2368 RoPE  | 244.1 | 230.2 / 230.5 | **−5.6%** |
+| N18944 no-rope | 592.7 | 592.8 / 591.9 | 0 (no cos/sin) |
+| N9472 no-rope  | 321.8 | 323.0 / 323.3 | noise |
+| N2368 no-rope  | 142.9 | 143.3 / 143.0 | noise |
+| L512 no-rope   | 64.3  | 64.6 / 64.7   | noise |
+
+Win on RoPE shapes (cos/sin reads partially hidden behind PRE), no-rope
+unaffected, no regressions. KEPT (committed). Doesn't fully reclaim the 25%
+cos/sin tax — the reader still serializes on the per-row cos/sin barrier; only
+compute's PRE overlaps it. Ideas B (dual-NoC) / C (deeper pipeline) target the rest.
