@@ -110,15 +110,15 @@ Record `needs_tracy: true` if `tracy: true` appears under the build-artifact `wi
 
 The source run must have produced artifacts matching the tracy requirement:
 
-- **`needs_tracy: false`**: Search for `Merge Gate` runs (they build without tracy).
-- **`needs_tracy: true`**: Merge Gate builds do NOT include tracy artifacts. Search for any completed nightly or CI run on that SHA that DID build with tracy. Check all successful runs on the SHA:
+- **`needs_tracy: false`**: Search for `Merge Gate` runs. Merge Gate builds with tracy (via `build-wrapper.yaml`), so its artifacts are a superset — compatible with both tracy and non-tracy workflows.
+- **`needs_tracy: true`**: Search for `Merge Gate` runs — they include tracy artifacts and are compatible.
 
 ```bash
 gh api "repos/tenstorrent/tt-metal/actions/runs?head_sha={sha}&per_page=100" \
   --jq '.workflow_runs[] | select(.conclusion == "success") | {id, name, created_at}'
 ```
 
-For `needs_tracy: false`, filter to `name == "Merge Gate"`. For `needs_tracy: true`, check any run that looks like it would have built with tracy (nightly workflows, APC, etc.).
+Filter to `name == "Merge Gate"` for both cases — Merge Gate builds with tracy via `build-wrapper.yaml` and is compatible with any workflow.
 
 ### 3c: Verify artifacts exist and are not expired
 
