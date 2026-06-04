@@ -70,7 +70,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -91,9 +93,9 @@ jobs:
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout: 20
-      run-fabric-tests: "true"
-      run-multiprocess-tests: "false"
-      run-ccl-tests: "false"
+      run-fabric-tests: 'true'
+      run-multiprocess-tests: 'false'
+      run-ccl-tests: 'false'
 
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:
@@ -101,7 +103,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

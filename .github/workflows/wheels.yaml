@@ -22,7 +22,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Commit SHA to test (default: HEAD)"
+        description: 'Commit SHA to test (default: HEAD)'
       enable-lto:
         required: false
         type: boolean
@@ -32,6 +32,7 @@ on:
       artifact-name:
         description: "Name to give download-artifact to get the Wheel"
         value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.artifact_name }}
+
 
 jobs:
   build-wheel:
@@ -91,7 +92,7 @@ jobs:
       - name: Set up Python 3.12
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
+          python-version: '3.12'
 
       - name: 🐍 Build wheel
         id: build-wheel
@@ -111,7 +112,7 @@ jobs:
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
-          CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+          CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
 
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'

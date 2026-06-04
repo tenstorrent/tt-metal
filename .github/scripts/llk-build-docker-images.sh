@@ -57,9 +57,7 @@ build_and_push() {
     local dockerfile=$2
     local on_main=$3
 
-    local prefixed_image="${HARBOR_PREFIX:-}${image_name}"
-
-    if docker manifest inspect "${prefixed_image}:${DOCKER_TAG}" > /dev/null 2>&1; then
+    if docker manifest inspect $image_name:$DOCKER_TAG > /dev/null 2>&1; then
         echo "Image $image_name:$DOCKER_TAG already exists"
 
         # If we're on main, update the latest tag even if the image exists
@@ -86,15 +84,9 @@ build_and_push() {
         tags="-t $image_name:$DOCKER_TAG"
     fi
 
-    local cache_from_flags=""
-    if [ -n "${HARBOR_PREFIX:-}" ]; then
-        cache_from_flags="--cache-from type=registry,ref=${prefixed_image}:${DOCKER_TAG}"
-    fi
-
     docker buildx build \
         --output type=image,compression=zstd,oci-mediatypes=true,push=true \
         --build-arg FROM_TAG=$DOCKER_TAG \
-        $cache_from_flags \
         $tags \
         -f $dockerfile \
         $LLK_PATH

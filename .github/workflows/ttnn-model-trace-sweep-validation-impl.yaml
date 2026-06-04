@@ -46,16 +46,12 @@ permissions:
   contents: read
   packages: write
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: Ubuntu 22.04
@@ -396,13 +392,13 @@ jobs:
 
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
-    needs: [check-harbor, build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.compute-sweep-matrix.outputs.matrix).include }}
     container:
-      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

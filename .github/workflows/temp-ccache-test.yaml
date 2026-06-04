@@ -4,17 +4,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       tracy: true
@@ -22,12 +17,13 @@ jobs:
       skip-tt-train: false
 
   ttnn-unit-tests:
-    needs: [check-harbor, build-artifact]
+    needs: build-artifact
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
     with:
-      enabled-skus: wh_n150_civ2
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      timeout-minutes-override: 45
+      timeout: 45
       merge-gate-call: false

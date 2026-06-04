@@ -84,8 +84,6 @@ permissions:
 run-name: "(Tier 2) Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -112,10 +110,8 @@ jobs:
           echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
@@ -128,7 +124,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}

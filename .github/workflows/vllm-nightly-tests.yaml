@@ -54,16 +54,12 @@ on:
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
   schedule:
-    - cron: "0 0 * * *" # This cron schedule runs the workflow every day at 12am UTC
+    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
@@ -72,11 +68,11 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   vllm-tests:
-    needs: [check-harbor, build-artifact]
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/vllm-nightly-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       vllm-commit: ${{ inputs.vllm-commit || 'dev' }}

@@ -25,7 +25,7 @@ on:
         default: false
         description: "If true, run only tests with test-type == fast; otherwise run all tests."
       enable-watcher:
-        description: "Enable watcher"
+        description: 'Enable watcher'
         default: false
         type: boolean
       enable-llk-asserts:
@@ -34,7 +34,7 @@ on:
         default: false
         description: "Enable LLK asserts"
       model:
-        description: "Filter tests by model-name (default: all)"
+        description: 'Filter tests by model-name (default: all)'
         required: false
         type: string
         default: "all"

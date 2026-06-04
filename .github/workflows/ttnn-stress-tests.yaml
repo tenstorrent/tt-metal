@@ -50,14 +50,9 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
@@ -66,13 +61,13 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   test:
-    needs: [check-harbor, build-artifact]
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
     with:
       arch: ${{ inputs.arch || 'wormhole_b0' }}
       runner-label: ${{ inputs.runner-label || 'N150' }}
       timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

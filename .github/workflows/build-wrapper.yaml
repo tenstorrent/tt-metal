@@ -59,11 +59,6 @@ on:
         type: number
         default: 500
         description: "Git fetch depth passed through to build-artifact"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor pull-through prefix for CI images (empty to use canonical refs)"
   workflow_dispatch:
     inputs:
       platform:
@@ -97,7 +92,6 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 permissions:
-  contents: read
   packages: write
 
 jobs:
@@ -109,20 +103,14 @@ jobs:
   # Platform parsing is handled by build-artifact.yaml internally.
   # =============================================================================
 
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
   # build-dispatch is for direct workflow_dispatch calls only
   build-dispatch:
-    needs: check-harbor
     if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -137,11 +125,9 @@ jobs:
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
   # or when called via workflow_call without the platform dropdown
   build:
-    needs: check-harbor
     if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     strategy:
@@ -165,7 +151,6 @@ jobs:
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}

@@ -16,7 +16,7 @@ on:
         type: string
         default: "in-service"
       single-card-demo:
-        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["resnet", "sdxl"]'
+        description: "Demo tests. Input 'all', 'disabled', or a list of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]"
         default: disabled
         type: string
       single-card-perf-models:
@@ -97,79 +97,67 @@ jobs:
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
   build-artifact:
-    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
+    needs: determine-tests
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       requested-models: ${{ inputs.trigger_type == 'manual' && inputs.single-card-demo || 'all' }}
       arch: wormhole_b0
   single-card-perf-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-models == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-perf-device-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-ttnn-models-frequent:
     if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   cpp-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0
       runner-label: tt-ubuntu-2204-n300-stable
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

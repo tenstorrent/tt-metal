@@ -40,13 +40,9 @@ on:
 run-name: "(Galaxy) Sanity"
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
-    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
     with:
@@ -56,10 +52,10 @@ jobs:
       build-wheel: true
 
   galaxy-sanity-test:
-    needs: [check-harbor, build-artifact]
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

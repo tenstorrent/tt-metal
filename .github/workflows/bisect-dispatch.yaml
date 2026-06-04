@@ -60,9 +60,6 @@ permissions:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
   determine-runner-config:
     runs-on: ubuntu-latest
     outputs:
@@ -102,11 +99,11 @@ jobs:
           echo "Determined arch: $ARCH_NAME"
 
   test-dispatch:
-    needs: [check-harbor, determine-runner-config]
+    needs: determine-runner-config
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:
-      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest') }}
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
       env:
         GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ needs.determine-runner-config.outputs.arch-name }}
@@ -115,8 +112,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        PYTHONFAULTHANDLER: 1 # prints Python stack trace on segfault
-        PYTHONMALLOC: debug # adds checks, helps catch memory issues
+        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
+        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161

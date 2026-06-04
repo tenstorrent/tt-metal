@@ -143,8 +143,6 @@ on:
 
 run-name: T3000 ${{ inputs.trigger_type == 'manual' && 'custom' || inputs.trigger_type }} pipeline
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
     runs-on: ubuntu-latest
@@ -186,87 +184,77 @@ jobs:
               ;;
           esac
   build-artifact:
-    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      contents: read
       packages: write
     secrets: inherit
+    needs: determine-tests
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   t3000-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-unit || 'all' }}
   t3000-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox_perf"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-demo || 'all' }}
   t3000-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-perf == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-perf-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox_perf"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-perf || 'all' }}
   t3000-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.t3000-integration || 'all' }}
   t3000-e2e-tests:
     if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-e2e-tests-impl.yaml
     with:
       enabled-skus: "wh_llmbox"
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-profiler-tests:
     if: ${{ needs.determine-tests.outputs.run-profiler == 'true' }}
-    needs: [resolve-docker-pull-refs, build-artifact, determine-tests]
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

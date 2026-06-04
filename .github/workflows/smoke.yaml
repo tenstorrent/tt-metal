@@ -6,10 +6,6 @@ on:
       docker-image:
         required: true
         type: string
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
       package-artifact-name:
         required: true
         type: string
@@ -28,7 +24,7 @@ on:
         type: boolean
         default: false
       enable-watcher:
-        description: "Enable watcher"
+        description: 'Enable watcher'
         default: false
         type: boolean
 
@@ -37,7 +33,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -177,9 +173,9 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: ${{ !cancelled() && inputs.upload-coverage && (
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
-          || (github.event_name == 'push' && github.ref_name == 'main')
-          ) }}
+              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
+              || (github.event_name == 'push' && github.ref_name == 'main')
+            ) }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
