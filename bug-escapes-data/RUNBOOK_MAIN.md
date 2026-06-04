@@ -124,7 +124,23 @@ In `just_find_one` mode: target is always 1, and the subagent stops after the fi
 
 ### 3. Interpret Find Agent Output
 
-For each finding in `findings[]`:
+**Immediately DM @ebanerjeeTT** with all candidates returned, before doing anything else:
+
+```
+🔍 Find agent returned {N} candidate(s):
+
+1. {escape_id} — {test_name}
+   Layer: L{test_layer} test / L{fix_layer} fix ({vertical|horizontal})
+   Fix commit: {fix_commit_sha[:8]} — {fix_commit_message[:80]}
+   Action: {action_required}
+   Hardware: {hardware} ({architecture})
+
+2. ...
+```
+
+If the find agent returned zero candidates, DM that too: "Find agent returned 0 candidates."
+
+Then for each finding in `findings[]`:
 
 1. Check `seen-escapes.json` — if escape_id present, skip.
 2. Write candidate to campaign-state.json with `status: "opus_classified"`.
@@ -158,7 +174,18 @@ For multi-card hardware (T3K, Galaxy): only one verify agent at a time per machi
 
 ### 5. Interpret Verify Agent Output
 
-The verify agent returns a verdict JSON. Based on `verdict`:
+**Immediately DM @ebanerjeeTT** with the probe URLs as soon as the verdict JSON arrives (probes were already dispatched by the verify agent):
+
+```
+🧪 Probes dispatched for {escape_id} — {test_name}
+
+BEFORE: {before_run_url}
+AFTER:  {after_run_url}
+
+Verdict: {verdict}
+```
+
+Then act on the verdict:
 
 | `verdict` | Action |
 |---|---|
