@@ -317,7 +317,7 @@
     exit $exit_code
   skus:
     bh_llmbox:
-      timeout: 26
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -369,6 +369,6 @@
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
