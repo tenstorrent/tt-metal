@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marrying the two precompile mechanisms — Plan</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --border:#30363d;
+    --fg:#e6edf3; --muted:#9da7b3; --accent:#58a6ff; --accent2:#79c0ff;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --purple:#bc8cff;
+    --add:#1b3a2b; --del:#3a1b1f; --code:#0b0f14;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1040px;margin:0 auto;padding:40px 28px 120px;}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px;letter-spacing:-.5px}
+  h2{font-size:22px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+  h3{font-size:17px;margin:28px 0 10px;color:var(--accent2)}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 8px}
+  p{margin:12px 0}
+  code{font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    font-size:12.5px;background:#21262d;border:1px solid var(--border);border-radius:5px;
+    padding:1px 6px;color:var(--accent2);white-space:nowrap}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;overflow-x:auto;margin:14px 0;line-height:1.55}
+  pre code{background:none;border:none;padding:0;color:#c9d1d9;white-space:pre;font-size:12.5px}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.3px;
+    padding:2px 9px;border-radius:20px;vertical-align:middle}
+  .t-mech1{background:rgba(188,140,255,.15);color:var(--purple);border:1px solid rgba(188,140,255,.35)}
+  .t-mech2{background:rgba(88,166,255,.13);color:var(--accent);border:1px solid rgba(88,166,255,.35)}
+  .t-change{background:rgba(63,185,80,.13);color:var(--green);border:1px solid rgba(63,185,80,.35)}
+  .t-nochange{background:rgba(157,167,179,.12);color:var(--muted);border:1px solid var(--border)}
+  .t-cpp{background:rgba(210,153,34,.13);color:var(--amber);border:1px solid rgba(210,153,34,.35)}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.5px}
+  th,td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:600}
+  td code{font-size:12px;white-space:normal}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:4px 20px 18px;margin:18px 0}
+  .card h3{margin-top:18px}
+  .filehdr{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 2px}
+  .filehdr .path{font-family:"SF Mono",monospace;font-size:13px;color:var(--fg);font-weight:600}
+  .lead{border-left:3px solid var(--accent);background:var(--panel2);
+    padding:10px 16px;border-radius:0 8px 8px 0;margin:14px 0;color:#cdd5de}
+  .warn{border-left:3px solid var(--amber);background:rgba(210,153,34,.07)}
+  .danger{border-left:3px solid var(--red);background:rgba(248,81,73,.06)}
+  .ok{border-left:3px solid var(--green);background:rgba(63,185,80,.06)}
+  .diff-add{color:#7ee787} .diff-del{color:#ff7b72} .cmt{color:#8b949e} .kw{color:#ff7b72}
+  .str{color:#a5d6ff} .fn{color:#d2a8ff} .num{color:#79c0ff}
+  ul{margin:10px 0;padding-left:22px} li{margin:5px 0}
+  .toc{columns:2;column-gap:30px;font-size:13.5px;background:var(--panel);
+    border:1px solid var(--border);border-radius:10px;padding:14px 22px}
+  .toc a{color:var(--accent);text-decoration:none} .toc a:hover{text-decoration:underline}
+  .pill{font-size:11px;color:var(--muted)}
+  .flow{font-family:"SF Mono",monospace;font-size:12px;line-height:1.5;
+    background:var(--code);border:1px solid var(--border);border-radius:10px;padding:16px;overflow-x:auto}
+  .kbd{color:var(--purple);font-weight:600}
+  hr{border:none;border-top:1px solid var(--border);margin:28px 0}
+  .meta{color:var(--muted);font-size:13px}
+  a.ref{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Marrying the two precompile mechanisms</h1>
+<p class="sub">Drive the op-agnostic <b>C++ collector</b> (mechanism&nbsp;#1) across the
+<b>cross-parametrization</b> session that the eval plugin already walks (mechanism&nbsp;#2) —
+so a cold golden run warms <em>every op of every case</em>, not just the first <code>generic_op</code>.</p>
+<p class="meta">Branch <code>mstaletovic/precompile_marriage</code> &nbsp;·&nbsp; both mechanisms now co-located + built green &nbsp;·&nbsp; 2026-06-04</p>
+
+<div class="toc">
+  <a href="#why">1 · What we're marrying &amp; why</a><br>
+  <a href="#key">2 · The mechanic that shapes the design</a><br>
+  <a href="#files">3 · The most important files</a><br>
+  <a href="#changes">4 · The changes, file by file</a><br>
+  <a href="#flow">5 · End-to-end flow after the change</a><br>
+  <a href="#validate">6 · Validation plan</a><br>
+  <a href="#risks">7 · Risks &amp; how each is handled</a><br>
+  <a href="#phase2">8 · Phase 2 — arbitrary ttnn tests</a><br>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="why">1 · What we're marrying &amp; why</h2>
+
+<p>Two collectors exist today. They share one architecture
+(<em>collect distinct programs → dedup by structural hash → parallel compile</em>) on
+<b>orthogonal axes</b>:</p>
+
+<table>
+<tr><th>Mechanism</th><th>Axis it covers</th><th>How it captures</th><th>Blind spot</th></tr>
+<tr>
+  <td><span class="tag t-mech2">#2</span> eval plugin<br><span class="pill">cross-parametrization</span></td>
+  <td>One <code>generic_op</code> program per case, across <b>all parametrizations</b> of a suite</td>
+  <td>Monkey-patches Python <code>ttnn.generic_op</code>, grabs the <code>ProgramDescriptor</code>, <b>raises to abort</b> before the body continues</td>
+  <td>Captures only the <b>first</b> <code>generic_op</code> per body; <b>blind</b> to multi-op bodies &amp; C++ ProgramDescriptor-migrated ops</td>
+</tr>
+<tr>
+  <td><span class="tag t-mech1">#1</span> C++ collector<br><span class="pill">cross-op, one run</span></td>
+  <td><b>Every</b> op of a single run (a model forward)</td>
+  <td>Hooks the universal device-op funnel under <b>NO_DISPATCH</b>; stashes each built workload, op-agnostic</td>
+  <td>Driven over <b>one</b> invocation only — no notion of a parametrized test session</td>
+</tr>
+</table>
+
+<div class="lead">
+<b>The marriage:</b> keep mechanism&nbsp;#2's <em>driver</em> (it already enumerates every eligible
+case of a parametrized golden suite and re-invokes each body on its own device), but replace its
+<em>capture engine</em> — the one-op Python intercept — with mechanism&nbsp;#1's op-agnostic C++
+collector. Result: <b>all ops of all cases</b> are stashed and deduped, including multi-op bodies and
+migrated ops, then compiled once in parallel.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="key">2 · The mechanic that shapes the design</h2>
+
+<p>While wiring the port I read the collector's lifecycle carefully. One detail drives the whole design:
+<b><code>begin_collect()</code> calls <code>clear()</code></b> — so it must wrap the <em>whole</em> loop, not each case.</p>
+
+<div class="filehdr"><span class="path">ttnn/core/up_front_compile.cpp</span><span class="pill">:78–91</span></div>
+<pre><code><span class="kw">void</span> <span class="fn">begin_collect</span>() {
+    ProgramCollector::instance().<span class="fn">clear</span>();          <span class="cmt">// ← wipes anything already collected</span>
+    ProgramCollector::<span class="fn">set_active</span>(<span class="kw">true</span>);            <span class="cmt">// per-thread flag the funnel checks</span>
+    ttnn::graph::GraphProcessor::<span class="fn">begin_graph_capture</span>(IGraphProcessor::RunMode::NO_DISPATCH);
+}
+<span class="kw">void</span> <span class="fn">end_collect</span>() {
+    ttnn::graph::GraphProcessor::<span class="fn">end_graph_capture</span>();  <span class="cmt">// discard JSON graph; only used NO_DISPATCH for alloc-blocking</span>
+    ProgramCollector::<span class="fn">set_active</span>(<span class="kw">false</span>);
+}</code></pre>
+
+<p>The collector itself is a <b>process-global singleton</b> that dedups by program hash
+(<code>try_emplace</code>, first-wins) and only resets on <code>clear()</code>:</p>
+
+<div class="filehdr"><span class="path">ttnn/core/up_front_compile.cpp</span><span class="pill">:38–48</span></div>
+<pre><code><span class="kw">void</span> ProgramCollector::<span class="fn">collect</span>(<span class="kw">uint64_t</span> program_hash, MeshWorkload&& workload) {
+    std::lock_guard lk(mutex_);
+    ++total_collected_;
+    <span class="kw">uint64_t</span> key = program_hash != <span class="num">0</span> ? program_hash : (UINT64_MAX - synthetic_key_++);
+    programs_.<span class="fn">try_emplace</span>(key, std::move(workload));   <span class="cmt">// ← dedup; structural duplicates dropped</span>
+}</code></pre>
+
+<div class="lead ok">
+<b>Consequence (and why it's clean):</b> to accumulate across <em>N</em> cases I issue
+<span class="kbd">one</span> <code>begin_collect()</code> → run all <em>N</em> dispatchers → <span class="kbd">one</span>
+<code>end_collect()</code> → <span class="kbd">one</span> <code>up_front_compile()</code>. The eval
+plugin <b>already</b> runs all dispatchers in a controlled loop on its <em>own</em> device. So the
+NO_DISPATCH window is fully contained inside the plugin's re-invocation loop — it never spans pytest's
+device-fixture setup/teardown, which neatly dodges the session-lifecycle risk the design doc flagged.
+<b>No new C++ and no new binding are needed for Phase&nbsp;1.</b>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="files">3 · The most important files</h2>
+
+<table>
+<tr><th>File</th><th>Role</th><th>Phase 1</th></tr>
+<tr><td><code>.claude/eval/precompile.py</code><br><span class="pill">= tt_ops_code_gen/eval/precompile.py</span></td>
+    <td>Mechanism&nbsp;#2 engine: <code>intercept_generic_op</code>, <code>capture_descriptor</code>, <code>collect_and_compile</code></td>
+    <td><span class="tag t-change">add fn</span> new <code>collect_and_compile_cpp()</code> alongside the existing one</td></tr>
+<tr><td><code>.claude/eval/precompile_plugin.py</code></td>
+    <td>Pytest glue: <code>_eligible</code>, <code>_make_dispatch</code>, <code>run_precompile</code> (opens device, calls the engine)</td>
+    <td><span class="tag t-change">route</span> new env <code>EVAL_PRECOMPILE_COLLECTOR=py|cpp</code> selects the engine</td></tr>
+<tr><td><code>.claude/eval/golden_tests/conftest.py</code></td>
+    <td>Registers <code>run_precompile</code> as the <code>pytest_collection_finish</code> hook</td>
+    <td><span class="tag t-nochange">no change</span></td></tr>
+<tr><td><code>ttnn/api/ttnn/up_front_compile.hpp</code><br><code>ttnn/core/up_front_compile.cpp</code></td>
+    <td>Mechanism&nbsp;#1 collector + <code>parallel_compile</code> (the C++ we just ported)</td>
+    <td><span class="tag t-nochange">no change</span> <span class="pill">reused as-is</span></td></tr>
+<tr><td><code>ttnn/api/ttnn/device_operation.hpp</code></td>
+    <td>The +13-line collect hook in <code>create_and_cache_mesh_workload</code> (the universal funnel)</td>
+    <td><span class="tag t-nochange">no change</span> <span class="pill">already wired</span></td></tr>
+<tr><td><code>ttnn/core/graph/graph_nanobind.cpp</code> · <code>ttnn/ttnn/graph.py</code></td>
+    <td>The 6 <code>ttnn.graph.up_front_*</code> Python bindings</td>
+    <td><span class="tag t-nochange">no change</span> <span class="pill">callable now</span></td></tr>
+</table>
+
+<p class="meta">The bindings, confirmed present &amp; importable after the build:</p>
+<div class="filehdr"><span class="path">ttnn/ttnn/graph.py</span><span class="pill">:33–39 (re-export from ttnn._ttnn.graph)</span></div>
+<pre><code>    <span class="cmt"># Tier-1 up-front parallel precompile (ttnn/up_front_compile.hpp)</span>
+    up_front_begin_collect,   up_front_end_collect,
+    up_front_num_unique,      up_front_num_collected,
+    up_front_clear,           up_front_compile,   <span class="cmt"># (device, max_workers=0, clear=True) -> (n_programs, n_errors, workers, wall_s)</span></code></pre>
+
+<!-- ============================================================ -->
+<h2 id="changes">4 · The changes, file by file</h2>
+
+<!-- ---------- precompile.py ---------- -->
+<div class="card">
+<div class="filehdr"><span class="tag t-change">CHANGE</span><span class="path">.claude/eval/precompile.py</span></div>
+
+<h3>What's there today <span class="tag t-mech2">#2</span></h3>
+<p>The capture intercepts the first <code>generic_op</code> and <b>raises</b> to abort the body —
+deliberately so the post-op reshape/verify never runs (precompile.py:55–82):</p>
+<pre><code><span class="kw">def</span> <span class="fn">_capture</span>(tensors, program_descriptor):
+    <span class="kw">raise</span> _Captured(program_descriptor)          <span class="cmt"># grab descriptor, abort the op immediately</span>
+ttnn.generic_op = _capture
+<span class="cmt"># ...</span>
+<span class="kw">def</span> <span class="fn">capture_descriptor</span>(dispatch):
+    <span class="kw">with</span> intercept_generic_op():
+        <span class="kw">try</span>: dispatch()
+        <span class="kw">except</span> _Captured <span class="kw">as</span> c: <span class="kw">return</span> c.descriptor   <span class="cmt"># exactly ONE descriptor, then stop</span>
+    <span class="kw">return</span> <span class="kw">None</span>                                       <span class="cmt"># body never called generic_op → "skip me"</span></code></pre>
+<p>…and <code>collect_and_compile</code> (precompile.py:115–207) loops that per case, hashes via
+<code>ttnn.compute_program_descriptor_hash</code>, dedups, and parallel-compiles each descriptor with
+<code>ttnn.precompile_program_descriptor</code> in a <code>ThreadPoolExecutor</code>.</p>
+
+<h3>What I'll add <span class="tag t-cpp">marriage path</span></h3>
+<p>A sibling function that runs each body <b>to completion</b> under <b>one</b> NO_DISPATCH window, letting
+the C++ collector stash <em>all</em> ops. Same <code>PrecompileResult</code>, same best-effort contract.</p>
+<pre><code><span class="kw">def</span> <span class="fn">collect_and_compile_cpp</span>(device, dispatchers, *, max_workers=<span class="kw">None</span>, progress=<span class="num">0</span>):
+    <span class="str">"""Marriage path: drive mechanism #1's op-agnostic C++ collector across
+    mechanism #2's dispatcher set. Unlike capture_descriptor() (first generic_op,
+    then abort), each body runs fully under ONE NO_DISPATCH collect window, so
+    EVERY op it dispatches — multiple ops per body, AND C++-migrated ops the
+    Python intercept can't see — is stashed and deduped by the device program
+    hash. begin_collect() clears, so it wraps the whole loop, not each case."""</span>
+    res = PrecompileResult(num_cases=<span class="fn">len</span>(dispatchers))
+    <span class="kw">if not</span> dispatchers:
+        res.skipped_reason = <span class="str">"no cases"</span>; <span class="kw">return</span> res
+
+    t0 = time.perf_counter()
+    ttnn.graph.<span class="fn">up_front_begin_collect</span>()                  <span class="cmt"># clear + NO_DISPATCH + active  (ONCE)</span>
+    <span class="kw">try</span>:
+        <span class="kw">for</span> i, dispatch <span class="kw">in</span> <span class="fn">enumerate</span>(dispatchers):
+            c0 = time.perf_counter()
+            <span class="kw">try</span>:
+                dispatch()                              <span class="cmt"># body runs; ops stash; addr-0 readback at the end fails</span>
+            <span class="kw">except</span> Exception:
+                res.num_capture_errors += <span class="num">1</span>             <span class="cmt"># EXPECTED: to_torch()/assert on a mocked output</span>
+            res.capture_case_ms.<span class="fn">append</span>((time.perf_counter() - c0) * <span class="num">1000.0</span>)
+            <span class="kw">if</span> progress <span class="kw">and</span> (i + <span class="num">1</span>) % progress == <span class="num">0</span>:
+                <span class="fn">print</span>(<span class="str">f"  precompile[cpp]: ran {i+1}/{len(dispatchers)}, "</span>
+                      <span class="str">f"{ttnn.graph.up_front_num_unique()} unique"</span>, flush=<span class="kw">True</span>)
+    <span class="kw">finally</span>:
+        ttnn.graph.<span class="fn">up_front_end_collect</span>()                <span class="cmt"># stop NO_DISPATCH + deactivate  (ONCE)</span>
+
+    res.num_captured = ttnn.graph.<span class="fn">up_front_num_collected</span>()  <span class="cmt"># all stashed ops (pre-dedup)</span>
+    res.num_unique   = ttnn.graph.<span class="fn">up_front_num_unique</span>()
+    res.collect_ms   = (time.perf_counter() - t0) * <span class="num">1000.0</span>
+    <span class="kw">if</span> res.num_unique == <span class="num">0</span>:
+        res.skipped_reason = <span class="str">"no programs collected"</span>; <span class="kw">return</span> res
+
+    <span class="kw">if</span> max_workers <span class="kw">is</span> <span class="kw">None</span>: max_workers = <span class="fn">default_workers</span>()
+    t1 = time.perf_counter()
+    n_prog, n_err, used, wall = ttnn.graph.<span class="fn">up_front_compile</span>(device, max_workers, <span class="kw">True</span>)
+    res.compile_ms = (time.perf_counter() - t1) * <span class="num">1000.0</span>   <span class="cmt"># GIL released inside → real parallel JIT</span>
+    <span class="kw">if</span> n_err: res.compile_errors = [<span class="str">f"{n_err} program(s) failed to compile"</span>]
+    <span class="kw">return</span> res</code></pre>
+<p class="meta">Tiny dataclass tweak: <code>num_captured</code> is reused for "ops stashed"; no new field strictly needed
+(I may add an explicit <code>num_collected</code> for clarity). The existing <code>collect_and_compile</code>
+(<span class="tag t-mech2">#2</span>) stays untouched as the default + the parity baseline.</p>
+</div>
+
+<!-- ---------- precompile_plugin.py ---------- -->
+<div class="card">
+<div class="filehdr"><span class="tag t-change">CHANGE</span><span class="path">.claude/eval/precompile_plugin.py</span></div>
+<p>Only the <b>engine selection</b> changes. <code>_eligible</code>, <code>_make_dispatch</code>, the device
+open/close, and the worker cap are all reused verbatim. The device handle from
+<code>ttnn.CreateDevice</code> is exactly what <code>up_front_compile(device, …)</code> expects (same
+<code>MeshDevice*</code> the existing <code>precompile_program_descriptor</code> already takes).</p>
+
+<div class="filehdr"><span class="path">run_precompile()</span><span class="pill">precompile_plugin.py:124–131, today</span></div>
+<pre><code>    device = ttnn.<span class="fn">CreateDevice</span>(device_id=device_id)
+    dispatchers = [<span class="fn">_make_dispatch</span>(it.function, it.callspec.params, device) <span class="kw">for</span> it <span class="kw">in</span> items]
+    res = precompile.<span class="fn">collect_and_compile</span>(device, dispatchers, max_workers=max_workers,
+                                       progress=<span class="num">500</span>, capture_only=capture_only)</code></pre>
+
+<div class="filehdr"><span class="path">proposed</span></div>
+<pre><code>    <span class="diff-add">collector = os.environ.get(<span class="str">"EVAL_PRECOMPILE_COLLECTOR"</span>, <span class="str">"py"</span>).lower()   # py = mech #2 (default), cpp = marriage</span>
+    device = ttnn.<span class="fn">CreateDevice</span>(device_id=device_id)
+    dispatchers = [<span class="fn">_make_dispatch</span>(it.function, it.callspec.params, device) <span class="kw">for</span> it <span class="kw">in</span> items]
+    <span class="diff-add">if collector == <span class="str">"cpp"</span>:</span>
+        <span class="diff-add">res = precompile.<span class="fn">collect_and_compile_cpp</span>(device, dispatchers, max_workers=max_workers, progress=<span class="num">500</span>)</span>
+    <span class="diff-add">else:</span>
+        res = precompile.<span class="fn">collect_and_compile</span>(device, dispatchers, max_workers=max_workers,
+                                           progress=<span class="num">500</span>, capture_only=capture_only)</code></pre>
+<p class="meta">Opt-in &amp; reversible: default <code>py</code> is byte-for-byte today's behavior. The whole pass is still
+gated by <code>EVAL_PRECOMPILE=1</code> and remains best-effort (any failure is logged &amp; swallowed,
+so it can never break the run it's warming).</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="flow">5 · End-to-end flow after the change</h2>
+<div class="flow">
+EVAL_PRECOMPILE=1  <span class="kbd">EVAL_PRECOMPILE_COLLECTOR=cpp</span>  run_safe_pytest.sh --run-all test_golden.py
+        │
+        ▼  pytest collects every test_op[...]  →  session.items
+   pytest_collection_finish  →  run_precompile(session)         <span class="cmt">(conftest.py)</span>
+        │   keep eligible (not skip/xfail) · _make_dispatch → zero-arg lambdas · CreateDevice(0)
+        ▼  collect_and_compile_cpp(device, dispatchers)
+        │
+        │   up_front_begin_collect()            <span class="cmt">── clear + NO_DISPATCH + active (once)</span>
+        │   for dispatch in dispatchers:
+        │       dispatch()  ──►  body builds tensors (addr-0), runs <b>every</b> op
+        │                        device-op funnel stashes each workload, deduped by hash
+        │                        post-op to_torch()/assert on addr-0 raises → swallowed
+        │   up_front_end_collect()              <span class="cmt">── stop NO_DISPATCH (once)</span>
+        │
+        │   up_front_compile(device, workers)   <span class="cmt">── parallel JIT, GIL released, warms TT_METAL_CACHE</span>
+        │   ttnn.close_device(device)
+        ▼
+   pytest executes the bodies for real  →  every kernel is a warm on-disk cache hit
+</div>
+
+<!-- ============================================================ -->
+<h2 id="validate">6 · Validation plan</h2>
+<ul>
+<li><b>Parity (correctness).</b> Run the groupnorm golden suite with <code>COLLECTOR=cpp</code> vs the
+existing <code>py</code> path. Groupnorm is pure single-<code>generic_op</code>, so both must yield the
+<b>same unique-program count (~2948)</b> and <b>identical outcomes</b> (140 / 2808 / 3552 / 737). This is
+the go/no-go check that the C++ collector sees the same set.</li>
+<li><b>The win (coverage).</b> Point it at a <b>multi-op</b> test body (or a C++-migrated op). The
+<code>cpp</code> path captures all ops; the <code>py</code> path captures only the first
+<code>generic_op</code>. Show <code>num_unique(cpp) &gt; num_unique(py)</code> with the extra programs warmed.</li>
+<li><b>Robustness.</b> Confirm running each body to completion under NO_DISPATCH doesn't hang / OOM /
+hard-crash on the <code>to_torch()</code>+<code>assert</code> post-amble; report the swallow rate
+(<code>num_capture_errors</code>) — high is expected and benign.</li>
+<li><b>Speed.</b> Compare compile-phase + total wall vs the <code>py</code> baseline (should match;
+this is a capture-engine swap, not a compile change). Optionally re-confirm on the remote farm.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="risks">7 · Risks &amp; how each is handled</h2>
+<table>
+<tr><th>Risk</th><th>Handling</th></tr>
+<tr><td><b>Bodies fail after the ops</b> — the body ends with <code>to_torch()</code>+<code>assert_with_pcc</code> on an addr-0 output.</td>
+    <td>Each <code>dispatch()</code> is wrapped in <code>try/except</code> and the failure is counted, not propagated — the programs were already stashed by the funnel <em>before</em> the readback. (Mechanism&nbsp;#2 sidesteps this by raising early; we instead let it run and swallow.)</td></tr>
+<tr><td><b>Mid-body readback / value-dependent branching</b> — a body that reads a tensor back <em>between</em> ops, or branches on values, breaks under addr-0.</td>
+    <td>Graceful degradation: we capture the ops <em>before</em> that point; the rest compile cold in the real run. Golden bodies are straight-line, so this is a Phase-2 concern (arbitrary tests), not Phase-1.</td></tr>
+<tr><td><b>Device-fixture lifecycle under NO_DISPATCH</b> (the design doc's main worry).</td>
+    <td><b>Avoided entirely in Phase 1:</b> the NO_DISPATCH window lives inside the plugin's own re-invocation loop on its own device, opened/closed in <code>run_precompile</code> — it never spans pytest's per-test fixture setup/teardown.</td></tr>
+<tr><td><b>Memory across many bodies in one window.</b></td>
+    <td>NO_DISPATCH mocks allocations (addr 0) → no real device memory accrues; the singleton holds built-but-uncompiled workloads keyed by hash (deduped). Worker cap stays at <code>min(cpus,4)</code> (the <code>-flto</code> link OOM guard) unless <code>EVAL_PRECOMPILE_WORKERS</code> raises it.</td></tr>
+<tr><td><b>hash==0 (cache disabled)</b> would collapse distinct programs.</td>
+    <td>Collector already falls back to a unique synthetic key per program (up_front_compile.cpp:45) — correctness over dedup. We run with the program cache enabled regardless.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="phase2">8 · Phase 2 — generalize to arbitrary ttnn tests</h2>
+<p>Phase&nbsp;1 reuses mechanism&nbsp;#2's <b>re-invocation</b> (<code>func(device=device, **params)</code>),
+which only works because golden tests share a uniform signature. Arbitrary ttnn tests use many fixtures
+and can't be hand-invoked. The full vision in
+<a class="ref" href="CROSS_PARAM_PRECOMPILE_DESIGN.md">CROSS_PARAM_PRECOMPILE_DESIGN.md</a> hooks the
+<b>call phase</b> instead, so pytest resolves fixtures normally:</p>
+<pre><code><span class="nd">@pytest.hookimpl</span>(hookwrapper=<span class="kw">True</span>)        <span class="cmt"># Phase 2 — needs a "begin without clear" path</span>
+<span class="kw">def</span> <span class="fn">pytest_runtest_call</span>(item):
+    ttnn.graph.<span class="fn">up_front_begin_collect</span>()      <span class="cmt"># (or a no-clear variant, since begin clears)</span>
+    <span class="kw">try</span>: <span class="kw">yield</span>                            <span class="cmt"># pytest runs the body WITH fixtures; ops captured</span>
+    <span class="kw">except</span> Exception: <span class="kw">pass</span>
+    <span class="kw">finally</span>: ttnn.graph.<span class="fn">up_front_end_collect</span>()
+
+<span class="kw">def</span> <span class="fn">pytest_sessionfinish</span>(session):
+    ttnn.graph.<span class="fn">up_front_compile</span>(device, max_workers=N)</code></pre>
+<div class="lead warn">
+Phase&nbsp;2 needs two things Phase&nbsp;1 doesn't: (a) a <b>begin-without-clear</b> entry point (or a
+session-wide single <code>begin</code>), because today's <code>begin_collect()</code> clears each call;
+and (b) a <b>two-pass</b> runner (collect pass → one compile → warm pass) sharing <code>TT_METAL_CACHE</code>,
+since pytest runs each test once. That's a small new C++/binding + a runner — deferred until Phase&nbsp;1
+proves the capture-engine swap on real suites.
+</div>
+
+<h3>Two execution-state limits to exclude in Phase&nbsp;2 <span class="pill">detail in MODEL_PRECOMPILE_DESIGN.md §8.1</span></h3>
+<p>Shared root cause: <b>NO_DISPATCH reproduces program <em>structure</em>, but nothing that depends on real
+device <em>execution</em></b> — buffers are mocked at addr&nbsp;0 (<code>hook_allocate</code>) and dispatch is
+blocked (<code>hook_program</code>). Both degrade <b>gracefully</b> (a cold recompile, never a wrong result),
+and <b>neither touches the <code>generic_op</code> groupnorm marriage</b>.</p>
+<table>
+<tr><th>Limit</th><th>What happens under collect</th><th>Phase&nbsp;2 handling</th></tr>
+<tr>
+  <td><b>Ops that pick their program from <em>live allocator state</em></b> — the "L1-saving vs fast path" decision via <code>lowest_occupied_compute_l1_address()</code> / <code>get_statistics(L1)</code> (matmul <code>get_max_l1_space</code>, generic reduction, transpose, topk, conv…).</td>
+  <td>Nothing is really allocated → that query returns <code>nullopt</code> all pass → op sees <b>empty/full L1</b> → biased to the fast path. A real run under L1 pressure may build a <em>different</em> program → the precompiled variant is a <b>cold miss</b> for that op.</td>
+  <td>Accept the cold-recompile fallback. Not a new risk — the program cache already keys on attrs+specs, not live L1 (<code>device_operation.hpp:399</code>).</td>
+</tr>
+<tr>
+  <td><b>Tests that drive trace / graph capture</b> — ~39 trace + ~6 graph in ttnn (matmul/CCL), and tilize's <code>test_deepseek_v3_mla_tilize_trace_mode</code>.</td>
+  <td>NO_DISPATCH blocks the real dispatch + trace-buffer alloc → empty/invalid trace → <code>execute_trace</code> errors; can leave CQ/trace state that <b>poisons a shared collect window</b>. Graph capture nests as a stack with an install-once hook.</td>
+  <td><b>Detect &amp; skip</b> (≈45 of thousands; they already compile in their warmup, so lose ~nothing). <b>Phase&nbsp;1 is safe by construction</b>: <code>_eligible</code> only re-invokes <code>test_op(inputs,&nbsp;axes,&nbsp;device)</code>, which excludes capture-driving bodies. Correct pattern: run collect <em>before</em> a trace region, never wrap it.</td>
+</tr>
+</table>
+
+<hr>
+<p class="meta">Phase 1 footprint: <b>2 files</b> in the eval submodule (one new function + one routing branch),
+<b>zero</b> C++ changes (mechanism&nbsp;#1 reused as-is), fully opt-in behind
+<code>EVAL_PRECOMPILE_COLLECTOR=cpp</code>. Anchors: precompile.py · precompile_plugin.py ·
+up_front_compile.{hpp,cpp} · graph_nanobind.cpp · device_operation.hpp · CROSS_PARAM_PRECOMPILE_DESIGN.md.</p>
+
+</div>
+</body>
+</html>

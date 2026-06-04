@@ -154,6 +154,37 @@ Recommend shipping Tier 1; treat Tier 2 as a later optimization only if profilin
 - **Mesh/multi-device:** compiling for `devices[0]` warms the whole homogeneous mesh (one `build_key`), per the `precompile_program_descriptor` comment in the eval binding. Confirm for heterogeneous meshes.
 - **Address-0 correctness:** safe for compile and hashing (both structural/address-free); do **not** attempt to enqueue a collect-mode workload.
 
+## 8.1 Execution-state dependence — two hard limits (verified against the source, 2026-06-04)
+
+Both limits below share **one root cause: NO_DISPATCH faithfully reproduces program *structure*, but nothing that depends on real device *execution*.** Under NO_DISPATCH the capture hook mocks every buffer at address 0 (`ProcessorHooks::hook_allocate` returns `do_block`, set true for NO_DISPATCH — `graph_processor.cpp:884,694`) and blocks dispatch (`hook_program` — `:900`). So any program *selection* or test *logic* that reads back the live runtime state of the device diverges from a real run. Both degrade **gracefully** (a cold recompile, never a wrong result — the on-disk kernel cache is content-addressed and the real run always rebuilds the program it actually needs), and both are **Phase-2 / whole-model concerns that do not affect the `generic_op` golden marriage**.
+
+### (a) Ops that select their program from *live allocator state*
+
+Some ops branch their program on how much L1 is currently free — exactly the "L1-saving path vs fast path" decision. They read it via `device->lowest_occupied_compute_l1_address()` or `allocator()->get_statistics(L1)`:
+
+- `matmul/device/utilities/matmul_utilities.cpp:76-82` (`get_max_l1_space`): `auto lowest = device->lowest_occupied_compute_l1_address(); max_l1 = lowest.has_value() ? lowest.value() : device->l1_size_per_core();`
+- `reduction/generic/device/common.cpp:215-223`: same idiom, returning `negate_cb_bytes <= max_l1_space` to pick a reduction strategy.
+- Also: `transpose.cpp:147`, `data_movement/common/common.cpp:431`, `topk` (`largest_free_block_bytes`), `sliding_window/op_slicing`, several CCL ops.
+
+**Under NO_DISPATCH nothing is really allocated**, so `lowest_occupied_compute_l1_address()` returns `nullopt` for the *whole* collect pass → these ops see **empty/full L1** and are systematically biased toward the **fast / L1-resident** path. A real run, under genuine L1 pressure, may pick the **L1-saving** path → a *different compiled program* (different CBs / compile-time args → different kernel hash) → the precompiled variant is a **cold miss** at run time for that op.
+
+- **Not a new correctness risk.** The in-memory device program cache *already* keys on `compute_mesh_workload_hash` = op attrs + tensor specs, **not** live allocator state (`device_operation.hpp:399`). An op whose *kernel structure* truly varied with transient L1 would already risk the program cache serving a stale variant across runs; well-behaved ops therefore confine the allocator-derived choice to things that don't change the compiled kernel (e.g. *where* to place a scratch buffer = runtime addresses). The ones that genuinely fork kernel structure on live L1 are precisely the ones that miss-and-recompile under collect — slower, never wrong.
+- **No impact on `generic_op` ops** (incl. `groupnorm_sc_N_1_HW_C`): their program is a pure function of the `ProgramDescriptor` (shapes/dtypes/layout/CB config), with no allocator query. Collected program == real program.
+- NO_DISPATCH **cannot** reproduce a realistic allocator state (it mocks allocation), so these ops are inherently outside its clean coverage. Accept the cold-recompile fallback.
+
+### (b) Tests / bodies that themselves drive trace or graph capture
+
+A trace records **real dispatches into a real trace buffer** and replays them; ttnn has ~39 such tests (matmul/CCL: `test_rs_matmul_1d_gather_in0.py`, `test_new_matmul_reduce_scatter.py`, `test_llama_all_gather_matmul.py`), ~6 graph-capture tests, and one eval golden suite (tilize's `test_deepseek_v3_mla_tilize_trace_mode`). Running such a body **inside** a collect window breaks:
+
+- NO_DISPATCH blocks the dispatch (`hook_program`) and the trace-buffer allocation (`hook_allocate`) that recording needs → the captured trace is empty/invalid → `end_trace_capture`/`execute_trace` error (swallowed best-effort).
+- **Worse:** it can leave device/CQ state (CQ stuck in trace-record mode, a dangling trace buffer) that **poisons the rest of a shared collect window** — one bad body breaks every dispatcher after it in the single-`begin_collect` design. (A per-test hookwrapper would contain the blast radius, but the test still fails.)
+- Graph capture nests as a **stack** (`push_processor`/`pop_processor`, `graph_processor.cpp:844-851`) with an **install-once hook** (`:691` adds a hook only if none exists) → an inner `begin_graph_capture` inherits our NO_DISPATCH blocking and sees an empty/wrong graph.
+- The funnel hook is *upstream* of trace-record/CQ-enqueue, so the ops' programs would still be collected up to the point the body crashes — but you can't rely on it getting there.
+
+**Phase 1 is safe by construction.** groupnorm has zero capture tests, and the eval plugin's `_eligible` (`precompile_plugin.py:37-47`) only re-invokes the canonical `test_op(inputs, axes, device)` parametrization. The one tilize trace test is a bespoke function without `inputs`/`axes` params → filtered out, never fed to NO_DISPATCH. The eligibility filter is an accidental but effective guard.
+
+**Phase 2 must explicitly detect + skip capture-driving tests** (static scan for `begin_trace_capture`/`begin_graph_capture`, or a runtime guard that aborts a test's collection if a capture is entered while collect is active). The cost is ~nil: they're ≈45 of thousands, and a trace test *already* compiles everything in its warmup loop before capturing, so it gains nothing from in-region precompile. The correct integration for a trace workload is to run collect **before** the test's capture (warm the kernel cache), then let the test's own warmup+trace run warm — the §4 pipeline. **Precede the trace region with collect; never wrap it.**
+
 ---
 
 ## 9. Validation plan
