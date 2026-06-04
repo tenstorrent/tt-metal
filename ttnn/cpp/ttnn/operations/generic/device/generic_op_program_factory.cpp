@@ -25,13 +25,8 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
                 return desc;
             }
         }
-        TT_FATAL(false, "generic_op: no mesh_program entry contains mesh coordinate {}", coord);
     }
 
-    TT_FATAL(
-        mesh_programs.size() == 1,
-        "generic_op: multiple mesh_program entries ({}) require per-coordinate mesh dispatch",
-        mesh_programs.size());
     return mesh_programs.front().second;
 }
 
