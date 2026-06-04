@@ -35,14 +35,13 @@ void kernel_main() {
         // Send out writes with transaction ids
         // Avoid using transaction id 0 in case fast dispatch breaks it in the future
         for (uint32_t i = 1; i <= num_of_transactions; i++) {
-            noc.async_write<Noc::TxnIdMode::ENABLED>(
+            noc.async_write<NocOptions::TXN_ID>(
                 endpoint,
                 endpoint,
                 bytes_per_transaction,
                 {.addr = local_addr},
                 {.noc_x = sub0_receiver_x_coord, .noc_y = sub0_receiver_y_coord, .addr = l1_local_addr + sub0_offset},
-                NOC_UNICAST_WRITE_VC,
-                i);
+                NocOptVals{.trid = i});
             local_addr += bytes_per_transaction;
             sub0_offset += bytes_per_transaction;
         }
@@ -52,7 +51,7 @@ void kernel_main() {
 
         // Wait for writes with transaction ids to depart, then read
         for (uint32_t i = 1; i <= num_of_transactions; i++) {
-            noc.async_writes_flushed<Noc::ResponseMode::NON_POSTED, Noc::BarrierMode::TXN_ID>(i);
+            noc.async_writes_flushed<NocOptions::TXN_ID>(NocOptVals{.trid = i});
             noc.async_read(
                 endpoint,
                 endpoint,

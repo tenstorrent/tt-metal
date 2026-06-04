@@ -29,11 +29,11 @@ void kernel_main() {
     Noc noc(noc_index);
     UnicastEndpoint unicast_endpoint;
     MulticastEndpoint mcast_endpoint;
-    constexpr auto mcast_mode = loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+    constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_transactions; i++) {
-            noc.async_write_multicast<mcast_mode>(
+            noc.async_write_multicast<mcast_opts>(
                 unicast_endpoint,
                 mcast_endpoint,
                 transaction_size,

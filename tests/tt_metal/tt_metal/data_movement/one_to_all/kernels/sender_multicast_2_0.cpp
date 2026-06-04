@@ -39,46 +39,34 @@ void kernel_main() {
     UnicastEndpoint unicast_endpoint;
     MulticastEndpoint multicast_endpoint;
 
-    constexpr Noc::McastMode include_src = loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+    constexpr NocOptions mcast_opts = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
-    {
-        DeviceZoneScopedN("RISCV0");
-
-        for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
-            noc.async_write_multicast<include_src>(
-                unicast_endpoint,
-                multicast_endpoint,
-                bytes_per_transaction,
-                num_subordinates,
-                {
-                    .addr = mst_base_addr,
-                },
-                {
-                    .noc_x_start = start_x,
-                    .noc_y_start = start_y,
-                    .noc_x_end = end_x,
-                    .noc_y_end = end_y,
-                    .addr = sub_base_addr,
-                },
-                is_linked);
-        }
-        // Last packet is sent separately to unlink the transaction,
-        // so the next one can use the VC and do its own path reservation
-        noc.async_write_multicast<include_src>(
+    auto do_mcast = [&](bool linked) {
+        noc.async_write_multicast<mcast_opts>(
             unicast_endpoint,
             multicast_endpoint,
             bytes_per_transaction,
             num_subordinates,
-            {
-                .addr = mst_base_addr,
-            },
+            {.addr = mst_base_addr},
             {
                 .noc_x_start = start_x,
                 .noc_y_start = start_y,
                 .noc_x_end = end_x,
                 .noc_y_end = end_y,
                 .addr = sub_base_addr,
-            });
+            },
+            linked);
+    };
+
+    {
+        DeviceZoneScopedN("RISCV0");
+
+        for (uint32_t i = 0; i < num_of_transactions - 1; i++) {
+            do_mcast(is_linked);
+        }
+        // Last packet is sent separately to unlink the transaction,
+        // so the next one can use the VC and do its own path reservation
+        do_mcast(false);
         noc.async_write_barrier();
     }
 
