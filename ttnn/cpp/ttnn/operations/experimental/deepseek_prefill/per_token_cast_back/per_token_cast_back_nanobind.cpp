@@ -17,7 +17,7 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
         R"doc(
             Inverse of per_token_cast_to_fp8: take an FP8_E4M3 tensor + a FLOAT32 scale tensor and
             recover a BFLOAT16/FLOAT32 tensor: out = decode(e4m3) * scale, where each scale applies
-            to its 128-element group of the token (the scale's last dim is H/128).
+            to its 128-element block of the token (the scale's last dim is H/128).
 
             Args:
                 * :attr:`input_e4m3`: FP8_E4M3 ROW_MAJOR tensor of shape [..., M, H]. Requires

@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::fp8_quant_common {
 
-inline constexpr uint32_t SCALE_GROUP_SIZE = 128;
+inline constexpr uint32_t BLOCK_W = 128;
 inline constexpr float E4M3_MAX_NORMAL = 448.0f;
 inline constexpr float SCALE_CLAMP_MIN = 1.0e-4f;  // DeepEP clamps amax to >= 1e-4 before /448
 
@@ -40,17 +40,13 @@ inline std::tuple<uint32_t, uint32_t> infer_M_H(const ttnn::Shape& shape) {
 inline ttnn::Shape scale_shape_from_input(const ttnn::Shape& input_shape) {
     const auto rank = input_shape.size();
     const uint32_t H = static_cast<uint32_t>(input_shape[rank - 1]);
-    TT_FATAL(
-        H % SCALE_GROUP_SIZE == 0,
-        "Per-token cast: hidden dim H={} must be a multiple of SCALE_GROUP_SIZE={}",
-        H,
-        SCALE_GROUP_SIZE);
+    TT_FATAL(H % BLOCK_W == 0, "Per-token cast: hidden dim H={} must be a multiple of BLOCK_W={}", H, BLOCK_W);
     ttsl::SmallVector<uint32_t> dims;
     dims.reserve(rank);
     for (size_t i = 0; i + 1 < rank; ++i) {
         dims.push_back(static_cast<uint32_t>(input_shape[i]));
     }
-    dims.push_back(H / SCALE_GROUP_SIZE);
+    dims.push_back(H / BLOCK_W);
     return ttnn::Shape(std::move(dims));
 }
 

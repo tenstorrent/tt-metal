@@ -4,11 +4,11 @@
 
 // Writer for per_token_cast_to_fp8. Mirror of the reader: the compute produces, per block, tile_h
 // output_e4m3 block-rows plus one fp32 scale tile whose column 0
-// holds the tile_h per-group scales. The writer walks the same group stream and:
-//   - writes each bank-contiguous run of output_e4m3 blocks back to its row at column gir*128 (one
-//     NoC async write per run, mirroring the reader's contiguous reads);
-//   - accumulates per-group scales into a persistent per-token scale-row scratch and flushes the
-//     full row (page-aligned source -> aligned DRAM page) when the token's last group is emitted.
+// holds the tile_h per-block scales. The writer walks the same block stream and:
+//   - writes each bank-contiguous run of output_e4m3 blocks back to its row at the current block
+//     column offset (one NoC async write per run, mirroring the reader's contiguous reads);
+//   - accumulates per-block scales into a persistent per-token scale-row scratch and flushes the
+//     full row (page-aligned source -> aligned DRAM page) when the token's last block is emitted.
 //     A block may straddle tokens and a token may straddle blocks, so the scratch and the
 //     (current_row, current_col) cursor persist across blocks.
 
@@ -20,7 +20,7 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 
-// Extract column 0 of one fp32 tile into out[0..tile_h) (one value per group-row); face-aware walk.
+// Extract column 0 of one fp32 tile into out[0..tile_h) (one value per block row); face-aware walk.
 template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
 static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile, uint32_t* out) {
     uint32_t s = 0;
@@ -48,20 +48,20 @@ void kernel_main() {
     constexpr uint32_t output_e4m3_block_bytes = get_compile_time_arg_val(1);  // 128 (1 byte/elem)
     constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_groups = get_compile_time_arg_val(4);              // H / 128 (full row width)
+    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(4);      // H / 128 (full row width)
     constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // per-row scratch footprint
     // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
-    constexpr uint32_t COL_BLOCK_ELEMS = 128;                         // column-block width = one group
-    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;    // 4 tiles per block
+    constexpr uint32_t block_w = 128;
+    constexpr uint32_t tiles_per_block = block_w / tile_w;
     constexpr uint32_t face_elems = face_h * face_w;                  // fp32 per face
     constexpr uint32_t faces_per_row = tile_w / face_w;               // face columns per tile
     constexpr uint32_t FACE_ROWS = tile_h / face_h;                   // face rows per tile
     constexpr uint32_t FACE_ROW_STRIDE = faces_per_row * face_elems;  // fp32 stride per face row
-    constexpr uint32_t scale_row_bytes = scale_groups * 4;
+    constexpr uint32_t scale_row_bytes = scale_blocks_per_row * 4;
 
     constexpr auto output_e4m3_accessor_args = TensorAccessorArgs<10>();
     constexpr auto scale_args = TensorAccessorArgs<output_e4m3_accessor_args.next_compile_time_args_offset()>();
@@ -77,28 +77,28 @@ void kernel_main() {
 
     uint32_t block_scales[tile_h];  // tile_h is compile-time constant
 
-    const uint32_t groups_per_row = width >> 7;  // H / 128 (COL_BLOCK_ELEMS = 128)
-    const uint32_t total_groups = num_rows * groups_per_row;
+    const uint32_t blocks_per_row = width >> 7;  // H / 128 (block_w = 128)
+    const uint32_t total_blocks = num_rows * blocks_per_row;
     const uint32_t end_row = start_row + num_rows;
     uint32_t current_row = start_row;
     uint32_t current_col = 0;  // element offset within the current row
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         const uint32_t base = blk * tile_h;
-        const uint32_t remaining = total_groups - base;
+        const uint32_t remaining = total_blocks - base;
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
-        cb_output_e4m3_obj.wait_front(COL_BLOCK_TILES);
+        cb_output_e4m3_obj.wait_front(tiles_per_block);
         cb_scale_tiles_obj.wait_front(1);
         extract_first_column<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE>(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_scale_tiles_obj.get_read_ptr()), block_scales);
 
-        uint32_t br = 0;  // block-local group-row
+        uint32_t br = 0;  // block-local row
         while (br < real_in_block && current_row < end_row) {
-            uint32_t gir = current_col >> 7;  // group index within the row (COL_BLOCK_ELEMS = 128)
-            uint32_t groups_left_in_row = groups_per_row - gir;
-            uint32_t groups_left_in_block = real_in_block - br;
-            uint32_t run = groups_left_in_row < groups_left_in_block ? groups_left_in_row : groups_left_in_block;
+            uint32_t block_idx_in_row = current_col >> 7;  // block index within the row (block_w = 128)
+            uint32_t blocks_left_in_row = blocks_per_row - block_idx_in_row;
+            uint32_t blocks_left_in_batch = real_in_block - br;
+            uint32_t run = blocks_left_in_row < blocks_left_in_batch ? blocks_left_in_row : blocks_left_in_batch;
 
             // output_e4m3: write `run` contiguous 128-element blocks back to (current_row, current_col).
             noc.async_write(
@@ -107,12 +107,12 @@ void kernel_main() {
                 run * output_e4m3_block_bytes,
                 {.offset_bytes = br * output_e4m3_block_bytes},
                 {.page_id = current_row, .offset_bytes = current_col});
-            // scale: stage this run's per-group scales into the token's scratch row.
+            // scale: stage this run's per-block scales into the token's scratch row.
             for (uint32_t g = 0; g < run; ++g) {
-                tok[gir + g] = block_scales[br + g];
+                tok[block_idx_in_row + g] = block_scales[br + g];
             }
             br += run;
-            current_col += run * COL_BLOCK_ELEMS;
+            current_col += run * block_w;
             if (current_col >= width) {  // token complete -> flush its full scale row (aligned)
                 noc.async_write(
                     use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
@@ -126,7 +126,7 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();  // drain this block's output_e4m3 writes before the CB page is reused
-        cb_output_e4m3_obj.pop_front(COL_BLOCK_TILES);
+        cb_output_e4m3_obj.pop_front(tiles_per_block);
         cb_scale_tiles_obj.pop_front(1);
     }
 }

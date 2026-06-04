@@ -65,22 +65,22 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         tile_h,
         tile_w);
     TT_FATAL(
-        common::SCALE_GROUP_SIZE % tile_w == 0,
-        "per_token_cast_to_fp8: tile width {} must divide SCALE_GROUP_SIZE={}",
+        common::BLOCK_W % tile_w == 0,
+        "per_token_cast_to_fp8: tile width {} must divide BLOCK_W={}",
         tile_w,
-        common::SCALE_GROUP_SIZE);
+        common::BLOCK_W);
 
     const auto& shape = input.logical_shape();
     TT_FATAL(shape.size() >= 2, "per_token_cast_to_fp8: input rank must be >= 2, got {}", shape.size());
 
     auto [M, H] = common::infer_M_H(shape);
     // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). H must
-    // stay a multiple of the 128-element scale group so groups are always full.
+    // stay a multiple of the 128-element block width so scale blocks are always full.
     TT_FATAL(
-        H % common::SCALE_GROUP_SIZE == 0,
-        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of SCALE_GROUP_SIZE={}",
+        H % common::BLOCK_W == 0,
+        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of BLOCK_W={}",
         H,
-        common::SCALE_GROUP_SIZE);
+        common::BLOCK_W);
     TT_FATAL(M > 0, "per_token_cast_to_fp8: M must be > 0");
 }
 

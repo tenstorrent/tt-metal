@@ -5,7 +5,7 @@
 """Tests for ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8 and per_token_cast_back.
 
 Mirrors DeepEP's reference (deepseek-ai/DeepEP deep_ep/utils/math.py):
-- per_token_cast_to_fp8: for each 128-element group of a token,
+- per_token_cast_to_fp8: for each 128-element block of a token,
     scale = clamp(max(|x|), 1e-4) / 448, e4m3 = round(x / scale)
 - per_token_cast_back: out = decode(e4m3) * scale
 
@@ -28,8 +28,10 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 
+pytestmark = pytest.mark.use_module_device
 
-GROUP_SIZE = 128
+
+BLOCK_W = 128
 E4M3_MAX = 448.0
 
 # Shapes exercised by most tests. Rank can be >= 2: all leading dims fold into the row count M and
@@ -61,7 +63,7 @@ def _require_blackhole():
 
 def _scale_shape(shape):
     """Expected scale shape for an input shape: leading dims preserved, last dim -> H / 128."""
-    return tuple(shape[:-1]) + (shape[-1] // GROUP_SIZE,)
+    return tuple(shape[:-1]) + (shape[-1] // BLOCK_W,)
 
 
 def _make_e4m3_from_torch(x_fp8_torch, *, device):
@@ -81,10 +83,10 @@ def _make_e4m3_from_torch(x_fp8_torch, *, device):
 
 
 def _ref_scale(x_fp32):
-    """Per-token reference scale [.., H/128] = clamp(amax over each 128-group, 1e-4) / 448."""
+    """Per-token reference scale [.., H/128] = clamp(amax over each 128-wide block, 1e-4) / 448."""
     *leading, H = x_fp32.shape
-    grouped = x_fp32.reshape(*leading, H // GROUP_SIZE, GROUP_SIZE)
-    amax = grouped.abs().amax(dim=-1).clamp(min=1e-4)
+    blocks = x_fp32.reshape(*leading, H // BLOCK_W, BLOCK_W)
+    amax = blocks.abs().amax(dim=-1).clamp(min=1e-4)
     return amax / E4M3_MAX
 
 
@@ -117,11 +119,11 @@ def test_cast_to_fp8_scale(device, dtype):
     M = 128 * 16
     # In this test, we want to verify that cast_to_fp8 scale is lossless if 128-consecutives values are the same
     # and if they can be represented exactly in fp8.
-    # This generate values [-M/4, -M/4 + 0.25, ..., M/4 - 0.25] (centered around 0)
-    # And for each value, repeat 128 times horizontally; and 1024 times vertically.
-    STEP = 0.25
-    MIN_VAL = -M / 2 * 0.25
-    x = torch.tensor([(MIN_VAL + i * STEP) for i in range(M // 128)], dtype=torch_dtype).repeat([H, M])
+    # Build one row with one exactly representable value per 128-wide block, then repeat it
+    # vertically across M rows. These values also produce exactly representable power-of-two scales.
+    block_values = torch.tensor([-448, -224, -112, -56, 56, 112, 224, 448], dtype=torch_dtype)
+    x_row = block_values.repeat_interleave(BLOCK_W)
+    x = x_row.repeat([M, 1])
     x_tt = ttnn.from_torch(
         x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -190,7 +192,7 @@ def test_cast_back_dequant(device, out_dtype, shape):
     out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
     out = ttnn.to_torch(out_tt).float()
 
-    golden = input_e4m3.float() * input_scale.repeat_interleave(GROUP_SIZE, dim=-1)
+    golden = input_e4m3.float() * input_scale.repeat_interleave(BLOCK_W, dim=-1)
     if out_dtype == "bfloat16":
         golden = golden.to(torch_dtype).float()
 

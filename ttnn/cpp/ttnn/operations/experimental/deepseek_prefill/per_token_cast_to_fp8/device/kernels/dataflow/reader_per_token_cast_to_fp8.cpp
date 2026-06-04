@@ -4,7 +4,7 @@
 
 // Reader for per_token_cast_to_fp8. Fills the reduce scaler tile once, then streams
 // the core's rows as a flat sequence of 128-element scale blocks. A block is tile_h consecutive blocks
-// (block_capacity = tile_h * 128 elements = COL_BLOCK_TILES tiles). Each bank-contiguous run (a span
+// (block_capacity = tile_h * 128 elements = tiles_per_block tiles). Each bank-contiguous run (a span
 // within one row) is read with a single NoC async read, so we exploit row-major DRAM locality
 // instead of hopping banks. After tilize, the compute reduces each 128-element block independently.
 
@@ -35,10 +35,10 @@ void kernel_main() {
     constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
     constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
     constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
-    constexpr uint32_t COL_BLOCK_ELEMS = 128;                              // scale-block width
-    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;         // 4 tiles per block
-    constexpr uint32_t elem_bytes = input_block_bytes / COL_BLOCK_ELEMS;   // input element size
-    constexpr uint32_t block_capacity = tile_h * COL_BLOCK_ELEMS;          // 4096 elems per block
+    constexpr uint32_t block_w = 128;                                      // BlockW
+    constexpr uint32_t tiles_per_block = block_w / tile_w;                 // BlockWt (BlockHt = 1)
+    constexpr uint32_t elem_bytes = input_block_bytes / block_w;           // input element size
+    constexpr uint32_t block_capacity = tile_h * block_w;                  // 4096 elems per block
     constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
@@ -64,7 +64,7 @@ void kernel_main() {
     uint32_t current_row = start_row;
     uint32_t current_col = 0;  // element offset within the current row
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        cb_in_obj.reserve_back(COL_BLOCK_TILES);
+        cb_in_obj.reserve_back(tiles_per_block);
         uint32_t filled = 0;
         while (filled < block_capacity && current_row < end_row) {
             uint32_t space_in_block = block_capacity - filled;
@@ -86,6 +86,6 @@ void kernel_main() {
         // The final block may be partial (rows exhausted); its tail slots stay stale and the
         // padding-oblivious compute never has them written back by the writer.
         noc.async_read_barrier();
-        cb_in_obj.push_back(COL_BLOCK_TILES);
+        cb_in_obj.push_back(tiles_per_block);
     }
 }

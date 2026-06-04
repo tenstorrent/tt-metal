@@ -72,10 +72,10 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         tile_h,
         tile_w);
     TT_FATAL(
-        common::SCALE_GROUP_SIZE % tile_w == 0,
-        "per_token_cast_back: tile width {} must divide SCALE_GROUP_SIZE={}",
+        common::BLOCK_W % tile_w == 0,
+        "per_token_cast_back: tile width {} must divide BLOCK_W={}",
         tile_w,
-        common::SCALE_GROUP_SIZE);
+        common::BLOCK_W);
     TT_FATAL(
         attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
@@ -101,13 +101,13 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const uint32_t H = static_cast<uint32_t>(e4m3_shape[-1]);
     const uint32_t H_scale = static_cast<uint32_t>(scale_shape[-1]);
     // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
-    // e4m3 width must equal scale_width * 128, which keeps H a multiple of the scale group.
+    // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
     TT_FATAL(
-        H == H_scale * common::SCALE_GROUP_SIZE,
-        "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * SCALE_GROUP_SIZE ({})",
+        H == H_scale * common::BLOCK_W,
+        "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
         H,
         H_scale,
-        common::SCALE_GROUP_SIZE);
+        common::BLOCK_W);
 
     auto [M, _] = common::infer_M_H(e4m3_shape);
     TT_FATAL(M > 0, "per_token_cast_back: row count M must be > 0");
