@@ -36,6 +36,31 @@ struct ChunkedContext {
     KVPadRotationContext kv_pad_rotation = {};
 };
 
+constexpr uint32_t chunks_until_next_multiple(uint32_t processed_chunks, uint32_t alignment) {
+    const uint32_t remainder = processed_chunks % alignment;
+    return remainder == 0 ? 0 : alignment - remainder;
+}
+
+template <bool v_shares_k_buffer>
+constexpr uint32_t dummy_kv_chunks_for_phase_alignment(uint32_t processed_chunks) {
+    // Reader pushes one K entry and one V entry per real chunk; compute pops the
+    // same entries. The dummy count pads the iteration so the next iteration
+    // starts on the same CB phase on every chained reader core.
+    if constexpr (v_shares_k_buffer) {
+        // Latent-V aliases cb_v_in to cb_k_in. Each real chunk consumes two
+        // entries in a three-entry CB cycle: K^T, then materialized V. Pad to
+        // the next multiple of three so the next K^T lands in the K phase.
+        constexpr uint32_t aliased_kv_cb_entries = 3;
+        return chunks_until_next_multiple(processed_chunks, aliased_kv_cb_entries);
+    }
+
+    // Separate K and V CBs keep the legacy two-phase chain cadence. Even chunk
+    // counts need one dummy K/V pair; odd counts already leave the next writer
+    // on the expected phase.
+    constexpr uint32_t separate_kv_phase_count = 2;
+    return (processed_chunks % separate_kv_phase_count) == 0 ? 1 : 0;
+}
+
 /**
  * Map a device-local K tile index to its global attention K position. Used by the
  * logical_n skip predicate and the diagonal-stamp mask coords. Under chunked-prefill
