@@ -191,12 +191,31 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
     return out_tensor
 
 
+def xfail_test_generic_ops(tensor_shape, dim, keepdim, correction, op, use_legacy):
+    """legacy path std/var failures from test_generic_ops; Created for issue https://github.com/tenstorrent/tt-metal/issues/43994"""
+    if not use_legacy or op not in ("std", "var"):
+        return None
+    is_failing = False
+    if tensor_shape == (2, 4, 8, 32, 64) and dim == 0 and correction:
+        is_failing = True
+    elif tensor_shape == (4, 8, 32, 64) and dim == (0, 2, 3):
+        is_failing = True
+    elif tensor_shape == (3, 6, 40, 63, 20) and dim == (1, 2, 3):
+        is_failing = True
+    elif tensor_shape == (4, 8, 32, 64) and dim == (1, 2, 3) and op == "var":
+        is_failing = True
+    if not is_failing:
+        return None
+    if op == "std":
+        return "ttnn::std PCC failure for multi-dim reduction using legacy path. Issue #46096."
+    return "ttnn::var PCC failure for multi-dim reduction using legacy path. Issue #46073."
+
+
 # Test a 0D, 1D, 1-element, 1 column, 0-volume, and a 5D tensor
 @pytest.mark.parametrize(
-    "tensor_shape",
-    [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20)],
+    "tensor_shape", [(), (2,), (1, 1), (32, 1), (6, 0, 32), (3, 6, 40, 63, 20), (4, 8, 32, 64), (2, 4, 8, 32, 64)]
 )
-@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4)])
+@pytest.mark.parametrize("dim", [None, 0, -1, (-2, -1), (0, 2), (0, 2, 4), (0, 2, 3), (0, 3, 4), (1, 2, 3)])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -212,6 +231,10 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     """
     if op not in ("var", "std") and correction:
         pytest.skip("PyTorch supports the correction argument only for var and std")
+
+    xfail_reason = xfail_test_generic_ops(tensor_shape, dim, keepdim, correction, op, use_legacy)
+    if xfail_reason is not None:
+        pytest.xfail(xfail_reason)
 
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
