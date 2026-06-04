@@ -2,16 +2,20 @@
 # Fabric CPU-only unit test driver (same commands as .github/workflows/fabric-cpu-only-tests-impl.yaml).
 # Run from repository root, or from anywhere (script cds to root). Requires a built tree under ./build.
 #
-# Example (run all groups sequentially):
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+# Modes:
+#   No args (sequential, default):
+#     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+#     Runs all 6 groups one after another. Simple, safe, readable output.
 #
-# Example (run one group — same as CI matrix job):
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group phys-grouping
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group control-plane
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group t3k
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
-#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-galaxy
+#   Single group:
+#     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
+#     Runs one group only (same as a single CI matrix job).
+#     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy, bh-galaxy
+#
+#   Parallel (all groups at once):
+#     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
+#     Runs all 6 groups in parallel via self-invocation. Each group's output is
+#     buffered to a temp file; logs are printed sequentially at the end.
 #
 set -euo pipefail
 
@@ -23,21 +27,23 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME="$REPO_ROOT"
 fi
 
-# Parse --group argument (default: run all groups sequentially)
+# Parse arguments
 GROUP="all"
+PARALLEL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --group) GROUP="$2"; shift 2 ;;
+    --parallel) PARALLEL=1; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
 run_group() { [[ "$GROUP" == "all" || "$GROUP" == "$1" ]]; }
 
-# When running all groups, self-invoke once per group in parallel on this runner.
+# When running all groups in parallel, self-invoke once per group in the background.
 # Each group's output goes to a temp file; logs are cat'd sequentially at the end
 # so parallel execution doesn't mangle the output.
-if [[ "$GROUP" == "all" ]]; then
+if [[ "$GROUP" == "all" && "$PARALLEL" -eq 1 ]]; then
   GROUPS=(unit phys-grouping control-plane t3k wh-galaxy bh-galaxy)
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
