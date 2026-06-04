@@ -353,7 +353,7 @@ def run_model_device_perf_test_per_op(
     measured_per_op = {}
     failures = []
     for op_substring, expected_ns in expected_per_op.items():
-        rows = df_merged[df_merged["OP CODE"].str.contains(op_substring, na=False)]
+        rows = df_merged[df_merged["OP CODE"].str.contains(op_substring, na=False, regex=False)]
         if rows.empty:
             pytest.fail(
                 f"No merged rows match op_substring={op_substring!r} in {filename}; "
@@ -374,14 +374,19 @@ def run_model_device_perf_test_per_op(
 
     total_measured = sum(measured_per_op.values())
     post_processed_results = {inference_time_key: total_measured}
+    expected_results = {}
     for op_substring, measured_ns in measured_per_op.items():
-        post_processed_results[f"{op_substring} DEVICE KERNEL DURATION [ns]"] = measured_ns
+        key = f"{op_substring} DEVICE KERNEL DURATION [ns]"
+        post_processed_results[key] = measured_ns
+        expected_ns = expected_per_op[op_substring]
+        expected_results[f"Lower Threshold {key}"] = (1 - margin) * expected_ns
+        expected_results[f"Upper Threshold {key}"] = (1 + margin) * expected_ns
 
     prep_device_perf_report(
         model_name=model_name,
         batch_size=1,
         post_processed_results=post_processed_results,
-        expected_results={},
+        expected_results=expected_results,
         comments=comments,
     )
 

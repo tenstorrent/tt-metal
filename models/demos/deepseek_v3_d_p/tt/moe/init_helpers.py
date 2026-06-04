@@ -456,9 +456,13 @@ def compute_constants(
         seq_len_per_chip % ttnn.TILE_SIZE == 0
     ), f"seq_len_per_chip ({seq_len_per_chip}) must be a multiple of TILE_SIZE ({ttnn.TILE_SIZE})"
 
-    experts_per_chip = (
-        experts_per_chip_override if experts_per_chip_override is not None else num_routed_experts // num_devices
-    )
+    if experts_per_chip_override is not None:
+        assert (
+            experts_per_chip_override > 0
+        ), f"experts_per_chip_override must be positive, got {experts_per_chip_override}"
+        experts_per_chip = experts_per_chip_override
+    else:
+        experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
