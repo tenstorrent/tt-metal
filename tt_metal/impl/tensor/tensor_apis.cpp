@@ -175,7 +175,7 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
             auto buf = distributed_host_buffer.get_shard(coord);
-            if (buf) {
+            if (buf && mesh_device->is_local(coord)) {
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(

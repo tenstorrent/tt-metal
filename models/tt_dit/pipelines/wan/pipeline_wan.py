@@ -687,7 +687,12 @@ class WanPipeline(PipelineAPIMixin):
         permuted_latent_tt = ts.model.ccl_manager.all_gather_persistent_buffer(
             permuted_latent_tt, dim=2, mesh_axis=sp_axis
         )
-        permuted_latent = ttnn.to_torch(ttnn.get_device_tensors(permuted_latent_tt)[0])
+        # After the all-gather above the latent is fully replicated across the
+        # whole mesh. On a multi-host mesh, shard index [0] is coordinate (0,0)
+        # which is only local to one host; the other hosts would try to convert a
+        # non-local shard and hit "supply a mesh composer". Read a *local* shard
+        # instead so every rank gets the complete tensor.
+        permuted_latent = tensor.local_device_to_torch(permuted_latent_tt)
 
         # Postprocess spatial output
         latents = ts.model.postprocess_spatial_output_host(

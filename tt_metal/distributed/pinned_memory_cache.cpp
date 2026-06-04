@@ -32,7 +32,11 @@ std::set<ChipId> PinnedMemoryCache::compute_device_ids(
     const auto& view = mesh_device.get_view();
     std::set<ChipId> device_ids;
     for (const auto& coord : coordinate_range_set.coords()) {
-        if (view.contains(coord)) {
+        // Only consider coordinates whose devices are local to this process. In a
+        // multi-process (multi-host) mesh, remote coordinates are part of the view
+        // but get_device() TT_FATALs on them, and host memory can only be pinned to
+        // MMIO devices local to this process anyway.
+        if (view.contains(coord) && view.is_local(coord)) {
             // get_device is deprecated but still functional; we only use it to
             // obtain the chip ID, which is not distribution-sensitive.
             if (auto* device = view.impl().get_device(coord)) {
