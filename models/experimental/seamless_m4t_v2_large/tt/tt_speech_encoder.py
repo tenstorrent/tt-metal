@@ -201,6 +201,22 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._matmul_pc_cache: dict = {}
         self._sdpa_pc_cache: dict = {}
 
+    def _mc_act(self, *, seq_len: Optional[int] = None) -> ttnn.MemoryConfig:
+        """Activation buffer type: DRAM on TP>1 so fused-op static CBs do not clash with persistent L1."""
+        if self._tp > 1:
+            return ttnn.DRAM_MEMORY_CONFIG
+        if seq_len is not None and seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD:
+            return ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.L1_MEMORY_CONFIG
+
+    def _to_act_mc(self, x: ttnn.Tensor, *, seq_len: Optional[int] = None) -> ttnn.Tensor:
+        """Move ``x`` to the preferred activation memory config when needed."""
+        target = self._mc_act(seq_len=seq_len)
+        mc = x.memory_config()
+        if mc.buffer_type == target.buffer_type and mc.memory_layout == target.memory_layout:
+            return x
+        return ttnn.to_memory_config(x, target)
+
     @staticmethod
     def _activation_tile_counts(batch: int, seq_len: int, hidden_size: int) -> Tuple[int, int]:
         m_tiles = (batch * seq_len + 31) // 32
@@ -247,13 +263,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._ln_sharded_cache[key] = cached
         return cached
 
-    @staticmethod
-    def _ensure_l1_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
-        """Move activations to L1 interleaved when host upload or prior op left them in DRAM."""
+    def _ensure_l1_interleaved(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Move activations to interleaved L1 (single device) or DRAM (TP>1)."""
+        target = self._mc_act()
         mc = x.memory_config()
-        if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        if mc.buffer_type == target.buffer_type and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
             return x
-        return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        return ttnn.to_memory_config(x, target)
 
     def _maybe_pad_for_block_ln(
         self,
@@ -564,9 +580,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 seq=seq,
                 input_dtype=input_dtype,
             )
+        act_mc = self._mc_act(seq_len=seq)
         if input_dtype is not None and x.dtype != input_dtype:
             # Don't deallocate the caller's tensor — they own it. typecast returns a new tensor.
-            x = ttnn.typecast(x, input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.typecast(x, input_dtype, memory_config=act_mc)
         if program_config is None:
             program_config = self._matmul_program_config(
                 token_rows,
@@ -579,7 +596,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             bias=bias,
             activation=activation,
             program_config=program_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=act_mc,
             compute_kernel_config=self._linear_compute_cfg,
         )
         if batch is None and len(x.shape) == 3:
@@ -1135,7 +1152,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             num_heads=num_heads,
             num_kv_heads=num_heads,
             transpose_key=k_transposed,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=self._mc_act(seq_len=seq_len),
         )
         return q, k, v, qkv
 
@@ -1431,7 +1448,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(q)
         ttnn.deallocate(k_sdpa)
         ttnn.deallocate(v)
-        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=self._mc_act(seq_len=seq_len))
         for o in out_blocks:
             ttnn.deallocate(o)
         return attn_out
@@ -1470,6 +1487,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
             k_transposed=use_relative,
             accept_sharded_input=accept_sharded_input,
         )
+        if self._tp > 1:
+            q = self._to_act_mc(q, seq_len=seq_len)
+            k = self._to_act_mc(k, seq_len=seq_len)
+            v = self._to_act_mc(v, seq_len=seq_len)
 
         if not use_relative:
             # Adapter self-attn has no relative positions — use fused SDPA.
@@ -1483,7 +1504,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 scale=scale,
                 program_config=self._sdpa_program_config(seq_len, seq_len),
                 compute_kernel_config=self._sdpa_compute_cfg,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self._mc_act(seq_len=seq_len),
             )
             ttnn.deallocate(q)
             ttnn.deallocate(k)
@@ -1504,10 +1525,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         else:
             # scores [B, H, S, S] — L1 fits for short seq on single device.
             # TP at S>=128 and long audio use DRAM (L1 scores diverge on 1×4 at S=256).
-            if self._tp > 1 and seq_len >= 128:
-                scores_mc = ttnn.DRAM_MEMORY_CONFIG
-            else:
-                scores_mc = ttnn.L1_MEMORY_CONFIG if seq_len <= 256 else ttnn.DRAM_MEMORY_CONFIG
+            scores_mc = self._mc_act(seq_len=seq_len if seq_len > 256 else 128)
 
             # k is already [B, H, D, S] — no permute needed.
             # Q weights are pre-scaled by 1/√head_dim during preprocessing so
@@ -1558,13 +1576,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
             attn_out = ttnn.matmul(
                 probs,
                 v,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=self._mc_act(seq_len=seq_len),
                 compute_kernel_config=self._attn_compute_cfg,
             )
             ttnn.deallocate(probs)
             ttnn.deallocate(v)
 
-        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=self._mc_act(seq_len=seq_len))
         ttnn.deallocate(attn_out)
         out = self._linear(
             merged_4d,
@@ -1932,7 +1950,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         token_m = batch * seq_len
         # Long-audio path: residual / hidden state lives in DRAM so kernel CBs always fit in L1.
         # Without this, conv1d / matmul kernels at seq ≳ 1100 clash with persistent L1 buffers.
-        res_mc = ttnn.DRAM_MEMORY_CONFIG if seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
+        res_mc = self._mc_act(seq_len=seq_len)
 
         if input_sharded:
             res = ttnn.sharded_to_interleaved(hidden, res_mc, output_dtype=ttnn.bfloat16)
@@ -2121,7 +2139,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if attn_4d is not None and not use_prebuilt_attn:
             ttnn.deallocate(attn_4d)
 
-        out = ttnn.add(attn, res_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(attn, res_out, memory_config=self._mc_act(seq_len=lens_a))
         ttnn.deallocate(attn)
         ttnn.deallocate(res_out)
 
@@ -2141,7 +2159,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
         ff = self._relu_ffn(h2, layer.ffn, batch=batch, seq_len=lens_a)
         ttnn.deallocate(h2)
-        return ttnn.add(res2, ff, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return ttnn.add(res2, ff, memory_config=self._mc_act(seq_len=lens_a))
 
     def warm_relative_position_caches_for_seq_lens(self, seq_lens: list[int]) -> None:
         """Populate ``_rel_pos_tab_cache`` and ``_rel_pos_idx_cache`` for each seq len.
@@ -2275,7 +2293,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         if conv_attention_mask_1d is not None:
             m1 = ttnn.reshape(conv_attention_mask_1d, (batch, seq, 1))
-            h = ttnn.mul(h, m1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            h = ttnn.mul(h, m1, memory_config=self._mc_act(seq_len=seq))
 
         enc = p.encoder
         if trace_masks is not None:
@@ -2305,7 +2323,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 _drain_device_profiler(self.device, trace_no_profiler=trace_no_profiler)
 
         if h_sharded:
-            h = ttnn.sharded_to_interleaved(h, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            h = ttnn.sharded_to_interleaved(h, self._mc_act(seq_len=seq), output_dtype=ttnn.bfloat16)
             h_sharded = False
 
         h = self._layer_norm(
@@ -2322,7 +2340,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         im = p.intermediate_ffn
         # The 0.5 scale is folded into intermediate_ffn output_dense weights at load time.
-        long_audio_add_mc = ttnn.DRAM_MEMORY_CONFIG if seq > _LONG_AUDIO_RES_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
+        long_audio_add_mc = self._mc_act(seq_len=seq)
         exp = self._relu_ffn(h, im, batch=batch, seq_len=seq)
         h = ttnn.add(h, exp, memory_config=long_audio_add_mc)
         ttnn.deallocate(exp)
