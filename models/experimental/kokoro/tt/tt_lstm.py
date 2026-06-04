@@ -86,6 +86,11 @@ def _lstm_step(
     if len(x_bt.shape) == 3 and x_bt.shape[1] == 1:
         x_bt = ttnn.reshape(x_bt, [x_bt.shape[0], x_bt.shape[2]], memory_config=memory_config)
 
+    # gates = x @ W_x^T + h @ W_h^T + b. Kept as two separate matmuls on the default
+    # matmul kernel: any change to this accumulation (1D-mcast/sharding, or fusing the
+    # two into one concat matmul) is fine for value PCC but flips the *rounded* durations
+    # that set the output length and perturbs the F0 curve (amplified ~1885x by the
+    # vocoder) below the PCC floor — see feedback notes. So this stays as the baseline.
     gates_x = ttnn.linear(
         x_bt,
         params.w_x,
@@ -103,6 +108,8 @@ def _lstm_step(
         compute_kernel_config=compute_kernel_config,
     )
     gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
+    ttnn.deallocate(gates_x)
+    ttnn.deallocate(gates_h)
     gates = ttnn.add(gates, params.b, memory_config=memory_config)
 
     gs = tuple(int(s) for s in gates.shape)
@@ -114,15 +121,16 @@ def _lstm_step(
     H = params.hidden_size
     assert H4 == 4 * H
 
-    i = ttnn.slice(gates, [0, 0], [gates.shape[0], H], [1, 1])
-    f = ttnn.slice(gates, [0, H], [gates.shape[0], 2 * H], [1, 1])
-    g = ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1])
-    o = ttnn.slice(gates, [0, 3 * H], [gates.shape[0], 4 * H], [1, 1])
-
-    i = ttnn.sigmoid(i, memory_config=memory_config)
-    f = ttnn.sigmoid(f, memory_config=memory_config)
-    g = ttnn.tanh(g, memory_config=memory_config)
-    o = ttnn.sigmoid(o, memory_config=memory_config)
+    # Gate order is [i, f, g, o] with i,f,o -> sigmoid and g -> tanh. Sigmoid is
+    # elementwise, so applying it once over the whole [B, 4H] tensor and slicing the
+    # i/f/o parts is bit-identical to three separate sigmoids but uses one op instead
+    # of three. g still needs tanh on the raw (pre-sigmoid) slice.
+    sig = ttnn.sigmoid(gates, memory_config=memory_config)
+    i = ttnn.slice(sig, [0, 0], [sig.shape[0], H], [1, 1])
+    f = ttnn.slice(sig, [0, H], [sig.shape[0], 2 * H], [1, 1])
+    o = ttnn.slice(sig, [0, 3 * H], [sig.shape[0], 4 * H], [1, 1])
+    ttnn.deallocate(sig)
+    g = ttnn.tanh(ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1]), memory_config=memory_config)
 
     c_new = ttnn.add(
         ttnn.multiply(f, c, memory_config=memory_config),
@@ -162,13 +170,13 @@ def _blend_state(
     *,
     memory_config: ttnn.MemoryConfig,
 ) -> ttnn.Tensor:
-    """Blend LSTM state; ``valid_b1`` is ``[B, 1]`` (broadcasts over hidden dim)."""
-    one_m = ttnn.add(ttnn.multiply(valid_b1, -1.0, memory_config=memory_config), 1.0, memory_config=memory_config)
-    return ttnn.add(
-        ttnn.multiply(valid_b1, new_state, memory_config=memory_config),
-        ttnn.multiply(one_m, old_state, memory_config=memory_config),
-        memory_config=memory_config,
-    )
+    """Blend LSTM state; ``valid_b1`` is ``[B, 1]`` (broadcasts over hidden dim).
+
+    ``old + valid*(new - old)`` — 3 ops vs 5 for the ``valid*new + (1-valid)*old``
+    form, and bit-exact for the 0/1 mask (valid=1 -> new, valid=0 -> old).
+    """
+    diff = ttnn.subtract(new_state, old_state, memory_config=memory_config)
+    return ttnn.add(old_state, ttnn.multiply(valid_b1, diff, memory_config=memory_config), memory_config=memory_config)
 
 
 def tt_bilstm_nlc(
@@ -202,16 +210,23 @@ def tt_bilstm_nlc(
     )
 
     valid_all = None
+    # Timesteps t < min(lengths) have every batch row valid, so the pack-padded blend
+    # is the identity (valid=1 -> new) and is skipped — bit-exact and avoids ~11 binary
+    # ops/timestep. Only t >= min_len (where some row is padded) needs masking. With no
+    # padding (all lengths == L, the common case) masking is skipped entirely.
+    min_len = L
     if sequence_lengths is not None:
         assert len(sequence_lengths) == B, "sequence_lengths must have one entry per batch row"
-        valid_all = _length_valid_mask_b1(
-            batch=B,
-            seq_len=L,
-            sequence_lengths=sequence_lengths,
-            device=x_nlc.device(),
-            memory_config=memory_config,
-            dtype=state_dtype,
-        )
+        min_len = max(0, min(min(int(n) for n in sequence_lengths), L))
+        if min_len < L:
+            valid_all = _length_valid_mask_b1(
+                batch=B,
+                seq_len=L,
+                sequence_lengths=sequence_lengths,
+                device=x_nlc.device(),
+                memory_config=memory_config,
+                dtype=state_dtype,
+            )
 
     h_f = h0
     c_f = c0
@@ -222,7 +237,7 @@ def tt_bilstm_nlc(
         h_new, c_new = _lstm_step(
             xt, h_f, c_f, fwd, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
-        if valid_all is not None:
+        if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
             h_f = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
@@ -241,7 +256,7 @@ def tt_bilstm_nlc(
         h_new, c_new = _lstm_step(
             xt, h_b, c_b, rev, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
-        if valid_all is not None:
+        if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
             vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
             h_b = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
