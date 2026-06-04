@@ -16,6 +16,14 @@ function(useCcache)
         set(CCACHE_ENV "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime")
     endif()
 
+    # Default to zstd level-3 compression if the caller has not already chosen a compression setting.
+    # This reduces remote storage (Redis) entry size by ~3-5x with negligible impact on build times.
+    if(NOT DEFINED ENV{CCACHE_COMPRESS})
+        list(APPEND CCACHE_ENV "CCACHE_COMPRESS=true")
+        list(APPEND CCACHE_ENV "CCACHE_COMPRESSLEVEL=3")
+        message(STATUS "ccache compression: defaulting to zstd level 3 (override with CCACHE_COMPRESS env var)")
+    endif()
+
     if(CMAKE_GENERATOR MATCHES "Ninja")
         foreach(lang IN ITEMS C CXX)
             set(CMAKE_${lang}_COMPILER_LAUNCHER
