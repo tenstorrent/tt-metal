@@ -220,7 +220,7 @@ struct CopyTile : CopyTileTag {
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
-    static constexpr uint32_t       cb_b_id()       { return 0;  }
+    // CopyTile reads one CB front (srcA via cb_a_id); cb_b is absent -> cb_b_of defaults to kNoCb.
     static constexpr OperandKind    a_index_mode    = IndexMode;
     static constexpr OperandKind    b_index_mode    = OperandKind::Scalar;
     static constexpr Dst            dst_slot        = DstSlot;
@@ -718,8 +718,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
                   "DestReuseBinary: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle");
 
-    static constexpr uint32_t       cb_a_id()         { return Cb; }
-    static constexpr uint32_t       cb_b_id()         { return 0;  }
+    // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (cb_a),
+    // DEST_TO_SRCA -> CB on srcB (cb_b). The other side is the DEST register, not a CB (kNoCb).
+    static constexpr uint32_t       cb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : kNoCb; }
+    static constexpr uint32_t       cb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : kNoCb; }
     static constexpr OperandKind    a_index_mode     = IndexMode;
     static constexpr OperandKind    b_index_mode     = OperandKind::Scalar;
     static constexpr InputLifecycle a_policy()        { return Policy; }
@@ -831,8 +833,8 @@ struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
 
+    // UnaryBcast reads one CB front (cb_a); cb_b is absent -> cb_b_of defaults to kNoCb.
     static constexpr uint32_t       cb_a_id()         { return Cb; }
-    static constexpr uint32_t       cb_b_id()         { return 0;  }
     static constexpr InputLifecycle a_policy()        { return Policy; }
     static constexpr InputLifecycle b_policy()        { return InputLifecycle::CallerManaged; }
     static constexpr Dst            dst_slot          = DstSlot;
