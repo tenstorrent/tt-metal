@@ -38,17 +38,6 @@ inline void llk_math_sfpu_generalized_moe_gate_top8(
         ckernel::sfpu::generalized_moe_gate_top8<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode, eps, scale);
 }
 
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_top8_ungrouped(
-    uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_top8_ungrouped<APPROXIMATE, is_fp32_dest_acc_en>,
-        dst_index,
-        vector_mode,
-        eps,
-        scale);
-}
-
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
 inline void llk_math_sfpu_generalized_moe_gate_merge4_top8(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
@@ -95,36 +84,6 @@ inline void llk_math_sfpu_generalized_moe_gate_normalize_run(
         vector_mode,
         eps,
         scale);
-}
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_probe_lanemap(
-    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_probe_lanemap<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_probe_offsets(
-    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_probe_offsets<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_shift_hi_groups(
-    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_shift_hi_groups<APPROXIMATE, is_fp32_dest_acc_en>, dst_index, vector_mode);
-}
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
-inline void llk_math_sfpu_generalized_moe_gate_rotate_groups_by4(
-    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::generalized_moe_gate_rotate_groups_by4<APPROXIMATE, is_fp32_dest_acc_en>,
-        dst_index,
-        vector_mode);
 }
 
 }  // namespace ckernel
