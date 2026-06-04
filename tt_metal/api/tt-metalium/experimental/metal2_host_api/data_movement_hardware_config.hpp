@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/set.hpp>
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental {
@@ -60,7 +61,7 @@ struct DataMovementHardwareConfig {
         //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
         //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
         // Any bound DFB not listed here will use implicit sync by default.
-        std::vector<DFBSpecName> disable_implicit_sync_for;
+        set<DFBSpecName> disable_implicit_sync_for;
     };
     // For a Gen2 DM kernel, providing the Gen2Config is optional.
     std::optional<Gen2Config> gen2_config = std::nullopt;

@@ -139,4 +139,7 @@ private:
     Storage keys_;
 };
 
+template <typename K, auto Proj = std::identity{}>
+using set = FlatSet<K, Proj>;
+
 }  // namespace tt::tt_metal::experimental

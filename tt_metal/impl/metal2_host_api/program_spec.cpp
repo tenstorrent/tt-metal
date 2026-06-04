@@ -203,9 +203,7 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
 }
 
 // Helper: return a DFB's alias-with list.
-const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
-    return dfb.advanced_options.alias_with;
-}
+const set<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) { return dfb.advanced_options.alias_with; }
 
 // Helper: return a kernel's dfb-compute-self-loop-scopes map.
 const Table<DFBSpecName, DFBSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
@@ -2754,13 +2752,14 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Overlapping override entries (two entries covering the same node) are an error.
         const auto& user_schema = kernel_spec.runtime_arg_schema;
         detail::ProgramImpl::KernelRTASchema runtime_schema;
-        runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
+        runtime_schema.runtime_arg_names.assign(
+            user_schema.runtime_arg_names.begin(), user_schema.runtime_arg_names.end());
 
         // Pass the user CRTA list through.
         // NOTE: The TensorBinding address section is tracked separately on the Kernel
         // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
         // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
-        runtime_schema.common_runtime_arg_names = user_named_crtas;
+        runtime_schema.common_runtime_arg_names.assign(user_named_crtas.begin(), user_named_crtas.end());
 
         // Varargs schema now lives on KernelAdvancedOptions.
         const uint32_t num_runtime_varargs = kernel_spec.advanced_options.num_runtime_varargs;

@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/set.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 
@@ -129,8 +130,11 @@ struct KernelSpec {
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+
+        bool operator==(const DFBBinding&) const = default;
     };
-    std::vector<DFBBinding> dfb_bindings;
+    // Is the key correct here?
+    set<DFBBinding /*, key = (accessor_name, endpoint_type) */> dfb_bindings;
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
@@ -139,7 +143,7 @@ struct KernelSpec {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
-    std::vector<SemaphoreBinding> semaphore_bindings;
+    set<SemaphoreBinding, &SemaphoreBinding::accessor_name> semaphore_bindings;
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
@@ -148,7 +152,11 @@ struct KernelSpec {
         TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
-    std::vector<TensorBinding> tensor_bindings;
+    // TODO: VERIFY — ResolveTensorBindingsForKernel walks these in declaration
+    // order to assign positional CTA/CRTA slots, but FlatSet does NOT officially
+    // guarantee insertion-order iteration. This relies on its current (vector-backed)
+    // behavior; confirm before depending on it, or restore std::vector here.
+    set<TensorBinding> tensor_bindings;
 
     // Additional resource binding types:
     //  - Scratchpad bindings (Program-local memory resource)
@@ -175,11 +183,17 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
+        // TODO: VERIFY — these names are positional (schema order defines the RTA
+        // slot order; see program_run_args.cpp), but FlatSet does NOT officially
+        // guarantee insertion-order iteration. This relies on its current
+        // (vector-backed) behavior; confirm before depending on it, or restore
+        // std::vector here.
+
         // Runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> runtime_arg_names;
+        set<std::string> runtime_arg_names;
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
-        std::vector<std::string> common_runtime_arg_names;
+        set<std::string> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};
 

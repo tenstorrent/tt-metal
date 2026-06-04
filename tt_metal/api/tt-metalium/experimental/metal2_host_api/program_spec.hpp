@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/set.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -65,7 +66,7 @@ struct WorkUnitSpec {
     WorkUnitSpecName name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
-    std::vector<KernelSpecName> kernels;
+    set<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
     Nodes target_nodes;
@@ -75,21 +76,26 @@ struct WorkUnitSpec {
 // ProgramSpec
 //------------------------------------------------
 
+// A RemoteDataflowBufferSpec is keyed by its nested DFB's unique_id.
+inline const DFBSpecName& remote_dfb_unique_id(const RemoteDataflowBufferSpec& r) { return r.dfb_spec.unique_id; }
+
 // A ProgramSpec describes a complete Program (its immutable properties).
 struct ProgramSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
     ProgramSpecName name;
 
     // Kernels, DFBs (local + remote), and semaphores that make up the Program
-    std::vector<KernelSpec> kernels;
-    std::vector<DataflowBufferSpec> dataflow_buffers;
-    std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
-    std::vector<SemaphoreSpec> semaphores;
+    set<KernelSpec, &KernelSpec::unique_id> kernels;
+    set<DataflowBufferSpec, &DataflowBufferSpec::unique_id> dataflow_buffers;
+    // Keyed on the nested dfb_spec.unique_id (see remote_dfb_unique_id), which a
+    // pointer-to-member can't reach.
+    set<RemoteDataflowBufferSpec, &remote_dfb_unique_id> remote_dataflow_buffers;
+    set<SemaphoreSpec, &SemaphoreSpec::unique_id> semaphores;
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on
     // (The actual MeshTensors are supplied via ProgramRunArgs.)
-    std::vector<TensorParameter> tensor_parameters;
+    set<TensorParameter, &TensorParameter::unique_id> tensor_parameters;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
