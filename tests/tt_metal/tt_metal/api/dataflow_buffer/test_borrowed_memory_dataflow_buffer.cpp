@@ -117,12 +117,12 @@ void run_borrowed_memory_dfb_program(
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
-        {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
+        {.tensor_parameter_name = experimental::TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
         // dfb_ring_tensor backs the borrowed DFB; the kernel does not access it directly,
         // but every TensorParameter must be bound to at least one kernel.
-        {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
+        {.tensor_parameter_name = experimental::TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
     };
-    producer_spec.dfb_bindings.push_back(ProducerOf("borrowed_dfb", "out"));
+    producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
 
     // --- Consumer kernel ---
     KernelSpec consumer_spec;
@@ -149,12 +149,12 @@ void run_borrowed_memory_dfb_program(
         };
         consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
         consumer_spec.tensor_bindings = {{
-            .tensor_parameter_name = "dst_tensor",
-            .accessor_name         = "dst_tensor",
+            .tensor_parameter_name = experimental::TensorParamName{"dst_tensor"},
+            .accessor_name = "dst_tensor",
         }};
     }
     consumer_spec.dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = "borrowed_dfb",
+        .dfb_spec_name = experimental::DFBSpecName{"borrowed_dfb"},
         .accessor_name = "in",
         .endpoint_type = DFBEndpointType::CONSUMER,
         .access_pattern = cfg.cap,
@@ -164,20 +164,20 @@ void run_borrowed_memory_dfb_program(
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
         if (!cfg.tensix_consumer) {
             std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+                .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
         }
     }
 
     // --- Borrowed DFB spec ---
     DataflowBufferSpec dfb_spec{
-        .unique_id = "borrowed_dfb",
+        .unique_id = experimental::DFBSpecName{"borrowed_dfb"},
         .entry_size = cfg.entry_size,
         .num_entries = cfg.num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = "dfb_ring_tensor",
+        .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
     };
 
     // --- TensorParameters ---
@@ -185,11 +185,12 @@ void run_borrowed_memory_dfb_program(
     const TensorSpec dst_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
     const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries);
 
-    spec.tensor_parameters.push_back({.unique_id = "src_tensor",     .spec = src_spec});
+    spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec});
     if (!cfg.tensix_consumer) {
-        spec.tensor_parameters.push_back({.unique_id = "dst_tensor", .spec = dst_spec});
+        spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"dst_tensor"}, .spec = dst_spec});
     }
-    spec.tensor_parameters.push_back({.unique_id = "dfb_ring_tensor", .spec = ring_spec});
+    spec.tensor_parameters.push_back(
+        {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec});
 
     spec.kernels          = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
@@ -213,27 +214,34 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Build and apply run params
     // -----------------------------------------------------------------------
-    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    using NodeRuntimeArgs = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values)::value_type;
     const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
 
     ProgramRunArgs params;
-    params.kernel_run_args.push_back({
-        .kernel_spec_name = "producer",
-        .runtime_arg_values = {dm_rtas},
-    });
-    if (cfg.tensix_consumer) {
-        params.kernel_run_args.push_back({.kernel_spec_name = "consumer"});
-    } else {
-        params.kernel_run_args.push_back({
-            .kernel_spec_name = "consumer",
+    params.kernel_run_args.emplace(
+        experimental::KernelSpecName{"producer"},
+        ProgramRunArgs::KernelRunArgs{
             .runtime_arg_values = {dm_rtas},
         });
+    if (cfg.tensix_consumer) {
+        params.kernel_run_args.emplace(experimental::KernelSpecName{"consumer"}, ProgramRunArgs::KernelRunArgs{});
+    } else {
+        params.kernel_run_args.emplace(
+            experimental::KernelSpecName{"consumer"},
+            ProgramRunArgs::KernelRunArgs{
+                .runtime_arg_values = {dm_rtas},
+            });
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
+    params.tensor_args.emplace(
+        experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)});
     if (!cfg.tensix_consumer) {
-        params.tensor_args.push_back({.tensor_parameter_name = "dst_tensor", .tensor = std::cref(*dst_tensor)});
+        params.tensor_args.emplace(
+            experimental::TensorParamName{"dst_tensor"},
+            ProgramRunArgs::TensorArgument{.tensor = std::cref(*dst_tensor)});
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor)});
+    params.tensor_args.emplace(
+        experimental::TensorParamName{"dfb_ring_tensor"},
+        ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor)});
     SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
@@ -287,10 +295,10 @@ void run_update_address_test(
     };
     producer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     producer_spec.tensor_bindings = {
-        {.tensor_parameter_name = "src_tensor",      .accessor_name = "src_tensor"},
-        {.tensor_parameter_name = "dfb_ring_tensor", .accessor_name = "dfb_ring"},
+        {.tensor_parameter_name = experimental::TensorParamName{"src_tensor"}, .accessor_name = "src_tensor"},
+        {.tensor_parameter_name = experimental::TensorParamName{"dfb_ring_tensor"}, .accessor_name = "dfb_ring"},
     };
-    producer_spec.dfb_bindings.push_back(ProducerOf("borrowed_dfb", "out"));
+    producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
 
     KernelSpec consumer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("consumer")
@@ -304,26 +312,26 @@ void run_update_address_test(
     };
     consumer_spec.runtime_arg_schema.runtime_arg_names = {"chunk_offset", "entries_per_core"};
     consumer_spec.tensor_bindings = {{
-        .tensor_parameter_name = "dst_tensor",
-        .accessor_name         = "dst_tensor",
+        .tensor_parameter_name = experimental::TensorParamName{"dst_tensor"},
+        .accessor_name = "dst_tensor",
     }};
-    consumer_spec.dfb_bindings.push_back(ConsumerOf("borrowed_dfb", "in"));
+    consumer_spec.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"borrowed_dfb"}, "in"));
 
     // Disable implicit sync on the borrowed DFB for both DM endpoints (Gen2 only;
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         std::get<DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
         std::get<DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back("borrowed_dfb");
+            .gen2_config->disable_implicit_sync_for.push_back(experimental::DFBSpecName{"borrowed_dfb"});
     }
 
     DataflowBufferSpec dfb_spec{
-        .unique_id = "borrowed_dfb",
+        .unique_id = experimental::DFBSpecName{"borrowed_dfb"},
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = "dfb_ring_tensor",
+        .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
     };
 
     const TensorSpec src_spec  = make_flat_dram_tensor_spec(entry_size, num_entries);
@@ -331,9 +339,9 @@ void run_update_address_test(
     const TensorSpec ring_spec = make_flat_l1_tensor_spec(entry_size, num_entries);
 
     spec.tensor_parameters = {
-        {.unique_id = "src_tensor",      .spec = src_spec},
-        {.unique_id = "dst_tensor",      .spec = dst_spec},
-        {.unique_id = "dfb_ring_tensor", .spec = ring_spec},
+        {.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec},
+        {.unique_id = experimental::TensorParamName{"dst_tensor"}, .spec = dst_spec},
+        {.unique_id = experimental::TensorParamName{"dfb_ring_tensor"}, .spec = ring_spec},
     };
     spec.kernels          = {producer_spec, consumer_spec};
     spec.dataflow_buffers = {dfb_spec};
@@ -350,7 +358,7 @@ void run_update_address_test(
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
-    using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    using NodeRuntimeArgs = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values)::value_type;
     const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
 
     // --- Run 1: ring at ring_tensor_a ---
@@ -360,13 +368,14 @@ void run_update_address_test(
 
     ProgramRunArgs params1;
     params1.kernel_run_args = {
-        {.kernel_spec_name = "producer", .runtime_arg_values = {dm_rtas}},
-        {.kernel_spec_name = "consumer", .runtime_arg_values = {dm_rtas}},
+        {experimental::KernelSpecName{"producer"}, ProgramRunArgs::KernelRunArgs{.runtime_arg_values = {dm_rtas}}},
+        {experimental::KernelSpecName{"consumer"}, ProgramRunArgs::KernelRunArgs{.runtime_arg_values = {dm_rtas}}},
     };
     params1.tensor_args = {
-        {.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)},
-        {.tensor_parameter_name = "dst_tensor", .tensor = std::cref(dst_tensor)},
-        {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_a)},
+        {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)}},
+        {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(dst_tensor)}},
+        {experimental::TensorParamName{"dfb_ring_tensor"},
+         ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor_a)}},
     };
     SetProgramRunArgs(program, params1);
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
@@ -387,10 +396,13 @@ void run_update_address_test(
 
     UpdateTensorArgs(
         program,
-        std::vector<ProgramRunArgs::TensorArgument>{
-            {.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)},
-            {.tensor_parameter_name = "dst_tensor", .tensor = std::cref(dst_tensor)},
-            {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_b)},
+        Table<experimental::TensorParamName, ProgramRunArgs::TensorArgument>{
+            {experimental::TensorParamName{"src_tensor"},
+             ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)}},
+            {experimental::TensorParamName{"dst_tensor"},
+             ProgramRunArgs::TensorArgument{.tensor = std::cref(dst_tensor)}},
+            {experimental::TensorParamName{"dfb_ring_tensor"},
+             ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor_b)}},
         });
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

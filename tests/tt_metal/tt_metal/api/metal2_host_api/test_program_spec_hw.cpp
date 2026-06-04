@@ -112,8 +112,8 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // DFB: both kernels bind it, with different local accessor names
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    producer.dfb_bindings.push_back(ProducerOf("loopback_dfb", "my_local_dfb_name"));
-    consumer.dfb_bindings.push_back(ConsumerOf("loopback_dfb", "a_dfb_named_bob"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"loopback_dfb"}, "my_local_dfb_name"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"loopback_dfb"}, "a_dfb_named_bob"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -129,32 +129,32 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     ProgramRunArgs params;
     params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "producer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs =
-                        {{node,
-                          {
-                              input_buffer->address(),
-                              0u,  // bank_id (single-page buffer → bank 0)
-                              num_transfers,
-                          }}},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "consumer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs =
-                        {{node,
-                          {
-                              output_buffer->address(),
-                              0u,  // bank_id
-                              num_transfers,
-                          }}},
-                },
-        },
+        {KernelSpecName{"producer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs =
+                         {{node,
+                           {
+                               input_buffer->address(),
+                               0u,  // bank_id (single-page buffer → bank 0)
+                               num_transfers,
+                           }}},
+                 },
+         }},
+        {KernelSpecName{"consumer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs =
+                         {{node,
+                           {
+                               output_buffer->address(),
+                               0u,  // bank_id
+                               num_transfers,
+                           }}},
+                 },
+         }},
     };
     SetProgramRunArgs(program, params);
 
@@ -254,8 +254,8 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     auto dfb = MakeMinimalDFB("loopback_dfb", entry_size, num_entries_in_dfb);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    producer.dfb_bindings.push_back(ProducerOf("loopback_dfb", "loopback_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf("loopback_dfb", "loopback_dfb"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"loopback_dfb"}, "loopback_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"loopback_dfb"}, "loopback_dfb"));
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
@@ -279,26 +279,26 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "producer",
-            .runtime_arg_values = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
-            .common_runtime_arg_values = {{"num_entries", num_transfers}},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
-                    .common_runtime_varargs = {kProducerCrta0},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "consumer",
-            .runtime_arg_values = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
-            .common_runtime_arg_values = {{"num_entries", num_transfers}},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
-                    .common_runtime_varargs = {kConsumerCrta0},
-                },
-        },
+        {KernelSpecName{"producer"},
+         ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+             .common_runtime_arg_values = {{"num_entries", num_transfers}},
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
+                     .common_runtime_varargs = {kProducerCrta0},
+                 },
+         }},
+        {KernelSpecName{"consumer"},
+         ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+             .common_runtime_arg_values = {{"num_entries", num_transfers}},
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
+                     .common_runtime_varargs = {kConsumerCrta0},
+                 },
+         }},
     };
     SetProgramRunArgs(program, params);
 
@@ -377,8 +377,8 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     auto out_dfb = MakeMinimalDFB("out_dfb", entry_size, num_entries_in_dfb);
     out_dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    compute.dfb_bindings.push_back(ProducerOf("out_dfb", "out_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf("out_dfb", "a_dfb_named_bob"));
+    compute.dfb_bindings.push_back(ProducerOf(DFBSpecName{"out_dfb"}, "out_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"out_dfb"}, "a_dfb_named_bob"));
 
     spec.kernels = {compute, consumer};
     spec.dataflow_buffers = {out_dfb};
@@ -400,23 +400,23 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     ProgramRunArgs params;
     params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "compute",
-            .runtime_arg_values = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
-            .common_runtime_arg_values = {{"num_tiles", num_transfers}},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kVararg0, kVararg1}}},
-                    .common_runtime_varargs = {kCommonVararg0},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "consumer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
-                },
-        },
+        {KernelSpecName{"compute"},
+         ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {kVararg0, kVararg1}}},
+                     .common_runtime_varargs = {kCommonVararg0},
+                 },
+         }},
+        {KernelSpecName{"consumer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
+                 },
+         }},
     };
     SetProgramRunArgs(program, params);
 
@@ -460,7 +460,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     // A SemaphoreSpec describes a Program-scope semaphore: it identifies the sem by name and
     // declares which nodes will see it. Initial value defaults to 0.
     SemaphoreSpec sem{
-        .unique_id = "only_sem",
+        .unique_id = SemSpecName{"only_sem"},
         .target_nodes = node,
     };
 
@@ -473,24 +473,24 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     // hints are the idiomatic way to get that — the producer writes the semaphore signal, the
     // consumer reads it — with no need to hand-pick a processor/NOC via an explicit Gen1Config.
     KernelSpec producer{
-        .unique_id = "producer",
+        .unique_id = KernelSpecName{"producer"},
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemSpecName{"only_sem"}, .accessor_name = "signal"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .role = DataMovementRoleHint::WRITER,
             },
     };
     KernelSpec consumer{
-        .unique_id = "consumer",
+        .unique_id = KernelSpecName{"consumer"},
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemSpecName{"only_sem"}, .accessor_name = "waiter"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .role = DataMovementRoleHint::READER,
@@ -500,7 +500,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
     WorkUnitSpec work_unit{
         .name = "work_unit_0",
-        .kernels = {"producer", "consumer"},
+        .kernels = {KernelSpecName{"producer"}, KernelSpecName{"consumer"}},
         .target_nodes = node,
     };
 
@@ -581,8 +581,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // DFB connecting the two kernels
     auto dfb = MakeMinimalDFB("input_dfb", page_size, num_dfb_entries);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    producer.dfb_bindings.push_back(ProducerOf("input_dfb", "input_dfb"));
-    consumer.dfb_bindings.push_back(ConsumerOf("input_dfb", "input_dfb"));
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"input_dfb"}, "input_dfb"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"input_dfb"}, "input_dfb"));
 
     // TensorAccessor bindings: each kernel sees its own tensor under its accessor name
     BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
@@ -591,8 +591,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.tensor_parameters = {
-        TensorParameter{.unique_id = "input_tensor", .spec = tensor_spec},
-        TensorParameter{.unique_id = "output_tensor", .spec = tensor_spec},
+        TensorParameter{.unique_id = TensorParamName{"input_tensor"}, .spec = tensor_spec},
+        TensorParameter{.unique_id = TensorParamName{"output_tensor"}, .spec = tensor_spec},
     };
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
@@ -606,24 +606,24 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     ProgramRunArgs params;
     params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "producer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {num_pages}}},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "consumer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {num_pages}}},
-                },
-        },
+        {KernelSpecName{"producer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {num_pages}}},
+                 },
+         }},
+        {KernelSpecName{"consumer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {num_pages}}},
+                 },
+         }},
     };
     params.tensor_args = {
-        ProgramRunArgs::TensorArgument{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
-        ProgramRunArgs::TensorArgument{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(input_tensor)}},
+        {TensorParamName{"output_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(output_tensor)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -672,9 +672,9 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    producer_g1.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    producer_g2.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    producer_g1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer_g2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     ProgramSpec spec;
     spec.name = "multi_binding_mask_mismatch";

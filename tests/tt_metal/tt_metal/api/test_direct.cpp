@@ -224,9 +224,9 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     const uint32_t num_threads = (is_quasar && test_config.num_tiles > 1) ? 2u : 1u;
     const uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
 
-    constexpr const char* L1_DFB = "l1_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
+    const experimental::DFBSpecName L1_DFB{"l1_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
 
     experimental::DataflowBufferSpec l1_dfb_spec{
         .unique_id = L1_DFB,
@@ -289,26 +289,24 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = test_config.node,
-                  .args =
-                      {{"src_addr", input_dram_byte_address},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", per_tile_stride}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = test_config.node,
-                  .args =
-                      {{"dst_addr", output_dram_byte_address},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", per_tile_stride}}}},
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{test_config.node,
+                   {{"src_addr", input_dram_byte_address},
+                    {"src_bank_id", 0u},
+                    {"num_tiles", num_tiles_per_thread},
+                    {"dram_page_stride", per_tile_stride}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{test_config.node,
+                   {{"dst_addr", output_dram_byte_address},
+                    {"dst_bank_id", 0u},
+                    {"num_tiles", num_tiles_per_thread},
+                    {"dram_page_stride", per_tile_stride}}}},
+         }},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -397,11 +395,11 @@ bool reader_datacopy_writer(
     const uint32_t per_core_tile_cnt = test_config.num_tiles / num_threads;
     const uint32_t num_tiles_per_thread = test_config.num_tiles / num_threads;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
     // via Gen2Config::disable_implicit_sync_for). The program-level
@@ -498,29 +496,25 @@ bool reader_datacopy_writer(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = test_config.node,
-                  .args =
-                      {{"src_addr", ctx.input_dram_byte_address},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", ctx.per_tile_stride}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = test_config.node,
-                  .args =
-                      {{"dst_addr", ctx.output_dram_byte_address},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles_per_thread},
-                       {"dram_page_stride", ctx.per_tile_stride}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{test_config.node,
+                   {{"src_addr", ctx.input_dram_byte_address},
+                    {"src_bank_id", 0u},
+                    {"num_tiles", num_tiles_per_thread},
+                    {"dram_page_stride", ctx.per_tile_stride}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{test_config.node,
+                   {{"dst_addr", ctx.output_dram_byte_address},
+                    {"dst_bank_id", 0u},
+                    {"num_tiles", num_tiles_per_thread},
+                    {"dram_page_stride", ctx.per_tile_stride}}}},
+         }},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
     experimental::SetProgramRunArgs(program, params);
 
