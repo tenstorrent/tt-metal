@@ -43,6 +43,8 @@ void kernel_main() {
     constexpr uint32_t done_sem_id = get_compile_time_arg_val(11);    // broadcast by the coordinator to all cores
     constexpr uint32_t coordinator_noc_x = get_compile_time_arg_val(12);  // first core (gather/broadcast hub)
     constexpr uint32_t coordinator_noc_y = get_compile_time_arg_val(13);
+    constexpr uint32_t in1_cb_index = get_compile_time_arg_val(14);   // this core's sharded B slice
+    constexpr uint32_t in1_num_tiles = get_compile_time_arg_val(15);  // tiles of B resident on this core
 
     // ---- Runtime args ----
     const uint32_t is_sender = get_arg_val<uint32_t>(0);       // 1 if this core holds a slice of A
@@ -60,9 +62,15 @@ void kernel_main() {
 
     Noc noc;
     CircularBuffer in0_cb(in0_cb_index);
+    CircularBuffer in1_cb(in1_cb_index);
     CircularBuffer full_in0_cb(full_in0_cb_index);
     Semaphore<> gather_sem(gather_sem_id);
     Semaphore<> done_sem(done_sem_id);
+
+    // B (in1) is width-sharded and already resident in this core's L1, so no NoC
+    // read is needed -- just publish the resident tiles to the compute kernel.
+    in1_cb.reserve_back(in1_num_tiles);
+    in1_cb.push_back(in1_num_tiles);
 
     // Reserve space for the whole A matrix; multicast writes land directly here.
     full_in0_cb.reserve_back(full_num_tiles);

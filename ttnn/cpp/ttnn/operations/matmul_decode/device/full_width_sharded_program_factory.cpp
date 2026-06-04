@@ -192,6 +192,9 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         // Coordinator's physical (worker) coords == rectangle start corner.
         static_cast<uint32_t>(mcast_start_phys.x),
         static_cast<uint32_t>(mcast_start_phys.y),
+        // in1 (B) is already resident in L1; the reader just publishes its tiles.
+        in1_cb_index,
+        K_tiles * inB_N_tiles_per_core,
     };
 
     // Map each A-holding core to its K-slice index (== semaphore id).  Cores are
