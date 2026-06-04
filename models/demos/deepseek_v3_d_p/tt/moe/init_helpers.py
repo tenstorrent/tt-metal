@@ -764,10 +764,8 @@ def load_captured_routing(
     # table → kernel skips (preserving the per-col routing share 1:1 with Galaxy col k).
     SENTINEL = 255
     experts_per_col = num_routed_experts // 4
-    in_col_share = (
-        (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
-    ).float().mean().item() * 100.0
     in_col_mask = (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
+    in_col_share = in_col_mask.float().mean().item() * 100.0
     indices = torch.where(
         in_col_mask,
         indices - col * experts_per_col,
