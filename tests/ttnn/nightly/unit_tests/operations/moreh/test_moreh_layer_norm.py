@@ -761,3 +761,31 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
     pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.09, atol=0.06)
     logger.debug(f"rstd's {out_rstd}")
     assert pass_rstd
+
+
+def test_moreh_layer_norm_rejects_invalid_mean_volume(device):
+    torch.manual_seed(2023)
+    input_shape = [2, 32, 64]
+    normalized_dims = 1
+    eps = 1e-5
+    mean_rstd_shape = input_shape[:-normalized_dims]
+    wrong_mean_shape = [input_shape[0], input_shape[1] + 1]
+
+    cpu_input, _, _, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine=False)
+
+    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
+    npu_output = to_ttnn(torch.empty_like(cpu_input), device=device, dtype=ttnn.bfloat16)
+    npu_mean = to_ttnn(torch.zeros(wrong_mean_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+    npu_rstd = to_ttnn(torch.zeros(mean_rstd_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+
+    with pytest.raises(RuntimeError, match="mean must have logical volume"):
+        ttnn.operations.moreh.layer_norm(
+            npu_input,
+            normalized_dims,
+            eps,
+            None,
+            None,
+            output=npu_output,
+            mean=npu_mean,
+            rstd=npu_rstd,
+        )

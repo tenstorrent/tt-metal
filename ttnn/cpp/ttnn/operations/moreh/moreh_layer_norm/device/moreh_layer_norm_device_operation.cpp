@@ -23,6 +23,23 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
         tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
 }
+
+ttnn::Shape get_promoted_logical_shape(const Tensor& tensor) {
+    auto logical_shape = tensor.logical_shape();
+    const auto padded_rank = tensor.padded_shape().rank();
+    if (logical_shape.rank() < padded_rank) {
+        logical_shape = logical_shape.to_rank(padded_rank);
+    }
+    return logical_shape;
+}
+
+uint64_t compute_prefix_volume(const ttnn::Shape& shape, uint32_t normalized_dims) {
+    uint64_t volume = 1;
+    for (uint32_t i = 0; i < shape.rank() - normalized_dims; ++i) {
+        volume *= shape[i];
+    }
+    return volume;
+}
 }  // namespace
 
 void MorehLayerNormOperation::validate_inputs(
@@ -55,14 +72,29 @@ void MorehLayerNormOperation::validate_inputs(
 
     const auto& mean = tensor_args.mean;
     const auto& rstd = tensor_args.rstd;
+    const auto promoted_input_shape = get_promoted_logical_shape(input);
+    const auto expected_mean_rstd_volume = compute_prefix_volume(promoted_input_shape, normalized_dims);
 
     if (mean.has_value()) {
         check_tensor(mean.value(), "moreh_layer_norm");
+        TT_FATAL(input.device() == mean.value().device(), "input and mean should be on the same device.");
+        TT_FATAL(
+            mean->logical_volume() == expected_mean_rstd_volume,
+            "mean must have logical volume {}. Got {}.",
+            expected_mean_rstd_volume,
+            mean->logical_volume());
     }
 
     if (rstd.has_value()) {
         check_tensor(rstd.value(), "moreh_layer_norm");
+        TT_FATAL(input.device() == rstd.value().device(), "input and rstd should be on the same device.");
+        TT_FATAL(
+            rstd->logical_volume() == expected_mean_rstd_volume,
+            "rstd must have logical volume {}. Got {}.",
+            expected_mean_rstd_volume,
+            rstd->logical_volume());
     }
+
 }
 
 void MorehLayerNormOperation::validate_on_program_cache_miss(
