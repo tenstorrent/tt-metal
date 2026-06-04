@@ -387,18 +387,6 @@ Note: You are providing the evidence — the verify agent will run `verify-pr-pr
 
 ---
 
-## Step 6: Existing CI Log Check (Narrow the Range Without Probing)
-
-Before concluding `action_required: "probe_verification"`, check if existing CI runs at key commits can narrow the range:
-
-```
-GET /repos/tenstorrent/tt-metal/actions/runs?head_sha={midpoint_sha}
-```
-
-For each midpoint in the binary search space, if a run exists at that SHA on the relevant workflow, check its job log for the test. Record in `bisect_log_reads`. If existing reads narrow to a single commit, set `fix_commit_sha` and reduce `candidate_fix_commits` accordingly.
-
----
-
 ## Output Format
 
 Return a single JSON object. Do not wrap in markdown. Do not add prose outside the JSON.
