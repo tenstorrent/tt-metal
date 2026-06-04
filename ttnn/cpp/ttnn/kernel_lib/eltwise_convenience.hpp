@@ -98,6 +98,28 @@ ALWI void mul(EltwiseShape shape) {
 }
 
 // ---------------------------------------------------------------------------
+// FPU square — x * x, via BinaryFpu reading the one input buffer for both operands
+// (the chain's same-buffer path waits/pops it once). Mirrors mul's knobs minus the ones
+// that don't apply when both operands are the same tile: no broadcast, and a single
+// operand lifecycle / index instead of separate A/B.
+// ---------------------------------------------------------------------------
+
+template <
+    uint32_t CbIn,
+    uint32_t CbOut,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    OperandKind Idx = OperandKind::Scalar,
+    InputLifecycle Life = InputLifecycle::Streaming,
+    OutputLifecycle OutLife = OutputLifecycle::Streaming,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+ALWI void square(EltwiseShape shape) {
+    eltwise_chain(
+        shape,
+        BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Reconfig, Life, Life, Idx, Dst::D0, Idx>{},
+        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+}
+
+// ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
 // ---------------------------------------------------------------------------
 

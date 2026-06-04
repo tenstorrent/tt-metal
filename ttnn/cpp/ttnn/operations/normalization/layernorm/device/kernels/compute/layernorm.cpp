@@ -28,6 +28,7 @@
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // square
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
@@ -274,24 +275,15 @@ void kernel_main() {
          * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> BinaryDataFormatReconfig::Input
          *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
-            compute_kernel_lib::BinaryFpu<
-                cb_xmm,
-                cb_xmm,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block>{},
-            compute_kernel_lib::PackTile<
-                cb_xmm2,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::None>{});
+        compute_kernel_lib::square<
+            cb_xmm,
+            cb_xmm2,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,  // operand index
+            compute_kernel_lib::InputLifecycle::HeldBulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::PackTileReconfig::None>(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
