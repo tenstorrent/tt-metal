@@ -353,7 +353,7 @@ jobs:
   # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
   # superset that re-validates everything in SD on every supported runner class.
   llk-sd-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [build-artifact, generate-arch-matrix, check-harbor]
     if: |
       (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
@@ -366,6 +366,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       dispatch-mode: sd

@@ -496,11 +496,8 @@ jobs:
   # the full suite under slow dispatch. Merge gate shards FD by arch and runs
   # the SD-only/Quasar slice from tests/pipeline_reorg/llk_unit_tests.yaml.
   #
-  # NOTE: llk-unit-tests and tt-train use raw GHCR image tags and handle
-  # Harbor prefix internally (llk-unit-tests.yaml hardcodes harbor.ci.tenstorrent.net
-  # for N150/N300 runners). This is intentional — do not add check-harbor here.
   llk-unit-tests:
-    needs: [ build, find-changes, load-llk-unit-test-matrix]
+    needs: [ build, find-changes, load-llk-unit-test-matrix, check-harbor]
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
@@ -524,6 +521,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner_label }}
       runs-on-labels: ${{ toJSON(matrix.test-group.runs_on) }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: ${{ matrix.test-group.dispatch_mode }}
