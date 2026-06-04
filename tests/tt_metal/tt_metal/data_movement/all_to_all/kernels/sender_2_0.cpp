@@ -42,7 +42,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_of_transactions; i++) {
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_write(
+                noc.async_write<NocOptions::CUSTOM_VC>(
                     unicast_endpoint,
                     unicast_endpoint,
                     bytes_per_transaction_per_master,
@@ -54,7 +54,7 @@ void kernel_main() {
                         .noc_y = subordinate_y_coord,
                         .addr = subordinate_l1_local_address,
                     },
-                    current_virtual_channel);
+                    NocOptVals{.vc = current_virtual_channel});
             }
         }
         noc.async_write_barrier();

@@ -33,7 +33,7 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc.async_write(
+            noc.async_write<NocOptions::CUSTOM_VC>(
                 unicast_endpoint,
                 AllocatorBank<bank_type>(),
                 bytes_per_transaction,
@@ -44,7 +44,7 @@ void kernel_main() {
                     .bank_id = dram_channel,
                     .addr = dram_addr,
                 },
-                virtual_channel);
+                NocOptVals{.vc = virtual_channel});
         }
         noc.async_write_barrier();
     }
