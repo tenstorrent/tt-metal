@@ -201,7 +201,7 @@ jobs:
             matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
+            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100a")
             matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
           fi
           echo "matrix-l2-tests=$matrix_l2" >> $GITHUB_OUTPUT
@@ -225,8 +225,8 @@ jobs:
             matrix_sd_fd=$(add_entry "$matrix_sd_fd" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P150")
-            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P100")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P150b")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P100a")
           fi
           echo "matrix-sd-fd-tests=$matrix_sd_fd" >> $GITHUB_OUTPUT
 
@@ -237,7 +237,7 @@ jobs:
           fi
           if [[ "$run_blackhole" == "true" ]]; then
             matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P150b")
-            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100")
+            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100a")
           fi
           echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
 
