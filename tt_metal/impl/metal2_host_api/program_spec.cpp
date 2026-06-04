@@ -208,7 +208,7 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
 }
 
 // Helper: return a kernel's dfb-compute-self-loop-scopes map.
-const ttsl::Table<DFBSpecName, DFBSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
+const Table<DFBSpecName, DFBSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
     return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 

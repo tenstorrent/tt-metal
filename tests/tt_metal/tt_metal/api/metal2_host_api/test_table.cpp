@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //---------------------------------------------------------------------------------
-// Unit tests for the Table<K, V> container (table.hpp).
+// Unit tests for the Metal 2.0 Host API Table<K, V> container (table.hpp).
 //
 // Pure host-side data-structure tests — no device required.
 //---------------------------------------------------------------------------------
@@ -19,11 +19,13 @@
 #include <utility>
 #include <vector>
 
-#include <tt_stl/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 
 namespace {
 
-using StrIntTable = ttsl::Table<std::string, int>;
+namespace m2 = tt::tt_metal::experimental;
+
+using StrIntTable = m2::Table<std::string, int>;
 
 // ---- iterator contract (compile-time) ----------------------------------------
 
@@ -278,7 +280,7 @@ TEST(TableTest, SpanDuplicateThrows) {
 // ---- genericity over other K/V types -----------------------------------------
 
 TEST(TableMiscTest, IntKeyStringValue) {
-    ttsl::Table<int, std::string> t;
+    m2::Table<int, std::string> t;
     t[1] = "one";
     t.emplace(2, "two");
     EXPECT_EQ(t.size(), 2u);

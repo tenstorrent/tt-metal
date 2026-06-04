@@ -25,7 +25,7 @@ namespace tt::tt_metal::experimental {
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
 // Helpers for vararg-value access (now living on AdvancedKernelRunArgs).
-const ttsl::Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.runtime_varargs;
 }
 
@@ -49,7 +49,7 @@ const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const Progra
 //     See the field doc comments in tensor_parameter.hpp for the full contracts.
 //   - Every declared TensorParameter must be set
 void ValidateTensorArgs(
-    const Program& program, const ttsl::Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
+    const Program& program, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     const detail::ProgramImpl& program_impl = program.impl();
 
     std::unordered_set<std::string> tensor_parameters_with_params;
@@ -363,8 +363,7 @@ std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle
 // Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
 // has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
 void AttachBorrowedDFBBuffers(
-    detail::ProgramImpl& program_impl,
-    const ttsl::Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
+    detail::ProgramImpl& program_impl, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
@@ -465,7 +464,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
         // Build a node -> named-RTA-values-map lookup for serialization.
-        std::unordered_map<NodeCoord, const ttsl::Table<std::string, uint32_t>*> named_rtas_by_node;
+        std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
             named_rtas_by_node[node] = &args;
         }
@@ -581,8 +580,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
 }
 
-void UpdateTensorArgs(
-    Program& program, const ttsl::Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
+void UpdateTensorArgs(Program& program, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     // Validate the TensorArgument list (shared with the full-path validator).

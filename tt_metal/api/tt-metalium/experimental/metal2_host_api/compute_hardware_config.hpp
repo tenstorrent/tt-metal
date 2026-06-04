@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt_stl/table.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode (global scope)
 
 namespace tt::tt_metal::experimental {
@@ -64,7 +64,7 @@ struct ComputeHardwareConfig {
     // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
     // failing to do so will trigger an error. Otherwise, supplying an entry is optional
     // and only Default is accepted.
-    using UnpackToDestModes = ttsl::Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
+    using UnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     UnpackToDestModes unpack_to_dest_mode;
 };
 

@@ -26,7 +26,6 @@ target_sources(
             tt_stl/llvm/llvm_small_vector.hpp
             tt_stl/span.hpp
             tt_stl/strong_type.hpp
-            tt_stl/table.hpp
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
             tt_stl/assert.hpp
