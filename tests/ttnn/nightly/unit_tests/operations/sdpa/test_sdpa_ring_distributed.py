@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import time
 import torch
@@ -19,11 +18,6 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    """Check if TT_METAL_WATCHER is enabled"""
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def gather_and_reshuffle_ring_outputs(ring_outputs, ring_size, global_seq_len):
@@ -146,7 +140,6 @@ def run_test_ring_distributed_sdpa(device, b, s, ring_size, q_chunk_size, k_chun
     logger.info("Ring-distributed SDPA correctness test passed!")
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_chunk_size", [96, 128, 192, 256], ids=["q96", "q128", "q192", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
 @pytest.mark.parametrize(
@@ -285,7 +278,6 @@ def run_test_ring_distributed_sdpa_with_prefix_and_paged_kv(
     )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize(
     "s",
     [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072],

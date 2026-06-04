@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -575,8 +574,6 @@ def run_test_sdpa_with_attention_sink(
 def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, memory_config):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
     rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
     run_test_sdpa_tt(
         device,
@@ -682,9 +679,6 @@ def test_sdpa_noncausal_randn_bias(device, b, nh, s, d):
 def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
-
     for _ in range(2):
         run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 

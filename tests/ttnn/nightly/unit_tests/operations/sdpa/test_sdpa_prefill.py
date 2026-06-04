@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import math
 import time
 import torch
@@ -20,10 +19,6 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def fa_rand(*shape):
@@ -238,7 +233,6 @@ def run_sdpa_noncausal(
     assert out_pass
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 96, 128, 192, 512], ids=["q32", "q96", "q128", "q192", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
@@ -255,8 +249,6 @@ def run_sdpa_noncausal(
     ],
 )
 def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal, is_ci_env):
-    if q_chunk_size == 512 and k_chunk_size == 512:
-        pytest.skip("OOM config.")
     if nh % nkv != 0:
         pytest.skip("nkv must divide nh")
     if is_ci_env and (b == 1 or nh == 1 or s == 1 or q_chunk_size == 512 or k_chunk_size == 512):
@@ -269,7 +261,6 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp4", "bfp8", "bf16"])
 @pytest.mark.parametrize(
     "memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_interleaved", "l1_interleaved"]
@@ -293,10 +284,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
         pytest.skip("just need to single test case for sanity-check bfp4")
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
-    if memory_config == ttnn.L1_MEMORY_CONFIG and k_chunk_size > 128 and q_chunk_size > 128:
-        pytest.skip("L1 memory config with large chunk sizes can cause OOM.")
     rmse_threshold = 0.0092 if (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b) else 0.0093
     run_test_sdpa_tt(
         device,
@@ -313,7 +300,6 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
     )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
 @pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
@@ -325,12 +311,9 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, me
 def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
 @pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
@@ -345,12 +328,9 @@ def test_sdpa_tt_small_chunks(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_si
 def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
@@ -362,8 +342,6 @@ def test_sdpa_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
     rmse_threshold = 0.0094
     run_test_sdpa_tt(
         device,
@@ -381,7 +359,6 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
 
 
 @pytest.mark.skip(reason="Skip perf test in CI")
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [256], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k128"])
@@ -398,12 +375,9 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
 def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -418,16 +392,12 @@ def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtyp
 def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
-    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
-        pytest.skip("Can cause OOM if profiling is enabled.")
-
     for _ in range(2):
         run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
 
     assert device.num_program_cache_entries() == 1
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128, 256], ids=["q32", "q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -450,7 +420,6 @@ def test_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
     run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -468,7 +437,6 @@ def test_sdpa_noncausal_unequal_seqlen(device, b, nh, nkv, sq, sk, d, q_chunk_si
     run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=sk)
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128], ids=["q32", "q128"])
 @pytest.mark.parametrize("k_chunk_size", [64, 128], ids=["k64", "k128"])
@@ -726,7 +694,6 @@ def run_test_chunked_sdpa(
             assert out_pass
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
@@ -800,7 +767,6 @@ def test_sdpa_chunked(
     )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("q_chunk_size", [128])
@@ -950,7 +916,6 @@ def run_test_joint_sdpa(
             assert rmse < rmse_threshold
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
@@ -973,8 +938,6 @@ def run_test_joint_sdpa(
     ],
 )
 def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
-    if q_chunk_size == 512 and k_chunk_size == 512:
-        pytest.skip("OOM config.")
     rmse_threshold = 0.013
     run_test_joint_sdpa(
         device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
@@ -982,7 +945,6 @@ def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_ch
 
 
 # @pytest.mark.skip(reason="ND PCC issues")
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -1368,7 +1330,6 @@ def run_test_sdpa_sliding_window(
         assert out_pass
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
@@ -1398,7 +1359,6 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     )
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128], ids=["q128"])
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])

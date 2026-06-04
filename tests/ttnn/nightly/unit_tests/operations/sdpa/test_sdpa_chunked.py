@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import time
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -19,10 +18,6 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def run_test_chunked_sdpa(
@@ -238,7 +233,6 @@ def run_test_chunked_sdpa(
             assert out_pass
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
@@ -378,7 +372,6 @@ def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
         device.enable_program_cache()
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("q_chunk_size", [128])

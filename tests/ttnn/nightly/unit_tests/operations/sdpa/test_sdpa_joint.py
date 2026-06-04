@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
@@ -17,10 +16,6 @@ def fa_rand(*shape):
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
-
-
-def is_watcher_enabled():
-    return os.environ.get("TT_METAL_WATCHER") is not None
 
 
 def run_test_joint_sdpa(
@@ -116,7 +111,6 @@ def run_test_joint_sdpa(
             assert rmse < rmse_threshold
 
 
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32, 128, 512], ids=["q32", "q128", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
@@ -141,6 +135,7 @@ def run_test_joint_sdpa(
 def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype):
     if q_chunk_size == 512 and k_chunk_size == 512:
         pytest.skip("OOM config.")
+
     rmse_threshold = 0.013
     run_test_joint_sdpa(
         device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
@@ -148,7 +143,6 @@ def test_joint_sdpa(device, b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_ch
 
 
 # @pytest.mark.skip(reason="ND PCC issues")
-@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
 @pytest.mark.parametrize("k_chunk_size", [128, 256], ids=["k128", "k256"])
