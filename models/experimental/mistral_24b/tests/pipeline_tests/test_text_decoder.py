@@ -18,8 +18,7 @@ from models.experimental.mistral_24b.tests.pipeline_tests.test_end2end import se
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 from models.experimental.mistral_24b.tt.generator import MistralGenerator
 
-# Mesh trace region (bytes) by architecture.
-TRACE_REGION_SIZE_WORMHOLE = 30_000_000  # 30 MiB
+# Mesh trace region
 TRACE_REGION_SIZE_BLACKHOLE = 35_000_000  # 35 MiB
 
 
