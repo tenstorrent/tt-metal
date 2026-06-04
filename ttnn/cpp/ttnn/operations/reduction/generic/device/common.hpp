@@ -69,9 +69,9 @@ struct RmPlan {
     uint32_t dst_datum_size;
 };
 
-// Populate an RmPlan from the input's padded + logical shapes, tile geometry, data formats
-// and the dim being reduced. Dim picks which of {wt,ht}_tiles_per_chunk is the variable
-// chunk size and which is pinned to 1.
+// Populate an RmPlan from the input's padded + logical shapes, tile geometry, and data formats.
+// Both the W and H reduce paths chunk by wt_tiles_per_chunk = clamp(Wt, 1, cap) with
+// ht_tiles_per_chunk = 1 (see make_rm_plan for the per-dim interpretation).
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,
@@ -79,8 +79,7 @@ RmPlan make_rm_plan(
     uint32_t tile_width,
     tt::DataFormat src_cb_data_format,
     tt::DataFormat dst_cb_data_format,
-    tt::tt_metal::ReduceOpMath math_op,
-    tt::tt_metal::ReduceOpDim dim);
+    tt::tt_metal::ReduceOpMath math_op);
 
 // The factory-level RM preconditions: interleaved I/O, SUM only, no negate, dim is H or W.
 // `dim_label` is "Reduce W" / "Reduce H" for the fatal messages.

@@ -72,8 +72,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             tile_width,
             src0_cb_data_format,
             dst_cb_data_format,
-            operation_attributes.math_op,
-            ReduceOpDim::H);
+            operation_attributes.math_op);
     }
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
@@ -84,7 +83,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_cols = NC * Wt;
+    // Classic tile path parallelizes over output columns (NC * Wt). The dense RM path instead
+    // parallelizes over width-chunk "units": each (n,c) is split into ceil(Wt / wt_tiles_per_chunk)
+    // units of up to wt_tiles_per_chunk contiguous output columns, and a core owns whole units so it
+    // can issue one wide per-row read per unit. num_cols therefore counts units on the RM path; every
+    // downstream per-core count (num_cols_per_core_group_*) is a unit count there.
+    const uint32_t rm_units_per_nc = rm_path ? tt::div_up(Wt, plan.wt_tiles_per_chunk) : 0;
+    auto num_cols = rm_path ? (NC * rm_units_per_nc) : (NC * Wt);
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
@@ -507,13 +512,16 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     TT_FATAL(
         cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     if (rm_path) {
-        for (uint32_t i = 0, output_tiles_seen = 0; i < num_cores; i++) {
+        // On the RM path num_cols / num_cols_per_core_group_* count width-chunk units, and the
+        // reader/compute/writer take (units_local, units_seen) — each unit expands to up to
+        // wt_tiles_per_chunk output columns inside the kernels.
+        for (uint32_t i = 0, units_seen = 0; i < num_cores; i++) {
             const CoreCoord& core = cores[i];
-            uint32_t num_output_tiles_local = 0;
+            uint32_t num_units_local = 0;
             if (core_group_1.contains(core)) {
-                num_output_tiles_local = num_cols_per_core_group_1;
+                num_units_local = num_cols_per_core_group_1;
             } else if (core_group_2.contains(core)) {
-                num_output_tiles_local = num_cols_per_core_group_2;
+                num_units_local = num_cols_per_core_group_2;
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
@@ -521,30 +529,30 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 core,
                 {
                     a,
-                    num_output_tiles_local,
-                    output_tiles_seen,
+                    num_units_local,
+                    units_seen,
                 });
             writer_desc.emplace_runtime_args(
                 core,
                 {
                     output,
-                    num_output_tiles_local,
-                    output_tiles_seen,
+                    num_units_local,
+                    units_seen,
                 });
             if (core_group_1.contains(core)) {
-                compute_desc_g1.emplace_runtime_args(core, {num_output_tiles_local, output_tiles_seen});
+                compute_desc_g1.emplace_runtime_args(core, {num_units_local, units_seen});
             } else if (compute_desc_g2.has_value()) {
-                compute_desc_g2->emplace_runtime_args(core, {num_output_tiles_local, output_tiles_seen});
+                compute_desc_g2->emplace_runtime_args(core, {num_units_local, units_seen});
             } else {
                 TT_THROW("Reduce H (dense RM): core in core_group_2 but no second compute descriptor");
             }
 
-            output_tiles_seen += num_output_tiles_local;
+            units_seen += num_units_local;
             if (i == num_cores - 1) {
                 TT_FATAL(
-                    output_tiles_seen == num_cols,
-                    "Reduce H (dense RM) assigned {} output tile columns across cores, expected {}",
-                    output_tiles_seen,
+                    units_seen == num_cols,
+                    "Reduce H (dense RM) assigned {} width-chunk units across cores, expected {}",
+                    units_seen,
                     num_cols);
             }
         }

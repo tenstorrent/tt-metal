@@ -14,8 +14,11 @@
 //   tiles per H chunk.
 //
 // H reduce path (REDUCE_DIM == REDUCE_COL):
-//   each output tile is one work unit; chunk_idx resets per work unit and advances per H chunk.
-//   accumulator holds wt_tiles_per_chunk (== 1 in current factory) partial tile(s) per work unit.
+//   each width-chunk "unit" (up to wt_tiles_per_chunk contiguous output columns) is one work unit;
+//   chunk_idx resets per unit and advances per H chunk. The accumulator holds wt_tiles_per_chunk
+//   partial tiles (one per output column in the chunk). A unit always tilizes/reduces the full
+//   wt_tiles_per_chunk width — the reader identity-pads any columns past W_logical for the last
+//   chunk of an NC, and the writer drops them — so the per-unit tile count is uniform.
 //
 // CB layout contract: cb_rm holds row-sized pages (one CB page = one chunk-wide RM row). Per
 // (h_chunk, w_chunk) iteration the reader pushes ht_in_chunk * TILE_HEIGHT pages — matching
@@ -117,15 +120,17 @@ void kernel_main() {
         //
         // === H reduce path ===
         //
-        // chunk_idx resets per output tile and advances per H chunk; cb_acc holds wt_tiles_per_chunk
-        // (== 1 in current factory) partial tile(s) per output. Runtime arg 1 (start_output_tile_id)
-        // is unused on the compute side now that wt_in_chunk is the compile-time constant.
+        // Runtime arg 0 is the number of width-chunk units this core owns (each unit = up to
+        // wt_tiles_per_chunk output columns; see reader/writer). chunk_idx resets per unit and
+        // advances per H chunk; cb_acc holds wt_tiles_per_chunk partial tiles (one per output column
+        // in the chunk). Runtime arg 1 (start unit) is unused on the compute side — every unit emits
+        // the same wt_tiles_per_chunk-wide block regardless of which (n,c) column range it maps to.
         //
-        const uint32_t num_output_tiles_local = get_arg_val<uint32_t>(0);
+        const uint32_t num_units_local = get_arg_val<uint32_t>(0);
 
         constexpr uint32_t Ht_total = Ht;  // For H reduce, arg(0) IS the total Ht.
 
-        for (uint32_t out_idx = 0; out_idx < num_output_tiles_local; ++out_idx) {
+        for (uint32_t out_idx = 0; out_idx < num_units_local; ++out_idx) {
             uint32_t chunk_idx = 0;
             for (uint32_t ht_base = 0; ht_base < Ht_total; ht_base += ht_tiles_per_chunk) {
                 const uint32_t ht_in_chunk =
