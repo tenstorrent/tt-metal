@@ -153,6 +153,15 @@ def test_unpack_unary_operand_quasar(
         tile_dimensions,
     ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
 
+    if (
+        formats.output_format == DataFormat.MxFp4
+        or formats.input_format == DataFormat.MxFp4
+    ):
+        if tuple(tile_dimensions) not in ((32, 32), (16, 16)):
+            pytest.skip("MxFp4 only supported for num_faces = 1, 4")
+
+    tile_shape = construct_tile_shape(tile_dimensions)
+
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
