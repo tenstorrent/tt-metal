@@ -30,7 +30,9 @@ public:
         TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
         TT_FATAL(
             mesh_buffer_->size() >= spec_.compute_packed_buffer_size_bytes(),
-            "MeshBuffer must be large enough to hold the tensor.");
+            "MeshBuffer must be large enough to hold the tensor, mesh buffer size is {} computed buffer size is {}.",
+            mesh_buffer_->size(),
+            spec_.compute_packed_buffer_size_bytes());
     }
 
     const distributed::MeshBuffer& mesh_buffer() const { return *raw_mesh_buffer(); }

@@ -27,10 +27,12 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "reshape.hpp"
 #include "reshape_common.hpp"
 #include "device/reshape_device_operation.hpp"
+#include "/home/maxim-artemov/workspace/debug_include.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -171,6 +173,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    py_log_tensor(tensor);
     // RM kernel assumes linear page ordering; use s2i/i2s for sharded buffers.
     auto temp_tensor = tensor;
     auto intermediate_out_memory_config = memory_config;
@@ -206,6 +209,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    py_log_here();
     // This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD
     // using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
@@ -237,11 +241,11 @@ ttnn::Tensor reshape_rm(
     const MemoryConfig& memory_config,
     const PadValue& /*pad_value*/,
     const std::optional<CoreRangeSet>& sub_core_grid) {
+    py_log_here();
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto& tensor_shape = tensor.logical_shape();
     TT_FATAL((tensor_shape.rank() != 0), "Can't do reshape from rank 0 tensor");
     TT_FATAL(tensor.layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
-
     // Collapse into the second last dimension
     uint32_t second_dim = 1;
     for (int64_t i = 0; i < static_cast<int64_t>(tensor_shape.rank()) - 1; ++i) {
@@ -270,18 +274,26 @@ ttnn::Tensor PerformView(
     const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim = tt::constants::TILE_HEIGHT,
     const uint32_t tile_second_dim = tt::constants::TILE_WIDTH) {
+    // py_log_here();
     if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
         return tensor;
     }
     if (logical_shape.rank() == 1) {
         return ttnn::experimental::view(tensor, logical_shape);
     }
+    // py_log_here();
     if (tensor.layout() == ttnn::TILE_LAYOUT &&
         (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0)) {
         return ttnn::experimental::view(tensor, logical_shape, compute_padded_shape(logical_shape));
     }
+    // py_log_here();
+    py_log_cout("logical_shape {} padded_shape {}", logical_shape, padded_shape);
+    py_log_cout("tensor.logical_shape() {} tensor.padded_shape() {}", tensor.logical_shape(), tensor.padded_shape());
     // Perform a reshape (view)
-    return ttnn::experimental::view(tensor, logical_shape, padded_shape);
+    // py_log_tensor(tensor);
+    auto result = ttnn::experimental::view(tensor, logical_shape, padded_shape);
+    // py_log_tensor(result);
+    return result;
 }
 
 std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
@@ -343,6 +355,7 @@ ttnn::Tensor reshape_tiled(
     if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
         memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // py_log_here();
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
 
         // BFLOAT8_B: typecast kernels require interleaved inputs, so keep both typecasts
@@ -381,6 +394,7 @@ ttnn::Tensor reshape_tiled(
                     output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
                 }
             }
+            // py_log_here();
             return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
         }
 
@@ -407,6 +421,8 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig interleaved_input{TensorMemoryLayout::INTERLEAVED, tensor3d.memory_config().buffer_type()};
             tensor3d = ttnn::sharded_to_interleaved(tensor3d, interleaved_input, std::nullopt);
         }
+
+        // py_log_here();
 
         auto output_tensor_3d = ttnn::prim::reshape_view(
             tensor3d,
@@ -438,6 +454,8 @@ ttnn::Tensor reshape_tiled(
 
         return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
     }
+
+    // py_log_here();
 
     // Interleaved (DRAM / L1) tensors: call prim::reshape_view directly.
     if (tensor.dtype() == DataType::BFLOAT8_B) {
@@ -516,9 +534,14 @@ ttnn::Tensor ttnn::reshape(
     const bool explicit_memory_config = memory_config.has_value();
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
+    const bool pad_value_explicit = pad_value.has_value();
 
     const auto [logical_shape, padded_shape] =
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+
+    py_log_cout("logical_input_shape {} padded_input_shape {}", logical_input_shape, padded_input_shape);
+    py_log_cout("logical_shape {} padded_shape {}", logical_shape, padded_input_shape);
+
     // First Case, No reshape Required
     if (tensor.logical_shape() == logical_shape && tensor.padded_shape() == padded_shape) {
         return tensor;
@@ -554,13 +577,25 @@ ttnn::Tensor ttnn::reshape(
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
 
+    // py_log_cout("shape_second_last_dim {} shape_last_dim {} tensor_shape_second_last_dim {} tensor_shape_last_dim {}
+    // mem_config.is_sharded() {} mem_config.is_l1() {} layout {} logical_shape.volume() {} tensor.logical_volume() {}",
+    // shape_second_last_dim, shape_last_dim, tensor_shape_second_last_dim, tensor_shape_last_dim,
+    // mem_config.is_sharded(), mem_config.is_l1(), layout, logical_shape.volume(), tensor.logical_volume());
+
+    // py_log1_cout(tensor_shape_second_last_dim == shape_second_last_dim);
+    // py_log1_cout(shape_second_last_dim % tile_second_dim == 0);
+    // py_log1_cout(tensor_shape_second_last_dim % tile_first_dim == 0);
+
     bool this_is_view =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
+        // (tensor.logical_shape() == tensor.padded_shape()) &&
         ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
          (shape_second_last_dim % tile_second_dim == 0 &&
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
+
+    py_log_here("this_is_view {}", this_is_view);
 
     if (this_is_view) {
         return operations::data_movement::PerformView(
@@ -574,6 +609,7 @@ ttnn::Tensor ttnn::reshape(
              padded_shape[-1] % tile.get_width() == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
 
         if (tile_tensor_view_reshape_possible) {
+            // py_log_here();
             // This case has been allowed in the past though it means introducing padding values to the data
             return ttnn::experimental::view(tensor, logical_shape, padded_shape);
         }
@@ -592,9 +628,10 @@ ttnn::Tensor ttnn::reshape(
             pad_value.value_or(default_pad_value),
             sub_core_grid);
     }
+
+    // py_log_here();
     // Preserve whether the caller explicitly passed pad_value. value_or(default_pad_value) below
     // collapses that signal, but reshape_tiled needs it to gate the default-off fill for non-BF8.
-    const bool pad_value_explicit = pad_value.has_value();
     return operations::data_movement::reshape_tiled(
         tensor,
         logical_shape,
