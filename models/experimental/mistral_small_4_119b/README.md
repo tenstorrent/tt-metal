@@ -98,17 +98,31 @@ Key flags:
 
 ## Tests
 
-PCC and smoke tests are gated behind per-test env flags (they need hardware and download weights). Each parametrizes the `mesh_device` fixture, so set `MESH_DEVICE` too.
+Tests need hardware and download weights. Each parametrizes the `mesh_device` fixture, so set `MESH_DEVICE=P150x8` too. The text **prefill** and **decode** PCC tests run the **full 36-layer** decoder by default and are marked `@pytest.mark.slow`; the other PCC/smoke harnesses are gated behind per-test env flags.
 
 **Correctness (PCC vs HF Torch reference):**
 
 ```bash
+# Full 36-layer text decoder — no env gate, marked @pytest.mark.slow.
+# Override layer count for fast local iteration: MISTRAL4_PREFILL_N_LAYERS=2 / MISTRAL4_DECODE_N_LAYERS=2
+pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py
+pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_pcc.py
+
 MISTRAL4_VISION_PCC=1  pytest models/experimental/mistral_small_4_119b/tests/test_vision_tower_pcc.py
 MISTRAL4_MMP_PCC=1     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_projector_pcc.py
-MISTRAL4_PREFILL_PCC=1 pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py
-MISTRAL4_DECODE_PCC=1  pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_pcc.py
 MISTRAL4_MM_PCC=1      pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py
 ```
+
+**Measured PCC (BH Loudbox / P150×8, prompt `"The capital of France is"`):**
+
+| Test | Layers | PCC | Notes |
+|------|-------:|----:|-------|
+| Text prefill (vs HF) | 36 | **0.944** | overall flattened; mean per-position 0.920; pos 0 = 0.758 (degenerate causal context), pos 1–4 ≥ 0.951; greedy token match 4/5 |
+| Text decode (vs HF) | 36 | **0.967** | decode logits vs HF reference at pos 4; greedy token matches |
+| Text decode (self-consistency) | 36 | **0.998** | decode-vs-prefill logits at pos 4 — validates the decode path reads/uses the KV cache that prefill wrote |
+| Unified multimodal (vs HF) | 36 + 24 | **~0.855** | full vision → projector → language path (consistent with aggressive `bfloat4_b`/`bfloat8_b` weight quantization); PCC ≈ 0.839 / 0.846 / 0.850 at 4K / 8K / 16K context |
+
+The decode test runs **two** checks: decode-vs-HF (ground truth, 0.967) and decode-vs-prefill self-consistency (0.998). The self-consistency check isolates the decode path itself — in bfloat16, TTNN matmul kernels are shape-specific, so a 1-token decode kernel produces slightly different K/V at a position than the seq-len prefill kernel; the self-consistency PCC is free of that effect, while the HF PCC (floor 0.90, measured 0.967) folds it in on top of quantization loss.
 
 **Smoke / plumbing (no PCC, fast):**
 
@@ -123,13 +137,27 @@ MISTRAL4_LANG_DEMO_SMOKE=1 pytest models/experimental/mistral_small_4_119b/tests
 
 ```bash
 # End-to-end wall-clock (TTFT, prefill tok/s, steady-state decode tok/s/user)
-pytest models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -m models_performance_bare_metal
+pytest models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -m models_performance_bare_metal -k L36V24
 
 # Per-op device performance (single layer)
 pytest models/experimental/mistral_small_4_119b/tests/perf/test_perf.py -m models_device_performance_bare_metal
 ```
 
 The e2e perf test isolates steady-state timing (compile/load passes excluded). Decode is trace-captured and replayed over 2 command queues (`decode_next_token_2cq`); prefill is not trace-captured.
+
+**Measured end-to-end performance (BH Loudbox / P150×8, full 36 text + 24 vision layers, 2CQ traced decode, 32 decode iters):**
+
+| Context | Prompt tokens | TTFT (ms) | Prefill tok/s | Steady-state tok/s/user | End-to-end tok/s/user |
+|---------|--------------:|----------:|--------------:|------------------------:|----------------------:|
+| 128 | 128 (25 image) | 614.5 | 230.1 | 17.62 | 6.30 |
+| 4K | 4000 (25 image) | 6078.0 | 663.9 | 13.74 | 2.36 |
+| 8K | 8092 (25 image) | 13168.9 | 616.8 | 11.21 | 1.68 |
+| 16K | 16384 (25 image) | 24339.7 | 674.6 | 8.04 | 0.95 |
+
+- **TTFT** — vision replay + one prefill replay (time to first decode logits)
+- **Prefill tok/s** — `prompt_len / prefill_trace_replay_time` (compile pass excluded)
+- **Steady-state tok/s/user** — `decode_iters / decode_trace_replay_total` (compile + capture excluded)
+- **End-to-end tok/s/user** — `decode_iters / (vision + prefill + decode compile + capture + all replays)`
 
 ## Directory layout
 
