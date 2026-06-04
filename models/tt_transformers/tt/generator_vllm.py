@@ -14,7 +14,7 @@ from tqdm import tqdm
 # (``initialize_vllm_text_transformer``, ``allocate_vllm_kv_cache_per_layer``) are pure
 # ``tt_transformers`` code and never touch vLLM at runtime — they're used by non-vLLM
 # consumers like the ACE-Step Qwen3 embedding encoder
-# (``models/demos/ace_step_v1_5/ttnn_impl/qwen3_embedding_ace_step.py``) and by the
+# (``models/experimental/ace_step_v1_5/ttnn_impl/qwen3_embedding_ace_step.py``) and by the
 # upstream ``Qwen3ForEmbedding`` reference in
 # ``models/demos/wormhole/qwen3_embedding_8b/demo/generator_vllm.py``.
 #
