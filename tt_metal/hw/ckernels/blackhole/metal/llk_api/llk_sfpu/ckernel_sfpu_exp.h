@@ -344,27 +344,29 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    sfpi::vInt i;
     sfpi::vFloat f, r, j, y;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
     j = 1.442695f * a;
     r = 1.37805939e-3f;
-    sfpi::vSMag i_smag = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
-    j = sfpi::convert<sfpi::vFloat>(i_smag, sfpi::RoundMode::Nearest);
+    i = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
+    j = sfpi::convert<sfpi::vFloat>(i, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
     f = j * -6.93145752e-1f + a;
     f = j * -1.42860677e-6f + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
-    // interleaved with conversion of i from sign-mag to two's complement
+    // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
     r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
     r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
     r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    i = sfpi::abs(i);
     y = r * f + 1.0f;
-    sfpi::vInt i_2c = sfpi::convert<sfpi::vInt>(i_smag);
+    i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
     r = y * f + 1.0f;
 
     sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias) + i_2c;
