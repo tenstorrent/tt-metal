@@ -1,0 +1,16 @@
+/goal Use $full-model for the HF_MODEL optimized multichip decoder in the current tt-metal checkout.
+
+This goal creates the full-model state for the repo-local TTNN autoport pipeline. Start from the completed optimized multichip decoder and work on models/autoports/<model>/tt/model.py and tt/generator.py; do not begin vLLM integration work in this goal.
+
+Transition completion requirements:
+- models/autoports/<model>/tt/model.py and tt/generator.py exist and implement the full HF autoregressive path: embeddings, all decoder layers, final norm, LM head or tied embeddings, logits, paged KV-cache exposure, and generator prefill/decode boundaries.
+- The generator API follows the standard Metal readiness contract, including build_generator and low-level prefill/decode methods suitable for a later generator_vllm.py adapter.
+- The full model uses the optimized multichip decoder strategy where appropriate; if any part falls back to single-chip, replicated, host-side, or less optimized behavior, the report identifies and justifies it with evidence.
+- Readiness reference generation succeeds or an existing matching reference is reused with provenance.
+- run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
+- run_autoregressive produces HF and TT completions; the outputs are read and judged for coherence, repetition, wrong-language drift, and early divergence.
+- Full-model prefill and decode performance figures are recorded with the commands and artifact paths that produced them.
+- Runtime fallback audit covers model/generator paths, including cache ownership, host-logit boundaries, sampling, and reset behavior.
+- models/autoports/<model>/doc/full_model/README.md and work_log.md summarize commands, top-k accuracy, autoregressive qualitative verdict, perf, limitations, and exact artifacts.
+
+Mark this goal complete only when the full model runs end to end on real weights with acceptable accuracy and usable generation evidence. If the full model exposes a decoder, cache, mesh, or optimization gap, keep working. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.
