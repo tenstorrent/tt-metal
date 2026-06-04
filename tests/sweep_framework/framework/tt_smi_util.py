@@ -34,6 +34,11 @@ class ResetUtil:
         # Retry policy (overridable via env for tuning per runner).
         self.reset_attempts = max(1, int(os.getenv("TT_SMI_RESET_ATTEMPTS", "3")))
         self.reset_backoff_seconds = max(0, int(os.getenv("TT_SMI_RESET_BACKOFF_SECONDS", "30")))
+        # After a reset, wait for the kernel driver / UMD to finish re-enumerating
+        # the devices before returning. A PCIe-level reset (tt-smi -r) tears the
+        # driver down; without a settle the next process can see <N devices or hit
+        # "Cannot access soc descriptor ... before device driver is initialized".
+        self.post_reset_settle_seconds = max(0, int(os.getenv("TT_SMI_POST_RESET_SETTLE_SECONDS", "10")))
 
     def _find_commands(self):
         """Build the ordered list of reset mechanisms [(executable, args), ...].
@@ -188,6 +193,17 @@ class ResetUtil:
                     logger.info(
                         f"TT-SMI Reset Complete Successfully via '{label}' (attempt {attempt}/{self.reset_attempts})"
                     )
+                    # Let the kernel driver / UMD re-enumerate before the next op
+                    # opens a device (esp. after a PCIe '-r' reset, which tears the
+                    # driver down). Without this, the next process can transiently
+                    # see <N devices and skip/fail with "soc descriptor ... before
+                    # device driver is initialized".
+                    if self.post_reset_settle_seconds:
+                        logger.info(
+                            f"SWEEPS: waiting {self.post_reset_settle_seconds}s for device driver re-enumeration "
+                            f"after '{label}'."
+                        )
+                        time.sleep(self.post_reset_settle_seconds)
                     return
                 if attempt < self.reset_attempts:
                     logger.warning(
