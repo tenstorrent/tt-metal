@@ -29,6 +29,11 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Docker images even if they exist in registry"
+      prewarm-harbor:
+        required: false
+        type: boolean
+        default: false
+        description: "Prewarm built images into Harbor from GHCR"
     outputs:
       # Ubuntu 22.04 images (from build-docker-artifact platform=Ubuntu 22.04)
       ubuntu-2204-ci-build-tag:
@@ -88,6 +93,11 @@ on:
         type: boolean
         default: false
         description: "Force rebuild of all Docker images even if they exist in registry"
+      prewarm-harbor:
+        required: false
+        type: boolean
+        default: true
+        description: "Prewarm built images into Harbor from GHCR"
 
 permissions:
   contents: read
@@ -266,8 +276,8 @@ jobs:
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
     needs: [preflight, build-tools, build-llk, build-2204, build-2404]
-    if: always() && !failure() && !cancelled() && needs.preflight.outputs.harbor-prefix != ''
-    runs-on: tt-ubuntu-2204-large-stable
+    if: always() && !failure() && !cancelled() && inputs.prewarm-harbor && needs.preflight.outputs.harbor-prefix != ''
+    runs-on: tt-ubuntu-2204-medium-stable
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
