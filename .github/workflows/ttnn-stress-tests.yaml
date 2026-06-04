@@ -73,6 +73,6 @@ jobs:
       arch: ${{ inputs.arch || 'wormhole_b0' }}
       runner-label: ${{ inputs.runner-label || 'N150' }}
       timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
