@@ -35,16 +35,27 @@ done
 run_group() { [[ "$GROUP" == "all" || "$GROUP" == "$1" ]]; }
 
 # When running all groups, self-invoke once per group in parallel on this runner.
+# Each group's output goes to a temp file; logs are cat'd sequentially at the end
+# so parallel execution doesn't mangle the output.
 if [[ "$GROUP" == "all" ]]; then
   GROUPS=(unit phys-grouping control-plane t3k wh-galaxy bh-galaxy)
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
   pids=()
   for g in "${GROUPS[@]}"; do
-    "$0" --group "$g" &
+    "$0" --group "$g" >"$tmpdir/$g.log" 2>&1 &
     pids+=($!)
   done
   exit_code=0
   for i in "${!pids[@]}"; do
     wait "${pids[$i]}" || { echo "FAILED: group ${GROUPS[$i]}" >&2; exit_code=1; }
+  done
+  # Print each group's log sequentially so output is clean and readable
+  for g in "${GROUPS[@]}"; do
+    echo "════════════════════════════════════════"
+    echo " Group: $g"
+    echo "════════════════════════════════════════"
+    cat "$tmpdir/$g.log"
   done
   exit $exit_code
 fi
