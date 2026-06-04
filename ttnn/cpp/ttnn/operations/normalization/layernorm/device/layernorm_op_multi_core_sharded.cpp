@@ -356,7 +356,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees num_blocks
     // == 1 except for RMSNorm. CB 7 (writer two-tile mask) and CB 14 (E[x] scratch) feed only the
     // LayerNorm E[x] masking; RMSNorm masks the squares with the host-built CB 19, so it needs neither.
-    const bool do_col_mask = col_mask_needed && !use_welford;
+    // Masking applies where per-shard width statistics are reduced over the input: the non-distributed
+    // full norm (LayerNorm and RMSNorm) and the RMSNorm pre-all-gather stats kernel, which reduces the
+    // squared input over the width. The post-all-gather stage normalizes from already-gathered stats
+    // (no width reduction) and reuses CB 19 for cb_var, so it never masks. The pre-all-gather kernel
+    // does not compute E[x], so LayerNorm's E[x]-site masking has nowhere to apply there; LayerNorm
+    // masking therefore stays confined to the non-distributed stage.
+    const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather && (!is_pre_all_gather || rms_norm);
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
