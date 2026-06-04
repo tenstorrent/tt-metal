@@ -1102,7 +1102,8 @@ void run_sequential_dfbs_program(
             .accessor_name = "dst_" + idx,
         });
         consumer_spec.compile_time_args.push_back({"entries_per_consumer_" + idx, epc});
-        consumer_spec.compile_time_args.push_back({"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
+        consumer_spec.compile_time_args.push_back(
+            {"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
     }
 
     experimental::WorkUnitSpec wu{

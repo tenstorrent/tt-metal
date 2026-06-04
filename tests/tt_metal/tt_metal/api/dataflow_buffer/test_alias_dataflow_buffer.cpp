@@ -239,8 +239,8 @@ void run_alias_dfb_program(
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
         return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
-            {{"chunk_offset_a", 0u},
-             {"chunk_offset_b", 0u},
+            {{"chunk_offset_a",     0u},
+             {"chunk_offset_b",     0u},
              {"entries_per_core_a", epc_a},
              {"entries_per_core_b", epc_b}}}};
     };
@@ -255,8 +255,8 @@ void run_alias_dfb_program(
             .runtime_arg_values = rtas(num_entries_a, num_entries_b)},
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
+        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
     };
@@ -570,8 +570,8 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     auto rtas = [&]() {
         return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
-            {{"chunk_offset_a", 0u},
-             {"chunk_offset_b", 0u},
+            {{"chunk_offset_a",     0u},
+             {"chunk_offset_b",     0u},
              {"entries_per_core_a", kNumEntries},
              {"entries_per_core_b", kNumEntries}}}};
     };
@@ -581,11 +581,11 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
         ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "consumer", .runtime_arg_values = rtas()},
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
+        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor", .tensor = std::cref(ring)},
+        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
     };
     SetProgramRunArgs(program, run_params);
 
@@ -622,8 +622,8 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     auto rtas = [&]() {
         return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
             node,
-            {{"chunk_offset_a", 0u},
-             {"chunk_offset_b", 0u},
+            {{"chunk_offset_a",     0u},
+             {"chunk_offset_b",     0u},
              {"entries_per_core_a", kNumEntries},
              {"entries_per_core_b", kNumEntries}}}};
     };
@@ -633,11 +633,11 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         ProgramRunArgs::KernelRunArgs{.kernel_spec_name = "consumer", .runtime_arg_values = rtas()},
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a", .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b", .tensor = std::cref(in_b)},
+        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
+        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
         {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
         {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor", .tensor = std::cref(ring)},
+        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
     };
     SetProgramRunArgs(program, run_params);
 

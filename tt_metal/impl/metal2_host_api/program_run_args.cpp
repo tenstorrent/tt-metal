@@ -25,11 +25,13 @@ namespace tt::tt_metal::experimental {
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
 // Helpers for vararg-value access (now living on AdvancedKernelRunArgs).
-const std::vector<AdvancedKernelRunArgs::NodeVarargs>& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const std::vector<AdvancedKernelRunArgs::NodeVarargs>& kernel_runtime_varargs(
+    const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.runtime_varargs;
 }
 
-const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(
+    const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
 }
 
@@ -74,8 +76,7 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
             // are set: dynamic is strictly more permissive.)
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-                "binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
                 "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
                 "page_config, memory_config, and alignment must still match exactly.",
                 tensor_params.tensor_parameter_name);
@@ -94,8 +95,7 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
             // (tensor_shape_in_pages is derived from padded_shape, which is fixed across binds).
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
-                "binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
                 "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
                 "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
                 "still match exactly.",
