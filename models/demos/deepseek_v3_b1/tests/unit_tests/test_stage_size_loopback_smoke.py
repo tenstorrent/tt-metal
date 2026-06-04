@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -484,7 +483,6 @@ def test_pipeline_level_passthrough_transport_loopback(topology_config, mesh_dev
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
     allocation = ttnn._ttnn.multi_device.experimental.resolve_blitz_decode_pipeline_allocation(use_fabric_loopback)
     num_stages = len(allocation.stages)
-    logger.info(f"num stages: {num_stages}")
     my_rank = int(ttnn.distributed_context_get_rank())
     local_stage_plans = build_local_stage_socket_plans(allocation, my_rank)
     assert (

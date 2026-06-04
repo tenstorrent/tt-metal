@@ -87,7 +87,6 @@ def open_mesh_device(*, enable_speculative_decode: bool = True):
 
     num_procs = int(ttnn.distributed_context_get_size())
     mesh_shape = query_global_stage_mesh_shape()
-    logger.info(f"Queried global stage mesh shape from MGD: {mesh_shape}")
     fabric_config = _fabric_config_for_topology(mesh_shape, num_procs)
     worker_l1_size = _worker_l1_size_for_rank(
         num_procs=num_procs,
