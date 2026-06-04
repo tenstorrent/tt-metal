@@ -12,7 +12,7 @@ same default greedy decoding HF uses (``do_sample=False, num_beams=1``):
   2. **T2ST** (text → speech)  — voiced-audio plausibility (RMS band + voicing fraction).
   3. **S2TT** (speech → text)  — soft: BOS+lang-code prefix match, non-empty content.
   4. **S2ST** (speech → speech)— soft: both produce voiced audio with RMS in HF's plausible band.
-  5. **ASR**  (speech → same-lang text) — soft (same as S2TT, with rep-penalty disabled per the demo).
+  5. **ASR**  (speech → same-lang text) — soft (same as S2TT; ``repetition_penalty=1.0`` like HF).
 
 This test runs at **demo length**: a long real prompt (~165-token translation) and, for the
 speech-input tasks, the chained ~33 s Hindi T2ST waveform → mel seq ≈ 1792 (the encoder's
@@ -57,7 +57,10 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_m
     load_pretrained_seamless_m4t_v2_model,
 )
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    hf_aligned_generation_kwargs,
+    to_torch_replicated_first_shard,
+)
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE,
     mesh_default_device,
@@ -84,10 +87,6 @@ _PROMPT = """Maya lived in a small coastal town where every morning began with t
 One rainy evening, while organizing a stack of returned books, she discovered a small blue journal tucked between two novels. The cover had no title, only a silver compass symbol that shimmered faintly under the light. Curious, she opened it and found detailed sketches of places around the town along with cryptic messages about a hidden lighthouse path that only appeared during storms.
 
 At first, Maya thought someone was playing a prank. But the next night, as heavy clouds gathered over the sea, she noticed something unusual from the bookstore window. A narrow trail of lantern lights stretched along the cliffs where no road existed before. Holding the journal tightly, she followed the glowing path through the rain until she reached an abandoned lighthouse overlooking the crashing waves."""
-# T2ST must decode the full translation for the chained audio to reach the demo's long-audio
-# regime; the speech→text tasks stop earlier at EOS. A generous cap avoids truncating either.
-_MAX_NEW_TOKENS = 200
-
 # T2TT common-prefix floor (TT-device-bf16 vs HF-cpu-bf16 desync after some greedy step; see
 # ``_assert_text_prefix_matches``). Measured first divergence at token 32 (a single near-tie flip,
 # after which the two sequences re-converge and the ~200-token tails match); 16 leaves a 2× margin
@@ -363,12 +362,8 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
     text_input_ids = text_enc["input_ids"]
     text_attn = text_enc["attention_mask"]
 
-    # Default greedy settings — HF default is ``do_sample=False, num_beams=1``; keeping them
-    # explicit makes the parity with the TT call obvious in the diff.
-    common_kwargs = dict(do_sample=False, num_beams=1, max_new_tokens=_MAX_NEW_TOKENS)
-    # ASR is same-language transcription: rep-penalty pushes the decoder away from the target
-    # language token (same comment as in the demo); disable it for ASR only.
-    asr_kwargs = {**common_kwargs, "repetition_penalty": 1.0}
+    common_kwargs = hf_aligned_generation_kwargs(model.generation_config)
+    asr_kwargs = common_kwargs
     tt_extra = dict(use_kv_cache=True, use_decode_trace=True, use_2cq=True)
 
     with mesh_default_device(mesh_device):
@@ -494,3 +489,4 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
             **tt_extra,
         )
         _assert_tokens_close_after_speech(hf_asr_ids, _unpack_tt_text(tt_out), task="ASR")
+        tt_model.release_generation_runtime()
