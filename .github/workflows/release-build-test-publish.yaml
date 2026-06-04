@@ -133,7 +133,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-tracy.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
