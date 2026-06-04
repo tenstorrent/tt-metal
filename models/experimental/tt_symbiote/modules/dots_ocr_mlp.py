@@ -12,6 +12,8 @@ from models.experimental.tt_symbiote.core.module import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
+    TTNNLinearLLamaIReplicatedWColSharded,
+    TTNNLinearLLamaIColShardedWAllReduced,
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
@@ -426,3 +428,65 @@ class TTNNDotsOCRMLP(TTNNModule):
         ttnn.deallocate(gate_up_mul)
 
         return output
+
+
+class TTNNDotsOCRMLPColParallel(TTNNModule):
+    """Column-parallel (Megatron) text SwiGLU: REPLICATED in -> REPLICATED out.
+
+    A/B alternative to the default row-parallel ``TTNNDotsOCRMLP`` (kept side by
+    side for perf comparison). gate/up are column-parallel (weight N-sharded,
+    activation replicated, NO collective); down is row-parallel and all-reduces
+    (reduce_scatter + all_gather) so the output returns replicated. The gate/up
+    column shards (intermediate/num_tp) line up exactly with the down K-shard, so
+    no reshard sits between the silu*mul and down.
+
+    Trade vs the row-parallel default: no wide reduce_scatter on the
+    ``[*, 2*intermediate]`` gate_up partial, but the activation is replicated
+    in/out (no hidden-dim sharding savings) and the down all-reduce is
+    reduce_scatter + all_gather on the ``[*, hidden]`` output (2 collectives)
+    rather than the row-parallel path's 2 reduce_scatters.
+
+    NOTE: ``down_proj`` (the QKV-style all-reduced class) keeps its weight in
+    ``bfloat8_b``; the row-parallel default down runs ``bfloat4_b``. Account for
+    that when comparing absolute down-matmul time.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_mlp):
+        tt_module = cls()
+        tt_module._fallback_torch_layer = torch_mlp
+        tt_module.intermediate_size = torch_mlp.gate_proj.out_features
+        tt_module.gate_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(torch_mlp.gate_proj)
+        tt_module.up_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(torch_mlp.up_proj)
+        tt_module.down_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(torch_mlp.down_proj)
+        return tt_module
+
+    def set_weight_dtype(self, dtype):
+        self.gate_proj.set_weight_dtype(dtype)
+        self.up_proj.set_weight_dtype(dtype)
+        # down is the QKV-style all-reduced class; it hardcodes bfloat8_b and has
+        # no set_weight_dtype, so only forward the dtype when supported.
+        if hasattr(self.down_proj, "set_weight_dtype"):
+            self.down_proj.set_weight_dtype(dtype)
+        return self
+
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Column-parallel gate/up: replicated activation in, N-sharded out, no CCL.
+        gate = self.gate_proj(hidden_states)
+        up = self.up_proj(hidden_states)
+        gate_up_mul = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        # Row-parallel down: K-sharded in -> reduce_scatter + all_gather -> replicated.
+        return self.down_proj(gate_up_mul)

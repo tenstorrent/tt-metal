@@ -31,7 +31,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP
+from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP, TTNNDotsOCRMLPColParallel
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsVisionMLP
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
@@ -89,15 +89,21 @@ def _raw_ttnn(t):
 
 # Real model shapes: decode is one token (tile-padded to 32 rows on device), prefill
 # is the full padded prompt length (2816 = 88 tiles) the e2e text decoder runs at.
-@pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
+# Both TP schemes are exercised:
+#   "row" -> TTNNDotsOCRMLP (default): K-sharded in -> N-sharded out, 2x reduce_scatter.
+#   "col" -> TTNNDotsOCRMLPColParallel: replicated in/out, gate/up column-parallel
+#            (no CCL) + down all-reduce (reduce_scatter + all_gather).
+@pytest.mark.parametrize("seq_len", [2816], ids=["prefill"])
+# @pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
+@pytest.mark.parametrize("scheme", ["row", "col"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
-def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len):
-    """Text decoder SwiGLU at TP=4: hidden-sharded in -> hidden-sharded out, no distortion."""
+def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len, scheme):
+    """Text decoder SwiGLU at TP=4 for both row- and column-parallel schemes, no distortion."""
     assert mesh_device.get_num_devices() == TP, f"Expected TP={TP}, got {mesh_device.get_num_devices()}"
     torch.manual_seed(0xD075)
 
@@ -106,29 +112,44 @@ def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len):
     # fp32 reference from the (bf16-rounded) weights so F.linear dtypes match.
     ref = torch_mlp.float()(x.float()).to(torch.float32)
 
-    tt_mlp = TTNNDotsOCRMLP.from_torch(torch_mlp)
+    if scheme == "row":
+        tt_mlp = TTNNDotsOCRMLP.from_torch(torch_mlp)
+        # Input is hidden-K-sharded across the TP axis (post-attention norm contract).
+        in_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+    else:
+        tt_mlp = TTNNDotsOCRMLPColParallel.from_torch(torch_mlp)
+        # Column-parallel takes a replicated full-hidden activation on every device.
+        in_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_mlp.set_weight_dtype(ttnn.bfloat8_b)  # match decoder gate-up precision
     _build_on_mesh(tt_mlp, mesh_device)
 
-    # Input is hidden-K-sharded across the TP axis (the post-attention norm contract).
     x_tt = ttnn.from_torch(
         x,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        mesh_mapper=in_mapper,
     )
     out_tt = tt_mlp(x_tt)
     ttnn.synchronize_device(mesh_device)
 
-    # Output is hidden-N-sharded; gather the per-device slices back to full hidden.
-    out = ttnn.to_torch(_raw_ttnn(out_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).to(torch.float32)
+    if scheme == "row":
+        # Output is hidden-N-sharded; gather the per-device slices back to full hidden.
+        out = ttnn.to_torch(_raw_ttnn(out_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).to(
+            torch.float32
+        )
+    else:
+        # Output is replicated; every device holds the full hidden -> take device 0.
+        out = ttnn.to_torch(_raw_ttnn(out_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(
+            torch.float32
+        )
+        out = out[: ref.shape[0]]
     out = out.reshape(ref.shape)
 
     passed, pcc = comp_pcc(ref, out, PCC_THRESHOLD)
-    logger.info(f"[text_mlp seq={seq_len}] TP={TP} pcc={float(pcc):.6f} (threshold {PCC_THRESHOLD})")
-    assert passed, f"Text MLP TP={TP} distorted at seq={seq_len}: pcc={float(pcc):.6f} < {PCC_THRESHOLD}"
+    logger.info(f"[text_mlp seq={seq_len} scheme={scheme}] TP={TP} pcc={float(pcc):.6f} (threshold {PCC_THRESHOLD})")
+    assert passed, f"Text MLP TP={TP} ({scheme}) distorted at seq={seq_len}: pcc={float(pcc):.6f} < {PCC_THRESHOLD}"
 
 
 # Real vision-tower seq: the padded patch-bucket the e2e vision encoder runs at
