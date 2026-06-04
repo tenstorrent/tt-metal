@@ -108,10 +108,6 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx*"
 
 # build_physical_multi_mesh_adjacency_graph with single BH galaxy (32 ASICs, no tt-run).
-# Custom1x17 / 2x4Pipeline are GTEST_SKIP'd in the test source (TODO #45629): those cases require the
-# 4x8_Mesh / 4x2_Mesh half-pod ({1,3}/{2,4}) PGD groupings to embed, which single_bh_galaxy_clus_desc's
-# connectivity does not realize today (0/N mapped). PR #45629 (PGD torus matching + cross-tray variants)
-# is the fix; re-enable then. The cases this mock does support (1x16Torus, N300) run here.
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/single_bh_galaxy_clus_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_*"
 
 ######################################
