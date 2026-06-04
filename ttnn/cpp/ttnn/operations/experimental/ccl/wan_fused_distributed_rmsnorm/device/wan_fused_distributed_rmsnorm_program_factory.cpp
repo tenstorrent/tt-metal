@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -143,6 +145,26 @@ uint32_t force_num_workers() {
         return 0u;
     }();
     return v;
+}
+// DIAGNOSTIC ABLATIONS (WAN_ABLATION env): inject a per-ablation -D into the
+// reader/writer kernels so we can selectively skip NoC traffic and measure
+// where kernel time goes. These BREAK correctness — perf attribution only.
+//   1 = skip rope cos/sin reads   2 = skip input read   3 = skip output write
+//   4 = skip fabric mcast+sem inc+sem wait   5 = skip writer gather/scatter
+std::map<std::string, std::string> ablation_defines() {
+    std::map<std::string, std::string> d;
+    const char* env = std::getenv("WAN_ABLATION");
+    if (env != nullptr) {
+        switch (std::strtol(env, nullptr, 10)) {
+            case 1: d["WAN_ABL_SKIP_ROPE_READ"] = "1"; break;
+            case 2: d["WAN_ABL_SKIP_INPUT_READ"] = "1"; break;
+            case 3: d["WAN_ABL_SKIP_OUTPUT_WRITE"] = "1"; break;
+            case 4: d["WAN_ABL_SKIP_FABRIC"] = "1"; break;
+            case 5: d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1"; break;
+            default: break;
+        }
+    }
+    return d;
 }
 // Streaming low-L1 fallback decision. The fast path keeps a whole tile-row of
 // `input_cb` resident from PRE through POST (one DRAM read). On very wide
@@ -780,7 +802,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
         "wan_rmsnorm_fused_reader.cpp",
         worker_core_set,
-        ReaderDataMovementConfig(reader_compile_args));
+        ReaderDataMovementConfig(reader_compile_args, ablation_defines()));
 
     // ------------------------------------------------------------------------
     // FabricMuxConfig (only when use_mux: TP>1 AND num_workers>1)
@@ -878,7 +900,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "wan_rmsnorm_fused_writer_mux.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            WriterDataMovementConfig(writer_compile_args, ablation_defines()));
     }
 
     // ------------------------------------------------------------------------
