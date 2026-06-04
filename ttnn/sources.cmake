@@ -311,7 +311,9 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.cpp
+    cpp/ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.cpp
+    cpp/ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
@@ -321,6 +323,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/events.cpp
     cpp/ttnn-nanobind/fabric.cpp
     cpp/ttnn-nanobind/disaggregation.cpp
+    cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp

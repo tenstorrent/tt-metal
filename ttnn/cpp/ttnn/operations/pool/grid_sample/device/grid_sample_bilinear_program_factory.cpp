@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
@@ -83,6 +84,17 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     uint32_t cb_idx = tt::CBIndex::c_0;
 
     // Create CBs
+    const auto input_face_geometry = FaceGeometry{.face_r_dim = REDUCTION_SIZE, .num_faces = 2};
+    const auto scalar_face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2};
+    const bool last_output_tile_is_partial = input_shape[-1] % tt::constants::TILE_WIDTH != 0;
+    const bool single_partial_output_fits_in_face =
+        last_output_tile_is_partial && input_shape[-1] <= tt::constants::FACE_WIDTH;
+    const auto output_face_geometry =
+        FaceGeometry{.face_r_dim = 1, .num_faces = single_partial_output_fits_in_face ? 1U : 2U};
+    const std::optional<TileDescriptor> output_tile =
+        single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
+                                           : std::nullopt;
+
     const uint32_t grid_stick_size =
         is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
     const uint32_t grid_cb_index = cb_idx++;
@@ -137,6 +149,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(input_cb_index_0),
             .data_format = input_cb_data_format,
             .page_size = input_cb_page_size,
+            .face_geometry = input_face_geometry,
         }}},
     });
 
@@ -150,6 +163,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(input_cb_index_1),
                 .data_format = input_cb_data_format,
                 .page_size = input_cb_page_size,
+                .face_geometry = input_face_geometry,
             }}},
         });
     }
@@ -163,6 +177,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(scalar_cb_index_0),
             .data_format = input_cb_data_format,
             .page_size = scalar_cb_page_size,
+            .face_geometry = scalar_face_geometry,
         }}},
     });
 
@@ -176,6 +191,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(scalar_cb_index_1),
                 .data_format = input_cb_data_format,
                 .page_size = scalar_cb_page_size,
+                .face_geometry = scalar_face_geometry,
             }}},
         });
     }
@@ -193,6 +209,8 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
+            .tile = output_tile,
+            .face_geometry = output_face_geometry,
         }}},
         .buffer = is_sharded ? output_tensor.buffer() : nullptr,
     });
@@ -329,6 +347,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             1,                                 // ct_arg[35]: kernel_h (unused by grid_sample)
             1,                                 // ct_arg[36]: kernel_w (unused by grid_sample)
             0,                                 // ct_arg[37]: indexes_32_bit (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[38]: fast_tilize_cb_id (tiled-output only)
         };
 
         KernelDescriptor compute_desc;

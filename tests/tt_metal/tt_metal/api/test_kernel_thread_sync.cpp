@@ -14,14 +14,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDMKernel;
@@ -50,12 +50,12 @@ ScratchLayout make_layout(uint32_t base_addr, uint32_t rounds) {
     return layout;
 }
 
-ProgramRunParams::KernelRunParams make_run_params(
+ProgramRunArgs::KernelRunArgs make_run_params(
     const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
-    return ProgramRunParams::KernelRunParams{
+    return ProgramRunArgs::KernelRunArgs{
         .kernel_spec_name = kernel_name,
         .advanced_options =
-            AdvancedKernelRunParams{
+            AdvancedKernelRunArgs{
                 .runtime_varargs =
                     {{node,
                       {
@@ -113,7 +113,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     }
 
     ProgramSpec spec;
-    spec.program_id = "kernel_thread_barrier";
+    spec.name = "kernel_thread_barrier";
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
@@ -124,11 +124,11 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<uint32_t> zeros(total_zeros, 0);
     detail::WriteToDeviceL1(device, kCore, l1_base, zeros);
 
-    ProgramRunParams params;
+    ProgramRunArgs params;
     for (const auto& cfg : kernel_configs) {
-        params.kernel_run_params.push_back(make_run_params(cfg.name, node, cfg.layout, kRounds, kSkewIters));
+        params.kernel_run_args.push_back(make_run_params(cfg.name, node, cfg.layout, kRounds, kSkewIters));
     }
-    SetProgramRunParameters(program, params);
+    SetProgramRunArgs(program, params);
     detail::LaunchProgram(device, program);
 
     for (const auto& cfg : kernel_configs) {
@@ -153,4 +153,4 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

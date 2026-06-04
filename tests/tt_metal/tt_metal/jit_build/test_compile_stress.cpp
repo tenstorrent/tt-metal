@@ -61,7 +61,7 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "common/env_lib.hpp"

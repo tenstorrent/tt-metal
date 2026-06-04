@@ -300,13 +300,14 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 elf.elf.elfclass
             ]
-            for s in elf.sections:
-                if s.name == ".device_print_strings":
-                    self._strings_addr = s.address
-                    self._strings_data = bytes(s.data)
-                elif s.name == ".device_print_strings_info":
-                    self._info_addr = s.address
-                    self._info_data = bytes(s.data)
+            strings = elf.sections.get(".device_print_strings")
+            if strings is not None:
+                self._strings_addr = strings.address
+                self._strings_data = bytes(strings.data)
+            info = elf.sections.get(".device_print_strings_info")
+            if info is not None:
+                self._info_addr = info.address
+                self._info_data = bytes(info.data)
         except Exception:
             # has_device_print will be false.
             logger.exception(

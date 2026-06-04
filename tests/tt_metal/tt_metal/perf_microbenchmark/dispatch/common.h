@@ -933,15 +933,13 @@ static_assert(SD_PREFETCHER_PAGE_BATCH_SIZE == 1);
 static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
-// Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB);
-// 50/50 split. Production FD splits ~75/25 (issue/completion); SD often needs more completion
-// (host-readback tests), so the even split is a reasonable middle ground.
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
-static_assert(
-    SD_HUGEPAGE_ISSUE_BUFFER_SIZE + SD_COMPLETION_QUEUE_SIZE <= DispatchSettings::MAX_DEV_CHANNEL_SIZE,
-    "SD issue + completion exceed per-device hugepage slot");
 inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
+
+// Quasar simulation exposes only the low 26 address bits of each DRAM bank as backing physical
+// memory (64 MB); addresses above this alias back into the same physical space even though the
+// bank is configured as 1 GB. Code that places buffers in DRAM on Quasar must keep them within
+// this window to avoid aliasing collisions.
+static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
@@ -1018,6 +1016,33 @@ protected:
             return false;
         }
         return true;
+    }
+
+    CoreCoord worker_start() const {
+        return (device_->arch() == tt::ARCH::QUASAR) ? CoreCoord{1, 0} : default_worker_start;
+    }
+
+    CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
+        if (device_->arch() == tt::ARCH::QUASAR) {
+            return CoreRange{first_worker, first_worker};
+        }
+        const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
+        return CoreRange{first_worker, last_worker};
+    }
+
+    // SD (slow dispatch) issue + completion buffer sizes. Must fit in one device's hugepage slot
+    // (MAX_DEV_CHANNEL_SIZE = 256 MB) on WH/BH; an even 50/50 split gives 128 MB each. On Quasar simulation, command
+    // queues must be stored in DRAM due to limitations, and only 64 MB of physical DRAM space
+    // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
+    // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
+    // capped at 16 MB on Quasar.
+    uint32_t sd_hugepage_issue_buffer_size() const {
+        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
+                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+    }
+    uint32_t sd_completion_queue_size() const {
+        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
+                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
@@ -1186,7 +1211,10 @@ protected:
 
 // Fixed core layout used by the SD spoof-prefetch execution path
 inline constexpr CoreCoord sd_spoof_prefetch_core = {0, 0};
-inline constexpr CoreCoord sd_dispatch_core = {4, 0};
+
+inline CoreCoord dispatch_core(const tt_metal::IDevice* device) {
+    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
+}
 
 // Builds the compile-time defines required by cq_dispatch.cpp for the SD (spoof-prefetch) path.
 // SD drives only the core dispatch fields; all fabric-mux, multi-CQ, go-signal, and downstream
@@ -1203,26 +1231,32 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     tt_metal::IDevice* device_,
     uint32_t dispatch_buffer_pages,
     uint32_t dispatch_core_sem_id,
+    uint32_t spoof_prefetch_sem_id,
     uint32_t prefetch_sync_sem,
     const CoreCoord& phys_spoof,
     const CoreCoord& phys_disp,
     const tt_metal::DispatchMemMap& memmap,
+    uint32_t dispatch_cb_base,
     uint32_t completion_queue_base = 0,
     uint32_t completion_queue_size = 0) {
-    const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
+    const bool is_cq_dram_backed = (device_->arch() == tt::ARCH::QUASAR);
     const uint32_t num_compute_cores =
         device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
     const auto my_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_disp);
-    const auto upstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_1, phys_spoof);
+    const tt_metal::NOC upstream_noc =
+        (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
+    const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
     const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
 
     return {
-        {"IS_CQ_DRAM_BACKED", "0"},
-        {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
+        {"DISPATCH_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_pages)},
         {"MY_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
-        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(dispatch_core_sem_id)},
+        // spoof_prefetch_sem_id is the upstream credit pool; dispatch releases credits back into it.
+        {"UPSTREAM_DISPATCH_CB_SEM_ID", std::to_string(spoof_prefetch_sem_id)},
         {"DISPATCH_CB_BLOCKS", std::to_string(DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS)},
         {"UPSTREAM_SYNC_SEM", std::to_string(prefetch_sync_sem)},
         {"DISPATCH_D_SHUTDOWN_SEM_ID", "0"},  // no dispatch_s in SD; disables dispatch_s_enabled path
@@ -1288,7 +1322,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(my_virtual.x)},
         {"MY_NOC_Y", std::to_string(my_virtual.y)},
-        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(tt_metal::NOC::NOC_1))},
+        {"UPSTREAM_NOC_INDEX", std::to_string(static_cast<uint32_t>(upstream_noc))},
         {"UPSTREAM_NOC_X", std::to_string(upstream_virtual.x)},
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
@@ -1298,6 +1332,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"FD_CORE_TYPE", "0"},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
+        {"DISPATCH_TELEMETRY_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
     };
 }
 
@@ -1326,6 +1362,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t entry_size,
     const CoreCoord& phys_prefetch,
     const CoreCoord& phys_dispatch) {
+    const bool is_cq_dram_backed = (device->arch() == tt::ARCH::QUASAR);
     const auto my_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_prefetch);
     const auto downstream_virtual = device->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, phys_dispatch);
     return {
@@ -1343,7 +1380,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
-        {"IS_CQ_DRAM_BACKED", "0"},
+        {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
+        {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"PCIE_BASE", std::to_string(pcie_base)},
         {"PCIE_SIZE", std::to_string(pcie_size)},
         {"PREFETCH_Q_BASE", std::to_string(prefetch_q_base)},
@@ -1395,6 +1433,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"FD_CORE_TYPE", "0"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
+        {"DISPATCH_TELEMETRY_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }

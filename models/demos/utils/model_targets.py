@@ -15,12 +15,17 @@ TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_tar
 
 # Keep SKU aliases explicit and unambiguous so models with multiple
 # SKU blocks (e.g. wh_n150 + wh_llmbox_perf) resolve correctly.
+# Note on p300x2: bh_quietbox_2 is 2x P300 boards = 4 dies, which today's
+# determine_device_name labels "P150x4". That label is kept here as an alias
+# so existing call sites still resolve to the right entries; the canonical
+# SKU name is p300x2 because that matches the actual hardware.
 _SKU_ALIASES = {
     "wh_n150": {"wh_n150", "n150"},
     "wh_n300": {"wh_n300", "n300"},
     "wh_llmbox_perf": {"wh_llmbox_perf", "t3k"},
     "wh_galaxy_perf": {"wh_galaxy_perf", "tg", "glx", "bhglx"},
     "blackhole": {"blackhole", "bh", "p150", "p300", "p150x8"},
+    "p300x2": {"p300x2", "p150x4", "bh_quietbox_2"},
 }
 
 

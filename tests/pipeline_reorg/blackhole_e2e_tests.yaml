@@ -253,26 +253,36 @@
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill
   name: bh_lb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and pcc_check' -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py -k "balanced and not non_balanced" -vvv --tb=short --timeout=900 || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_moe_grouped_topk.py -k "realistic" -vvv --tb=short || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 90
+      timeout: 75
   owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-lb-deepseek-prefill-op-tests
+  name: bh_lb_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check)) and (not test_rope_prefill or 4x2)" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_loudbox:
+      timeout: 55
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
 - id: bh-lb-deepseek-prefill-perf
   name: bh_lb_DeepSeek_PREFILL_PERF
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     exit_code=0
     pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
@@ -288,14 +298,77 @@
 
 - id: bh-qb-deepseek-prefill
   name: bh_qb_DeepSeek_PREFILL
-  model-name: deepseek
+  model-name: deepseek_prefill
   cmd: |
     pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64" --timeout 1800
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2 and pcc_check' -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_dispatch_combine_l1_small_semaphores.py -vvv --tb=short
+  skus:
+    bh_llmbox:
+      timeout: 10
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
+- id: bh-qb-deepseek-prefill-op-tests
+  name: bh_qb_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla or (2x2 and pcc_check)" || exit_code=$?
+    exit $exit_code
   skus:
     bh_llmbox:
       timeout: 30
-  owner_id: U08E1JCMAJF # Marko Bezulj
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-p150-deepseek-prefill-op-tests
+  name: bh_p150_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-p300-deepseek-prefill-op-tests
+  name: bh_p300_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_p300:
+      timeout: 10
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-db-deepseek-prefill-op-tests
+  name: bh_db_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_deskbox:
+      timeout: 13
+  owner_id: U094PKWHNJ0 # Petar Milojevic
+  team: models
+
+- id: bh-qb2-deepseek-prefill-op-tests
+  name: bh_qb2_DeepSeek_PREFILL_OP_TESTS
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla or (2x2 and pcc_check)" || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+  owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models

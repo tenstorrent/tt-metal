@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -131,14 +131,14 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     v_if(base < 0.0f) {
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        sfpi::vInt pow_int = sfpi::float_to_int16(
+        auto pow_int = sfpi::convert<sfpi::vSMag16>(
             pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
+        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::copysgn(y, pow_int << 31);
+        y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
@@ -246,14 +246,14 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        sfpi::vInt pow_int = sfpi::float_to_int16(
+        auto pow_int = sfpi::convert<sfpi::vSMag16>(
             pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
+        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::copysgn(y, pow_int << 31);
+        y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN

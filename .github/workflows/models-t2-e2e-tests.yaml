@@ -44,11 +44,9 @@ on:
           - "wh_galaxy (WH Galaxy)"
           - "wh_galaxy_perf (WH Galaxy perf)"
           - "bh_p150 (P150)"
-          - "bh_loudbox (BH LoudBox)"
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
-          - "bh_galaxy_perf (BH Galaxy perf)"
       platform:
         required: false
         type: choice
@@ -86,6 +84,8 @@ permissions:
 run-name: "(Tier 2) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -95,7 +95,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"
@@ -112,17 +112,20 @@ jobs:
           echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:

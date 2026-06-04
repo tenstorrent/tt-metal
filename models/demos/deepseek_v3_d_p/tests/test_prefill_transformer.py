@@ -67,7 +67,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     slice_non_padded,
     tokenize_prompt_to_isl,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tests.ttnn.utils_for_testing import assert_equal, comp_pcc
 
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
@@ -558,6 +558,10 @@ def test_prefill_transformer(
             test_params=test_params,
         )
 
+    logger.info(
+        f"Params: pcc_validation={pcc_validation}, return_kv_cache={return_kv_cache}, do_return_kv={do_return_kv} is_balanced={is_balanced} ref_kvpe_list={ref_kvpe_list is not None}"
+    )
+
     # --- PCC check ---
     if pcc_validation:
         profiler.start("pcc_validation")
@@ -644,6 +648,24 @@ def test_prefill_transformer(
                     logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
                     pcc_results.append((f"{label}_kv", -1.0))
                     pcc_results.append((f"{label}_pe", -1.0))
+
+            # Per-layer chunk readback via the address table — verify the table
+            # maps to the same bytes as the gathered cache, chunk by chunk.
+            # Only meaningful when `is_balanced` so `tt_kvpe_all_layers` is
+            # position-continuous (matching the lookup table's position index).
+            if is_balanced:
+                logger.info(f"Starting KV cache table validity check")
+                chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+                for layer in range(num_layers):
+                    for position in range(0, isl_total, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                        raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=0)
+                        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+                        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+                        expected_chunk = tt_kvpe_all_layers[
+                            layer : layer + 1, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :
+                        ]
+                        assert_equal(chunk_torch, expected_chunk)
+                logger.info(f"KV cache table validity check passed!")
 
         # --- Logits PCC check (last-token logits vs trace reference) ---
         # Trace logits / next-token are products of the full traced model. They are

@@ -14,6 +14,7 @@ format_dict = {
     DataFormat.Float16_b: torch.bfloat16,
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp4_b: torch.bfloat16,  # BFP4 not native to PyTorch, is represented as bfloat16
+    DataFormat.Bfp2_b: torch.bfloat16,  # BFP2 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
     DataFormat.UInt32: torch.int64,
     DataFormat.Int16: torch.int16,
@@ -124,6 +125,12 @@ class MathOperation(Enum):
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLeInt = OpSpec("LE_INT", MathOpType.SFPU_BINARY_INT)
     SfpuGeInt = OpSpec("GE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuElwLt = OpSpec("LT", MathOpType.SFPU_BINARY)
+    SfpuElwGt = OpSpec("GT", MathOpType.SFPU_BINARY)
+    SfpuElwLe = OpSpec("LE", MathOpType.SFPU_BINARY)
+    SfpuElwGe = OpSpec("GE", MathOpType.SFPU_BINARY)
+    SfpuElwEq = OpSpec("EQ", MathOpType.SFPU_BINARY)
+    SfpuElwNe = OpSpec("NE", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
@@ -445,6 +452,7 @@ class BriscCmd(Enum):
 format_tile_sizes = {
     DataFormat.Bfp8_b: 1088,
     DataFormat.Bfp4_b: 576,
+    DataFormat.Bfp2_b: 320,
     DataFormat.Float16: 2048,
     DataFormat.Float16_b: 2048,
     DataFormat.Float32: 4096,

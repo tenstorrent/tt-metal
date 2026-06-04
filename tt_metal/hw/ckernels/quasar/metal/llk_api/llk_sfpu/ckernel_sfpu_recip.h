@@ -17,7 +17,6 @@ template <
     int ITERATIONS = 8,
     [[maybe_unused]] bool legacy_compat = true>
 inline void calculate_reciprocal() {
-    static_assert(EN_32BIT_DEST == false, "Non-default EN_32BIT_DEST (true) not supported in Quasar reciprocal");
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     _calculate_reciprocal_<APPROXIMATION_MODE>(ITERATIONS);
 }
@@ -28,7 +27,6 @@ template <
     [[maybe_unused]] bool legacy_compat = true>
 void recip_init() {
     // Kept for backwards compatibility
-    static_assert(EN_32BIT_DEST == false, "Non-default EN_32BIT_DEST (true) not supported in Quasar reciprocal");
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
 }
 

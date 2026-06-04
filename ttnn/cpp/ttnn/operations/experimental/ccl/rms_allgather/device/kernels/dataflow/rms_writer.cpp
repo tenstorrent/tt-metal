@@ -47,7 +47,12 @@ void kernel_main() {
     constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(21);
     constexpr uint32_t signaling_cb = get_compile_time_arg_val(22);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(23);
-    constexpr auto gamma_args = TensorAccessorArgs<24>();
+    // num_mcast_dests = num_x * num_y, the cell count of the multicast bounding
+    // box. For non-rectangular shard grids this differs from num_blocks (the
+    // worker count). The NoC ack counter must be credited against the
+    // rectangle size or noc_async_write_barrier() will wait forever.
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
+    constexpr auto gamma_args = TensorAccessorArgs<25>();
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
@@ -183,8 +188,10 @@ void kernel_main() {
         // Signal the other local cores that the semaphore has returned
 
         noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
+        // num_dests counts the multicast bounding-box cells (loopback includes
+        // self), not the worker count.
         noc_semaphore_set_multicast_loopback_src(
-            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false);
+            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_mcast_dests, false);
         noc_async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
@@ -207,7 +214,7 @@ void kernel_main() {
         cb_reserve_back(cb_gamma, block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
+            uint64_t gamma_noc_addr = gamma.get_noc_addr(tile_id);
             noc_async_read(gamma_noc_addr, l1_write_addr_gamma, bytes_in_two_facelines);
             gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
             noc_async_read_barrier();  // might be faster to do two separate read instead of barrier.
