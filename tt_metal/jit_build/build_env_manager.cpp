@@ -7,6 +7,7 @@
 #include <tracy/Tracy.hpp>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -22,9 +23,60 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// Process-wide singleton state. Seeded once via seed_if_unseeded_with_hal(), then read-only
+// for the lifetime of the process. Driven by MetalContext::create_* so that the seeding HAL
+// is always the HAL of the first MetalContext that comes into existence -- no implicit
+// silicon initialisation, and no walking of g_instances slots from outside MetalContext.
+std::atomic<BuildEnvManager*> s_instance{nullptr};
+std::mutex s_seed_mutex;
+
+}  // namespace
+
+void BuildEnvManager::seed_if_unseeded_with_hal(const Hal& hal) {
+    // Fast path: already seeded. No lock, no allocation.
+    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(s_seed_mutex);
+    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+    // Seed the singleton with the supplied HAL. The constructor sizes
+    // kernel_build_state_indices_ / firmware_build_state_indices_ from that HAL's
+    // programmable-core-type, processor-class, and fw-binary counts.
+    //
+    // PRE-EXISTING LIMITATION (not introduced by the explicit-seeding refactor, but surfaced
+    // once contexts can genuinely coexist in-process): HAL layout can be modulated by
+    // rtoptions -- simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so two
+    // contexts on the same arch with disagreeing rtoptions, or two contexts on different
+    // arches, can produce different layout counts. Whichever HAL seeds this singleton first
+    // wins; the other context will index build states through a table sized for the wrong
+    // layout. This is a property of the singleton design.
+    // TODO(#TBD): key BuildEnvManager by a stable HAL signature (arch + relevant rtoptions),
+    // or move the index computation into per-device DeviceBuildEnv so each device carries
+    // its own mapping. That refactor closes the cross-arch / cross-rtoptions hazard above.
+    s_instance.store(new BuildEnvManager(hal), std::memory_order_release);
+}
+
+BuildEnvManager& BuildEnvManager::get_instance(ContextId context_id) {
+    // Resolve the ContextId to a HAL via MetalContext::instance(context_id), then seed.
+    // Callers that already hold g_instance_mutex (i.e. MetalContext::create_*) must use
+    // seed_if_unseeded_with_hal() directly with the in-scope HAL to avoid re-entering
+    // MetalContext::instance().
+    seed_if_unseeded_with_hal(MetalContext::instance(context_id).hal());
+    return *s_instance.load(std::memory_order_acquire);
+}
+
 BuildEnvManager& BuildEnvManager::get_instance() {
-    static BuildEnvManager instance(MetalContext::instance().hal());
-    return instance;
+    auto* existing = s_instance.load(std::memory_order_acquire);
+    TT_FATAL(
+        existing != nullptr,
+        "BuildEnvManager::get_instance() called before any MetalContext was created. The "
+        "singleton is seeded by MetalContext::create_instance(); ensure at least one "
+        "MetalEnv has been constructed first, or call get_instance(ContextId) explicitly.");
+    return *existing;
 }
 
 BuildEnvManager::BuildEnvManager(const Hal& hal) {
@@ -84,7 +136,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
 
 uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOptions& rtoptions) {
     // Collect all the parameters that affect the build configuration
-    FNV1a hasher;
+    StableHasher hasher;
 
     hasher.update(static_cast<uint32_t>(config.dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
@@ -152,10 +204,10 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 
 }  // namespace
 
-void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
+void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
     const std::lock_guard<std::mutex> lock(this->lock);
-    auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
-    add_build_env_locked(device_id, dev_config, MetalContext::instance().rtoptions());
+    auto dev_config = create_jit_device_config(device_id, num_hw_cqs, context_id);
+    add_build_env_locked(device_id, dev_config, MetalContext::instance(context_id).rtoptions());
 }
 
 void BuildEnvManager::add_build_env(
@@ -195,8 +247,17 @@ const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
 
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    const uint32_t state_idx =
-        get_firmware_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
+    // `processor_id` is indexed in the per-processor-type space (0..get_processor_types_count-1),
+    // which on Quasar can span replicated NEOs (e.g. COMPUTE has 16 entries: 4 NEOs x 4 TRISCs).
+    // Firmware binaries are built per TRISC type only (num_fw_binaries == 4 for COMPUTE), and the
+    // processor layout is {NEO0 TR0..3, NEO1 TR0..3, ...}, so the type index is processor_id % num_fw_binaries.
+    const auto [base, num_fw_binaries] = get_firmware_build_index_and_state_count(programmable_core, processor_class);
+    TT_ASSERT(
+        num_fw_binaries > 0,
+        "No firmware binaries for programmable_core={} processor_class={}",
+        programmable_core,
+        processor_class);
+    const uint32_t state_idx = base + (static_cast<uint32_t>(processor_id) % num_fw_binaries);
     return get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
@@ -267,6 +328,19 @@ std::string BuildEnvManager::get_firmware_binary_path(
     const auto& env = get_device_build_env(device_id).build_env;
     const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
     return env.get_firmware_binary_root() + state.get_target_full_path();
+}
+
+std::string BuildEnvManager::get_kernel_binary_path(
+    ChipId device_id,
+    uint32_t programmable_core,
+    uint32_t processor_class,
+    int processor_id,
+    const std::string& binary_root,
+    const std::string& kernel_full_name) {
+    const auto& state = get_kernel_build_state(device_id, programmable_core, processor_class, processor_id);
+    auto path = std::filesystem::path(binary_root) / kernel_full_name;
+    path += state.get_target_full_path();
+    return path.string();
 }
 
 // Get build environment info for all devices

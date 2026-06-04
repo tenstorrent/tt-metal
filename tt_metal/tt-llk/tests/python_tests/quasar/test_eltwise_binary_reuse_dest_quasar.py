@@ -28,7 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -66,6 +66,7 @@ TILE_DIMENSIONS = [32, 32]
             DataFormat.Float16,
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp4,
         ],
     ),
     mathop=[
@@ -77,7 +78,12 @@ TILE_DIMENSIONS = [32, 32]
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    math_fidelity=[MathFidelity.LoFi],
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=INPUT_DIMENSIONS,
     output_dimensions=OUTPUT_DIMENSIONS,
@@ -92,12 +98,15 @@ def test_eltwise_binary_reuse_dest_quasar(
     output_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
-    if math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Quasar reuse_dest eltwise binary supports LoFi only")
+    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
+        pytest.skip("elwadd/elwsub only supports LoFi mode")
 
-    if mathop == MathOperation.Elwmul and formats.input_format.is_mx_format():
+    if mathop == MathOperation.Elwmul and (
+        formats.input_format == DataFormat.MxFp8R
+        or formats.input_format == DataFormat.MxFp8P
+    ):
         pytest.skip(
-            "Elwmul with MX input and reuse_dest has golden vs hardware rounding differences; skip to avoid flaky tolerance failures"
+            "Elwmul with MxFp8R or MxFp8P input and reuse_dest has rounding differences; skip to avoid flaky tolerance failures"
         )
 
     # MX formats require implied_math_format=Yes on Quasar; set it and disable_format_inference so golden matches.
@@ -144,7 +153,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     input_tiles_in_block = inner_dim * output_tiles_in_block
     input_num_blocks = output_num_blocks
 
-    src_A, _, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -188,6 +197,7 @@ def test_eltwise_binary_reuse_dest_quasar(
         if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
         else None
     )
+
     math_format_for_fidelity = (
         (DataFormat.Float16_b if use_mx else formats.output_format)
         if eltwise_golden is not None
@@ -234,12 +244,10 @@ def test_eltwise_binary_reuse_dest_quasar(
                         .to(srcA_m.dtype)
                         .to(internal_dtype)
                     )
-                    dest = dest + product
+                    dest = product
                 else:
-                    dest = dest + srcA * srcB
+                    dest = srcA * srcB
 
-        if formats.output_format.is_mx_format():
-            dest = quantize_mx_tensor_chunked(dest, formats.output_format)
         golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
 
     configuration = TestConfig(
@@ -299,6 +307,14 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
-    ), "Assert against golden failed"
+    # Quantize golden tensor if output format is MX format
+    if formats.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(torch.bfloat16), formats.output_format
+        ).to(torch_format)
+
+    test_passed = passed_test(
+        golden_tensor, res_tensor, formats.output_format, print_errors=False
+    )
+
+    assert test_passed, "Assert against golden failed"

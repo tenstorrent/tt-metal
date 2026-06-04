@@ -49,7 +49,7 @@ from .config import (
 )
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
-from .prefill import prefill_forward_chunked
+from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
 from .weights import (
     ThroughputExpertWeights,
     load_throughput_expert_weights,
@@ -61,6 +61,7 @@ __all__ = [
     "ThroughputExperts",
     "ThroughputExpertConfig",
     "ThroughputProgramConfig",
+    "DeepSeekPrefillConfig",
     "ThroughputExpertWeights",
     "AllToAllDispatchConfig",
     "AllToAllCombineConfig",
@@ -110,6 +111,7 @@ class ThroughputExperts:
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
         fused_config: Optional[FusedMoeGptConfig] = None,
+        prefill_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
         Initialize throughput experts.
@@ -140,6 +142,7 @@ class ThroughputExperts:
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
         self.fused_config = fused_config
+        self.prefill_config = prefill_config
 
         # Memory configurations
         decode_memory_config = decode_memory_config or ttnn.L1_MEMORY_CONFIG
@@ -147,21 +150,26 @@ class ThroughputExperts:
 
         # Create all_to_all configurations (used by dense flow)
         _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
+        _num_links = ccl_manager.num_links
         self.dispatch_config_decode = AllToAllDispatchConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.dispatch_config_prefill = AllToAllDispatchConfig(
             memory_config=prefill_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.combine_config_decode = AllToAllCombineConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.combine_config_prefill = AllToAllCombineConfig(
             memory_config=prefill_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
 
         # Load weights for the dense flow. When using the fused flow (fused_config is set),
@@ -195,6 +203,32 @@ class ThroughputExperts:
         self.num_experts = config.num_experts
         self.hidden_size = config.hidden_size
         self.num_experts_per_device = config.num_experts_per_device
+
+        # Precompute a chunk-sized round-robin index tensor used to pad short
+        # warmup seqs (e.g. seq=128) up to seq_len_per_chip. Built once at init
+        # so forward_prefill stays trace-compatible — no ttnn.from_torch host
+        # writes are allowed once trace capture starts.
+        self._round_robin_pad_indices = None
+        prefill_cfg = getattr(self, "prefill_config", None)
+        if prefill_cfg is not None:
+            import torch as _torch
+
+            chunk_init = prefill_cfg.seq_len_per_chip
+            num_experts_init = config.num_experts
+            num_experts_per_tok_init = config.num_experts_per_tok
+            positions_init = _torch.arange(chunk_init, dtype=_torch.int32).view(chunk_init, 1, 1, 1)
+            ks_init = _torch.arange(num_experts_per_tok_init, dtype=_torch.int32).view(
+                1, 1, 1, num_experts_per_tok_init
+            )
+            rr_torch = ((positions_init + ks_init) % num_experts_init).to(_torch.int32).contiguous()
+            # uint16 matches ttnn.topk output dtype (see prefill.py dispatch).
+            # num_experts (128) fits comfortably in uint16.
+            self._round_robin_pad_indices = ttnn.from_torch(
+                rr_torch.to(_torch.int32),  # ttnn.from_torch needs int32 source for uint16
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint16,
+            )
 
     def __call__(
         self,
@@ -301,21 +335,101 @@ class ThroughputExperts:
         Returns:
             Output [seq_per_device, 1, 1, hidden_size]
         """
-        return prefill_forward_chunked(
+        # DeepSeek-style chunked prefill is the only supported path; the legacy
+        # chunked fallback was removed when DeepSeek prefill was bundled into
+        # use_throughput_experts.
+        #
+        # The DeepSeek prefill path is hardcoded for seq_len_per_chip (kernels,
+        # CB sizes, dispatch tables all baked at config init). For seq shorter
+        # than that (e.g. vLLM warmup at seq_len=128), pad up to seq_len_per_chip
+        # with zeros + expert_id=0 + weight=0, then slice the output back.
+        chunk = self.prefill_config.seq_len_per_chip
+        seq_per_device = hidden_states.shape[2] if len(hidden_states.shape) >= 3 else hidden_states.shape[0]
+        if seq_per_device < chunk:
+            pad_len = chunk - seq_per_device
+
+            # Pad along seq axis only; build spec sized to each tensor's rank
+            # to avoid "padding len can't be larger than input tensor rank".
+            def _pad_seq(t, seq_axis, value):
+                rank = len(t.shape)
+                spec = [(0, 0)] * rank
+                spec[seq_axis] = (0, pad_len)
+                return ttnn.pad(t, spec, value=value)
+
+            # hidden_states is [..., S, H] — seq is axis 2 if rank>=3 else axis 0
+            h_seq_axis = 2 if len(hidden_states.shape) >= 3 else 0
+            hidden_states = _pad_seq(hidden_states, h_seq_axis, value=0.0)
+
+            # topk_expert_indices: padding all positions with expert_id=0 would
+            # route every padding token to expert 0 and overflow the dispatch
+            # buffer (max_dispatched_tokens_per_expert is sized for balanced
+            # routing). Instead, slice a pad_len-sized chunk from the
+            # precomputed round-robin index tensor (built at init) and concat.
+            # This keeps the forward path host-write-free for trace capture.
+            if self._round_robin_pad_indices is None:
+                raise RuntimeError(
+                    "ThroughputExperts._round_robin_pad_indices was not "
+                    "initialized; did the prefill_config get set after "
+                    "__init__?"
+                )
+            pad_idx_slice = ttnn.slice(
+                self._round_robin_pad_indices,
+                [0, 0, 0, 0],
+                [pad_len, 1, 1, self.config.num_experts_per_tok],
+            )
+            # Cached tensor is 4D [chunk, 1, 1, K]; runtime indices may be 2D
+            # [N, K] (from topk_router) or 4D. Reshape slice to match runtime
+            # rank/shape (with seq dim replaced by pad_len) before concat.
+            target_shape = list(topk_expert_indices.shape)
+            target_shape[0] = pad_len
+            pad_idx_slice = ttnn.reshape(pad_idx_slice, target_shape)
+            # ttnn.concat requires matching layouts; the cached round-robin
+            # tensor is ROW_MAJOR but runtime topk indices may be TILE
+            # (depending on the upstream router output). Align before concat.
+            if pad_idx_slice.layout != topk_expert_indices.layout:
+                pad_idx_slice = ttnn.to_layout(pad_idx_slice, topk_expert_indices.layout)
+            topk_expert_indices = ttnn.concat([topk_expert_indices, pad_idx_slice], dim=0)
+            # Convert to TILE_LAYOUT to match what ttnn.topk normally produces.
+            # The chunk function does "idx_for_routing = to_layout(topk_expert_indices,
+            # ROW_MAJOR_LAYOUT); ... deallocate(idx_for_routing)". When the input is
+            # already ROW_MAJOR, to_layout aliases instead of creating a new buffer,
+            # so the deallocate kills topk_expert_indices itself, leading to
+            # "Tensor is not allocated" on the next use. By passing TILE here, the
+            # chunk function's ROW_MAJOR conversion is a real copy, no alias.
+            topk_expert_indices = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
+
+            # weights: pad with zeros — combine multiplies expert outputs by these,
+            # so padding contributions are zeroed regardless of which expert ran them.
+            topk_expert_weights = _pad_seq(topk_expert_weights, 0, value=0.0)
+            out = forward_prefill_deepseek(
+                hidden_states=hidden_states,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_weights=topk_expert_weights,
+                config=self.config,
+                prefill_config=self.prefill_config,
+                mesh_device=self.mesh_device,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
+                weights=self.weights,
+                program_config=self.program_config,
+            )
+            return ttnn.slice(
+                out,
+                [0, 0, 0, 0],
+                [out.shape[0], out.shape[1], seq_per_device, out.shape[3]],
+            )
+
+        return forward_prefill_deepseek(
             hidden_states=hidden_states,
             topk_expert_indices=topk_expert_indices,
             topk_expert_weights=topk_expert_weights,
-            weights=self.weights,
             config=self.config,
-            expert_mapping_tensors=self.expert_mapping_tensors,
-            remap_topk_mask=self.remap_topk_mask,
-            dispatch_config=self.dispatch_config_prefill,
-            combine_config=self.combine_config_prefill,
-            program_config=self.program_config,
+            prefill_config=self.prefill_config,
             mesh_device=self.mesh_device,
             mesh_config=self.mesh_config,
             ccl_manager=self.ccl_manager,
-            chunk_size=chunk_size,
+            weights=self.weights,
+            program_config=self.program_config,
         )
 
     @classmethod

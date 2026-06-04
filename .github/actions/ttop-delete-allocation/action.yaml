@@ -6,7 +6,7 @@ inputs:
     description: 'Allocation name'
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
 
@@ -16,4 +16,4 @@ runs:
     - name: Delete Allocation
       shell: bash
       run: |
-        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }} --ignore-not-found
+        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }}

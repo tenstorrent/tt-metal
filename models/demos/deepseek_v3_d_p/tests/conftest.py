@@ -389,9 +389,14 @@ def config_only():
     return config
 
 
-@pytest.fixture(scope="session")
-def tokenizer():
-    """Load DeepSeek tokenizer, searching known model locations."""
+@pytest.fixture(scope="session", params=["right"])
+def tokenizer(request):
+    """Load DeepSeek tokenizer, searching known model locations.
+
+    Default padding_side is "right" (back-padding). To test with left padding,
+    override in your test: @pytest.mark.parametrize("tokenizer", ["left"], indirect=True)
+    """
+    padding_side = request.param
     candidates = [
         os.getenv("DEEPSEEK_V3_HF_MODEL"),
         "models/demos/deepseek_v3/reference",
@@ -403,13 +408,17 @@ def tokenizer():
         p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
-            return AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
+            tok.padding_side = padding_side
+            return tok
 
     # Fall back to downloading config-only (includes tokenizer files)
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
-    return AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(str(config_path), use_fast=True, trust_remote_code=True)
+    tok.padding_side = padding_side
+    return tok
 
 
 @pytest.fixture(scope="session")

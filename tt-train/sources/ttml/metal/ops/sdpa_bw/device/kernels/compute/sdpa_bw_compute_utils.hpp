@@ -77,7 +77,8 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
     const uint32_t working_reg = 0;
 
-    init_bcast<ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+        cb_attention_weights, cb_intermediates, cb_attention_weights);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
@@ -114,7 +115,7 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     // so it is safe inside an acquire block (unlike the full unary_bcast_init).
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_intermediates)));
-    MATH((llk_math_eltwise_unary_datacopy_init<B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(cb_intermediates)));
 
     unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
 
@@ -135,7 +136,9 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
     tile_regs_commit();
 
     cb_reserve_back(cb_transpose_wh, onetile);
-    pack_reconfig_data_format(cb_transpose_wh);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    // In both callers (update_grad_value, update_grad_key) the previous PACK target equals cb_input.
+    pack_reconfig_data_format(cb_input, cb_transpose_wh);
     tile_regs_wait();
     pack_tile(0, cb_transpose_wh);
     tile_regs_release();
@@ -146,18 +149,23 @@ inline void transpose_tile_fpu(const uint32_t cb_input, /*output cb*/ const uint
 // This is part of the softmax gradient: dS = P * (dP - u), where u = sum(P * dP) per row.
 // Since O = P @ V, we have dP = dO @ V^T, and u = sum(dO * O) row-wise.
 // The reduction is done via matmul with a column of ones (cb_mat_mul_reduction).
+// Computes u_scalar = rowsum(dO * O) and packs the result to cb_u_scalar_row.
+// When cb_u_scaler_output != 0, also packs a second copy to that CB (for DRAM flush
+// to the KV kernel). Both packs happen directly from DST at full FP32 precision,
+// avoiding a separate copy-pack cycle.
 void compute_u_scalar_row(
     const uint32_t cb_grad_output,
     const uint32_t cb_attn_output,
     /*output result*/ const uint32_t cb_u_scalar_row,
     /*mutmul reduction*/ const uint32_t cb_mat_mul_reduction,
     const uint32_t tiles_per_row,
-    const uint32_t scaler_bits) {
+    const uint32_t scaler_bits,
+    const uint32_t cb_u_scaler_output) {
     const uint32_t accum_register = 0;
     // using binary_tiles_init function instead of specific mul_tiles_init() because specific one doesn't support
     // accumulation to dest regs
     reconfig_data_format(cb_grad_output, cb_attn_output);
-    binary_tiles_init<true, ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
+    binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(cb_grad_output, cb_attn_output, /*acc_to_dest*/ true);
     tile_regs_acquire();
     for (uint32_t tile_idx = 0; tile_idx < tiles_per_row; ++tile_idx) {
         mul_tiles(
@@ -195,6 +203,12 @@ void compute_u_scalar_row(
     cb_reserve_back(cb_u_scalar_row, onetile);
     pack_reconfig_data_format(cb_u_scalar_row);
     pack_tile(accum_register, cb_u_scalar_row);
+
+    cb_reserve_back(cb_u_scaler_output, onetile);
+    pack_reconfig_data_format(cb_u_scalar_row, cb_u_scaler_output);
+    pack_tile(accum_register, cb_u_scaler_output);
+    cb_push_back(cb_u_scaler_output, onetile);
+
     tile_regs_release();
     cb_push_back(cb_u_scalar_row, onetile);
 }
@@ -207,6 +221,7 @@ void compute_grad_attn_weights(
     const uint32_t cb_value,
     const uint32_t tiles_per_row,
     const uint32_t cb_grad_attn_weights,
+    const uint32_t cb_prev_pack,
     const uint32_t scaler_bits) {
     reconfig_data_format(cb_grad_output, cb_value);
     // This call is required to set up the matmul correctly
@@ -224,7 +239,8 @@ void compute_grad_attn_weights(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_attn_weights, onetile);
-    pack_reconfig_data_format(cb_grad_attn_weights);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_prev_pack, cb_grad_attn_weights);
     pack_tile(0, cb_grad_attn_weights);
     tile_regs_release();
 
@@ -272,7 +288,8 @@ void compute_grad_scores(
 
     tile_regs_wait();
     cb_reserve_back(cb_grad_scores, onetile);
-    pack_reconfig_data_format(cb_grad_scores);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
     pack_tile(grad_reg, cb_grad_scores);
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
@@ -290,7 +307,8 @@ void update_grad_query(
     const bool do_accumulate = false) {
     cb_wait_front(cb_grad_scores, onetile);
 
-    pack_reconfig_data_format(cb_grad_query_accum);
+    // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+    pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -346,7 +364,7 @@ void update_grad_value(
     // grad_V = Attention^T @ grad_output
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_value_accum);
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_value_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values
     if (!do_accumulate) {
@@ -398,7 +416,7 @@ void update_grad_key(
     transpose_tile_fpu(cb_grad_scores, cb_transpose_wh);
     cb_wait_front(cb_transpose_wh, onetile);
 
-    pack_reconfig_data_format(cb_grad_key_accum);
+    pack_reconfig_data_format(cb_transpose_wh, cb_grad_key_accum);
     if (!do_accumulate) {
         cb_reserve_back(cb_grad_key_accum, tiles_per_row);
     } else {

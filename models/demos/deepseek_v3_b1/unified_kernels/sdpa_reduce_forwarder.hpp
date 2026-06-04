@@ -81,20 +81,32 @@ struct SdpaReduceForwarder {
 
     private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        static constexpr uint8_t forwarder_to_fabric_noc = 0;
+        static_assert(
+            noc_mode == DM_DYNAMIC_NOC || forwarder_to_fabric_noc == noc_index, "Custom noc requires DM_DYNAMIC_NOC");
+
         /**
          * Process ready slots from a semaphore and forward packets.
          * Returns updated sent_mask.
          */
-        template <typename FabricConnection>
+        template <bool use_posted_transport_writes, typename FabricConnection>
         FORCE_INLINE uint32_t process_ready_slots(
             volatile tt_l1_ptr uint32_t* sem_ptr,
             uint32_t sent_mask,
             uint32_t buffer_base,
-            FabricConnection& fabric_connection) {
+            FabricConnection& fabric_connection,
+            uint32_t& cached_free_write_slots) {
             uint32_t sem_value = *sem_ptr;
             uint32_t pending = sem_value & ~sent_mask;
 
             while (pending != 0) {
+                if (cached_free_write_slots == 0) {
+                    do {
+                        invalidate_l1_cache();
+                        cached_free_write_slots = fabric_connection.get_num_free_write_slots();
+                    } while (cached_free_write_slots == 0);
+                }
+
                 uint32_t slot = __builtin_ctz(pending);
                 uint32_t slot_addr = buffer_base + (slot * CT::slot_size);
 
@@ -102,11 +114,13 @@ struct SdpaReduceForwarder {
                 auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(slot_addr);
                 uint32_t actual_packet_size = packet_header->get_payload_size_including_header();
 
-                fabric_connection.wait_for_empty_write_slot();
-                fabric_connection.send_payload_flush_non_blocking_from_address(slot_addr, actual_packet_size);
+                fabric_connection
+                    .template send_current_slot_stateful_non_blocking_from_address<use_posted_transport_writes>(
+                        slot_addr, actual_packet_size, forwarder_to_fabric_noc);
 
                 sent_mask |= (1u << slot);
-                pending &= ~(1u << slot);
+                cached_free_write_slots--;
+                pending &= pending - 1;
             }
 
             return sent_mask;
@@ -114,6 +128,7 @@ struct SdpaReduceForwarder {
 
         void forwarder_impl(const ForwarderArgs& args) {
             static_assert(CT::slots_per_round <= 32, "forwarder supports at most 32 slots per round");
+            constexpr bool use_posted_transport_writes = true;
 
             const uint32_t my_buffer_base = args.buffer_base + args.buffer_offset;
 
@@ -121,6 +136,8 @@ struct SdpaReduceForwarder {
             auto fabric_connection =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             fabric_connection.open();
+            fabric_connection.template setup_stateful_send_cmd_bufs<use_posted_transport_writes>(
+                forwarder_to_fabric_noc);
 
             // Interleaved R1/R2 forwarding loop
             volatile tt_l1_ptr uint32_t* r1_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_sem_addr);
@@ -131,14 +148,24 @@ struct SdpaReduceForwarder {
 
             uint32_t r1_sent_mask = 0;
             uint32_t r2_sent_mask = 0;
+            uint32_t cached_free_write_slots = 0;
 
             do {
                 invalidate_l1_cache();
 
-                r1_sent_mask = process_ready_slots(r1_sem_ptr, r1_sent_mask, r1_buffer_base, fabric_connection);
-                r2_sent_mask = process_ready_slots(r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection);
+                r1_sent_mask = process_ready_slots<use_posted_transport_writes>(
+                    r1_sem_ptr, r1_sent_mask, r1_buffer_base, fabric_connection, cached_free_write_slots);
+                r2_sent_mask = process_ready_slots<use_posted_transport_writes>(
+                    r2_sem_ptr, r2_sent_mask, r2_buffer_base, fabric_connection, cached_free_write_slots);
 
             } while (r1_sent_mask != CT::all_sent_mask || r2_sent_mask != CT::all_sent_mask);
+
+            if constexpr (use_posted_transport_writes) {
+                noc_async_posted_writes_flushed(forwarder_to_fabric_noc);
+            } else {
+                noc_async_writes_flushed(forwarder_to_fabric_noc);
+            }
+
             noc_semaphore_set(r1_sem_ptr, 0);
             noc_semaphore_set(r2_sem_ptr, 0);
             fabric_connection.close();

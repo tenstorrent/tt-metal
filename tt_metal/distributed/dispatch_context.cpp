@@ -145,6 +145,13 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         tt::llrt::internal_::wait_until_cores_done(dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
     }
 
+    // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
+    // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
+    for (const auto& device : device_manager->get_all_active_devices_impl()) {
+        device->command_queue_programs_.clear();
+        device->command_queues_.clear();
+    }
+
     fast_dispatch_enabled_ = false;
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor

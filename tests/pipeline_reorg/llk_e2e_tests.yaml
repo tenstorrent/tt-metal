@@ -1,0 +1,312 @@
+# LLK e2e — python_tests compile producer/consumer with coverage (5-way split, no speed-of-light).
+# PYTEST_MARKERS is set by llk-e2e-impl from workflow_call inputs. ci-quiet log mode is hard-coded.
+
+- name: llk_e2e_wormhole group 1/5
+  split_group: 1
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 --timeout=60 \
+      --junitxml=pytest-report-wormhole-1-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-1-run.xml .
+    junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-1.info
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_wormhole group 2/5
+  split_group: 2
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 --timeout=60 \
+      --junitxml=pytest-report-wormhole-2-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-2-run.xml .
+    junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-2.info
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_wormhole group 3/5
+  split_group: 3
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 --timeout=60 \
+      --junitxml=pytest-report-wormhole-3-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-3-run.xml .
+    junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-3.info
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_wormhole group 4/5
+  split_group: 4
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 --timeout=60 \
+      --junitxml=pytest-report-wormhole-4-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-4-run.xml .
+    junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-4.info
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_wormhole group 5/5
+  split_group: 5
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 --timeout=60 \
+      --junitxml=pytest-report-wormhole-5-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-5-run.xml .
+    junitparser merge pytest-report-wormhole-5-compile.xml pytest-report-wormhole-5-run.xml pytest-report-wormhole-5.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-wormhole-5.info
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_blackhole group 1/5
+  split_group: 1
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 --timeout=60 \
+      --junitxml=pytest-report-blackhole-1-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-1-run.xml .
+    junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-1.info
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_blackhole group 2/5
+  split_group: 2
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 --timeout=60 \
+      --junitxml=pytest-report-blackhole-2-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-2-run.xml .
+    junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-2.info
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_blackhole group 3/5
+  split_group: 3
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 --timeout=60 \
+      --junitxml=pytest-report-blackhole-3-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-3-run.xml .
+    junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-3.info
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_blackhole group 4/5
+  split_group: 4
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 --timeout=60 \
+      --junitxml=pytest-report-blackhole-4-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-4-run.xml .
+    junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-4.info
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U07J3K6KS1K
+
+- name: llk_e2e_blackhole group 5/5
+  split_group: 5
+  team: llk
+  coverage: true
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --coverage --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 --timeout=60 \
+      --junitxml=pytest-report-blackhole-5-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --coverage --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-5-run.xml .
+    junitparser merge pytest-report-blackhole-5-compile.xml pytest-report-blackhole-5-run.xml pytest-report-blackhole-5.xml
+    if [ ! -f "/tmp/tt-llk-build/merged_coverage.info" ]; then
+      echo "Error: Coverage file /tmp/tt-llk-build/merged_coverage.info not found." >&2
+      echo "Ensure coverage artefacts was generated!" >&2
+      exit 1
+    fi
+    cd ../..
+    cp /tmp/tt-llk-build/merged_coverage.info code-coverage-blackhole-5.info
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U07J3K6KS1K

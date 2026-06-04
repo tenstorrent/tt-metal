@@ -21,12 +21,14 @@ def run_with_trace(
     output_mem_config,
     num_iter=20,
     subdevice_id=None,
+    cluster_axis=None,
 ):
     # Compile Run
     logger.info("Compiling model")
     tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
+        cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
@@ -40,6 +42,7 @@ def run_with_trace(
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
+            cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
@@ -164,6 +167,21 @@ def run_all_broadcast_impl(
         output_tensor_goldens_list.append(output_tensors)
         temp_output_tensor = torch.cat(output_tensors, -1)
 
+        # Detect actual mesh shape and configure accordingly
+        mesh_actual_shape = mesh_device.shape
+        if mesh_actual_shape[0] > 1 and mesh_actual_shape[1] == 1:
+            # Row-oriented: (N, 1)
+            placement = [ttnn.PlacementShard(-1), ttnn.PlacementReplicate()]
+            logical_shape = ttnn.MeshShape(num_devices, 1)
+        elif mesh_actual_shape[1] > 1 and mesh_actual_shape[0] == 1:
+            # Column-oriented: (1, N)
+            placement = [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]
+            logical_shape = ttnn.MeshShape(1, num_devices)
+        else:
+            # Default to column-oriented for other cases
+            placement = [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]
+            logical_shape = ttnn.MeshShape(1, num_devices)
+
         input_tensor_mesh = ttnn.from_torch(
             temp_output_tensor,
             device=mesh_device,
@@ -172,9 +190,7 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                ttnn.MeshMapperConfig(placement, logical_shape),
             ),
         )
 
@@ -193,6 +209,7 @@ def run_all_broadcast_impl(
                 output_mem_config,
                 num_iter=num_iters,
                 subdevice_id=worker_sub_device_id,
+                cluster_axis=cluster_axis,
             )
             tt_out_tensor_list.append(tt_out_tensor)
         else:
@@ -200,6 +217,7 @@ def run_all_broadcast_impl(
                 tt_out_tensors = ttnn.all_broadcast(
                     input_tensor_mesh_list[i],
                     num_links=num_links,
+                    cluster_axis=cluster_axis,
                     memory_config=output_mem_config,
                     topology=all_broadcast_topology,
                     subdevice_id=worker_sub_device_id,
@@ -209,7 +227,6 @@ def run_all_broadcast_impl(
             logger.info(f"Waiting for op")
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done op")
-
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensors = tt_out_tensor_list[tensor_index]

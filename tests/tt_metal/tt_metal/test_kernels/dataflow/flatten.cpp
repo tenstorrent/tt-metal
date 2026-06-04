@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // Kernel args
@@ -28,10 +28,10 @@ void kernel_main() {
     constexpr uint32_t num_bytes_for_sending_twenty_four_tile_rows = num_bytes_per_tile_row * 24;
 
     // Initialize experimental API objects
-    experimental::CircularBuffer cb(cb_id_in0);
-    experimental::Noc noc;
-    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
-    experimental::AllocatorBank<bank_type> src_dram;
+    CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    constexpr AllocatorBankType bank_type = AllocatorBankType::DRAM;
+    AllocatorBank<bank_type> src_dram;
 
     std::uint32_t num_bytes_per_tile = cb.get_tile_size();
 
@@ -71,7 +71,7 @@ void kernel_main() {
                 */
                 for (std::uint32_t z = 0; z < 3; z++) {
                     noc.async_read(
-                        experimental::UnicastEndpoint{},
+                        UnicastEndpoint{},
                         cb,
                         num_bytes_for_sending_eight_tile_rows,
                         {.addr = MEM_ZEROS_BASE},
@@ -80,7 +80,7 @@ void kernel_main() {
                 }
 
                 noc.async_read(
-                    experimental::UnicastEndpoint{},
+                    UnicastEndpoint{},
                     cb,
                     num_bytes_for_sending_seven_tile_rows,
                     {.addr = MEM_ZEROS_BASE},

@@ -29,13 +29,18 @@ class Allocator;
 
 // Implementation of SharedMemoryStatsProvider
 
-SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int device_id) :
+SharedMemoryStatsProvider::SharedMemoryStatsProvider(
+    uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose) :
     asic_id_(asic_id),
     device_id_(device_id),
     shm_fd_(-1),
     region_(nullptr),
-    per_pid_tracking_enabled_(true)  // Enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1
-    ,
+    // Per-PID tracking is enabled by default and disabled by TT_METAL_SHM_TRACKING_DISABLED=1.
+    // The flag is captured once at construction (passed in by Device::initialize from its
+    // MetalContext's rtoptions) -- it's a process-wide debug toggle, no need to look it up
+    // again per allocation.
+    per_pid_tracking_enabled_(!tracking_disabled),
+    verbose_enabled_(verbose),
     is_creator_(false) {
     // Format: /tt_device_<chip_unique_id>_memory
     // chip_unique_id from UMD is globally unique and never changes
@@ -79,6 +84,31 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     // Initialize if we're the creator
     if (is_creator_) {
         initialize_region();
+    } else if (region_->version != DEVICE_MEMORY_REGION_VERSION) {
+        const uint32_t existing_refcount = region_->reference_count.load(std::memory_order_acquire);
+        if (existing_refcount == 0) {
+            log_info(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION);
+            initialize_region();
+        } else {
+            log_warning(
+                tt::LogMetal,
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) with {} attached process(es); "
+                "disabling SHM tracking for this provider",
+                asic_id_,
+                region_->version,
+                DEVICE_MEMORY_REGION_VERSION,
+                existing_refcount);
+            munmap(region_, sizeof(DeviceMemoryRegion));
+            region_ = nullptr;
+            close(shm_fd_);
+            shm_fd_ = -1;
+            return;
+        }
     }
 
     // Increment reference count (this process is now attached)
@@ -90,16 +120,7 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int devic
     TT_ASSERT(device_id_ >= 0, "Negative device_id {} passed to SHM provider", device_id_);
     region_->device_id = static_cast<uint32_t>(device_id_);
 
-    // Check if tracking should be disabled (enabled by default)
-    const auto& rtopts = MetalContext::instance().rtoptions();
-    if (rtopts.get_shm_tracking_disabled()) {
-        per_pid_tracking_enabled_ = false;
-    }
-
-    // Verbose logging for initialization
-    bool verbose_enabled = rtopts.get_shm_verbose();
-
-    if (verbose_enabled) {
+    if (verbose_enabled_) {
         log_info(
             tt::LogMetal,
             "SHM Provider initialized: device_id={}, asic_id=0x{:x}, shm_name={}, is_creator={}, region_={}, "
@@ -194,7 +215,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
 
             // Reset per-chip stats
             for (auto & chip_stat : region_->chip_stats) {
-                if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
+                if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
                     chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
                     chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -229,7 +250,7 @@ void SharedMemoryStatsProvider::initialize_region() {
     // Set version (use constexpr from header)
     region_->version = DEVICE_MEMORY_REGION_VERSION;
     region_->num_active_processes = 0;
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
     region_->reference_count.store(0, std::memory_order_relaxed);
 
     // Set physical chip identification (for proper device correlation)
@@ -247,8 +268,8 @@ void SharedMemoryStatsProvider::initialize_region() {
 
     // Initialize per-chip entries (for remote device tracking)
     for (auto & chip_stat : region_->chip_stats) {
-        chip_stat.chip_id = CHIP_STATS_UNUSED;
-        chip_stat.is_remote = 0;
+        chip_stat.chip_id.store(CHIP_STATS_UNUSED, std::memory_order_relaxed);
+        chip_stat.is_remote.store(0, std::memory_order_relaxed);
         chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
         chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
         chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
@@ -257,8 +278,8 @@ void SharedMemoryStatsProvider::initialize_region() {
     }
 
     // Register the gateway chip itself (chip_id = device_id, is_remote = false)
-    region_->chip_stats[0].chip_id = static_cast<uint32_t>(device_id_);
-    region_->chip_stats[0].is_remote = 0;
+    region_->chip_stats[0].chip_id.store(static_cast<uint32_t>(device_id_), std::memory_order_relaxed);
+    region_->chip_stats[0].is_remote.store(0, std::memory_order_relaxed);
 
     // Clear per-process entries
     for (auto & processe : region_->processes) {
@@ -274,10 +295,8 @@ void SharedMemoryStatsProvider::initialize_region() {
 }
 
 void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
-
     if (!region_) {
-        if (verbose_enabled) {
+        if (verbose_enabled_) {
             log_warning(
                 tt::LogMetal,
                 "SHM record_allocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
@@ -289,7 +308,7 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
         return;
     }
 
-    if (verbose_enabled) {
+    if (verbose_enabled_) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
         const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
@@ -333,7 +352,7 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
     }
 
     // Update timestamp
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled
     if (per_pid_tracking_enabled_) {
@@ -355,10 +374,8 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
 }
 
 void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
-    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
-
     if (!region_) {
-        if (verbose_enabled) {
+        if (verbose_enabled_) {
             log_warning(
                 tt::LogMetal,
                 "SHM record_deallocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
@@ -370,7 +387,7 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
         return;
     }
 
-    if (verbose_enabled) {
+    if (verbose_enabled_) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
         const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
@@ -425,7 +442,7 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
     }
 
     // Update timestamp
-    region_->last_update_timestamp = current_timestamp_ns();
+    region_->last_update_timestamp.store(current_timestamp_ns(), std::memory_order_relaxed);
 
     // Update per-PID stats if enabled (with underflow protection using atomics)
     if (per_pid_tracking_enabled_) {
@@ -464,7 +481,7 @@ SharedMemoryStatsProvider::DeviceStats SharedMemoryStatsProvider::get_device_sta
         region_->total_l1_small_allocated.load(std::memory_order_relaxed),
         region_->total_trace_allocated.load(std::memory_order_relaxed),
         region_->total_cb_allocated.load(std::memory_order_relaxed),
-        region_->last_update_timestamp};
+        region_->last_update_timestamp.load(std::memory_order_relaxed)};
 }
 
 std::vector<SharedMemoryStatsProvider::ProcessInfo> SharedMemoryStatsProvider::get_process_stats() const {
@@ -555,21 +572,27 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
 
     // First, try to find existing entry
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id == chip_id) {
+        if (chip_stat.chip_id.load(std::memory_order_relaxed) == chip_id) {
             return &chip_stat;
         }
     }
 
-    // Not found, create new entry
+    // Not found — claim a slot with CAS to avoid TOCTOU race between threads
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id == CHIP_STATS_UNUSED) {
-            chip_stat.chip_id = chip_id;
-            chip_stat.is_remote = 0;  // Will be set by register_chip if needed
+        uint32_t expected = CHIP_STATS_UNUSED;
+        if (chip_stat.chip_id.compare_exchange_strong(
+                expected, chip_id, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // We claimed this slot; initialize it
+            chip_stat.is_remote.store(0, std::memory_order_relaxed);
             chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
             chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
             chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
             chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
             chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
+            return &chip_stat;
+        }
+        if (expected == chip_id) {
+            // Another thread claimed this slot for the same chip_id concurrently
             return &chip_stat;
         }
     }
@@ -585,7 +608,7 @@ void SharedMemoryStatsProvider::register_chip(uint32_t chip_id, bool is_remote) 
 
     auto* chip_entry = find_or_create_chip_entry(chip_id);
     if (chip_entry) {
-        chip_entry->is_remote = is_remote ? 1 : 0;
+        chip_entry->is_remote.store(is_remote ? 1u : 0u, std::memory_order_relaxed);
     }
 }
 
@@ -596,10 +619,10 @@ std::vector<SharedMemoryStatsProvider::ChipInfo> SharedMemoryStatsProvider::get_
     }
 
     for (auto & chip_stat : region_->chip_stats) {
-        if (chip_stat.chip_id != CHIP_STATS_UNUSED) {
+        if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
             ChipInfo info{};
-            info.chip_id = chip_stat.chip_id;
-            info.is_remote = (chip_stat.is_remote != 0);
+            info.chip_id = chip_stat.chip_id.load(std::memory_order_relaxed);
+            info.is_remote = (chip_stat.is_remote.load(std::memory_order_relaxed) != 0);
             info.dram_allocated = chip_stat.dram_allocated.load(std::memory_order_relaxed);
             info.l1_allocated = chip_stat.l1_allocated.load(std::memory_order_relaxed);
             info.l1_small_allocated = chip_stat.l1_small_allocated.load(std::memory_order_relaxed);

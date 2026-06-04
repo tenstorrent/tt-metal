@@ -11,6 +11,8 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -21,9 +23,15 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
@@ -41,12 +49,13 @@ PCC_THRESHOLD_KVPE = 0.999
 
 
 @pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total",
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024),
-        ("abc_1k", True, 1024),
+        ("random", False, 1024, 8),
+        ("abc_1k", False, 25 * 1024, 8),
+        ("abc_1k", True, 1024, 8),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -56,6 +65,7 @@ PCC_THRESHOLD_KVPE = 0.999
     ],
     ids=["dense", "moe-gate_device"],
 )
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -89,15 +99,24 @@ def test_prefill_block(
     config_only,
     mesh_device,
     device_params,
+    is_balanced,
     isl_total,
+    dispatch_buffer_capacity_factor,
     layer_type,
     gate_fallback_mode,
     num_links,
     topology,
     pcc_validation,
     input_source,
-    request,
+    tokenizer,
+    is_ci_env,
+    is_ci_v2_env,
 ):
+    if (is_ci_env or is_ci_v2_env) and pcc_validation == False:
+        pytest.skip("Skip non-PCC test in CI to save time")
+    if (is_ci_env or is_ci_v2_env) and not is_balanced:
+        pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
+
     profiler.clear()
     profiler.start("total_test_time")
     config = config_only
@@ -121,23 +140,56 @@ def test_prefill_block(
         f"input_source={input_source}"
     )
 
-    # --- Build HF reference model and extract weights ---
-    profiler.start("weights_creation")
-    torch.manual_seed(42)
-    num_layers = layer_idx + 1
-    hf_model = create_hf_model(config, num_layers)
-    hf_sd = hf_model.state_dict()
-    state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
-    profiler.end("weights_creation")
+    # --- Cache setup ---
+    is_dense = layer_idx < DeepSeekV3Config.NUM_DENSE_LAYERS
+    cache_dir = Path(f"/tmp/deepseek_v3_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Create input ---
-    if input_source == "abc_1k":
+    init_checker(cache_dir)
+    ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
+    torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
+
+    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source == "abc_1k")
+    need_hf_model = not ttnn_cache_complete or ((pcc_validation or input_source == "abc_1k") and not ref_cache_loadable)
+    logger.info(
+        f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
+        f"need_hf_model={need_hf_model}"
+    )
+
+    # --- Build HF reference model and extract weights ---
+    num_layers = layer_idx + 1
+    hf_model = None
+    if need_hf_model:
+        profiler.start("weights_creation")
+        torch.manual_seed(42)
+        hf_model = create_hf_model(config, num_layers)
+        hf_sd = hf_model.state_dict()
+        state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
+        profiler.end("weights_creation")
+    else:
+        logger.info("TTNN cache complete, skipping torch weight creation")
+        state_dict = {}
+
+    # --- Resolve torch_input and torch reference (single decision point for ref_cache) ---
+    torch_output = None
+    ref_kvpe = None
+    if ref_cache_loadable:
+        logger.info(f"Loading cached reference from {torch_ref_cache}")
+        profiler.start("reference_loading")
+        ref_cached = torch.load(torch_ref_cache, weights_only=True)
+        torch_input = ref_cached["torch_input"]
+        if pcc_validation:
+            torch_output = ref_cached["torch_output"]
+            ref_kvpe = ref_cached["ref_kvpe"]
+        profiler.end("reference_loading")
+    elif input_source == "abc_1k":
         profiler.start("tokenization")
-        tok = request.getfixturevalue("tokenizer")
         prompts = load_prompts_from_json(str(ABC_1K_PATH))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
-        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(tok, max_isl=isl_total, prompt_text=prompt_text)
-        attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=True)
+        token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
+            tokenizer, max_isl=isl_total, prompt_text=prompt_text
+        )
+        attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
         logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
         with torch.no_grad():
@@ -147,10 +199,7 @@ def test_prefill_block(
         torch.manual_seed(123)
         torch_input = torch.randn(1, isl_total, emb_dim, dtype=torch.bfloat16)
 
-    # --- Torch reference (only when pcc_validation is enabled) ---
-    torch_output = None
-    ref_kvpe = None
-    if pcc_validation:
+    if pcc_validation and torch_output is None:
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
@@ -171,6 +220,34 @@ def test_prefill_block(
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 
+        logger.info(f"Saving reference to {torch_ref_cache}")
+        torch.save(
+            {"torch_input": torch_input, "torch_output": torch_output, "ref_kvpe": ref_kvpe},
+            torch_ref_cache,
+        )
+
+    # Free HF model early
+    if hf_model is not None:
+        del hf_model
+
+    # --- Build TTNN cache if needed ---
+    if not ttnn_cache_complete:
+        logger.info("Building TTNN cache...")
+        profiler.start("ttnn_cache_build")
+        TtPrefillBlock.build_ttnn_cache(
+            state_dict=state_dict,
+            layer_idx=layer_idx,
+            cache_path=cache_dir,
+            mesh_device=mesh_device,
+            config=config,
+            seq_len=isl_total,
+            num_links=num_links,
+            topology=topology,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+        )
+        profiler.end("ttnn_cache_build")
+
     # --- TT block ---
     profiler.start("tt_block_creation")
     block_kwargs = dict(
@@ -179,10 +256,13 @@ def test_prefill_block(
         state_dict=state_dict,
         layer_idx=layer_idx,
         seq_len=isl_total,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
         num_links=num_links,
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        weight_cache_path=cache_dir,
+        is_balanced=is_balanced,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -193,6 +273,10 @@ def test_prefill_block(
 
     # Shard input to device: [1, 1, isl_total, emb_dim] → [1, 1, isl_per_chip, emb_dim/tp]
     tt_input_4d = torch_input.unsqueeze(0)  # [1, 1, isl_total, emb_dim]
+    if is_balanced == True:
+        chunk_order = create_balanced_chunk_order(sp_factor)
+        tt_input_4d = reorder_tensor_chunks(tt_input_4d, chunk_order, seq_dim=2)
+
     tt_input = ttnn.from_torch(
         tt_input_4d,
         device=mesh_device,
@@ -202,7 +286,7 @@ def test_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
     )
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
@@ -238,6 +322,8 @@ def test_prefill_block(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
         # Remove leading batch dim: [1, 1, isl_total, emb_dim] → [1, isl_total, emb_dim]
+        if is_balanced:
+            tt_output_host = reverse_reorder_tensor_chunks(tt_output_host, chunk_order, seq_dim=-2)
         tt_output_host = tt_output_host.squeeze(0)
 
         if layer_type == "dense":
@@ -256,6 +342,8 @@ def test_prefill_block(
         # --- KVPE cache validation ---
         if ref_kvpe is not None and tt_kvpe is not None:
             kv_lora_rank = config.kv_lora_rank
+            if is_balanced:
+                tt_kvpe = reverse_reorder_tensor_chunks(tt_kvpe, chunk_order, seq_dim=2)
             _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
             logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")

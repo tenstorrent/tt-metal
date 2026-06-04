@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       run-fabric-tests:
-        description: 'Run t3k fabric tests'
+        description: "Run t3k fabric tests"
         required: false
         default: true
         type: boolean
       run-multiprocess-tests:
-        description: 'Run t3k ttnn multiprocess tests'
+        description: "Run t3k ttnn multiprocess tests"
         required: false
         default: true
         type: boolean
       run-ccl-tests:
-        description: 'Run t3k ttnn ccl tests'
+        description: "Run t3k ttnn ccl tests"
         required: false
         default: true
         type: boolean
@@ -44,18 +44,23 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-fast-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:

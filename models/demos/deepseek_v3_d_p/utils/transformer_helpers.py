@@ -47,8 +47,87 @@ def _log_memory(label: str):
 
 # --- Constants ---
 
-PROMPTS_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
+PROMPT_1K_PATH = Path("models/demos/deepseek_v3/demo/test_prompts_1024.json")
 ABC_1K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_1k.json")
+ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.json")
+P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
+P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
+PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
+PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
+
+TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
+ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
+ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
+ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
+ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
+LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
+
+# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
+# Traces are only used when use_pretrained=True and n_routed_experts=256, since they
+# were generated from the full pretrained model.
+TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
+    ("json_prompts", 1024, "right"): ILLIAD_1024_TRACE,
+    ("json_prompts", 25600, "right"): ILLIAD_25024_TRACE,
+    ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
+    ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
+    ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
+}
+
+
+def find_trace_dir(
+    input_source: str,
+    isl_total: int,
+    padding_side: str,
+    use_pretrained: bool,
+    n_routed_experts: int,
+) -> Path | None:
+    """Return the trace directory for an exact test configuration, or None.
+
+    A trace is eligible only when:
+    - the model uses pretrained weights with 256 experts (traces were generated from
+      the full pretrained DeepSeek-R1 model)
+    - (input_source, isl_total, padding_side) match a known trace exactly
+    - the directory exists and contains a metadata.json
+    """
+    if not use_pretrained or n_routed_experts != 256:
+        return None
+
+    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
+    if path is not None and path.exists() and (path / "metadata.json").exists():
+        return path
+    return None
+
+
+def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_token_prob: float) -> bool | None:
+    """Check whether the produced first token matches the trace reference.
+
+    Looks up the expected token ID from trace metadata or output_metadata.json.
+
+    Returns:
+        True if match, False if mismatch, None if no reference available.
+    """
+    ref_token_id = trace.metadata.get("next_token_id")
+    ref_token_text = trace.metadata.get("next_token_text")
+
+    if ref_token_id is None or ref_token_text is None:
+        output_meta_path = (trace_dir / "output_metadata.json").resolve()
+        if output_meta_path.exists():
+            with open(output_meta_path) as f:  # noqa: S108
+                output_meta = json.load(f)
+            ref_token_id = ref_token_id or output_meta.get("next_token_id")
+            ref_token_text = ref_token_text or output_meta.get("next_token_text")
+
+    if ref_token_text is None:
+        ref_token_text = "N/A"
+
+    token_match = first_token_id == ref_token_id if ref_token_id is not None else None
+    logger.info(
+        f"Trace first token: TT={first_token_id} (prob={first_token_prob:.4f}), "
+        f"Trace={ref_token_id} [{repr(ref_token_text)}], "
+        f"Match={'YES' if token_match else 'NO' if token_match is not None else 'N/A'}"
+    )
+    return token_match
+
 
 # Subset name -> JSONL filename on HuggingFace
 INFINITEBENCH_SUBSETS = {
@@ -268,10 +347,10 @@ def create_hf_model_with_weights(config, num_layers, hf_sd):
     return result
 
 
-def get_4d_causal_mask(attention_mask, ignore_padding=False):
-    "Get 4D causal attention mask for prefill. If ignore_padding=True, returns a purely causal mask that does not account for padding tokens."
+def get_4d_causal_mask(attention_mask, causal_only=False):
+    "Get 4D causal attention mask for prefill. If causal_only=True, returns a purely causal mask without any padding mask (equivalent to is_causal=True in ttnn)."
 
-    if ignore_padding:
+    if causal_only:
         # torch.where(torch.tril(torch.ones(5,5)) == 1, 0, -1e38)
         # tensor([[ 0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38, -1.0000e+38],
         #         [ 0.0000e+00,  0.0000e+00, -1.0000e+38, -1.0000e+38, -1.0000e+38],
@@ -310,13 +389,12 @@ def load_and_compute_layer_by_layer(
     topology: ttnn.Topology = ttnn.Topology.Linear,
     sp_axis: int = 0,
     tp_axis: int = 1,
-    capacity_factor: int = 32,
     gate_fallback_mode=None,
     routed_expert_activations_dtype=ttnn.bfloat8_b,
     routed_expert_weights_dtype=ttnn.bfloat4_b,
     shared_expert_activations_dtype=ttnn.bfloat16,
     shared_expert_weights_dtype=ttnn.bfloat8_b,
-    ignore_padding=True,
+    causal_only=True,
 ) -> LayerByLayerResult:
     """
     Process layers one-at-a-time: load → compute reference → build cache → clear → next.
@@ -342,9 +420,10 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
     from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+    from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -405,7 +484,7 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-    attention_mask = get_4d_causal_mask(attention_mask, ignore_padding=ignore_padding)
+    attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
@@ -512,7 +591,6 @@ def load_and_compute_layer_by_layer(
                 topology=topology,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
-                capacity_factor=capacity_factor,
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
@@ -542,6 +620,7 @@ def load_and_compute_layer_by_layer(
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
         hf_model.load_state_dict(norm_with_prefix, strict=False)
+        logger.debug(f"[norm] h_ref {h_ref.dtype=}, norm_weight dtype={norm_dequant['weight'].dtype}")
         with torch.no_grad():
             h_ref = hf_model.norm(h_ref)
         ref_snapshots.append(h_ref)
@@ -562,6 +641,36 @@ def load_and_compute_layer_by_layer(
     del norm_sd, norm_dequant
     gc.collect()
 
+    # --- Process LM Head ---
+    logger.info("Processing lm_head...")
+    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
+
+    if compute_reference:
+        # Apply lm_head projection: logits = h_ref @ lm_head_weight.T
+        logger.debug(f"[lm_head] h_ref {h_ref.dtype=}, lm_head_weight.dtype={lm_head_dequant['weight'].dtype}")
+        lm_head_weight = lm_head_dequant["weight"].to(torch.bfloat16)
+        with torch.no_grad():
+            h_ref_lm = torch.nn.functional.linear(h_ref.to(torch.bfloat16), lm_head_weight)
+        ref_snapshots.append(h_ref_lm)
+        del lm_head_weight
+
+    if build_ttnn_cache:
+        TtLMHead.build_ttnn_cache(
+            torch_weight=lm_head_dequant["weight"],
+            vocab_size=config.vocab_size,
+            emb_dim=config.hidden_size,
+            mesh_device=mesh_device,
+            cache_path=weight_cache_path,
+            is_column_parallel=True,
+        )
+
+    for k in lm_head_sd.keys():
+        lazy_sd.evict(k)
+    del lm_head_sd, lm_head_dequant
+    gc.collect()
+    _log_memory("After lm_head processed and cleared")
+
     # Cleanup
     lazy_sd.close()
 
@@ -575,7 +684,30 @@ def load_and_compute_layer_by_layer(
     )
 
 
-def check_reference_cache_exists(cache_key: str) -> bool:
+@dataclass(frozen=True)
+class ReferenceCacheKey:
+    """All parameters that affect reference output identity.
+
+    Changing any field produces a different cache filename, so stale results
+    are never reused silently.
+    """
+
+    weight_type: str  # "pretrained" or "random"
+    input_source: str  # "random", "json_prompts", "abc_1k", or InfiniteBench subset
+    isl_total: int
+    num_layers: int
+    n_routed_experts: int
+    padding_side: str  # "right" or "left"
+
+    def __str__(self) -> str:
+        return (
+            f"{self.weight_type}_{self.input_source}"
+            f"_isl{self.isl_total}_layers{self.num_layers}"
+            f"_experts{self.n_routed_experts}_pad{self.padding_side}"
+        )
+
+
+def check_reference_cache_exists(cache_key: ReferenceCacheKey) -> bool:
     """
     Check if reference output cache exists for the given cache key.
 
@@ -583,7 +715,7 @@ def check_reference_cache_exists(cache_key: str) -> bool:
     This cache is machine-independent and can be generated once and shared.
 
     Args:
-        cache_key: Cache identifier like "pretrained_json_prompts_isl1024_layers24_experts256"
+        cache_key: ReferenceCacheKey encoding all parameters that affect reference outputs
 
     Returns:
         True if cache file exists, False otherwise
@@ -601,7 +733,7 @@ def check_reference_cache_exists(cache_key: str) -> bool:
     return exists
 
 
-def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):
+def save_reference_cache(cache_key: ReferenceCacheKey, ref_snapshots, ref_kvpe_list):
     """Save reference outputs to cache file."""
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
     cache_path = cache_dir / f"{cache_key}.pt"
@@ -611,8 +743,12 @@ def save_reference_cache(cache_key: str, ref_snapshots, ref_kvpe_list):
     logger.info(f"Saved reference to {cache_path} ({len(ref_snapshots)} snapshots, {len(ref_kvpe_list)} KVPE)")
 
 
-def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    """Load reference outputs from cache file."""
+def load_reference_cache(cache_key: ReferenceCacheKey) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Load reference outputs from cache file.
+
+    Returns:
+        Tuple of (ref_snapshots, ref_kvpe_list)
+    """
     cache_dir = Path(os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp/deepseek_v3_transformer_ref_cache"))
     cache_path = cache_dir / f"{cache_key}.pt"
 
@@ -626,6 +762,25 @@ def load_reference_cache(cache_key: str) -> tuple[list[torch.Tensor], list[torch
 
     logger.info(f"Loaded reference from {cache_path}")
     return cached["ref_snapshots"], cached["ref_kvpe_list"]
+
+
+def slice_non_padded(tensor: torch.Tensor, num_real_tokens: int, padding_side: str, seq_dim: int = -2) -> torch.Tensor:
+    """Slice a tensor to keep only the non-padded tokens along the sequence dimension.
+
+    Args:
+        tensor: Input tensor with a sequence dimension
+        num_real_tokens: Number of real (non-padded) tokens
+        padding_side: "right" (padding at end) or "left" (padding at start)
+        seq_dim: Which dimension is the sequence dimension (default: -2)
+
+    Returns:
+        Tensor with only the non-padded tokens along seq_dim
+    """
+    if padding_side == "right":
+        return tensor.narrow(seq_dim, 0, num_real_tokens)
+    else:
+        start = tensor.shape[seq_dim] - num_real_tokens
+        return tensor.narrow(seq_dim, start, num_real_tokens)
 
 
 # --- Tokenization helpers ---
@@ -650,9 +805,6 @@ def tokenize_prompt_to_isl(
     input_ids: torch.Tensor = inputs.input_ids  # shape [B, 1024] (padded or capped)
     attention_mask: torch.Tensor = inputs.attention_mask
     tokens = tokenizer.convert_ids_to_tokens(input_ids[0].tolist()) if debug else None
-
-    logger.debug(f"Input IDs shape: {input_ids.shape}")
-    logger.debug(f"Attention mask sum: {attention_mask.sum(dim=1)}")  # actual non‑pad tokens
 
     return input_ids, attention_mask, tokens
 
@@ -745,3 +897,117 @@ def download_infinitebench_subset(subset: str) -> Path:
 
     logger.info(f"Saved {cached_path.name} ({cached_path.stat().st_size:,} bytes)")
     return cached_path
+
+
+# --- Debug trace helpers ---
+@dataclass
+class DebugTraceData:
+    """Data loaded from a bit_sculpt debug trace directory."""
+
+    token_ids: torch.Tensor  # [1, seq_len] int64
+    ref_snapshots: dict[str, torch.Tensor]  # label -> [1, seq, hidden_dim] bfloat16
+    ref_kvpe_list: list[torch.Tensor]  # per-layer [1, 1, seq, kv_lora_rank + qk_rope_head_dim]
+    logits: torch.Tensor | None  # [seq, vocab_size] float32
+    metadata: dict  # raw metadata.json contents
+
+
+def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTraceData:
+    """
+    Load reference tensors from a bit_sculpt debug trace directory.
+
+    The trace contains real intermediate outputs from a pretrained model run,
+    stored as safetensors files alongside a metadata.json.
+
+    Args:
+        trace_dir: Path to trace directory (must contain metadata.json + .safetensors)
+        num_layers: Number of layers to load (default: all layers from metadata)
+
+    Returns:
+        DebugTraceData with token_ids, per-layer reference snapshots, KVPE cache, and logits
+    """
+    from safetensors import safe_open
+
+    trace_dir = Path(trace_dir).resolve()
+    if not trace_dir.exists():
+        raise FileNotFoundError(f"Debug trace directory not found: {trace_dir}")
+
+    with open(trace_dir / "metadata.json") as f:
+        metadata = json.load(f)
+
+    if num_layers is None:
+        num_layers = metadata["n_layers"]
+
+    token_ids = torch.tensor([metadata["token_ids"]], dtype=torch.int64)
+    logger.info(f"Loaded {token_ids.shape[1]} tokens from {trace_dir.name}")
+
+    ref_snapshots = {}
+    hs_dir = trace_dir / "hidden_states"
+    hs_flat = trace_dir / "hidden_states.safetensors"
+    per_layer_format = hs_dir.is_dir()
+
+    if per_layer_format:
+        for i in range(num_layers):
+            layer_path = hs_dir / f"layer_{i}.safetensors"
+            with safe_open(layer_path, framework="pt") as f:
+                key = f"decoder_output_layer_{i}"
+                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states/ (per-layer files)")
+    else:
+        with safe_open(hs_flat, framework="pt") as f:
+            for i in range(num_layers):
+                key = f"decoder_output_layer_{i}"
+                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states.safetensors")
+
+    ref_kvpe_list = []
+    kv_dir = trace_dir / "kv_cache"
+    kv_flat = trace_dir / "kv_cache.safetensors"
+
+    if per_layer_format and kv_dir.is_dir():
+        # Detect key prefix from the first layer file
+        with safe_open(kv_dir / "layer_0.safetensors", framework="pt") as f:
+            available_keys = set(f.keys())
+        use_post_transform = "kv_post_transform_layer_0" in available_keys
+        key_prefix = "kv_post_transform_layer_" if use_post_transform else "compressed_kv_layer_"
+        if not use_post_transform:
+            logger.warning(
+                "kv_post_transform not found in trace — falling back to compressed_kv (pre-RMSNorm, pre-RoPE). "
+                "KVPE PCC will be unreliable. Re-generate the trace to fix."
+            )
+        for i in range(num_layers):
+            layer_path = kv_dir / f"layer_{i}.safetensors"
+            with safe_open(layer_path, framework="pt") as f:
+                kv = f.get_tensor(f"{key_prefix}{i}")
+                ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        kv_format = "post-transform" if use_post_transform else "pre-transform (legacy)"
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache/ (per-layer, {kv_format})")
+    else:
+        with safe_open(kv_flat, framework="pt") as f:
+            available_keys = set(f.keys())
+            use_post_transform = "kv_post_transform_layer_0" in available_keys
+            key_prefix = "kv_post_transform_layer_" if use_post_transform else "compressed_kv_layer_"
+            if not use_post_transform:
+                logger.warning(
+                    "kv_post_transform not found in trace — falling back to compressed_kv (pre-RMSNorm, pre-RoPE). "
+                    "KVPE PCC will be unreliable. Re-generate the trace to fix."
+                )
+            for i in range(num_layers):
+                kv = f.get_tensor(f"{key_prefix}{i}")
+                ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        kv_format = "post-transform" if use_post_transform else "pre-transform (legacy)"
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache.safetensors ({kv_format})")
+
+    logits = None
+    logits_path = trace_dir / "logits.safetensors"
+    if logits_path.exists():
+        with safe_open(logits_path, framework="pt") as f:
+            logits = f.get_tensor("logits")
+        logger.info(f"Loaded logits: shape={list(logits.shape)}, dtype={logits.dtype}")
+
+    return DebugTraceData(
+        token_ids=token_ids,
+        ref_snapshots=ref_snapshots,
+        ref_kvpe_list=ref_kvpe_list,
+        logits=logits,
+        metadata=metadata,
+    )

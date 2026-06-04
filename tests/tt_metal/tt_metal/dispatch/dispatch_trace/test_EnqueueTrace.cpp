@@ -9,6 +9,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -24,7 +25,7 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
@@ -1080,7 +1081,8 @@ DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uin
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range, dfb_config);
     experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);

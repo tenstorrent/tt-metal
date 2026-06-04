@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <cmath>
 
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation_types.hpp"
-#include "welford_reduce_program_factory.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include "welford_reduce_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::prim {
 
-WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::create(
-    const WelfordReduceParams& operation_attributes, const Tensor& tensor_arg, Tensor& tensor_return_value) {
+tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_arg,
+    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -41,21 +44,46 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     uint32_t HtWt = Ht * Wt;
 
     const bool reduce_w = (operation_attributes.reduce_dim == ReduceOpDim::W);
+    const bool reduce_h = (operation_attributes.reduce_dim == ReduceOpDim::H);
     const bool reduce_hw = (operation_attributes.reduce_dim == ReduceOpDim::HW);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tensor_arg.device()->arch(), operation_attributes.compute_kernel_config);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    // Scalar datatype is hardcoded bfloat16 due to tile creation in reader
-    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(input_cb_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "ttnn.std/var with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
+        "config; otherwise precision is silently lost in the unpacker format conversion.");
+
+    // Match cb_scalar's data format to the input. When cb_in is FP32, cb_scalar must also be
+    // FP32: mul_tiles_bcast_scalar reads cb_in as SrcA and cb_scalar as SrcB, and a
+    // format/stride mismatch between the two operands would cause the unpacker to silently
+    // produce zeros into DEST.
+    tt::DataFormat scalar_cb_data_format =
+        (input_cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+
+    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
+
+    // For variance output (is_std=false) to bf16, the scratch CBs (c_19 for W-reduce,
+    // c_22 for HW-reduce) do not need to be wider than bf16: there is no math between
+    // the scratch read-back and the final pack to output, so bf16-rounding once at the
+    // pack to scratch vs once at the pack to output produces a bit-identical result.
+    // For std output, sqrt sits between the read-back and the output pack, so keep the
+    // scratch at the wider precision to avoid quantizing the variance before sqrt
+    // (which could shift the std output by up to one bf16-ULP on elements whose post-
+    // sqrt value straddles a bf16 rounding boundary).
+    bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
 
     tt_metal::IDevice* device = tensor_arg.device();
 
@@ -138,41 +166,69 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_work_units);
     }
 
+    ProgramDescriptor desc;
+
+    // Input CB c_0. The unpack_to_dest_mode flag below makes c_0 UnpackToDestFp32 for FP32
+    // input on the !do_scale path so the welford SFPU intake (copy_tile / transpose_wh_tile)
+    // reads via the precision-preserving unpack-to-DEST path. On the do_scale path c_0 stays
+    // Default so the FPU mul_tiles_bcast_scalar SrcA read works (UnpackToDest is incompatible
+    // with FPU SrcA); the SFPU welford on that path reads cb_scaled instead, and cb_scaled's
+    // own UnpackToDestFp32 flag preserves the FPU mul output mantissa.
     CBIndex input_cb_index = CBIndex::c_0;
     uint32_t input_tiles_per_cb = 2;
-    tt_metal::CircularBufferConfig input_cb_config =
-        tt_metal::CircularBufferConfig(
-            input_tiles_per_cb * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, input_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_tiles_per_cb * input_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(input_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_single_tile_size,
+        }}},
+    });
 
     CBIndex scalar_cb_index = CBIndex::c_2;
-
-    tt_metal::CircularBufferConfig scalar_cb_config =
-        tt_metal::CircularBufferConfig(scalar_single_tile_size, {{scalar_cb_index, scalar_cb_data_format}})
-            .set_page_size(scalar_cb_index, scalar_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, scalar_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scalar_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(scalar_cb_index),
+            .data_format = scalar_cb_data_format,
+            .page_size = scalar_single_tile_size,
+        }}},
+    });
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t output_tiles_per_cb = 2;
-    tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(
-            output_tiles_per_cb * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, dst_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = output_tiles_per_cb * dst_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = dst_cb_data_format,
+            .page_size = dst_single_tile_size,
+        }}},
+    });
 
     // cb_var (c_19): W-reduce only -- scratch buffer for variance tile between
     // the two transpose steps (Welford produces row-oriented results that must
     // be transposed back to column orientation).
     if (reduce_w) {
         CBIndex scratch_cb_index = CBIndex::c_19;
-        // It stores temporary data from the DST register, so data format is the same as the DST register.
-        tt::DataFormat scratch_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        // Float32 only when the DST register is fp32 and we are not narrowing the scratch
+        // to the output dtype (variance output to bf16 -- see narrow_scratch_to_bf16 above);
+        // bf16 otherwise.
+        tt::DataFormat scratch_cb_data_format =
+            (fp32_dest_acc_en && !narrow_scratch_to_bf16) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         uint32_t scratch_single_tile_size = tt::tile_size(scratch_cb_data_format);
-        tt_metal::CircularBufferConfig scratch_cb_config =
-            tt_metal::CircularBufferConfig(scratch_single_tile_size, {{scratch_cb_index, scratch_cb_data_format}})
-                .set_page_size(scratch_cb_index, scratch_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = scratch_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scratch_cb_index),
+                .data_format = scratch_cb_data_format,
+                .page_size = scratch_single_tile_size,
+            }}},
+        });
     }
 
     // cb_scaled (c_20): only W-reduce needs this when do_scale is true.
@@ -182,10 +238,15 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     bool do_scale = (operation_attributes.scalar != 1.0f);
     if (do_scale && reduce_w) {
         CBIndex scaled_cb_index = CBIndex::c_20;
-        tt_metal::CircularBufferConfig scaled_cb_config =
-            tt_metal::CircularBufferConfig(input_single_tile_size, {{scaled_cb_index, input_cb_data_format}})
-                .set_page_size(scaled_cb_index, input_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, scaled_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = input_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(scaled_cb_index),
+                .data_format = input_cb_data_format,
+                .page_size = input_single_tile_size,
+            }}},
+        });
     }
 
     // cb_partial (c_21): HW-reduce only -- holds per-column mean+var tile pairs
@@ -196,64 +257,92 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
         uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
         // Reserve space for 4 tiles to enable double buffering (since compute kernel packs 2 tiles at a time).
-        tt_metal::CircularBufferConfig partial_cb_config =
-            tt_metal::CircularBufferConfig(4 * partial_single_tile_size, {{partial_cb_index, partial_cb_data_format}})
-                .set_page_size(partial_cb_index, partial_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, partial_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 4 * partial_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(partial_cb_index),
+                .data_format = partial_cb_data_format,
+                .page_size = partial_single_tile_size,
+            }}},
+        });
 
         // cb_combined (c_22): HW-reduce only -- holds the combined scalar result
-        // (one Float32 tile per output) written by the writer kernel after
-        // W-combining all per-column partials and applying Bessel's correction.
+        // (one tile per output) written by the writer kernel after W-combining
+        // all per-column partials and applying Bessel's correction.
         // The compute kernel reads this tile, applies sqrt_tile for std, and
         // re-packs it to cb_out in the correct output data format (the packer
         // hardware is required for BFLOAT8_B conversion).
+        // Float32 unless we can safely narrow to bf16.
         CBIndex combined_cb_index = CBIndex::c_22;
-        tt::DataFormat combined_cb_data_format = tt::DataFormat::Float32;
+        tt::DataFormat combined_cb_data_format =
+            narrow_scratch_to_bf16 ? tt::DataFormat::Float16_b : tt::DataFormat::Float32;
         uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
-        tt_metal::CircularBufferConfig combined_cb_config =
-            tt_metal::CircularBufferConfig(combined_single_tile_size, {{combined_cb_index, combined_cb_data_format}})
-                .set_page_size(combined_cb_index, combined_single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, combined_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = combined_single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(combined_cb_index),
+                .data_format = combined_cb_data_format,
+                .page_size = combined_single_tile_size,
+            }}},
+        });
     }
 
-    bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
-    uint32_t packed_scalar_value = pack_two_bfloat16_into_uint32({bfloat_scalar_value, bfloat_scalar_value});
-
-    tt_metal::Buffer* input_buffer = tensor_arg.buffer();
-    tt_metal::Buffer* output_buffer = tensor_return_value.buffer();
+    const auto& input = tensor_arg.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
+    reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+
+    // welford_fp32_input gates the full hw_configure pairs in the W-reduce compute kernel
+    // in the do_scale wt-inner loop that switch UNPACK between cb_in's Default mode
+    // (FPU mul SrcA) and cb_scaled's UnpackToDestFp32 mode (welford-intake transpose). H- and
+    // HW-reduce kernels don't have a cb_scaled-style intermediate and don't need this flag.
+    std::vector<std::pair<std::string, uint32_t>> welford_named_args;
+    if (reduce_w) {
+        welford_named_args.push_back(
+            {"welford_fp32_input", static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)});
+    }
 
     // --- Reader kernel ---
-    tt_metal::KernelHandle reader_kernel_id;
-    if (reduce_w) {
-        // W-reduce: sequential reader reads tiles row by row
-        std::vector<uint32_t> reader_compile_time_args = {packed_scalar_value};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        reader_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "reader_unary_reduce_universal_start_id.cpp",
-            all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
-    } else {
+    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
+    KernelDescriptor reader_desc;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
+
+    if (reduce_h || reduce_hw) {
         // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
-        // For HW-reduce, num_cols = Wt * NC_per_core to read all columns for all assigned NC slices.
-        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, /*row_chunk=*/1, packed_scalar_value};
-        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-        reader_kernel_id = tt_metal::CreateKernel(
-            program,
+        // Welford processes one column at a time (SFPU can only track one running
+        // mean/M2 state), so the reader must deliver tiles in strict column-major
+        // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
+        std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits, /*use_welford=*/1};
+        TensorAccessorArgs(input).append_to(reader_compile_time_args);
+        reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp",
-            all_cores,
-            tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
+        reader_desc.compile_time_args = reader_compile_time_args;
+    } else {
+        // W-reduce: sequential reader reads tiles row by row.
+        std::vector<uint32_t> reader_compile_time_args = {scaler_bits};
+        TensorAccessorArgs(input).append_to(reader_compile_time_args);
+        reader_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+            "reader_unary_reduce_universal_start_id.cpp";
+        reader_desc.compile_time_args = reader_compile_time_args;
     }
 
     // --- Compute + Writer kernels ---
-    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
 
-    tt_metal::KernelHandle writer_kernel_id;
+    KernelDescriptor writer_desc;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.config = WriterConfigDescriptor{};
+
     if (reduce_hw) {
         if (operation_attributes.correction) {
             TT_FATAL(
@@ -264,23 +353,27 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
 
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
-            Wt, W, tile_width, H, static_cast<uint32_t>(operation_attributes.correction), reduce_batch_size};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-        writer_kernel_id = tt_metal::CreateKernel(
-            program,
+            Wt,
+            W,
+            tile_width,
+            H,
+            static_cast<uint32_t>(operation_attributes.correction),
+            reduce_batch_size,
+            static_cast<uint32_t>(narrow_scratch_to_bf16)};
+        TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-            "writer_welford_hw.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+            "writer_welford_hw.cpp";
+        writer_desc.compile_time_args = writer_compile_time_args;
+        // Note: HW writer does not pass reduce_defines (matches original behavior).
     } else {
         // W-reduce and H-reduce: generic tile writer.
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-        writer_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
+        std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
+        TensorAccessorArgs(output).append_to(writer_compile_time_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        writer_desc.compile_time_args = writer_compile_time_args;
+        writer_desc.defines = {reduce_defines.begin(), reduce_defines.end()};
     }
 
     std::vector<uint32_t> compute_compile_args;
@@ -322,27 +415,70 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
                              : "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_h.cpp";
     }
 
-    tt_metal::KernelHandle compute_kernel_id_group_1 = tt_metal::CreateKernel(
-        program,
-        compute_kernel,
-        core_group_1,
-        tt_metal::ComputeConfig{
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so that
+    // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
+    // downcast to TF32, losing precision and even leading to large-mean fp32 variance
+    // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
+    // between nearby samples.
+    //
+    // Apply this to every Float32 CB the compute kernel reads back via copy_tile /
+    // transpose_wh_tile:
+    //   - Input CB: needed on all three reduction paths (H, W, HW), but only on the !do_scale
+    //     path with FP32 input, where the Welford SFPU intake reads c_0 directly via
+    //     copy_tile/transpose_wh_tile, so UnpackToDestFp32 preserves the full FP32 into DEST.
+    //     On the do_scale path input CB is read by the FPU mul (SrcA), which is incompatible
+    //     with UnpackToDest mode. The precision-preserving plumbing lives downstream on cb_scaled.
+    //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
+    //     transpose to undo it.
+    //   - W-reduce + do_scale only: cb_scaled (c_20) -- the FPU-scaled input tile is read
+    //     back by transpose_wh_tile, whose result feeds the SFPU welford on DEST.
+    //     flagged UnpackToDestFp32 to preserve the up-to-22 mantissa bits the FPU mul output
+    //     can carry beyond its TF32 inputs.
+    //   - HW-reduce only: cb_combined (c_22) -- the variance tile is read back after the
+    //     writer-side cross-core re-reduction.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (input_cb_data_format == tt::DataFormat::Float32 && !do_scale) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (reduce_w && do_scale && input_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_20)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    KernelDescriptor compute_desc_g1;
+    compute_desc_g1.kernel_source = compute_kernel;
+    compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_g1.core_ranges = core_group_1;
+    compute_desc_g1.compile_time_args = compute_compile_args;
+    compute_desc_g1.named_compile_time_args = welford_named_args;
+    compute_desc_g1.defines = {reduce_defines.begin(), reduce_defines.end()};
+    compute_desc_g1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+    };
+
+    std::optional<KernelDescriptor> compute_desc_g2;
+    if (!core_group_2.ranges().empty()) {
+        KernelDescriptor d;
+        d.kernel_source = compute_kernel;
+        d.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        d.core_ranges = core_group_2;
+        d.compile_time_args = compute_compile_args;
+        d.named_compile_time_args = welford_named_args;
+        d.defines = {reduce_defines.begin(), reduce_defines.end()};
+        d.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_compile_args,
-            .defines = reduce_defines});
-
-    tt_metal::KernelHandle compute_kernel_id_group_2 = 0;
-    if (!core_group_2.ranges().empty()) {
-        compute_kernel_id_group_2 = tt_metal::CreateKernel(
-            program,
-            compute_kernel,
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = compute_compile_args,
-                .defines = reduce_defines});
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+        };
+        compute_desc_g2 = std::move(d);
     }
 
     // --- Runtime args per core ---
@@ -366,7 +502,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         for (uint32_t i = 0; i < num_cores; ++i) {
             const CoreCoord& core = cores[i];
             uint32_t num_work_units_per_core = 0;
-            if (core_group_1.contains(core)) {
+            bool in_g1 = core_group_1.contains(core);
+            if (in_g1) {
                 num_work_units_per_core = num_work_units_per_core_group_1;
             } else if (core_group_2.contains(core)) {
                 num_work_units_per_core = num_work_units_per_core_group_2;
@@ -375,21 +512,10 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             }
             uint32_t num_input_tiles_per_core = num_work_units_per_core * Wt;
             uint32_t num_output_tiles_per_core = num_work_units_per_core;
-            tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernel_id,
-                core,
-                {tensor_arg.buffer()->address(), num_input_tiles_per_core, input_tiles_offset});
-            tt_metal::SetRuntimeArgs(
-                program,
-                core_group_1.contains(core) ? compute_kernel_id_group_1 : compute_kernel_id_group_2,
-                core,
-                {num_work_units_per_core});
-            tt_metal::SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                core,
-                {tensor_return_value.buffer()->address(), num_output_tiles_per_core, output_tiles_offset});
+            reader_desc.emplace_runtime_args(core, {input, num_input_tiles_per_core, input_tiles_offset});
+            (in_g1 ? compute_desc_g1 : *compute_desc_g2)
+                .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_work_units_per_core});
+            writer_desc.emplace_runtime_args(core, {output, num_output_tiles_per_core, output_tiles_offset});
             input_tiles_offset += num_input_tiles_per_core;
             output_tiles_offset += num_output_tiles_per_core;
         }
@@ -397,7 +523,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         // HW-reduce: each work unit is one output element, produced from
         // reduce_batch_size consecutive NC slices (Ht * Wt tiles each).
         // Reader uses the column-partitioned reader with
-        // num_cols = Wt * num_outputs_per_core * reduce_batch_size.
+        // num_cols = Wt * nc_slices_per_core so the compute kernel's
+        // for wt: for ht: loop order sees column-major tile order.
         TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
         TT_FATAL(
             NC % reduce_batch_size == 0, "NC ({}) must be divisible by reduce_batch_size ({})", NC, reduce_batch_size);
@@ -406,7 +533,8 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         for (uint32_t i = 0; i < num_cores; ++i) {
             const CoreCoord& core = cores[i];
             uint32_t num_outputs_per_core = 0;
-            if (core_group_1.contains(core)) {
+            bool in_g1 = core_group_1.contains(core);
+            if (in_g1) {
                 num_outputs_per_core = num_work_units_per_core_group_1;
             } else if (core_group_2.contains(core)) {
                 num_outputs_per_core = num_work_units_per_core_group_2;
@@ -418,28 +546,19 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             // Reader: read all columns for all NC slices assigned to this core.
             uint32_t num_cols = Wt * nc_slices_per_core;
             uint32_t col_start_tile_id = nc_slice_offset * HtWt;
-            tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernel_id,
+            reader_desc.emplace_runtime_args(
                 core,
-                {tensor_arg.buffer()->address(),
+                {input,
                  col_start_tile_id,
                  /*curr_col_in_batch=*/0u,
                  num_cols});
             // Compute: runtime arg is total NC slices (not num_outputs).
-            tt_metal::SetRuntimeArgs(
-                program,
-                core_group_1.contains(core) ? compute_kernel_id_group_1 : compute_kernel_id_group_2,
-                core,
-                {nc_slices_per_core});
+            (in_g1 ? compute_desc_g1 : *compute_desc_g2)
+                .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{nc_slices_per_core});
             // Writer: runtime args are {dst_addr, NC_per_core, output_tile_start_id}.
             // NC_per_core is total NC slices; the writer uses reduce_batch_size
             // (compile-time) to determine how many to group per output.
-            tt_metal::SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                core,
-                {tensor_return_value.buffer()->address(), nc_slices_per_core, output_offset});
+            writer_desc.emplace_runtime_args(core, {output, nc_slices_per_core, output_offset});
             nc_slice_offset += nc_slices_per_core;
             output_offset += num_outputs_per_core;
         }
@@ -451,63 +570,32 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         for (uint32_t i = 0; i < num_cores; ++i) {
             const CoreCoord& core = cores[i];
             uint32_t num_cols_per_core = 0;
-            if (core_group_1.contains(core)) {
+            bool in_g1 = core_group_1.contains(core);
+            if (in_g1) {
                 num_cols_per_core = num_work_units_per_core_group_1;
             } else if (core_group_2.contains(core)) {
                 num_cols_per_core = num_work_units_per_core_group_2;
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
-            tt_metal::SetRuntimeArgs(
-                program,
-                reader_kernel_id,
+            reader_desc.emplace_runtime_args(
                 core,
-                {tensor_arg.buffer()->address(),
-                 (num_cols_read / Wt * HtWt) + (num_cols_read % Wt),
-                 num_cols_read % Wt,
-                 num_cols_per_core});
-            tt_metal::SetRuntimeArgs(
-                program,
-                core_group_1.contains(core) ? compute_kernel_id_group_1 : compute_kernel_id_group_2,
-                core,
-                {num_cols_per_core});
-            tt_metal::SetRuntimeArgs(
-                program,
-                writer_kernel_id,
-                core,
-                {tensor_return_value.buffer()->address(), num_cols_per_core, num_cols_read});
+                {input, (num_cols_read / Wt * HtWt) + (num_cols_read % Wt), num_cols_read % Wt, num_cols_per_core});
+            (in_g1 ? compute_desc_g1 : *compute_desc_g2)
+                .runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_cols_per_core});
+            writer_desc.emplace_runtime_args(core, {output, num_cols_per_core, num_cols_read});
             num_cols_read += num_cols_per_core;
         }
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
-}
-
-void WelfordReduceProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const WelfordReduceParams& /*operation_attributes*/,
-    const Tensor& tensor_arg,
-    Tensor& tensor_return_value) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    auto* src_dram_buffer = tensor_arg.buffer();
-    auto* dst_dram_buffer = tensor_return_value.buffer();
-
-    auto& reader_runtime_args_by_core =
-        GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernel_id);
-    auto& writer_runtime_args_by_core =
-        GetRuntimeArgs(cached_program.program, cached_program.shared_variables.writer_kernel_id);
-    for (const auto& core : cached_program.shared_variables.cores) {
-        {
-            auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-            runtime_args[0] = src_dram_buffer->address();
-        }
-
-        {
-            auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-            runtime_args[0] = dst_dram_buffer->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_g1));
+    if (compute_desc_g2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_g2));
     }
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

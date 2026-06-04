@@ -8,6 +8,7 @@
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::idle_eth;
 
 #include <cstdint>
@@ -31,6 +32,10 @@ namespace idle_eth_dev_msgs {
 
 namespace idle_eth_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
+}
+
+namespace idle_eth_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
 }
 
 HalCoreInfoType create_idle_eth_mem_map() {
@@ -67,7 +72,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
@@ -122,7 +127,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         idle_eth_dev_msgs::create_factory(),
-        idle_eth_fabric_telemetry::create_factory()};
+        idle_eth_fabric_telemetry::create_factory(),
+        idle_eth_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

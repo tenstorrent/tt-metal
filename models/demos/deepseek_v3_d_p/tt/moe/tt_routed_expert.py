@@ -21,7 +21,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
@@ -36,35 +35,43 @@ class TtRoutedExpert(LightweightModule):
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str, experts_per_chip: int) -> bool:
         """Check if all routed expert weight cache files exist."""
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import pattern_exists
+
         for local_expert_idx in range(experts_per_chip):
             for proj in ["gate", "up", "down"]:
                 pattern = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}*.tensorbin"
-                if not list(cache_path.glob(pattern)):
+                if not pattern_exists(pattern, "RoutedExpert"):
                     logger.debug(f"TTNN cache missing: {cache_name_prefix}.local_{local_expert_idx}_{proj}")
                     return False
         return True
 
     @staticmethod
     def _convert_and_cache_expert_weights(
-        torch_weights: list[dict],
+        torch_weights: list[dict] | None,
         experts_per_chip: int,
         mesh_device: ttnn.MeshDevice,
         weights_dtype: ttnn.DataType,
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,
+        *,
+        emb_dim: int | None = None,
+        hidden_dim: int | None = None,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
 
         Args:
-            torch_weights: List of 256 expert weight dicts
+            torch_weights: List of expert weight dicts, or None for cache-only loading.
+                When None, emb_dim and hidden_dim must be provided.
             experts_per_chip: Number of experts per chip (8 for 8x4 mesh)
             mesh_device: Mesh device reference
             weights_dtype: Weight data type
             cache_path: Cache directory
             cache_name_prefix: Prefix for cache files
             device: None for cache-only, mesh_device for cache+load
+            emb_dim: Required when torch_weights is None
+            hidden_dim: Required when torch_weights is None
 
         Returns:
             (gate_projs, up_projs, down_projs) if device is not None, else None
@@ -79,53 +86,58 @@ class TtRoutedExpert(LightweightModule):
         mesh_rows, mesh_cols = mesh_device.shape
         gate_tensors, up_tensors, down_tensors = [], [], []
 
-        for local_expert_idx in tqdm(
-            range(experts_per_chip), desc=f"Expert weights ({'cache' if device is None else 'device'})"
-        ):
-            gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
-                torch_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
-            )
+        mode = "build-cache" if device is None else ("load-cache" if torch_weights is None else "convert")
+        for local_expert_idx in tqdm(range(experts_per_chip), desc=f"Expert weights ({mode})"):
+            if torch_weights is not None:
+                gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
+                    torch_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+                )
 
-            # Convert gate
-            stacked_gate = torch.stack([w.T.contiguous() for w in gate_weights], dim=0)
-            in_f, out_f = stacked_gate.shape[1], stacked_gate.shape[2]
-            stacked_gate = stacked_gate.reshape(mesh_rows, mesh_cols, in_f, out_f)
+                stacked_gate = torch.stack([w.T.contiguous() for w in gate_weights], dim=0)
+                in_f, out_f = stacked_gate.shape[1], stacked_gate.shape[2]
+                stacked_gate = stacked_gate.reshape(mesh_rows, mesh_cols, in_f, out_f)
+
+                stacked_up = torch.stack([w.T.contiguous() for w in up_weights], dim=0).reshape(
+                    mesh_rows, mesh_cols, in_f, out_f
+                )
+
+                stacked_down = torch.stack([w.T.contiguous() for w in down_weights], dim=0)
+                in_f_down, out_f_down = stacked_down.shape[1], stacked_down.shape[2]
+                stacked_down = stacked_down.reshape(mesh_rows, mesh_cols, in_f_down, out_f_down)
+            else:
+                assert emb_dim is not None and hidden_dim is not None
+                stacked_gate = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
+                stacked_up = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
+                stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
+
+            mem = ttnn.DRAM_MEMORY_CONFIG if device else None
+            mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
             gate_tt = ttnn.as_tensor(
                 stacked_gate,
-                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
-            )
-
-            # Convert up (same shape as gate)
-            stacked_up = torch.stack([w.T.contiguous() for w in up_weights], dim=0).reshape(
-                mesh_rows, mesh_cols, in_f, out_f
             )
             up_tt = ttnn.as_tensor(
                 stacked_up,
-                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
             )
-
-            # Convert down (different shape: hidden_dim x emb_dim after transpose)
-            stacked_down = torch.stack([w.T.contiguous() for w in down_weights], dim=0)
-            in_f_down, out_f_down = stacked_down.shape[1], stacked_down.shape[2]  # Get actual down_proj dims
-            stacked_down = stacked_down.reshape(mesh_rows, mesh_cols, in_f_down, out_f_down)
             down_tt = ttnn.as_tensor(
                 stacked_down,
-                mesh_mapper=ExpertMapping.get_weights_mesh_mapper(mesh_device),
+                mesh_mapper=mapper,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 dtype=weights_dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG if device else None,
+                memory_config=mem,
                 cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
             )
 
@@ -178,6 +190,7 @@ class TtRoutedExpert(LightweightModule):
         self,
         mesh_device,
         experts_per_chip: int,
+        global_expert_idx_table: ttnn.Tensor,
         emb_dim: int = 7 * 1024,
         hidden_dim: int = 2 * 1024,
         max_tokens: int = 1600,
@@ -205,6 +218,10 @@ class TtRoutedExpert(LightweightModule):
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
             compute_kernel_config: Compute kernel configuration
+            global_expert_idx_table: TTNN tensor mapping local expert slots to global expert ids.
+                          Produced by sharding ExpertMapping.create_global_expert_idx_table via
+                          get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
+                          global ids. Required.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -218,6 +235,7 @@ class TtRoutedExpert(LightweightModule):
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self.global_expert_idx_table = global_expert_idx_table
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -240,9 +258,30 @@ class TtRoutedExpert(LightweightModule):
                 f"experts_per_chip={experts_per_chip}), got {len(torch_weights)}"
             )
             logger.debug(f"Creating weights from provided torch tensors ({total_experts} experts)")
+            result = self._convert_and_cache_expert_weights(
+                torch_weights,
+                experts_per_chip,
+                self.mesh_device,
+                self.weights_dtype,
+                self.weight_cache_path,
+                self.cache_name_prefix,
+                device=self.mesh_device,
+            )
+        elif weight_cache_path is not None:
+            logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
+            result = self._convert_and_cache_expert_weights(
+                None,
+                experts_per_chip,
+                self.mesh_device,
+                self.weights_dtype,
+                self.weight_cache_path,
+                self.cache_name_prefix,
+                device=self.mesh_device,
+                emb_dim=emb_dim,
+                hidden_dim=hidden_dim,
+            )
         else:
-            # Cache-only mode: create dummy tensors (ignored when cache exists)
-            logger.debug(f"Creating dummy tensors for cache loading ({total_experts} experts)")
+            logger.debug(f"Creating dummy tensors for testing ({total_experts} experts)")
             torch_weights = []
             for _ in range(total_experts):
                 torch_weights.append(
@@ -252,18 +291,52 @@ class TtRoutedExpert(LightweightModule):
                         "down_proj": torch.empty(emb_dim, hidden_dim),
                     }
                 )
+            result = self._convert_and_cache_expert_weights(
+                torch_weights,
+                experts_per_chip,
+                self.mesh_device,
+                self.weights_dtype,
+                None,
+                None,
+                device=self.mesh_device,
+            )
 
-        # Use shared static method with device=mesh_device (works for both real weights and cache loading)
-        result = self._convert_and_cache_expert_weights(
-            torch_weights,
-            experts_per_chip,
-            self.mesh_device,
-            self.weights_dtype,
-            self.weight_cache_path,
-            self.cache_name_prefix,
-            device=self.mesh_device,
-        )
+        assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+
+    @staticmethod
+    def shard_expert_token_counts(
+        mesh_device: ttnn.MeshDevice,
+        expert_token_counts: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """
+        Convert and shard the expert token counts tensor across mesh devices.
+
+        Args:
+            mesh_device: The mesh device to place the tensor on
+            expert_token_counts: Total tokens per expert (sparse per group, replicated across dispatch_group_size)
+                Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts) - from get_gate_outputs()
+
+        Returns:
+            TTNN tensor sharded across mesh devices.
+            Per-device shape: (1, num_routed_experts)
+        """
+        logger.debug(f"[shard_expert_token_counts] INPUT: expert_token_counts.shape={expert_token_counts.shape}")
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(1, 0),
+        )
+        result = ttnn.from_torch(
+            expert_token_counts,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+        result = ttnn.squeeze(result, 0)
+        logger.debug(f"[shard_expert_token_counts] OUTPUT: result.shape={result.shape}")
+        return result
 
     def _cache_name(self, name: str) -> Optional[str]:
         if self.weight_cache_path is None or self.cache_name_prefix is None:
@@ -318,7 +391,6 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Output tensor matching the shape of ``x``.
         """
-
         return ttnn.experimental.deepseek_prefill.routed_expert_ffn(
             x,
             gate_proj,
@@ -328,10 +400,11 @@ class TtRoutedExpert(LightweightModule):
             output=out,
         )
 
-    def _bh_forward_impl(
+    def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
+        expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """
         Blackhole forward implementation using narrow and in-place writes.
@@ -342,10 +415,13 @@ class TtRoutedExpert(LightweightModule):
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
+                shape: (max_dispatch_buffer_token_size, emb_dim)
+            expert_token_counts: Token counts per expert per chip
                 If provided, only processes tokens up to the count (currently unused,
                 all tokens are processed for simplicity)
+            expert_region_offsets: Expert region start offsets per expert
+                (shared across source devices in a dispatch group). Produced by
+                offset_cumsum. Shape per device: (1, num_routed_experts).
 
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
@@ -361,13 +437,21 @@ class TtRoutedExpert(LightweightModule):
         # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
         # We process expert by expert and reassemble
 
-        expert_outputs = ttnn.empty_like(dispatched_buffer)
+        expert_outputs = dispatched_buffer
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
-            # Extract tokens for this expert
-            # Shape: (1, max_tokens, emb_dim)
-            tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
+            # Extract tokens for this expert using the deepseek_prefill extract op,
+            # which uses expert_region_offsets and expert_token_counts to slice out
+            # this expert's valid rows
+            tokens = ttnn.experimental.deepseek_prefill.extract(
+                dispatched_buffer,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+                max_dispatched_tokens_per_expert=self.max_tokens,
+            )
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
@@ -376,103 +460,22 @@ class TtRoutedExpert(LightweightModule):
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
-                out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
+                out=None,
             )
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+
+            # Insert this expert's output back into the flat expert_outputs buffer at
+            # the expert's region (determined by expert_region_offsets and expert_token_counts).
+            expert_outputs = ttnn.experimental.deepseek_prefill.insert(
+                expert_outputs,
+                output,
+                expert_region_offsets,
+                expert_token_counts,
+                self.global_expert_idx_table,
+                local_expert_id=local_expert,
+            )
 
         # Shape: (experts_per_chip, max_tokens, emb_dim)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
         return expert_outputs
-
-    def _wh_forward_impl(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-    ) -> ttnn.Tensor:
-        """
-        Wormhole forward implementation using indexing, unsqueeze, and concat.
-
-        Extracts per-expert tokens via tensor indexing, runs the FFN, then
-        reassembles the output by unsqueezing and concatenating along the expert
-        dimension.
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
-
-        # Convert input to activations dtype if needed
-        if dispatched_buffer.dtype != self.activations_dtype:
-            logger.warning(f"{dispatched_buffer.dtype=} typecasting to {self.activations_dtype}")
-            dispatched_buffer = ttnn.typecast(dispatched_buffer, self.activations_dtype)
-
-        # Process each local expert
-        # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
-        # We process expert by expert and reassemble
-
-        expert_outputs_list = []
-        for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
-
-            # Extract tokens for this expert
-            # Shape: (max_tokens, emb_dim)
-            tokens = dispatched_buffer[local_expert, :, :]
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
-
-            # Run FFN
-            output = self._expert_ffn(
-                tokens,
-                self.gate_projs[local_expert],
-                self.up_projs[local_expert],
-                self.down_projs[local_expert],
-                out=None,  # Let the FFN allocate output since we will concatenate later
-            )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
-
-            # Add expert dimension back
-            # Shape: (1, max_tokens, emb_dim)
-            output = ttnn.unsqueeze(output, dim=0)
-            expert_outputs_list.append(output)
-
-        # Concatenate along expert dimension
-        # Shape: (experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
-
-        return expert_outputs
-
-    def forward(
-        self,
-        dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
-    ) -> ttnn.Tensor:
-        """
-        Process dispatched tokens through local experts.
-
-        Dispatches to the architecture-specific implementation based on the
-        current device type (Wormhole or Blackhole).
-
-        Args:
-            dispatched_buffer: Dispatched tokens
-                shape: (experts_per_chip, max_tokens, emb_dim)
-            expert_token_counts: Optional token counts per expert per chip
-                If provided, only processes tokens up to the count (currently unused,
-                all tokens are processed for simplicity)
-
-        Returns:
-            expert_outputs: Expert output tensor, same shape as dispatched_buffer
-        """
-        if is_wormhole_b0():
-            return self._wh_forward_impl(dispatched_buffer, expert_token_counts)
-        elif is_blackhole():
-            return self._bh_forward_impl(dispatched_buffer, expert_token_counts)
-        else:
-            raise ValueError("Unsupported device architecture")

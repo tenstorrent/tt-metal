@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t buffer_addr_a = get_arg_val<uint32_t>(0);
@@ -17,11 +17,11 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(6);
     uint32_t other_noc_y = get_arg_val<uint32_t>(7);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::CoreLocalMem<uint32_t> buf_a(buffer_addr_a);
-    experimental::CoreLocalMem<uint32_t> buf_b(buffer_addr_b);
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    CoreLocalMem<uint32_t> buf_a(buffer_addr_a);
+    CoreLocalMem<uint32_t> buf_b(buffer_addr_b);
 
     {
         auto lock_a = buf_a.scoped_lock(num_elements_a);

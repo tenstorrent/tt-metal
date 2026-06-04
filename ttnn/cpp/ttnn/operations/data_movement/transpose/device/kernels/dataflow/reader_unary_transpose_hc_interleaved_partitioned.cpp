@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 using uint32_t = std::uint32_t;
 
@@ -42,14 +46,18 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src_args, src0_addr);
 
-    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    Noc noc;
+    CircularBuffer cb(cb_id_in0);
+    CircularBuffer cb_scratch(1);
+
+    uint32_t intermed_l1_scratch = MISALIGNED ? cb_scratch.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++) {
         auto h32 = (h & 31);
 
-        cb_reserve_back(cb_id_in0, onetile);
+        cb.reserve_back(onetile);
 
-        uint32_t dest_tr0_l1 = get_write_ptr(cb_id_in0);
+        uint32_t dest_tr0_l1 = cb.get_write_ptr();
         // uint32_t save_dest = dest_tr0_l1;
         uint32_t cSubtileOffs = 0;
         for (uint32_t sub = 0; sub < 4; sub++) {
@@ -99,32 +107,39 @@ void kernel_main() {
                     rem = (bsrc_offs & 2047);
                 }
 
-                uint64_t banked_addr = get_noc_addr(batch_itile, s0);
-                banked_addr += rem;
-
                 if constexpr (MISALIGNED) {
-                    // if banked addr and dest addr don't share alignment then we need to read to the intermediate
-                    // buffer and then copy it to the correct location
+                    uint64_t banked_addr = s0.get_noc_addr(batch_itile, rem);
                     uint32_t banked_alignment = banked_addr % ALIGNMENT;
                     if (dest_tr0_l1 % ALIGNMENT != banked_alignment) {
-                        // we write to the top of the intermediate buffer as that's aligned, and we write from the
-                        // closest align source address if source is not aligned to ALIGNMENT then we go to the nearest
-                        // address that is aligned and copy from there
-                        noc_async_read(banked_addr - (banked_alignment), intermed_l1_scratch, ALIGNMENT);
+                        CoreLocalMem<uint32_t> scratch_dst(intermed_l1_scratch);
+                        noc.async_read(
+                            s0,
+                            scratch_dst,
+                            ALIGNMENT,
+                            {.page_id = batch_itile, .offset_bytes = rem - banked_alignment},
+                            {.offset_bytes = 0});
                         volatile tt_l1_ptr uint8_t* dest_tr0_l1_ptr = (volatile uint8_t*)dest_tr0_l1;
-                        // need the barrier to ensure that we can copy from the intermediate buffer
-                        noc_async_read_barrier();
-                        // if source is not aligned to ALIGNMENT then we need to skip forward by the amount needed to
-                        // align to get to the correct data
+                        noc.async_read_barrier();
                         for (uint32_t i = 0; i < SUBTILE_LINE_BYTES; i++) {
                             dest_tr0_l1_ptr[i] = intermed_l1_scratch_ptr[i + banked_alignment];
                         }
                     } else {
-                        // this starts async NOC dma from DRAM to TR0_L1 buffer
-                        noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                        CoreLocalMem<uint32_t> dst(dest_tr0_l1);
+                        noc.async_read(
+                            s0,
+                            dst,
+                            SUBTILE_LINE_BYTES,
+                            {.page_id = batch_itile, .offset_bytes = rem},
+                            {.offset_bytes = 0});
                     }
                 } else {
-                    noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
+                    CoreLocalMem<uint32_t> dst(dest_tr0_l1);
+                    noc.async_read(
+                        s0,
+                        dst,
+                        SUBTILE_LINE_BYTES,
+                        {.page_id = batch_itile, .offset_bytes = rem},
+                        {.offset_bytes = 0});
                 }
 
                 // the output address is just linearly incremented
@@ -141,10 +156,10 @@ void kernel_main() {
         }  // sub<4
 
         // block on all outstanding noc DMA requests to complete
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // notifies the unpacker that the buffer is populated
-        cb_push_back(cb_id_in0, onetile);
+        cb.push_back(onetile);
         wt++;
         if (wt == WT) {  // End of row
             wt = 0;

@@ -9,6 +9,8 @@
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
+using namespace tt::tt_metal;
+
 std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(float p) {
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
@@ -46,7 +48,14 @@ ttnn::Shape get_output_grad_shape(
     return shape;
 }
 
-MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOperation::ProgramFactory::create(
+static constexpr const char* READER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/reader_moreh_norm_backward.cpp";
+static constexpr const char* WRITER_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/writer_moreh_norm_backward.cpp";
+static constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/moreh_norm_backward_kernel.cpp";
+
+ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& input_grad) {
@@ -54,11 +63,11 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     const auto& output = tensor_args.output;
     const auto& output_grad = tensor_args.output_grad;
     const auto p = operation_attributes.p;
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = output_grad.device();
-    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -100,13 +109,15 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
+         num_cols_per_core_group_2] = split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
+    const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
+    const uint32_t cb_tile_size = tile_size(cb_data_format);
+    const uint32_t intermed_tile_size = tile_size(intermed_data_format);
 
     const uint32_t in0_t{1};  // input(==x)
     const uint32_t in1_t{1};  // output(==y)
@@ -116,91 +127,110 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     // (x^(p - 1) * y * dy) / y^p
     const uint32_t out0_t{1};  // input_grad(==dx)
 
-    const uint32_t im0_t{1};
-    const uint32_t im1_t{1};
-    const uint32_t im2_t{1};
-    const uint32_t im3_t{1};
-    const uint32_t im4_t{1};
-    const uint32_t im5_t{1};
-    const uint32_t im6_t{1};
-    const uint32_t im7_t{1};
+    ProgramDescriptor desc;
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},    // input
-            {tt::CBIndex::c_1, in1_t},    // output
-            {tt::CBIndex::c_2, in2_t},    // output_grad
-            {tt::CBIndex::c_3, in3_t},    // decimal
-            {tt::CBIndex::c_16, out0_t},  // input_grad
-            {tt::CBIndex::c_24, im0_t, intermed_data_format},
-            {tt::CBIndex::c_25, im1_t, intermed_data_format},
-            {tt::CBIndex::c_26, im2_t, intermed_data_format},
-            {tt::CBIndex::c_27, im3_t, intermed_data_format},
-            {tt::CBIndex::c_28, im4_t, intermed_data_format},
-            {tt::CBIndex::c_29, im5_t, intermed_data_format},
-            {tt::CBIndex::c_30, im6_t, intermed_data_format},
-            {tt::CBIndex::c_31, im7_t, intermed_data_format},
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_0, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // input
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_1, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // output
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_2, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // output_grad
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in3_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_3, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // decimal
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = tt::CBIndex::c_16, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+    });  // input_grad
+
+    // Intermediate CBs (c_24 through c_31)
+    for (uint8_t cb_idx = static_cast<uint8_t>(tt::CBIndex::c_24); cb_idx <= static_cast<uint8_t>(tt::CBIndex::c_31);
+         ++cb_idx) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 1 * intermed_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_idx, .data_format = intermed_data_format, .page_size = intermed_tile_size}}},
         });
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                         Core Setup
-    ////////////////////////////////////////////////////////////////////////////
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto* const reader_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
-        "reader_moreh_norm_backward.cpp";
-    const auto* const writer_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
-        "writer_moreh_norm_backward.cpp";
+    KernelDescriptor::CompileTimeArgs reader_ct_args = {static_cast<uint32_t>(input_grad_rank)};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*output.buffer()).append_to(reader_ct_args);
+    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_ct_args);
 
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_grad_rank)};
-    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*output.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {};
-    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_compile_time_args);
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = READER_KERNEL_PATH;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.runtime_args.reserve(num_cores_to_be_used);
+
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
+    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_ct_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = WRITER_KERNEL_PATH;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
-        "moreh_norm_backward_kernel.cpp";
-    std::map<std::string, std::string> compute_defines{};
+    KernelDescriptor::Defines compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
 
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    const auto compute_kernels_id_1 = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    ComputeConfigDescriptor compute_config{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
-    KernelHandle compute_kernels_id_2{0};
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
-            num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-        compute_kernels_id_2 = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+    // Compute kernel for core_group_1
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = COMPUTE_KERNEL_PATH;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = compute_config;
+
+    // Compute kernel for core_group_2 (may be empty)
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source = COMPUTE_KERNEL_PATH;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = compute_config;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -209,20 +239,17 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        KernelHandle compute_kernel_id;
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
-            compute_kernel_id = compute_kernels_id_1;
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_2;
-            compute_kernel_id = compute_kernels_id_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
 
         // reader
-        std::vector<uint32_t> reader_rt_args{
+        KernelDescriptor::CoreRuntimeArgs reader_rt_args{
             input.buffer()->address(),
             output.buffer()->address(),
             output_grad.buffer()->address(),
@@ -233,57 +260,41 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
 
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_rt_args);
+        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
         // writer
-        std::vector<uint32_t> writer_runtime_args{
-            input_grad.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-        };
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
+        writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});
 
-        // compute
-        const std::vector<uint32_t> compute_runtime_args{
-            num_tiles_per_core,
-            floored_p,
-            static_cast<uint32_t>(p_is_negative),
-            floored_p_minus_one,
-            static_cast<uint32_t>(p_minus_one_is_negative)};
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
+        // compute — runtime args go to the correct kernel descriptor
+        if (core_group_1.contains(core)) {
+            compute_desc_1.emplace_runtime_args(
+                core,
+                {num_tiles_per_core,
+                 floored_p,
+                 static_cast<uint32_t>(p_is_negative),
+                 floored_p_minus_one,
+                 static_cast<uint32_t>(p_minus_one_is_negative)});
+        } else {
+            compute_desc_2.emplace_runtime_args(
+                core,
+                {num_tiles_per_core,
+                 floored_p,
+                 static_cast<uint32_t>(p_is_negative),
+                 floored_p_minus_one,
+                 static_cast<uint32_t>(p_minus_one_is_negative)});
+        }
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
-}
-
-void MorehNormBackwardOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
-    auto& writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
-    auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    for (uint32_t icore = 0; icore < num_cores_to_be_used; icore++) {
-        CoreCoord core = {icore / num_cores_y, icore % num_cores_y};
-        // readers
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-            runtime_args[1] = tensor_args.output.buffer()->address();
-            runtime_args[2] = tensor_args.output_grad.buffer()->address();
-        }
-
-        // writer
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
+
 }  // namespace ttnn::operations::moreh::moreh_norm_backward

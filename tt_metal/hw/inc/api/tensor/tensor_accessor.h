@@ -12,6 +12,7 @@
 #include "api/tensor/shard_pages_address_iterator.h"
 #include "api/tensor/pages_address_iterator.h"
 #include "api/compile_time_args.h"
+#include "api/kernel_thread_globals.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "internal/dataflow/dataflow_api_addrgen.h"
@@ -24,6 +25,10 @@ template <typename T>
 T get_arg_val(int arg_idx);
 
 namespace tensor_accessor {
+
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+struct TensorAccessorBindingToken;  // definition below
+
 // This helper gets proper additional offset from interleaved_addr_gen::get_bank_offset +
 //      Adds proper xy coordinates for NOC address
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -81,6 +86,29 @@ public:
         const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
         dspec_instance(args), bank_base_address(bank_base_address_in), aligned_page_size(page_size_in) {}
 
+    // Construct TensorAccessor directly from a Metal 2.0 binding token.
+    // The token instance is emitted by host codegen into kernel_bindings_generated.h,
+    // based on the information in the user's host code (ProgramSpec).
+    // Delegates to the legacy TensorAccessorArgs ctor.
+    //
+    // The binding's CRTA section is laid out as: [base_address_word, optional runtime
+    // accessor fields...]. The runtime accessor fields (used when the TensorParameter
+    // opts into a dynamic field like dynamic_tensor_shape) start at the word immediately
+    // following the address slot, so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+        TensorAccessor(
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        // ADDR_CRTA_OFFSET is the byte offset of the binding's base-address word. Host codegen
+        // produces it as `crta_word_index * sizeof(uint32_t)`, so it is word-aligned by
+        // construction. The conversions to a CRTA word index (`/sizeof(uint32_t)`) silently
+        // truncate otherwise — catch any future codegen change that violates the invariant.
+        static_assert(
+            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
+            "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    }
+
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
@@ -134,6 +162,11 @@ public:
         }
         return get_shard_noc_addr(shard_id, offset, noc);
     }
+
+    // Returns the bank-relative base address (offset) used by this accessor.
+    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
+    FORCE_INLINE
+    constexpr uint32_t get_bank_base_address() const { return bank_base_address; }
 
     // Helpers
     struct PageMapping {
@@ -239,7 +272,32 @@ public:
     tensor_accessor::Pages<TensorAccessor> pages(
         uint32_t start_page_id = 0, uint32_t end_page_id = 0, uint8_t noc = noc_index) const {
         uint32_t actual_end_page_id = (end_page_id == 0) ? dspec().tensor_volume() : end_page_id;
-        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, actual_end_page_id, noc);
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, actual_end_page_id, 1, noc);
+    }
+
+    // Returns a proxy that iterates over the pages owned by the calling DM (strided iteration).
+    // Each DM thread i (0..N-1) visits pages i, i+N, i+2N, ...
+    tensor_accessor::Pages<TensorAccessor> strided_pages(uint8_t noc = noc_index) const {
+        const uint32_t tid = get_my_thread_id();
+        const uint32_t num_threads = get_num_threads();
+        return tensor_accessor::Pages<TensorAccessor>(
+            *this, tid, dspec().tensor_volume(), num_threads, noc);
+    }
+
+    // Returns a range of ShardPages, one per shard owned by the calling DM (whole-shard granularity).
+    // The calling DM owns shards i, i+N, i+2N, ..., where N = get_num_threads().
+    // Each yielded ShardPages covers all pages within its assigned shard.
+    tensor_accessor::StridedShardPages<TensorAccessor> strided_shard_pages(uint8_t noc = noc_index) const {
+        static_assert(DSpec::has_static_rank, "strided_shard_pages is only supported for static rank");
+        const uint32_t tensor_volume = dspec().tensor_volume();
+        const uint32_t shard_volume = dspec().shard_volume();
+        const uint32_t num_threads = get_num_threads();
+        const uint32_t tid = get_my_thread_id();
+        ASSERT(shard_volume > 0);
+        // ShardPagesAddressIterator skips padded slots beyond tensor bounds, so ceiling division is safe.
+        const uint32_t total_shards = (tensor_volume + shard_volume - 1) / shard_volume;
+        return tensor_accessor::StridedShardPages<TensorAccessor>(
+            *this, tid, total_shards, num_threads, noc);
     }
 
 private:
@@ -286,6 +344,7 @@ private:
 
 public:
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::StridedShardPagesIterator<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorSharded<TensorAccessor>;
     friend class tensor_accessor::PagesAddressIteratorInterleaved<TensorAccessor>;
 };
@@ -323,6 +382,19 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         InterleavedAddrGen<IsDram>(
             {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
         aligned_page_size(page_size_in) {}
+
+    // Construct TensorAccessor directly from a Metal 2.0 binding token.
+    // See the sharded specialization for the binding's CRTA section layout and the
+    // alignment rationale.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+    TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
+        TensorAccessor(
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
+        static_assert(
+            ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
+            "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
+    }
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
@@ -367,6 +439,11 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         return false;
     }
 
+    // Returns the bank-relative base address (offset) used by this accessor.
+    // (For L1-sharded tensors, this is the local L1 base address of the shard region.)
+    FORCE_INLINE
+    constexpr uint32_t get_bank_base_address() const { return this->bank_base_address; }
+
     // Returns a proxy for shard pages iterator
     tensor_accessor::ShardPages<TensorAccessor> shard_pages(
         uint32_t shard_id,
@@ -384,7 +461,23 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // volume
     tensor_accessor::Pages<TensorAccessor> pages(
         uint32_t start_page_id, uint32_t end_page_id, uint8_t noc = noc_index) const {
-        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, end_page_id, noc);
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, end_page_id, 1, noc);
+    }
+
+    // Returns a proxy that iterates over the pages owned by the calling DM (strided iteration).
+    // Each DM thread i (0..N-1) visits pages i, i+N, i+2N, ...
+    tensor_accessor::Pages<TensorAccessor> strided_pages(
+        uint32_t total_pages, uint8_t noc = noc_index) const {
+        uint32_t tid = get_my_thread_id();
+        uint32_t num_threads = get_num_threads();
+        return tensor_accessor::Pages<TensorAccessor>(*this, tid, total_pages, num_threads, noc);
+    }
+
+    tensor_accessor::StridedShardPages<TensorAccessor> strided_shard_pages(uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::strided_shard_pages is not supported by the interleaved tensor accessor");
+        return {};
     }
 
 private:
@@ -414,6 +507,33 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram>>;
+
+// CTAD deduction guide for the Metal 2.0 binding-token ctor.
+// Mirrors the (args, size_t) guide above. The token's ADDR_CRTA_OFFSET marks the
+// binding's base-address slot; any runtime accessor fields start at the next word,
+// so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        /* RankCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT,
+        /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT,
+        /* TensorShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::tensor_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::TensorShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT>::type,
+        /* ShardShapeWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorU32<
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::shard_shape_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::ShardShapeCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT>::type,
+        /* BankCoordsWrapper */
+        typename tensor_accessor::ArrayWrapperTypeSelectorPackedU16<
+            !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::bank_coords_is_crta,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::BankCoordsCTAOffset,
+            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT>::type,
+        /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
+        /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
@@ -480,6 +600,48 @@ auto make_tensor_accessor_tuple(const std::tuple<Args...>& args, uint32_t addres
     return tensor_accessor::detail::make_tensor_accessor_tuple(
         args, address_rt_arg_index_start, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
+
+// Convention:
+//  - main TensorAccessor public API is in the global namespace
+//  - public API opaque types live in tensor_accessor namespace
+namespace tensor_accessor {
+
+// TensorAccessorBindingToken:
+//
+// == What is it? ==
+// This is a codegen-emitted handle for a Metal 2.0 kernel's tensor binding.
+// The user never interacts with this type directly; they use an opaque token (defined in the
+// auto-generated kernel_bindings_generated.h) to construct the TensorAccessor directly.
+//
+// The user's kernel code looks like:
+//  auto ta = TensorAccessor(ta::my_host_declared_accessor_name);
+//
+// No more fussing around with TensorAccessorArgs!
+// All of the boilerplate, nasty args offset logic, and raw base pointer are now fully hidden
+// from the kernel author.
+//
+// == How does it work? ==
+// For each kernel tensor binding, headergen emits the following into kernel_bindings_generated.h:
+//   - A type alias:  using my_TA_name_t = TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
+//   - A token value: constexpr my_TA_name_t my_TA_name{};
+//
+// This indirection gives us ultimate future-proofing flexibility over what actually goes into the
+// TensorAccessorBindingToken. We can change TensorAccessorBindingToken at any time, or add a
+// wrapper-type indirection, all without disturbing any existing Metal 2.0 kernel code.
+// (Probably overkill, but cheap insurance.)
+//
+// == Current limitations ==
+// The Metal 2.0 binding flow currently packs all DSpec metadata (shape, shard shape, bank coords)
+// as (static) CTAs; the (dynamic) CRTA-based metadata is a planned follow-up.
+//
+template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
+struct TensorAccessorBindingToken {
+    using args_t = TensorAccessorArgs<CTA_OFFSET>;
+    static constexpr args_t args{};
+    static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
+};
+
+}  // namespace tensor_accessor
 
 /**
  * @brief AbstractTensorAccessorWrapper provides a unified interface over templated tensor accessors.

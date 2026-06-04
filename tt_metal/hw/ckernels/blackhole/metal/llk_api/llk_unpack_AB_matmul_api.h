@@ -10,13 +10,6 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-inline void llk_unpack_AB_matmul_mop_config(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool partial_face_a, const bool partial_face_b) {
-    // in0 - loaded to SrcB
-    // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(ct_dim, rt_dim, partial_face_a, partial_face_b);
-}
-
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -40,17 +33,15 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
-    LLK_ASSERT(
-        (are_unpackers_AB_configured_correctly(
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
-            unpA_face_r_dim,
-            unpB_face_r_dim,
-            unpA_num_faces,
-            unpB_num_faces)),
-        "");
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces));
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -76,8 +67,6 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
-
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -91,17 +80,15 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
-    LLK_ASSERT(
-        (are_unpackers_AB_configured_correctly(
-            unpack_src_format[operandB_id],
-            unpack_dst_format[operandB_id],
-            unpack_src_format[operandA_id],
-            unpack_dst_format[operandA_id],
-            get_operand_face_r_dim(operandB_id),
-            get_operand_face_r_dim(operandA_id),
-            partial_face_a ? 1 : get_operand_num_faces(operandB_id),
-            partial_face_b ? 1 : get_operand_num_faces(operandA_id))),
-        "");
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        partial_face_a ? 1 : get_operand_num_faces(operandB_id),
+        partial_face_b ? 1 : get_operand_num_faces(operandA_id)));
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

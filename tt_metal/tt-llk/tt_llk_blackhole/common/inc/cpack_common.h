@@ -297,7 +297,7 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
     return is_packer_to_L1_early_conversion_supported(in_reg, out_l1) || is_packer_to_L1_late_conversion_supported(in_reg, out_l1);
 }
 
-template <bool untilize = false, bool tilize = false>
+template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
     std::uint32_t x_stride = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
@@ -308,7 +308,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
     // Untilize mode has 2 packer interfaces active, so z counter needs to jump by 2
     // faces, since z counter is only 1 bit (can't be programmed to inc by 2)
-    const std::uint32_t z_stride = ((untilize ^ tilize) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
+    const std::uint32_t z_stride = ((pack_mode != PackMode::Default) && (tile_c_dim == TILE_C_DIM)) ? 2 * FACE_R_DIM * y_stride : FACE_R_DIM * y_stride;
 
     TT_SETDMAREG(0, LOWER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, LO_16(p_gpr_pack::TMP0)); // x-stride not used!
     TT_SETDMAREG(0, UPPER_HALFWORD((y_stride << PCK0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT)), 0, HI_16(p_gpr_pack::TMP0));
@@ -320,7 +320,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_NOP;
     TTI_NOP;
 
-    if constexpr (tilize && !untilize)
+    if constexpr (pack_mode == PackMode::Tilize)
     {
         const std::uint32_t z_stride_ch1 = FACE_R_DIM * y_stride;
         TT_SETDMAREG(0, LOWER_HALFWORD((z_stride_ch1 << PCK0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT)), 0, LO_16(p_gpr_pack::TMP1));
@@ -379,11 +379,15 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
         }
     }
 
+    static_assert(
+        THCON_SEC0_REG1_Exp_threshold_en_ADDR32 == THCON_SEC0_REG1_Exp_threshold_ADDR32,
+        "THCON_SEC0_REG1_Exp_threshold_en and Exp_threshold must share ADDR32 for combined RMW");
+
     constexpr std::uint32_t THRESHOLD_RMW_MASK = THCON_SEC0_REG1_Exp_threshold_en_MASK | THCON_SEC0_REG1_Exp_threshold_MASK;
 
     std::uint32_t threshold_rmw_data = (threshold << THCON_SEC0_REG1_Exp_threshold_SHAMT) | (enable << THCON_SEC0_REG1_Exp_threshold_en_SHAMT);
 
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 3, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_threshold_ADDR32, 0, THRESHOLD_RMW_MASK>(threshold_rmw_data);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -479,7 +483,7 @@ inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    [[maybe_unused]] const std::uint32_t face_r_dim,
+    const std::uint32_t face_r_dim,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const bool partial_face)
@@ -539,6 +543,12 @@ inline void reconfig_packer_data_format(
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
+    static_assert(
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Read_unsigned_ADDR32,
+        "PCK_DEST_RD_CTRL_Read_32b_data and Read_unsigned must share ADDR32 for combined RMW");
+    static_assert(
+        PCK_DEST_RD_CTRL_Read_32b_data_ADDR32 == PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
+        "PCK_DEST_RD_CTRL_Read_32b_data and Round_10b_mant must share ADDR32 for combined RMW");
     cfg_reg_rmw_tensix<
         PCK_DEST_RD_CTRL_Read_32b_data_ADDR32,
         PCK_DEST_RD_CTRL_Read_32b_data_SHAMT,
@@ -562,23 +572,21 @@ inline void reconfig_packer_data_format(
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 
     // Set packer strides
-    set_packer_strides(pack_output_src_format, tile_c_dim);
+    set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false, bool tilize = false>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t face_r_dim          = FACE_R_DIM,
-    const std::uint32_t tile_c_dim          = TILE_C_DIM,
-    const std::uint32_t num_faces           = 4,
-    const bool partial_face                 = false,
-    [[maybe_unused]] const bool narrow_tile = false,
-    const std::uint32_t relu_config         = 0)
+    const std::uint32_t face_r_dim  = FACE_R_DIM,
+    const std::uint32_t tile_c_dim  = TILE_C_DIM,
+    const std::uint32_t num_faces   = 4,
+    const bool partial_face         = false,
+    const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!narrow_tile, "narrow_tile: this parameter is unused");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format & 0xF), static_cast<DataFormat>(pack_dst_format & 0xF)),
         "Unsupported packer to L1 conversion.");
@@ -587,7 +595,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<untilize, tilize>(pack_src_format, tile_c_dim);
+    set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
 
     t6_mutex_acquire(mutex::REG_RMW);
 
@@ -600,6 +608,8 @@ inline void configure_pack(
     relu_config_u hw_relu_config;
     hw_relu_config.r.STACC_RELU_ApplyRelu     = relu_config & 0xffff;
     hw_relu_config.r.STACC_RELU_ReluThreshold = (relu_config >> 16) & 0xffff;
+
+    static_assert(STACC_RELU_ApplyRelu_ADDR32 == STACC_RELU_ReluThreshold_ADDR32, "STACC_RELU_ApplyRelu and ReluThreshold must share ADDR32 for combined RMW");
 
     constexpr std::uint32_t hw_relu_mask = STACC_RELU_ApplyRelu_MASK | STACC_RELU_ReluThreshold_MASK;
     cfg_reg_rmw_tensix<STACC_RELU_ApplyRelu_ADDR32, 0, hw_relu_mask>(hw_relu_config.val[0]);
@@ -825,16 +835,17 @@ enum class PackerProgramType
 };
 
 /**
- * Checks whether all packers' config and counters match the expected formats and face dimension.
+ * Validates that all packers' config and counters match the expected formats and face dimension.
+ * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers
- * @param face_r_dim       Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
- * @param nop_count        Number of nop operations to ensure configuration writes complete (default 10)
- * @return true if all packer configurations match the expected values, false otherwise
+ * @param face_r_dim        Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
+ * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
  */
 template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
-__attribute__((noinline)) bool are_packers_configured_correctly(
+__attribute__((noinline)) void are_packers_configured_correctly(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
@@ -855,10 +866,38 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
     const std::uint32_t pack_hw_src_format =
         ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
 
-    const bool isDataFormatCorrect = (config.in_data_format == pack_hw_src_format) && (config.out_data_format == pack_output_dst_format);
+    if (config.in_data_format != pack_hw_src_format)
+    {
+        // DEVICE_PRINT("#1101 are_packers_configured_correctly: pack_src_format mismatch. expected: {}, actual: {}\n", pack_hw_src_format,
+        // config.in_data_format);
+        LLK_ASSERT(
+            (config.in_data_format == pack_hw_src_format),
+            "are_packers_configured_correctly: pack_src_format mismatch. Uncomment DEVICE_PRINT #1101 to inspect "
+            "expected/actual.");
+    }
+    if (config.out_data_format != pack_output_dst_format)
+    {
+        // DEVICE_PRINT("#1102 are_packers_configured_correctly: pack_dst_format mismatch. expected: {}, actual: {}\n", pack_output_dst_format,
+        // config.out_data_format);
+        LLK_ASSERT(
+            (config.out_data_format == pack_output_dst_format),
+            "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #1102 to inspect "
+            "expected/actual.");
+    }
 
-    const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (counters.pack_reads_per_xy_plane == face_r_dim);
-    return isDataFormatCorrect && isFaceRDimCorrect;
+    if constexpr (program_type == PackerProgramType::ProgramByFace)
+    {
+        if (counters.pack_reads_per_xy_plane != face_r_dim)
+        {
+            // DEVICE_PRINT(
+            // "#1103 are_packers_configured_correctly: pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n", face_r_dim,
+            // counters.pack_reads_per_xy_plane);
+            LLK_ASSERT(
+                (counters.pack_reads_per_xy_plane == face_r_dim),
+                "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
+                "DEVICE_PRINT #1103 to inspect expected/actual.");
+        }
+    }
 }
 
 } // namespace ckernel::packer

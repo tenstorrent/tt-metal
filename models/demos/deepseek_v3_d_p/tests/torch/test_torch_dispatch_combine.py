@@ -25,8 +25,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import ValidationRes
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor",
+    "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, dispatch_buffer_capacity_factor",
     [
         (32, 64, 16, 4, 2, 2),
         (512, 32, 256, 8, 4, 2),
@@ -34,17 +37,27 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     ids=["xs", "small"],
 )
 def test_torch_dispatch_combine(
-    seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_group_size,
+    dispatch_buffer_capacity_factor,
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
     torch.manual_seed(42)
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
         num_experts_per_tok,
-        num_devices=dispatch_group_size,
-        dispatch_group_size=dispatch_group_size,
-        capacity_factor=capacity_factor,
+        dispatch_group_size,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     print("\n")
 
@@ -77,6 +90,7 @@ def test_torch_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         expert_dispatch_table=expert_dispatch_table,
@@ -89,7 +103,7 @@ def test_torch_dispatch_combine(
     )
 
     # Compute gate outputs before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -116,6 +130,7 @@ def test_torch_dispatch_combine(
         dispatched,
         metadata,
         expert_token_counts,
+        expert_region_offsets,
     )
     logger.debug(f"{y.shape=}")
     y /= num_experts_per_tok  # since we are summing contributions from multiple experts, we need to average them

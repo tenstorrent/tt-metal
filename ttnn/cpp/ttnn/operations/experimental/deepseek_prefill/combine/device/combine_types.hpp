@@ -23,6 +23,8 @@ struct CombineParams {
     MemoryConfig output_mem_config;
     CoreRangeSet worker_core_range_set;
     bool init_zeros;
+    bool use_l1_small_for_semaphores = false;
+    bool use_fp8_combine = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -34,7 +36,9 @@ struct CombineParams {
         "topology",
         "output_mem_config",
         "worker_core_range_set",
-        "init_zeros");
+        "init_zeros",
+        "use_l1_small_for_semaphores",
+        "use_fp8_combine");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -47,7 +51,9 @@ struct CombineParams {
             topology,
             output_mem_config,
             worker_core_range_set,
-            init_zeros);
+            init_zeros,
+            use_l1_small_for_semaphores,
+            use_fp8_combine);
     };
 };
 
@@ -55,6 +61,7 @@ struct CombineInputs {
     ttnn::Tensor dispatched_buffer;
     ttnn::Tensor dispatched_metadata;
     ttnn::Tensor expert_token_counts;
+    ttnn::Tensor expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

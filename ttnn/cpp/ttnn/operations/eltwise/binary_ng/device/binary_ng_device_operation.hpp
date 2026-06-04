@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 namespace ttnn::operations::binary_ng {
 
@@ -41,10 +42,14 @@ struct BinaryNgDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         std::optional<CoreRangeSet> sub_core_grids;
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         bool is_sfpu = false;
         bool is_quant_op = false;
         bool is_where_op = false;
+        float rtol = 0.0f;
+        float atol = 0.0f;
+        bool equal_nan = false;
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
@@ -91,7 +96,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    float rtol = 0.0f,
+    float atol = 0.0f,
+    bool equal_nan = false);
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a_arg,
@@ -105,6 +114,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace ttnn::prim

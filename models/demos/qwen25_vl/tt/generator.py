@@ -6,12 +6,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
-class Generator(WarmupForwardMixin):
+class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
     def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
@@ -217,7 +218,7 @@ class Generator(WarmupForwardMixin):
     def process_decode_output_host(self, tt_out, is_tokens=False):
         return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         logger.warning("Warmup model prefill not implemented for Qwen2_5_VL Generator")
         logger.warning("Tracing in prefill mode is not supported for Qwen2_5_VL")
 

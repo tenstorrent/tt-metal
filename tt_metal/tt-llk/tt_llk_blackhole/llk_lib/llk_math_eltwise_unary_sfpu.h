@@ -10,9 +10,9 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "ckernel_sfpu.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "llk_sfpu_types.h"
 
 using namespace ckernel;
@@ -45,7 +45,9 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     if constexpr (
         sfpu_op == SfpuType::reciprocal || sfpu_op == SfpuType::typecast || sfpu_op == SfpuType::unary_max || sfpu_op == SfpuType::unary_min ||
         sfpu_op == SfpuType::unary_max_int32 || sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 ||
-        sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit)
+        sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit || sfpu_op == SfpuType::equal_zero || sfpu_op == SfpuType::not_equal_zero ||
+        sfpu_op == SfpuType::less_than_zero || sfpu_op == SfpuType::greater_than_equal_zero || sfpu_op == SfpuType::less_than_equal_zero ||
+        sfpu_op == SfpuType::greater_than_zero)
     {
         addr_mod_t {
             .srca = {.incr = 0},
@@ -56,35 +58,10 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     }
 }
 
-inline void eltwise_unary_sfpu_configure_mop();
-
-template <DstSync Dst>
-inline void _llk_math_eltwise_unary_sfpu_start_(const std::uint32_t dst_index)
-{
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-}
-
-inline void _llk_math_eltwise_unary_sfpu_done_()
-{
-    math::clear_dst_reg_addr();
-}
-
-inline void _llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()
-{
-    math::inc_dst_addr<8>();
-    math::inc_dst_addr<8>();
-}
-
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-inline void _llk_math_eltwise_unary_sfpu_uninit_()
-{
-    // No state to restore - all states are transient or default
 }

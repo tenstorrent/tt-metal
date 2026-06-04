@@ -12,11 +12,15 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::upsample {
 
 static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_halo_preprocessing(
-    const ttnn::Tensor& input_tensor, int scale_h, int scale_w) {
+    const ttnn::Tensor& input_tensor,
+    int scale_h,
+    int scale_w,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
     // Create sliding window config for bilinear upsample (fixed 2x2 kernel, 1x1 stride, 1x1x1x1 padding)
     const tt::tt_metal::Shape& input_shape = input_tensor.logical_shape();
     const uint32_t batch_size = input_tensor.padded_shape()[0];
@@ -49,6 +53,7 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     tt::tt_metal::Tensor haloed_tensor = ttnn::halo(
         input_tensor_reshaped,
         sliding_window_config,
+        compute_kernel_config,
         0,       // pad_val
         false,   // remote_read
         false,   // transpose_mcast
@@ -110,8 +115,8 @@ ttnn::Tensor upsample(
 
     // Validation is handled by the device operation's validate_on_program_cache_miss
 
-    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(), std::nullopt, tt::tt_metal::MathFidelity::HiFi4));
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {
@@ -130,7 +135,7 @@ ttnn::Tensor upsample(
         int scale_h_int = static_cast<int>(scale_h);
         int scale_w_int = static_cast<int>(scale_w);
         std::pair<tt::tt_metal::Tensor, sliding_window::SlidingWindowConfig> halo_result =
-            apply_bilinear_halo_preprocessing(input_for_halo, scale_h_int, scale_w_int);
+            apply_bilinear_halo_preprocessing(input_for_halo, scale_h_int, scale_w_int, config);
         tt::tt_metal::Tensor haloed_tensor = halo_result.first;
         sliding_window::SlidingWindowConfig sliding_window_config = halo_result.second;
 

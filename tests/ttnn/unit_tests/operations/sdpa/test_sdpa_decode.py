@@ -18,6 +18,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_single_iter,
     run_test_sdpa_decode_multi_pos,
     run_test_sdpa_decode_paged_attention,
+    run_test_sdpa_decode_broadcast_mask_batch,
 )
 
 
@@ -186,6 +187,35 @@ def test_sdpa_decode_paged_attention(
     )
 
     assert device.num_program_cache_entries() == 4
+
+
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size",
+    [
+        [32, 32, 8, 2048, 128, (10, 11)],
+    ],
+    ids=["blackhole_b32_nkv8"],
+)
+@pytest.mark.timeout(120)
+def test_sdpa_decode_kv_head_core_divisibility(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
+    """Regression test for github.com/tenstorrent/tt-metal/issues/40978.
+
+    When floor(num_cores_available / B) yields a value that makes ceil(num_kv_heads / uncapped)
+    a non-divisor of num_kv_heads, the old core allocation produced inconsistent counts causing
+    a TT_FATAL crash at output core indexing.
+    """
+    run_test_sdpa_decode_single_iter(
+        device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor=True, sharded_in=False, sharded_out=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -386,3 +416,24 @@ def test_sdpa_decode_sliding_window(
             start_indices=[cur_pos + i for i in range(b)],  # test a batch with different start positions
             sliding_window_size=sliding_window_size,
         )
+
+
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, dtype, grid_size",
+    [
+        (32, 8, 1, 2048, 128, ttnn.bfloat8_b, (8, 8)),
+    ],
+)
+def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_size, mask_dtype):
+    run_test_sdpa_decode_broadcast_mask_batch(
+        device,
+        b=b,
+        nh=nh,
+        nkv=nkv,
+        s=s,
+        d=d,
+        dtype=dtype,
+        grid_size=grid_size,
+        mask_dtype=mask_dtype,
+    )

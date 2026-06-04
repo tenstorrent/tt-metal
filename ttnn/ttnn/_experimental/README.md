@@ -26,3 +26,24 @@ import ttnn.experimental.moe_compute_utils
 ```
 
 This approach avoids conflicts with the `experimental_loader` while allowing us to extend the experimental namespace.
+
+## MoE compute helpers
+
+``moe_compute_utils`` provides reference implementations for packing expert
+weights and optional biases into the DRAM-sharded tensors expected by
+``ttnn.experimental.moe_compute``. See the module docstring for full details:
+
+- Two packed weight tensor arguments (W0+W1 bundle, W2) containing three logical matrices
+- Bias tensor formats: PyTorch ``(L, E, N)`` or ``(L, E, K)`` expanded to kernel tile layout
+- Constants that must stay in sync with ``moe_ring_common.h``
+- DRAM sharding requirements for the packed tensors
+
+Example usage:
+```python
+from ttnn.experimental.moe_compute_utils import (
+    prepare_w0_w1_tensor_for_moe_compute,
+    prepare_w2_tensor_for_moe_compute,
+    prepare_w0_w1_tensor_with_bias,
+    prepare_w2_tensor_with_bias,
+)
+```

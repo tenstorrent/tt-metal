@@ -71,6 +71,7 @@ class Gemma4ModelArgs:
     attention_bias: bool = False
     # Layer pattern
     layer_types: tuple = None
+    model_cache_path: Path | None = None
 
     def __post_init__(self):
         if self.layer_types is None:
@@ -201,14 +202,32 @@ class Gemma4ModelArgs:
         """Sequence lengths to compile during prefill warmup."""
         return [32, 128, 512]
 
-    def weight_cache_path(self, model_path, dtype):
-        """Return weight cache path for the model."""
+    @staticmethod
+    def resolve_model_cache_path(model_path):
+        """Resolve the cache root for model artifacts."""
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:
             cache_dir = Path(cache_dir)
-        else:
+        elif Path(model_path).is_dir():
+            # Local checkpoint: cache next to the weights.
             cache_dir = Path(model_path)
+        else:
+            # Otherwise model_path is an HF id like "google/gemma-4-E2B-it".
+            # Caching under Path(model_path) would create that as a relative dir
+            # in cwd, which then makes transformers' AutoConfig.from_pretrained
+            # treat the id as a local path (os.path.isdir returns True) and fail
+            # to find config.json. Fall back to an HF_HOME-based cache instead.
+            hf_home = os.getenv("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+            sanitized = str(model_path).replace("/", "--")
+            cache_dir = Path(hf_home) / "tt_cache" / sanitized
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+
+    def weight_cache_path(self, dtype):
+        """Return weight cache path for the model."""
+        if self.model_cache_path is None:
+            raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        cache_path = cache_dir / f"tensor_cache_{dtype_str}"
+        cache_path = self.model_cache_path / f"tensor_cache_{dtype_str}"
         cache_path.mkdir(parents=True, exist_ok=True)
         return cache_path

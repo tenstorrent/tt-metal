@@ -87,6 +87,7 @@ static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
     {"S", RoutingDirection::S},
     {"E", RoutingDirection::E},
     {"W", RoutingDirection::W},
+    {"Z", RoutingDirection::Z},
 });
 
 static const StringEnumMapper<Topology> topology_mapper({
@@ -337,8 +338,13 @@ public:
 
     // Progress monitoring options
     bool show_progress();
+    bool show_progress_detail();
     uint32_t get_progress_interval();
     uint32_t get_hung_threshold();
+    uint32_t get_hung_confirmation_rounds();
+    bool wait_on_hang();
+    std::string get_validation_summary_file();
+    std::string get_validation_detail_file();
 
 private:
     const std::vector<std::string>& input_args_;

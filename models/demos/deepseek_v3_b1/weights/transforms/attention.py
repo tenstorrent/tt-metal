@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.weights.specs.overlap_configs import (
     QAB_KVA_PROJ_SingleDeviceOverlapSpec,
 )
 from models.demos.deepseek_v3_b1.weights.transforms.moe import _tp_factors
+from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import pack_o_proj_weights_tp4_shuffled
 
 
 def preprocess_q_ab_kv_a(
@@ -122,7 +123,7 @@ def fuse_q_ab_kv_a(
     kv_a_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse q_a, q_b, and kv_a projection weights into one overlapped buffer."""
@@ -143,7 +144,7 @@ def fuse_o_proj_gate_mm_norms(
     ffn_norm: torch.Tensor,
     device,
     *,
-    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse o_proj, gate_mm, and RMSNorm weights into one overlapped buffer."""
@@ -179,9 +180,9 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     kv_a_proj_weights: torch.Tensor,
     device,
     *,
-    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    q_ab_dtype: ttnn.DataType = ttnn.bfloat8_b,
-    kv_a_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat4_b,
+    q_ab_dtype: ttnn.DataType = ttnn.bfloat4_b,
+    kv_a_dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse TP4 ``shuffle_q_a`` o_proj, norms, and q_a / q_b / kv_a into one per-core L1 buffer.
@@ -214,7 +215,7 @@ def fuse_o_proj_tp4_shuffled_gate_mm_norms_q_ab_kv_a(
     assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
     assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
 
-    o_packed = o_cfg.pack_o_proj_weights_tp4_shuffled(o_proj_weights)
+    o_packed = pack_o_proj_weights_tp4_shuffled(o_proj_weights)
     o_spec = replace(
         o_cfg.o_proj,
         raw_tensor_shape=tuple(o_packed.shape),
@@ -256,7 +257,7 @@ def fuse_kv_b12(
     kv_b2_proj_weights: torch.Tensor,
     device,
     *,
-    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
     """Fuse kv_b1 and kv_b2 projection weights into one overlapped buffer."""

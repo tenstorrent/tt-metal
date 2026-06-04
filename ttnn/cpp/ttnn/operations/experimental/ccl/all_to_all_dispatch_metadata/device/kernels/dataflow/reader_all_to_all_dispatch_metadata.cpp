@@ -21,6 +21,8 @@ void kernel_main() {
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
+    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(15);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
@@ -48,6 +50,7 @@ void kernel_main() {
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
     constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
     constexpr auto input_args = TensorAccessorArgs<45>();
@@ -82,11 +85,15 @@ void kernel_main() {
     constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
     constexpr uint16_t bf16_one = 0x3f80;
 
-    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address);
-    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address);
-    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address);
-    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
+    const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, input_page_size);
+    const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
+    const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
+    const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+
+    if (token_start_idx == token_end_idx) {
+        return;
+    }
 
     // Read the expert mapping table - new format: [devices, experts]
     // Each page is one device's view of the mapping. Read only the source device's page.
@@ -136,7 +143,7 @@ void kernel_main() {
         // Read input token (or portion of it in payload split mode)
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
-        uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
+        uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(i);
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 

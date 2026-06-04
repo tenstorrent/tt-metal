@@ -78,9 +78,13 @@ private:
         RegionAllocator(uint32_t ringbuffer_size, std::vector<ExtraData>& extra_data) :
             ringbuffer_size_(ringbuffer_size), extra_data_(extra_data) {}
 
-        // Returns sync_idx and address.
+        // Returns sync_idx and address. When `top_down` is true the candidate placements are
+        // walked from the top of the ringbuffer downward (one slot ending at the top, plus one
+        // slot ending just before each existing region). This is intended for short-lived data
+        // (non-binary entries and binaries that won't be reused later in the trace) so that
+        // long-lived cached binaries can stay packed at the bottom of the buffer.
         std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
-            uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id);
+            uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id, bool top_down = false);
 
         void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) {
             program_ids_memory_map_[data_type][program_id] = addr;

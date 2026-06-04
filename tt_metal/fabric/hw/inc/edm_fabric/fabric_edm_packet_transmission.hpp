@@ -22,22 +22,13 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::tt_fabric::CHIP_UNICAST: {
-            DPRINT << "C_UNI: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "C_UNI: dist:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK));
             break;
         }
         case tt::tt_fabric::CHIP_MULTICAST: {
-            DPRINT << "C_MCST: dist:"
-                   << (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK)
-                   << ", rng:"
-                   << (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
-                                 tt::tt_fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)
-                   << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "C_MCST: dist:{}, rng:{}\n",
                 (uint32_t)(packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK),
                 (uint32_t)((packet_start->routing_fields.value & tt::tt_fabric::RoutingFields::RANGE_MASK) >>
@@ -50,8 +41,7 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHea
 
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
-    DEVICE_PRINT("ROUTE:{}\n", packet_start->routing_fields.value);
+    DPRINT("ROUTE:{}\n", packet_start->routing_fields.value);
 #endif
 }
 
@@ -60,13 +50,10 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_write.noc_address << "\n";
-            DEVICE_PRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
+            DPRINT("N_WR addr:{}\n", (uint64_t)packet_start->command_fields.unicast_write.noc_address);
         } break;
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
-            DPRINT << "N_WR addr:" << (uint64_t)packet_start->command_fields.unicast_seminc.noc_address
-                   << ", val:" << (uint32_t)packet_start->command_fields.unicast_seminc.val << "\n";
-            DEVICE_PRINT(
+            DPRINT(
                 "N_WR addr:{}, val:{}\n",
                 (uint64_t)packet_start->command_fields.unicast_seminc.noc_address,
                 (uint32_t)packet_start->command_fields.unicast_seminc.val);
@@ -82,11 +69,7 @@ FORCE_INLINE void print_pkt_header_noc_fields(volatile T* const packet_start) {
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", csnd_t:" << (uint32_t)packet_start->chip_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} csnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->chip_send_type,
@@ -100,10 +83,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::PacketHeader* const p
 FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
-    DPRINT << "PKT: nsnd_t:" << (uint32_t)packet_start->noc_send_type
-           << ", src_chip:" << (uint32_t)packet_start->src_ch_id
-           << ", payload_size_bytes:" << (uint32_t)packet_start->payload_size_bytes << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "PKT: nsnd_t:{} src_chip:{} payload_size_bytes:{}\n",
         (uint32_t)packet_start->noc_send_type,
         (uint32_t)packet_start->src_ch_id,
@@ -356,7 +336,7 @@ __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     uint32_t transaction_id,
     uint8_t rx_channel_id) {
     // Assert that relay has space (best effort check)
-    ASSERT(local_relay_interface.edm_has_space_for_packet());
+    ASSERT(local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());
 
     // Send the full packet (header + payload) to relay
     // The relay will handle the local chip forwarding
@@ -407,7 +387,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         new_value = cached_routing_fields.route_buffer[0];
 
 // Shift buffer left
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT - 1; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i + 1];
@@ -415,7 +395,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
     } else {
 // No refill needed - just copy buffer as-is
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i];

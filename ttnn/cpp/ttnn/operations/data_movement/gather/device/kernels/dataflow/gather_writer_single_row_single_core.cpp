@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include "api/debug/dprint.h"
 
@@ -53,9 +53,13 @@ void kernel_main() {
     // Output tensor config
     const auto output_tensor_dram = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer input_cb(input_tensor_cb_index);
-    experimental::CircularBuffer output_cb(output_tensor_cb_index);
+    // Tile size in bytes for input and output tensors
+    constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
+    constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(output_tensor_cb_index);
+
+    Noc noc;
+    CircularBuffer input_cb(input_tensor_cb_index);
+    CircularBuffer output_cb(output_tensor_cb_index);
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate

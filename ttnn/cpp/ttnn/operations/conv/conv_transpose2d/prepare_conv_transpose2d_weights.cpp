@@ -133,8 +133,10 @@ ttnn::Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_t
         tt::tt_metal::TensorLayout(
             conv_weight_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
+    auto transformed_buffer = conv_weight_tensor.host_storage().buffer().transform(
+        compute, tt::tt_metal::DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return Tensor(
-        conv_weight_tensor.host_storage().transform(compute), output_spec, conv_weight_tensor.tensor_topology());
+        tt::tt_metal::HostTensor(std::move(transformed_buffer), output_spec, conv_weight_tensor.tensor_topology()));
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {
@@ -338,7 +340,7 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
             dram_slice_config_,
             conv_config.output_layout,
             device);
-        log_info(
+        log_debug(
             tt::LogOp,
             "DRAM Slice Config in Prepare Conv_Transpose2d Weights: {} for {}",
             dram_slice_config,
@@ -431,6 +433,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     // Note: bias preparation doesn't receive output_padding, so we assume output_padding = 0
     auto dims =
         compute_conv_transpose2d_dimensions(input_height, input_width, kernel_size, stride, padding, {0, 0}, dilation);
+    const uint32_t groups_for_prep = groups > 1 ? 1 : groups;
 
     return prepare_conv_bias(
         bias_tensor,
@@ -445,7 +448,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
         ConvTranspose2dDimensions::CONV2D_STRIDE,   // stride is always 1x1 for conv2d micro-op
         ConvTranspose2dDimensions::CONV2D_PADDING,  // padding is 0 (halo already added padding)
         dilation,
-        groups,
+        groups_for_prep,
         device,
         input_dtype,
         output_dtype,

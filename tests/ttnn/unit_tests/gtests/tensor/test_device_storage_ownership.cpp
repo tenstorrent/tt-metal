@@ -19,14 +19,20 @@ using ::testing::SizeIs;
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::DeviceStorage;
+using tt::tt_metal::GenericMeshDeviceFixture;
 using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshDevice1x2Fixture;
+using tt::tt_metal::MeshTensor;
 using tt::tt_metal::Tensor;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
 
-using DeviceStorageOwnershipTest = MeshDevice1x2Fixture;
+// Most ownership tests only need a single device.
+using DeviceStorageOwnershipTest = GenericMeshDeviceFixture;
+// Tests that explicitly exercise multi-device behaviour (views, shards).
+using DeviceStorageMultiDeviceTest = MeshDevice1x2Fixture;
 
 TensorSpec make_test_tensor_spec() {
     return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -44,6 +50,20 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
 
     EXPECT_FALSE(storage.is_allocated());
     EXPECT_TRUE(storage.is_uniform_storage());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedFromMeshTensor) {
+    auto source_mesh_tensor = MeshTensor::allocate_on_device(*mesh_device_, make_test_tensor_spec(), TensorTopology{});
+    MeshTensor moved_mesh_tensor(std::move(source_mesh_tensor));
+
+    EXPECT_TRUE(source_mesh_tensor.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(moved_mesh_tensor.is_valueless_after_move());
+
+    auto construct_storage_from_moved_from = [&]() {
+        DeviceStorage storage(std::move(source_mesh_tensor));  // NOLINT(bugprone-use-after-move)
+        (void)storage;
+    };
+    EXPECT_THROW(construct_storage_from_moved_from(), std::exception);
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerAfterCreation) {
@@ -82,7 +102,57 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerRestoredAfterCopyDestr
     EXPECT_TRUE(original_storage.is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveConstructorTransfersOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage original = tensor.device_storage();
+    EXPECT_TRUE(original.is_allocated());
+
+    DeviceStorage moved_into(std::move(original));
+
+    // Moved-into storage has the memory; moved-from is in DeallocatedDefaultConstructed state.
+    EXPECT_TRUE(moved_into.is_allocated());
+    EXPECT_FALSE(original.is_allocated());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveAssignmentTransfersOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage original = tensor.device_storage();
+    EXPECT_TRUE(original.is_allocated());
+
+    DeviceStorage moved_into;
+    moved_into = std::move(original);
+
+    // Moved-into storage has the memory; moved-from is in DeallocatedDefaultConstructed state.
+    EXPECT_TRUE(moved_into.is_allocated());
+    EXPECT_FALSE(original.is_allocated());  // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_MoveDoesNotAddSharedReference) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    ASSERT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+
+    // Copying the storage increments the use-count — tensor is no longer sole owner.
+    {
+        DeviceStorage copy = tensor.device_storage();  // NOLINT(performance-unnecessary-copy-initialization)
+        EXPECT_FALSE(tensor.device_storage().is_sole_owner_of_device_memory());
+    }
+    // Copy destroyed — sole ownership restored.
+    EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+
+    // Moving the storage does NOT increment the use-count: it transfers the
+    // existing slot.  After both the moved-from (temp) and moved-into objects
+    // are destroyed, tensor is the sole owner again — proving no extra reference
+    // was added by the move.
+    {
+        DeviceStorage temp = tensor.device_storage();  // copy: use_count = 2
+        DeviceStorage moved_into(std::move(temp));     // move: use_count stays 2, temp deallocated
+        EXPECT_FALSE(temp.is_allocated());  // NOLINT(bugprone-use-after-move)
+    }
+    // temp and moved_into both gone — sole ownership restored.
+    EXPECT_TRUE(tensor.device_storage().is_sole_owner_of_device_memory());
+}
+
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewSharesOwnership) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
@@ -99,7 +169,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
     ASSERT_THAT(view_storage.get_coords(), SizeIs(1));
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewDeallocateAffectsOwner) {
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_ViewDeallocateAffectsOwner) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
@@ -112,7 +182,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewDeallocateAffectsOwner) {
     EXPECT_FALSE(storage.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeviceStorage_OwnerDeallocateAffectsView) {
+TEST_F(DeviceStorageMultiDeviceTest, DeviceStorage_OwnerDeallocateAffectsView) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     DeviceStorage owner_storage = tensor.device_storage();
 
@@ -192,12 +262,8 @@ TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateIsIdempotent) {
     EXPECT_NO_THROW(tensor.deallocate(/*force=*/false));
 }
 
-TEST_F(DeviceStorageOwnershipTest, Tensor_ShardsShareDeviceStorageOwnership) {
+TEST_F(DeviceStorageMultiDeviceTest, Tensor_ShardsShareDeviceStorageOwnership) {
     const auto num_devices = mesh_device_->num_devices();
-    if (num_devices < 2) {
-        GTEST_SKIP() << "Test requires at least 2 devices";
-    }
-
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     auto shards = get_device_tensors(tensor);
 

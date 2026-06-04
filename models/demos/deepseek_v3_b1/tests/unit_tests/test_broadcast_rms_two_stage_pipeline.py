@@ -19,7 +19,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import HostIoPlacement, LoopbackConfig, PipelineBlock
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
@@ -45,6 +45,12 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
 @pytest.mark.parametrize("epsilon", [1e-6])
+# TODO(#43073): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_broadcast_rms_two_stage_pipeline[blackhole-1e-06-0-64-7168-device_params0-mesh_device0] hit Fabric Router "
+    "Sync timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43073"
+)
 def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim, token_id, epsilon, device_params):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -98,6 +104,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             d2h_socket_fifo_size=embedding_fifo_size,
             d2h_socket_page_size=embedding_size_bytes,
             embedding_tensor=embedding_tensor,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     elif is_stage1:
         stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
@@ -112,6 +119,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             # Detach stage-1 exit path from the bcast input socket chain. This keeps the
             # stage-0->stage-1 input path clean while allowing later stages to be passive.
             exit_node_upstream=ttnn.MeshCoreCoord(stage_entry_device, pipeline_core),
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
     else:
         # Passive forwarding stages for rank >=2 when running on larger clusters.
@@ -122,6 +130,7 @@ def test_broadcast_rms_two_stage_pipeline(mesh_device, vocab_size, embedding_dim
             downstream_d2d_socket_fifo_size=embedding_fifo_size,
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
+            loopback=LoopbackConfig.fabric_loopback(HostIoPlacement.default(pipeline_core)),
         )
 
     logger.info(f"[rank={my_mesh_id}] pipeline block created")

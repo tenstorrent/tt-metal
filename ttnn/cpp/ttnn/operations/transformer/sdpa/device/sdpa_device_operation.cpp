@@ -5,7 +5,6 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -177,6 +176,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
         if (flexible_chunked) {
             const auto& csi_tensor = attrs.chunk_start_idx_tensor.value();
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.has_value(),
+                "chunk_start_idx tensor must be present in tensor args for descriptor cache patching");
+            TT_FATAL(
+                tensors.chunk_start_idx_tensor.value().buffer() == csi_tensor.buffer(),
+                "chunk_start_idx tensor in attrs and tensor args must reference the same buffer");
             TT_FATAL(csi_tensor.storage_type() == StorageType::DEVICE, "chunk_start_idx tensor must be on device");
             TT_FATAL(
                 csi_tensor.dtype() == DataType::INT32,
@@ -380,6 +385,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
     const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
+    const std::optional<int64_t> chunk_start_idx_for_hash = flexible_chunked ? std::nullopt : attrs.chunk_start_idx;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
         attrs.head_dim_v,
         attrs.scale,
@@ -389,6 +395,7 @@ ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, 
         attrs.is_causal,
         is_chunked_prefill,
         flexible_chunked,
+        chunk_start_idx_for_hash,
         attrs.compute_kernel_config,
         q,
         k,
@@ -519,6 +526,7 @@ Tensor sdpa(
             .v = input_tensor_v,
             .attn_mask = attn_mask,
             .page_table = page_table_tensor,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
         });
 }

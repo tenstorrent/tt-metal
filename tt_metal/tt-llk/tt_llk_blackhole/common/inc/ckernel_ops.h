@@ -9,7 +9,7 @@
 #pragma once
 
 #define TT_OP(opcode, params) ((opcode << 24) + params)
-#define INSTRUCTION_WORD(x)   __asm__ __volatile__(".ttinsn %0" : : "i"((x))) // Swizzle 32 bits into the instruction stream.
+#define INSTRUCTION_WORD(x)   __asm__ __volatile__(".ttinsn %0" : : "n"((x))) // Swizzle 32 bits into the instruction stream.
 
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x58, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))

@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_quantization ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Quantization ALIAS ttnn_op_eltwise_quantization)
 
@@ -10,9 +12,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES quantization.hpp
+        FILES ${TTNN_OP_ELTWISE_QUANTIZATION_API_HEADERS}
     PRIVATE
-        quantization.cpp
+        ${TTNN_OP_ELTWISE_QUANTIZATION_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_quantization PRIVATE ${FixmeOpIncDirs})

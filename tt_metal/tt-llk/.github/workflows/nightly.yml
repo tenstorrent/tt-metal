@@ -18,6 +18,9 @@ permissions:
   packages: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-images:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-images.yml
@@ -26,9 +29,9 @@ jobs:
     name: "🌀 Nightly Tests (Wormhole)"
     uses: ./.github/workflows/setup-and-test.yml
     secrets: inherit
-    needs: build-images
+    needs: [check-harbor, build-images]
     with:
-      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 5
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}
@@ -41,9 +44,9 @@ jobs:
     name: "🕳️ Nightly Tests (Blackhole)"
     uses: ./.github/workflows/setup-and-test.yml
     secrets: inherit
-    needs: build-images
+    needs: [check-harbor, build-images]
     with:
-      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 5
       pytest_markers: ${{ inputs.pytest_markers || 'not perf and not quasar' }}

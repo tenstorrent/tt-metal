@@ -7,9 +7,24 @@ import pytest
 
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 
+_DEFAULT_MAX_PREFILL = 8192
+
 
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
+    parser.addoption(
+        "--max-prefill",
+        action="store",
+        type=int,
+        default=_DEFAULT_MAX_PREFILL,
+        help=(
+            "Maximum prefill seq_len to run. Tests parametrized over "
+            "PREFILL_BUCKETS skip lengths above this cap; the demo skips "
+            "buckets above this cap in test_demo_prefill_lengths. Default: "
+            f"{_DEFAULT_MAX_PREFILL}. Set higher (up to 262144) to exercise "
+            "long-context kernels."
+        ),
+    )
 
 
 @pytest.fixture(scope="session")

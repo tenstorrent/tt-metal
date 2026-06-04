@@ -14,9 +14,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Validate input tensor layouts are ROW_MAJOR
-    TT_FATAL(
-        tensor_args.input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
     TT_FATAL(
         tensor_args.weights_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Weights tensor must be ROW_MAJOR layout");
@@ -40,8 +37,8 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Weights tensor must be BFLOAT16, got {}",
         tensor_args.weights_tensor.dtype());
     TT_FATAL(
-        tensor_args.indices_tensor.dtype() == DataType::INT32 || tensor_args.indices_tensor.dtype() == DataType::UINT32,
-        "Indices tensor must be INT32 or UINT32, got {}",
+        tensor_args.indices_tensor.dtype() == DataType::UINT16,
+        "Indices tensor must be UINT16 (matching moe_grouped_topk output), got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
@@ -52,6 +49,16 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
         "Expert dispatch table tensor must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
+
+    // FP8 output requires tiled input (untilize+typecast is fused in compute; row-major path has no compute kernel)
+    if (operation_attributes.use_fp8_dispatch) {
+        TT_FATAL(
+            tensor_args.input_tensor.device()->arch() != tt::ARCH::WORMHOLE_B0,
+            "FP8 dispatch is not supported on Wormhole_B0; use Blackhole or set fp8_output=False");
+        TT_FATAL(
+            tensor_args.input_tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR,
+            "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
+    }
 
     // Validate output memory config is DRAM interleaved (not sharded)
     TT_FATAL(
@@ -67,9 +74,8 @@ void DispatchDeviceOperation::validate_on_program_cache_hit(
 DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Extract necessary dimensions from operation attributes
-    uint32_t experts_per_chip = operation_attributes.experts_per_chip;
     uint32_t metadata_len = operation_attributes.metadata_len;
-    uint32_t max_dispatched_tokens_per_expert = operation_attributes.max_dispatched_tokens_per_expert;
+    uint32_t max_dispatch_buffer_token_size = operation_attributes.max_dispatch_buffer_token_size;
 
     // Get the input tensor's per-device shape (sharded dimension)
     auto input_shape = tensor_args.input_tensor.tensor_spec().logical_shape();
@@ -81,15 +87,19 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // Layout for all output tensors
     auto layout = tt::tt_metal::Layout::ROW_MAJOR;
 
-    // Define output shapes - these are PER-DEVICE shapes (not global shapes)
-    auto dispatch_buffer_shape = ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim});
-    auto dispatch_metadata_shape =
-        ttnn::Shape({1, 1, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len});
+    // Define output shapes - these are PER-DEVICE shapes (not global shapes). The
+    // dispatch buffer is a single flat region shared across all local experts; its
+    // total token capacity is max_dispatch_buffer_token_size.
+    auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
+    auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
+
+    // FP8 dispatch uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
+    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::UINT8 : DataType::BFLOAT16;
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(
         Shape(dispatch_buffer_shape),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(layout), mem_config));
+        tt::tt_metal::TensorLayout(dispatch_buffer_dtype, tt::tt_metal::PageConfig(layout), mem_config));
 
     auto dispatch_metadata_spec = TensorSpec(
         Shape(dispatch_metadata_shape),
@@ -137,12 +147,14 @@ prefill_dispatch(
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
-    uint32_t max_dispatched_tokens_per_expert,
+    uint32_t max_dispatch_buffer_token_size,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_dispatch) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -151,12 +163,14 @@ prefill_dispatch(
             .num_routed_experts = num_routed_experts,
             .num_experts_per_tok = num_experts_per_tok,
             .metadata_len = metadata_len,
-            .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
+            .max_dispatch_buffer_token_size = max_dispatch_buffer_token_size,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
             .output_mem_config = memory_config,
-            .worker_core_range_set = worker_core_range_set},
+            .worker_core_range_set = worker_core_range_set,
+            .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
+            .use_fp8_dispatch = use_fp8_dispatch},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

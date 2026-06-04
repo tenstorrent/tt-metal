@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_full ${LIB_TYPE})
 add_library(TTNN::Ops::Full ALIAS ttnn_op_full)
 
@@ -19,26 +21,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_FULL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/full_device_operation.cpp
-        device/full_program_factory_interleaved.cpp
-        device/full_program_factory_nd_sharded.cpp
-        device/full_program_factory_sharded.cpp
-        full.cpp
+        ${TTNN_OP_FULL_SRCS}
 )
 
-target_include_directories(ttnn_op_full PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_full
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_full PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -49,4 +41,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_full LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_full FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -36,7 +36,6 @@ def test_vision_block_inference(
     dtype = ttnn.bfloat8_b
     pccs = [0.99] * n_layers
     pccs[24:] = [0.85] * (n_layers - 24)
-    print(pccs)
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # Example inputs
@@ -151,9 +150,11 @@ def test_vision_block_inference(
         # Remove sequence padding
         tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
 
-        # Run reference model
+        # Cast input to reference model dtype (e.g. bfloat16 for 32B) to avoid mat1/mat2 dtype mismatch
+        ref_dtype = next(reference_model.parameters()).dtype
+        pt_ref_input = pt_input.squeeze(0).squeeze(0).to(ref_dtype)
         reference_output = reference_model(
-            pt_input.squeeze(0).squeeze(0),
+            pt_ref_input,
             cu_seqlens=cu_seqlens,
             rotary_pos_emb=None,
             position_embeddings=position_embeddings,

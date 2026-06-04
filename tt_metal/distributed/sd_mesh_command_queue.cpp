@@ -9,6 +9,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -24,13 +25,19 @@ namespace {
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& current_cores) {
-    // Build a set from previous_cores only, then probe with current_cores directly.
-    std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set;
-    for (const auto& core_group : previous_cores) {
-        previous_cores_set.insert(core_group.begin(), core_group.end());
-    }
-    for (const auto& core_group : current_cores) {
-        for (const auto& core : core_group) {
+    // The outer index is the programmable_core_type (TENSIX, DRAM, ETH, ...). Two CoreCoords
+    // with the same (x, y) but different programmable core types refer to physically distinct
+    // cores (e.g., DRAM (0,0) is bank 0; WORKER (0,0) is the bottom-left compute core), so we
+    // must only consider intersection WITHIN the same programmable core type.
+    const size_t shared = std::min(previous_cores.size(), current_cores.size());
+    for (size_t pct = 0; pct < shared; ++pct) {
+        const auto& prev_group = previous_cores[pct];
+        const auto& curr_group = current_cores[pct];
+        if (prev_group.empty() || curr_group.empty()) {
+            continue;
+        }
+        std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set(prev_group.begin(), prev_group.end());
+        for (const auto& core : curr_group) {
             if (previous_cores_set.contains(core)) {
                 return true;
             }
@@ -73,7 +80,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
+    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
+    const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
     }
@@ -93,9 +101,13 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    tt::tt_metal::detail::WriteToBuffer(
-        *shard_view,
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+    auto payload =
+        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    if (logical_core_filter != nullptr) {
+        tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+    } else {
+        tt::tt_metal::detail::WriteToBuffer(*shard_view, payload);
+    }
     return false;  // Slow dispatch doesn't support pinned memory
 }
 
@@ -126,7 +138,10 @@ void SDMeshCommandQueue::read_shard_from_device(
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
-void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
+void SDMeshCommandQueue::submit_memcpy_request(
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {}
 
 WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*index*/) {
     TT_THROW("Not supported for slow dispatch");
@@ -134,6 +149,8 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
     if (!logical_cores_for_previous_workload_.empty()) {
+        // In emulated mode this map is always empty (LaunchProgram is synchronous),
+        // so this block is effectively a no-op for emulated devices.
         for (const auto& [device_id, logical_cores] : logical_cores_for_previous_workload_) {
             tt::llrt::internal_::wait_for_idle(device_id, logical_cores);
         }

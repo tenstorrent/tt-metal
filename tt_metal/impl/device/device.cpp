@@ -13,6 +13,7 @@
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
+#include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -163,6 +164,9 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
+    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return experimental::make_mock_allocator(config);
+    }
     return std::make_unique<L1BankingAllocator>(config);
 }
 
@@ -215,8 +219,18 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
 
                 if (this->sysmem_manager_->is_dram_backed()) {
+                    // With DRAM-backed CQs, each device stores its command queue in its own DRAM. The CQ
+                    // pointers for a serviced device must therefore be written into that device's DRAM, not
+                    // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
+                    // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
+                    const uint32_t dram_channel =
+                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
-                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        serviced_device_id,
+                        dram_channel,
+                        cq_offset);
                 } else {
                     MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
                         pointers.data(),
@@ -242,11 +256,11 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 }
 
 void Device::init_command_queue_host() {
-    // SystemMemoryManager now has internal stubs for mock devices
+    // SystemMemoryManager now has internal stubs for mock/emulated devices
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(context_->get_context_id(), this->id_, this->num_hw_cqs());
 
-    // For mock devices, skip HWCommandQueue creation (they don't need real command queues)
-    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
+    if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -465,15 +479,20 @@ bool Device::initialize(
         return true;
     }
 
-    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1)
-    if (!MetalContext::instance().rtoptions().get_shm_tracking_disabled()) {
+    // Create shared memory stats provider (enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1).
+    // Snapshot the SHM rtoptions once here -- they are process-wide debug toggles, so capturing
+    // them at construction time avoids the SHM helpers having to look up a MetalContext on every
+    // allocation (and avoids any "find any context" walk that mock+silicon coexistence forced).
+    const bool shm_tracking_disabled = context_->rtoptions().get_shm_tracking_disabled();
+    const bool shm_verbose = context_->rtoptions().get_shm_verbose();
+    if (!shm_tracking_disabled) {
         // Use UMD's chip_unique_ids for globally unique chip identification.
         // This ID is computed by topology discovery from hardware-reported board_id and asic_location,
         // and is consistent across all board types (P300, N300, UBB Wormhole, UBB Blackhole, etc.).
         uint64_t asic_id = 0;
 
         try {
-            const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            const auto& cluster = context_->get_cluster();
             auto* cluster_desc = cluster.get_cluster_desc();
 
             if (cluster_desc) {
@@ -507,14 +526,17 @@ bool Device::initialize(
             asic_id = this->id_;
         }
 
-        shm_stats_provider_ = std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_);
+        shm_stats_provider_ =
+            std::make_unique<SharedMemoryStatsProvider>(asic_id, this->id_, shm_tracking_disabled, shm_verbose);
         log_debug(tt::LogMetal, "Shared memory tracking enabled for device {}, asic_id=0x{:x}", this->id_, asic_id);
 
-        // Register ShmTrackingProcessor globally once (when first device with SHM is created)
+        // Register ShmTrackingProcessor globally once (when first device with SHM is created).
+        // Verbose flag is captured here from this device's MetalContext for the same reason as
+        // SharedMemoryStatsProvider above.
         static bool shm_processor_registered = false;
         if (!shm_processor_registered) {
             tt::tt_metal::GraphTracker::instance().push_processor(
-                std::make_shared<tt::tt_metal::ShmTrackingProcessor>());
+                std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
             log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
             shm_processor_registered = true;
         }
@@ -849,7 +871,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalEnvAccessor(*env_).impl().get_hal();
         bool noc_translation_enabled = true;
-        if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        if (!MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
             noc_translation_enabled =
                 MetalEnvAccessor(*env_).impl().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
                     this->id());
@@ -875,12 +897,14 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
-        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        std::vector<uint32_t> worker_phy_y;
+        worker_phy_y.reserve(num_cores_y);
         for (int i = 0; i < num_cores_y; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
-            worker_phy_y.at(i) = core_phy.y;
+            worker_phy_y.push_back(core_phy.y);
         }
-        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        std::vector<uint32_t> worker_phy_x;
+        worker_phy_x.reserve(num_cores_x);
         for (int i = 0; i < num_cores_x; ++i) {
             auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
             worker_phy_x.push_back(core_phy.x);

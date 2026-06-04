@@ -70,7 +70,7 @@ class Generator(WarmupForwardMixin):
             if page_table is not None:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
-            logits = self.__prefill_forward_single_user_text(
+            logits = self.prefill_forward_single_user_text(
                 tokens[user_id : user_id + 1],
                 page_table=page_table_user if page_table is not None else None,
                 user_id=user_id,
@@ -124,7 +124,7 @@ class Generator(WarmupForwardMixin):
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(
+    def prefill_forward_single_user_text(
         self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None, deepstack_visual_embeds=None
     ):
         seq_len = tokens.shape[1]
@@ -187,7 +187,7 @@ class Generator(WarmupForwardMixin):
                 )
                 tt_logits = self.model.ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in chunk_rot_mats_prefill],
+                    rot_mats_global=[rm[0:1, ...] for rm in chunk_rot_mats_prefill],
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -221,7 +221,7 @@ class Generator(WarmupForwardMixin):
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
-                rot_mats_global=[rm[user_id : user_id + 1, ...] for rm in rot_mats_prefill],
+                rot_mats_global=[rm[0:1, ...] for rm in rot_mats_prefill],
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -240,7 +240,7 @@ class Generator(WarmupForwardMixin):
 
             return logits
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
         logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
 

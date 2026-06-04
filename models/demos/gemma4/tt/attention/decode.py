@@ -16,6 +16,7 @@ from .operations import (
     apply_qkv_projection,
     apply_rope,
     concat_heads,
+    effective_block_size,
     split_qkv_heads_decode,
 )
 from .weights import AttentionWeights
@@ -103,6 +104,14 @@ def decode_forward(
     # 5. KV cache update — skip for KV-shared layers (source layer already updated the cache)
     # Use position_idx_cache (int32) for cache ops when position_idx is uint32 (embedding lookup format)
     cache_pos = position_idx_cache if position_idx_cache is not None else position_idx
+    # Bounded sliding-window cache: when set, the op wraps absolute positions into a
+    # circular buffer of ``cache_position_modulo`` tokens before the page_table lookup.
+    # ``None`` = legacy unbounded behavior (set on full-attention layers or when the
+    # bounded-cache mode isn't wired up). Empty kwargs dict on the legacy path keeps
+    # kernel signatures and program-cache keys for existing callers byte-identical.
+    paged_modulo_kwargs = (
+        {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo is not None else {}
+    )
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
@@ -111,8 +120,32 @@ def decode_forward(
             tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
-                ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos, page_table=page_table)
-                ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos, page_table=page_table)
+                # Per-device kv-head count of the layer's input view. When the cache
+                # was allocated for a different layer type under HMA cross-group
+                # sharing (Gemma4-26B-A4B sliding kv=8 / full kv=2 on multi-device
+                # TP) cache.padded_shape[1] disagrees with what the kernel needs to
+                # write — see paged_update_cache num_kv_heads kwarg. Mirrors
+                # split_qkv_heads_decode's local head count.
+                num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+                eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
+                ttnn.experimental.paged_update_cache(
+                    k_cache,
+                    tt_k,
+                    update_idxs_tensor=cache_pos,
+                    page_table=page_table,
+                    block_size=eff_bs,
+                    num_kv_heads=num_local_kv_heads,
+                    **paged_modulo_kwargs,
+                )
+                ttnn.experimental.paged_update_cache(
+                    v_cache,
+                    tt_v,
+                    update_idxs_tensor=cache_pos,
+                    page_table=page_table,
+                    block_size=eff_bs,
+                    num_kv_heads=num_local_kv_heads,
+                    **paged_modulo_kwargs,
+                )
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)
@@ -123,18 +156,28 @@ def decode_forward(
     # 6. SDPA (scale=1.0)
     sliding_window = config.sliding_window if config.is_sliding else None
 
-    # For large head_dim (e.g. 512 on global layers), use a smaller compute grid
-    # to avoid L1 overflow on mesh devices where fabric reserves L1 space
-    sdpa_program_config = None
+    # Always pass an SDPAProgramConfig so num_cores_per_head stays within
+    # MAX_TREE_REDUCTION_ROUNDS=6 (=> 64 cores/head). With program_config=None,
+    # the SDPA op falls back to the full device grid, which exceeds 64 cores
+    # on Blackhole (>=110 cores) when num_kv_heads is small. The struct's
+    # default max_cores_per_head_batch=16 caps the per-head reduction tree.
     if config.head_dim >= 512:
-        sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-            q_chunk_size=32,
-            k_chunk_size=64,
-            exp_approx_mode=False,
-        )
+        # Global layers: smaller grid — head_dim=512 needs more L1 per core.
+        sdpa_grid = ttnn.CoreCoord(8, 4)
+    else:
+        # Sliding layers: use the full device compute grid.
+        device_grid = mesh_device.compute_with_storage_grid_size()
+        sdpa_grid = ttnn.CoreCoord(device_grid.x, device_grid.y)
+
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_grid,
+        q_chunk_size=32,
+        k_chunk_size=64,
+        exp_approx_mode=False,
+    )
 
     if page_table is not None:
+        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
             k_cache,
@@ -145,6 +188,12 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+            # Tell SDPA the layer's view of the cache when the buffer was allocated
+            # for a different layer type under HMA cross-group sharing — same
+            # rationale as the num_kv_heads override on paged_update_cache.
+            num_kv_heads=sdpa_num_local_kv_heads,
+            **paged_modulo_kwargs,
         )
     else:
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention_decode(

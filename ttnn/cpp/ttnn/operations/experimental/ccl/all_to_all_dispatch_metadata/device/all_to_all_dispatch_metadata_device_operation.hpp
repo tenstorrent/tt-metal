@@ -38,6 +38,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
         // It's still part of the struct for use in the program factory.
         const std::optional<GlobalSemaphore> cross_device_semaphore;  // Optional external semaphore for persistent mode
         static constexpr auto attribute_names = std::forward_as_tuple(
+            "shared_expert_ids",
             "worker_core_range_set",
             "axis",
             "num_links",
@@ -48,6 +49,7 @@ struct AllToAllDispatchMetadataDeviceOperation {
             "dispatch_algorithm");
         auto attribute_values() const {
             return std::forward_as_tuple(
+                shared_expert_ids,
                 worker_core_range_set,
                 axis,
                 num_links,

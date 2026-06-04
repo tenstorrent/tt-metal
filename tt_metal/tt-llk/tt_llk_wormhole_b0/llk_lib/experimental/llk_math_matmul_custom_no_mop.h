@@ -22,12 +22,7 @@ inline void matmul_validate_no_mop_contract(
         "Wormhole custom no-mop matmul currently supports only full 32x32 tiles with partial_face disabled");
 }
 
-inline std::uint32_t matmul_get_replay_buf_len_no_mop(
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const bool partial_face            = false)
+inline std::uint32_t matmul_get_replay_buf_len_no_mop()
 {
     // The narrowed WH full-tile path uses a fixed replay image.
     return 16;
@@ -79,14 +74,7 @@ inline void matmul_configure_addrmod_no_mop(
 }
 
 template <MathFidelity math_fidelity>
-inline void matmul_emit_replay_program_no_mop(
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    [[maybe_unused]] const bool partial_face            = false)
+inline void matmul_emit_replay_program_no_mop(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -171,21 +159,14 @@ inline void matmul_emit_replay_program_no_mop(
 }
 
 template <MathFidelity math_fidelity>
-inline void matmul_load_replay_no_mop(
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
-    const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
-    const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face            = false)
+inline void matmul_load_replay_no_mop(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    const std::uint32_t replay_buf_len = matmul_get_replay_buf_len_no_mop(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    const std::uint32_t replay_buf_len = matmul_get_replay_buf_len_no_mop();
 
     // WH records the replay image explicitly at init/reinit time rather than
     // assuming it persists like the BH path does.
     lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, replay_buf_len);
-    matmul_emit_replay_program_no_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_emit_replay_program_no_mop<math_fidelity>(ct_dim, rt_dim);
 }
 
 template <MathFidelity math_fidelity>
@@ -221,8 +202,7 @@ inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, con
 }
 
 template <MathFidelity math_fidelity>
-inline void matmul_run_no_mop_tdim1_reuse_a(
-    const std::uint32_t dst_index, [[maybe_unused]] const std::uint32_t ct_dim, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
+inline void matmul_run_no_mop_tdim1_reuse_a(const std::uint32_t dst_index, const std::uint32_t rut_dim, const std::uint32_t replay_buf_len)
 {
     for (std::uint32_t rut = 0; (rut + 1) < rut_dim; rut++)
     {
@@ -365,7 +345,7 @@ inline void _llk_math_matmul_init_no_mop_(
         transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, ct_dim, rt_dim);
     // Initial entry records the replay image once; later calls just replay it
     // after restoring the addrmod/counter contract.
-    matmul_load_replay_no_mop<math_fidelity>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    matmul_load_replay_no_mop<math_fidelity>(ct_dim, rt_dim);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
@@ -394,13 +374,13 @@ inline void _llk_math_matmul_no_mop_(
     // reused. This matches the BH helper naming and is effectively the
     // "reuse-dim" for the no-mop path.
     const std::uint32_t rut_dim        = reuse_a ? ct_dim : rt_dim;
-    const std::uint32_t replay_buf_len = matmul_get_replay_buf_len_no_mop(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+    const std::uint32_t replay_buf_len = matmul_get_replay_buf_len_no_mop();
 
     if (t_dim == 1)
     {
         if (reuse_a)
         {
-            matmul_run_no_mop_tdim1_reuse_a<math_fidelity>(dst_index, ct_dim, rut_dim, replay_buf_len);
+            matmul_run_no_mop_tdim1_reuse_a<math_fidelity>(dst_index, rut_dim, replay_buf_len);
         }
         else
         {

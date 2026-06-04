@@ -23,15 +23,11 @@ on:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
-        default: false
-        type: boolean
-      enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       gtest_filter:
@@ -73,9 +69,6 @@ jobs:
               ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
             auto-triage: false
-          - name: llk
-            cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter=$GTEST_FILTER
-            auto-triage: true
           - name: FD2
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_fd2_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_fd2_tests.sh
@@ -87,7 +80,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -106,7 +99,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -119,7 +112,6 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
-          enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
           auto-triage: ${{ !inputs.enable-watcher && matrix.test-group.auto-triage }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}

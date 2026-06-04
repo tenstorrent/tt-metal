@@ -9,6 +9,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -16,6 +19,13 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_gelu.h"
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
+}
 #endif
 
 namespace detail {
@@ -29,24 +39,24 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
-template <MoEActivationFunction activation>
+template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
 template <>
-inline void pack_init_activation<MoEActivationFunction::SWIGLU>() {
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
 };
 
 template <>
-inline void pack_init_activation<MoEActivationFunction::SILU>() {
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
 };
 
-template <MoEActivationFunction activation>
+template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_compute_activation() {};
 
 template <>
-inline void pack_compute_activation<MoEActivationFunction::SILU>() {
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
@@ -55,18 +65,36 @@ inline void pack_compute_activation<MoEActivationFunction::SILU>() {
 };
 
 template <>
-inline void pack_compute_activation<MoEActivationFunction::SWIGLU>() {
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU>() {
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
+template <>
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
+};
+
+template <>
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(0)));
+    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(2)));
+
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
+    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+};
+
 }  // namespace detail
 void kernel_main() {
+    constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
     constexpr auto activation_type =
-        detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
+        ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
     // For synchronization with tilize cores
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
@@ -92,16 +120,24 @@ void kernel_main() {
     constexpr auto cb_w2c_md = tt::CBIndex::c_7;
 
     constexpr auto cb_c2s_out = tt::CBIndex::c_1;  // matmul_writer_cb_id
+    // c_8 is unused on matmul cores when bias is off (CB not allocated); when has_bias, tilize uses c_8 only on
+    // tilize cores. Only referenced in if constexpr(has_bias) branches below.
+    constexpr auto cb_c2c_ones_tile = tt::CBIndex::c_8;
 
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = moe_ring::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = moe_ring::NUM_W2_TILES_H;
+    // Pre-computed shard lookup tables — avoids runtime div/mod in inner loops.
+    // ring_core_id is a runtime arg, but Nt/Ht/num_cores are compile-time.
+    constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
+    constexpr auto w2_shard_tiles_lut = moe_ring::make_w2_shard_lut<Ht, Nt, num_cores>();
 
-    const uint32_t num_w0_w1_tiles_w = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = moe_ring::W2_TILES_PER_CORE_B[ring_core_id];
+    // Constants for MoE — derived from compile-time shape args
+    constexpr uint32_t num_w0_w1_tiles_h = Ht;
+    constexpr uint32_t num_w2_tiles_h = Nt;
+
+    const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
 
     const uint32_t num_in2_tiles = num_w2_tiles_w;
     const uint32_t num_mm2_tiles = num_w2_tiles_w;
@@ -112,37 +148,45 @@ void kernel_main() {
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 32
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_ring::IN2_TILES_PER_STEP_B /
-        2;  // 32 * 3 = 96
-            // 2 * num_w0_w1_tiles_w * num_w0_w1_tiles_h / w0_w1_tiles_per_block;  // (5|6 * 224) / 28 = 80|96
 
-    // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 5 (round up)
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 5 / 2 = 10
-    constexpr uint32_t w2_blocks_per_expert = moe_ring::W2_BLOCKS_PER_EXPERT;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+
+    // W2 reading constants (base-constant aliases only; derived values come from Cfg)
+    constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
+    constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
+    constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = moe_ring::NUM_A2A_ITERS_B;
+    constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
 
-    // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
+    constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    // The number of tiles to send in each step
-    // We send 6 tiles in each step, even though some cores in some steps may have only 5 valid ones
-    constexpr uint32_t tiles_per_step = moe_ring::IN2_TILES_PER_STEP_B;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
 
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    if constexpr (has_bias) {
+        // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
+        // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
+        unary_op_init_common(cb_c2c_ones_tile, cb_c2c_ones_tile);
+        tile_regs_acquire();
+        fill_tile_init();
+        constexpr uint32_t dst0 = 0;
+        fill_tile(dst0, 1.f);
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(cb_c2c_ones_tile, 1);
+        pack_tile(dst0, cb_c2c_ones_tile);
+        tile_regs_release();
+        cb_push_back(cb_c2c_ones_tile, 1);
+        // Synchronize: UNPACK must wait for PACK to finish writing before the first
+        // matmul_block read. The tile is never popped so one cb_wait_front suffices.
+        cb_wait_front(cb_c2c_ones_tile, 1);
+    }
+
     // Pack is always configured to Float16_b
     pack_reconfig_data_format(cb_s2c_in2);
 
@@ -212,10 +256,31 @@ void kernel_main() {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                [[maybe_unused]] uint32_t k_tracker = 0;
+                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_col; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
+                        if constexpr (has_bias) {
+                            if (k_tracker == num_w0_w1_tiles_h) {
+                                // Bias addition: matmul(ones_tile, bias_row)
+                                matmul_block(
+                                    cb_c2c_ones_tile,
+                                    cb_r2c_w0_w1,
+                                    0,
+                                    /*in1_index=*/k,
+                                    /*idst=*/0,
+                                    /*transpose=*/false,
+                                    /*ct_dim=*/4,
+                                    /*rt_dim=*/1,
+                                    /*kt_dim=*/1);
+                                k_tracker++;
+                                continue;
+                            } else if (k_tracker > num_w0_w1_tiles_h) {
+                                k_tracker++;
+                                continue;  // skip padding K slots after bias
+                            }
+                        }
                         matmul_block(
                             cb_s2c_in,
                             cb_r2c_w0_w1,
@@ -226,6 +291,9 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
+                        if constexpr (has_bias) {
+                            k_tracker++;
+                        }
                     }
                     cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
                 }
@@ -263,28 +331,53 @@ void kernel_main() {
             //---------------------------------------------------------------------
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
-            for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][0];
+
+            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
+            // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
+            // execution and produces garbage output (NaN/Inf) on BH silicon.
+            pack_untilize_dest_init<
+                /*block_ct_dim=*/w2_tiles_per_iter_w,
+                /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
+
+            for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
+                uint32_t src_core = ring_core_id;
+                uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_wait_front(cb_w2c_rdy, 1);
 
                 uint32_t in2_offset = 0, in2_index = 0;
 
                 tile_regs_acquire();
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_four_mm2_tile; ++block_id) {
+
+                uint32_t w2_k_tracker = 0;
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
-
-                    for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                        // The last block has only 4 tiles of interest, so we exit early.
-                        if ((block_id == (w2_blocks_per_four_mm2_tile - 1)) && (k == 4)) {
-                            cb_pop_front(cb_w2c_rdy, 1);
-                            break;
+                    for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
+                        if constexpr (has_bias) {
+                            if (w2_k_tracker == num_w2_tiles_h) {
+                                // Bias addition: matmul(ones_tile, bias_row); padding K slots do not consume in2/dm1.
+                                matmul_block(
+                                    cb_c2c_ones_tile,
+                                    cb_r2c_w2,
+                                    0,
+                                    /*in1_index=*/k,
+                                    /*idst=*/0,
+                                    /*transpose=*/false,
+                                    /*ct_dim=*/4,
+                                    /*rt_dim=*/1,
+                                    /*kt_dim=*/1);
+                                w2_k_tracker++;
+                                continue;
+                            }
                         }
-
+                        if (w2_k_tracker >= num_w2_tiles_h) {
+                            continue;  // skip padding K slots (bias: after bias tile; no_bias: at/past logical K)
+                        }
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = moe_ring::W0_W1_TILES_PER_CORE_PER_STEP_B[ring_core_id][++dm1_step];
+                            src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
+                            dm1_tiles_remaining = shard_tiles_lut[src_core];
                             in2_offset += tiles_per_step;
                             in2_index = in2_offset;
                         }
@@ -300,25 +393,30 @@ void kernel_main() {
                             /*ct_dim=*/4,
                             /*rt_dim=*/1,
                             /*kt_dim=*/1);
+                        w2_k_tracker++;
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
+                cb_pop_front(cb_w2c_rdy, 1);
 
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init</*block_ct_dim=*/4, /*full_ct_dim=*/20>(cb_c2s_out);
-
-                pack_untilize_dest</*block_ct_dim=*/4, /*full_ct_dim=*/20>(
+                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-                pack_untilize_uninit(cb_c2s_out);
 
                 tile_regs_release();
             }
+
+            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+            pack_untilize_uninit(cb_c2s_out);
+
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
+            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+            pack_reconfig_data_format(cb_s2c_in2);
 
         }  // end for (chunk)
     }  // end for (expert_id)

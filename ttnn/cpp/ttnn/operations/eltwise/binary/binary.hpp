@@ -7,6 +7,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 // Macros for binary operations with identical argument signatures and implementation.
 // Each macro generates function declaration(s). Use the corresponding TTNN_*_IMPL macro in .cpp.
@@ -22,8 +23,8 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        const std::optional<bool>& use_legacy = std::nullopt,                             \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Tensor-float binary op (calls invoke_binary_ng)
 #define TTNN_BINARY_OP_TENSOR_FLOAT(NAME, OP_TYPE)                                        \
@@ -36,8 +37,8 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        const std::optional<bool>& use_legacy = std::nullopt,                             \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Inplace binary op (Tensor-Tensor and Tensor-float, calls invoke_binary_ng with output=lhs)
 #define TTNN_BINARY_OP_INPLACE(NAME, OP_TYPE)                                             \
@@ -47,16 +48,16 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);                \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
         float rhs,                                                                        \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Inplace relational binary op (Tensor-Tensor and Tensor-float, calls inplace_relational_binary)
 #define TTNN_BINARY_OP_INPLACE_RELATIONAL(NAME, OP_TYPE)                                  \
@@ -66,16 +67,16 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);                \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
         float rhs,                                                                        \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Tensor-Tensor bitwise binary op (no output_dtype, calls invoke_binary_ng)
 #define TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(NAME, OP_TYPE)                               \
@@ -87,8 +88,8 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Tensor-int32_t bitwise binary op (no output_dtype, calls invoke_binary_ng)
 #define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
@@ -100,8 +101,8 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 // Inplace binary op that calls invoke_binary_ng (logical_and_, logical_or_, logical_xor_, rsub_, bias_gelu_)
 #define TTNN_BINARY_OP_INPLACE_INVOKE(NAME, OP_TYPE)                                      \
@@ -111,27 +112,19 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);                \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
         float rhs,                                                                        \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
-        std::optional<bool> use_legacy = std::nullopt,                                    \
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 namespace ttnn {
 namespace operations::binary {
-
-bool is_legacy_only(
-    const Tensor& lhs,
-    const auto& rhs,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
 
 template <BinaryOpType binary_op_type>
 Tensor where_operation_with_scalar(
@@ -140,7 +133,8 @@ Tensor where_operation_with_scalar(
     unary::ScalarVariant scalar_value,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 }  // namespace operations::binary
 
@@ -156,9 +150,9 @@ Tensor invoke_binary_ng(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode = false,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
@@ -170,9 +164,9 @@ Tensor invoke_binary_ng(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode = false,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
@@ -184,8 +178,18 @@ Tensor invoke_binary_ng(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+Tensor invoke_binary_ng_isclose(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace detail
@@ -206,8 +210,8 @@ Tensor eq(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor eq(
     float lhs,
     const Tensor& rhs,
@@ -224,8 +228,8 @@ Tensor ne(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor ne(
     float lhs,
     const Tensor& rhs,
@@ -242,8 +246,8 @@ Tensor ge(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor ge(
     float lhs,
     const Tensor& rhs,
@@ -260,8 +264,8 @@ Tensor gt(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor gt(
     float lhs,
     const Tensor& rhs,
@@ -278,8 +282,8 @@ Tensor le(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor le(
     float lhs,
     const Tensor& rhs,
@@ -296,8 +300,8 @@ Tensor lt(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor lt(
     float lhs,
     const Tensor& rhs,
@@ -331,9 +335,9 @@ Tensor divide(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide(
     const Tensor& lhs,
     float rhs,
@@ -343,27 +347,27 @@ Tensor divide(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide_(
     const Tensor& lhs,
     const Tensor& rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    std::optional<bool> use_legacy = std::nullopt,
     std::optional<bool> fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide_(
     const Tensor& lhs,
     float rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    std::optional<bool> use_legacy = std::nullopt,
     std::optional<bool> fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -373,9 +377,9 @@ Tensor multiply(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(
     const Tensor& lhs,
     float rhs,
@@ -385,9 +389,9 @@ Tensor multiply(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
 Tensor multiply(const Tensor& lhs, float rhs, bool fast_and_approximate_mode);
 Tensor multiply_(
@@ -396,18 +400,18 @@ Tensor multiply_(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    std::optional<bool> use_legacy = std::nullopt,
     std::optional<bool> fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor multiply_(
     const Tensor& lhs,
     float rhs,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    std::optional<bool> use_legacy = std::nullopt,
     std::optional<bool> fast_and_approximate_mode = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 TTNN_BINARY_OP_INPLACE_RELATIONAL(gt_, GT)
 TTNN_BINARY_OP_INPLACE_RELATIONAL(ge_, GE)
 TTNN_BINARY_OP_INPLACE_RELATIONAL(le_, LE)
@@ -452,6 +456,13 @@ Tensor hypot(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor isclose(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {

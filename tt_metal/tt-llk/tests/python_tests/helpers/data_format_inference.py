@@ -139,11 +139,11 @@ def infer_unpack_out(
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 
-    # Sub-byte BFP formats (Bfp4_b) can only exist in L1.
+    # Sub-byte BFP formats can only exist in L1.
     # The Wormhole HW unpacker only supports BFP4_b → BFP8_b conversion
     # (not BFP4_b → Float16_b). The unpacker expands 4-bit mantissas to 8-bit
     # in the BFP8_b register format, preserving the shared exponent structure.
-    if input_format == DataFormat.Bfp4_b:
+    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
 
     if (
@@ -273,7 +273,7 @@ def infer_pack_in(
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
-    if output_format == DataFormat.Bfp4_b:
+    if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return (
             DataFormat.Float32
             if is_fp32_dest_acc_en == DestAccumulation.Yes
@@ -479,15 +479,22 @@ def data_formats(
         A list of FormatConfig objects of length num_iterations
     """
 
-    if (
-        disable_format_inference
-    ):  # TODO: What happens here when we have two different input formats?
-        # Return a single FormatConfig where all formats are the same if format inference is disabled or not supported for the architecture
-        # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
-        if input_format.is_mx_format():
+    if disable_format_inference:
+        # MX formats can't exist in registers, so "keep formats the same in dest"
+        # is meaningless for them. Delegate to the inference path, which produces
+        # the only valid config (unpack_dst=Float16_b, math=Float16_b, etc.).
+        if input_format.is_mx_format() or (
+            input_format_B is not None and input_format_B.is_mx_format()
+        ):
             unpack_dst = DataFormat.Float16_b
             math_format = DataFormat.Float16_b
-            pack_src_format = DataFormat.Float16_b
+            # When dest_acc is enabled (FP32 destination), pack_src should be Float32 to match hardware behavior
+            # This affects ReLU threshold encoding - FP32 dest requires threshold in different position
+            pack_src_format = (
+                DataFormat.Float32
+                if is_fp32_dest_acc_en == DestAccumulation.Yes
+                else DataFormat.Float16_b
+            )
         elif input_format == DataFormat.Fp8_e4m3:
             unpack_dst = DataFormat.Fp8_e4m3
             math_format = DataFormat.Float16
@@ -497,16 +504,12 @@ def data_formats(
             math_format = input_format
             pack_src_format = input_format
 
-        # Determine if we have different formats for A and B
         same_src_format = (input_format_B is None) or (input_format_B == input_format)
         unpack_B_src_val = (
             input_format_B if input_format_B is not None else input_format
         )
 
-        # For B destination format when format inference is disabled
-        if input_format_B is not None and input_format_B.is_mx_format():
-            unpack_B_dst_val = DataFormat.Float16_b
-        elif input_format_B is not None and input_format_B == DataFormat.Fp8_e4m3:
+        if input_format_B is not None and input_format_B == DataFormat.Fp8_e4m3:
             unpack_B_dst_val = DataFormat.Fp8_e4m3
         elif input_format_B is not None:
             unpack_B_dst_val = input_format_B
@@ -528,7 +531,7 @@ def data_formats(
                 pack_S_src=pack_src_format,
                 pack_S_dst=output_format,
             )
-        ]  # No final config for single iteration
+        ]
 
     if num_iterations > 1:
         intermediate_config = infer_data_formats(

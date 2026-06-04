@@ -45,7 +45,6 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(27);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(28);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(29) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -103,6 +102,9 @@ void kernel_main() {
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
+
+    constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -162,7 +164,6 @@ void kernel_main() {
 
         // Build lightweight mask context for this ring iteration
         LightweightMaskContext lw_mask;
-        lw_mask.enabled = needs_lightweight_mask;
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
         lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
@@ -205,17 +206,28 @@ void kernel_main() {
                 cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
-                cb_sum_in>(
+                cb_sum_in,
+                cb_signal,
+                needs_lightweight_mask,
+                false,  // is_causal_sdpa
+                false,  // is_balanced_sdpa
+                false,  // chunked_enabled
+                local_padded_Nt,
+                local_padded_Nt,  // q_local_padded_Nt
+                0,                // chunk_size_t
+                global_n_has_padding,
+                local_n_has_padding,
+                joint_has_padding,
+                false>(  // straddle_mask_enabled
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,
+                num_q_chunks,
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -226,9 +238,23 @@ void kernel_main() {
                 acc_state,
                 is_last_ring_iter,
                 q_per_core,
-                lw_mask);
+                lw_mask,
+                /*skip_first_half_q=*/false,
+                /*use_zigzag_balancing=*/false,
+                ChunkedContext{},
+                /*is_first_active_iter=*/(ring_iter == 0));
         } else {
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, DHt, scale_fp32>(
+            sdpa_ring<
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_scale_in,
+                Sq_chunk_t,
+                Sk_chunk_t,
+                NH,
+                DHt,
+                DHt,
+                scale_fp32,
+                needs_lightweight_mask>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,

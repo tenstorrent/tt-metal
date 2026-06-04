@@ -9,7 +9,7 @@ namespace ttnn {
 
 ttnn::Tensor narrow(
     const ttnn::Tensor& input_tensor, const int32_t narrow_dim, const int32_t narrow_start, const uint32_t length) {
-    auto input_tensor_shape = input_tensor.padded_shape();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
     uint32_t dim = input_tensor_shape.get_normalized_index(narrow_dim);
     uint32_t start = operations::data_movement::wrap_index(narrow_start, input_tensor_shape[dim]);
 
@@ -75,8 +75,7 @@ ttnn::Tensor narrow(
 
     tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config =
         std::get<tt::tt_metal::distributed::ReplicatedBufferConfig>(storage.get_mesh_buffer().global_config());
-    uint32_t reduction_factor = input_tensor_shape[dim] / length;
-    replicated_config.size /= reduction_factor;
+    replicated_config.size = replicated_config.size / input_tensor_shape[dim] * length;
     tt::tt_metal::distributed::MeshBufferConfig narrowed_global_config = replicated_config;
 
     // Handle INTERLEAVED DRAM buffers
@@ -252,9 +251,10 @@ ttnn::Tensor narrow(
         // Update tensor shape in pages
         auto narrowed_pages_shape = tensor_pages_shape;
         if (narrow_width) {
-            narrowed_pages_shape[1] /= reduction_factor;
+            narrowed_pages_shape[1] = length / page_shape[1];
         } else {
-            narrowed_pages_shape[0] /= reduction_factor;
+            narrowed_pages_shape[0] =
+                static_cast<uint32_t>(static_cast<uint64_t>(tensor_pages_shape[0]) * length / input_tensor_shape[dim]);
         }
 
         // Create new shard specifications

@@ -24,7 +24,7 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
     const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
+    const auto& u_scaler = tensor_args.u_scaler;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
@@ -55,17 +55,16 @@ RingSDPABwKVProgramFactory::cached_mesh_workload_t RingSDPABwKVProgramFactory::c
             continue;
         }
 
-        // Create SDPA backward KV with mask_type (no explicit mask tensor needed)
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
             .grad_output = grad_output,
-            .attn_output = attn_output,
             .query = query,
             .key = key,
             .value = value,
-            .attn_mask = std::nullopt,  // No explicit mask - using mask_type
+            .attn_mask = std::nullopt,
             .intermediates = intermediates,
+            .u_scaler = u_scaler,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};
 
@@ -102,7 +101,7 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
     namespace sdpa_kv = ttml::metal::ops::sdpa_bw::device::kv;
 
     const auto& grad_output = tensor_args.grad_output;
-    const auto& attn_output = tensor_args.attn_output;
+    const auto& u_scaler = tensor_args.u_scaler;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
@@ -122,22 +121,20 @@ void RingSDPABwKVProgramFactory::override_runtime_arguments(
         auto& shared_vars = cached_workload.shared_variables.at(coord_range);
         const auto& start_coord = coord_range.start_coord();
 
-        // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
         auto [should_execute, effective_mask_type] =
             get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
 
-        // Create SDPA attributes and tensor args
         sdpa_kv::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_kv::tensor_args_t sdpa_tensor_args{
             .grad_output = grad_output,
-            .attn_output = attn_output,
             .query = query,
             .key = key,
             .value = value,
             .attn_mask = std::nullopt,
             .intermediates = intermediates,
+            .u_scaler = u_scaler,
             .preallocated_grad_key = grad_key,
             .preallocated_grad_value = grad_value};
 

@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -18,9 +16,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -71,18 +70,18 @@ void kernel_main() {
     constexpr uint32_t cb_x = cb_in;
 #endif
 
-    experimental::CircularBuffer cb_eps_obj(cb_eps);
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_inb_obj(cb_inb);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
-    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    experimental::CircularBuffer cb_accumulate_obj(cb_accumulate);
+    CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_inb_obj(cb_inb);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_xmm2_obj(cb_xmm2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    CircularBuffer cb_accumulate_obj(cb_accumulate);
 
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
@@ -91,7 +90,11 @@ void kernel_main() {
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
+#ifdef RMSNORM
+    binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
     cb_eps_obj.wait_front(1);  // comes from the reader
 
@@ -105,10 +108,13 @@ void kernel_main() {
         //      --------
         //         n
 #ifdef FUSE_PRE_ADD
-        numeric::row_wise_mean_with_pre_add<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
+        numeric::row_wise_mean_with_pre_add<
+            PoolType::SUM,
+            ReduceDim::REDUCE_ROW,
+            FLOAT32_REDUCTION,
+            policies::FullBlockWithPopPolicy>(cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
 #else
-        numeric::row_wise_mean<FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+        numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_in, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
 #endif
 #endif  // !RMS ifdef end
@@ -121,7 +127,11 @@ void kernel_main() {
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef TILIZE_IN
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+#ifdef RMSNORM
+            binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
             cb_in_obj.wait_front(block.full_block_size());
             tile_regs_acquire();
@@ -143,9 +153,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_in, cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif
@@ -176,13 +187,14 @@ void kernel_main() {
 
             // Accumulate (x-E[x])^2
             reconfig_data_format(cb_xmm2, cb_scaler);
-            reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
+            reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_accumulate);
             for (auto i : block.local()) {
                 const auto scaler_tile_idx = block.to_global(i) == Wt - 1 && last_tile_is_partial ? 1 : 0;
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
+                    cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 
-            cb_xmm2_obj.pop_front(block.full_block_size());
+            cb_pop_front(cb_xmm2, block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;
@@ -196,11 +208,11 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            experimental::CircularBuffer(pack_cb).reserve_back(onetile);
+            CircularBuffer(pack_cb).reserve_back(onetile);
             pack_reconfig_data_format(pack_cb);
             pack_tile(dst0, pack_cb);
             tile_regs_release();
-            experimental::CircularBuffer(pack_cb).push_back(onetile);
+            CircularBuffer(pack_cb).push_back(onetile);
         }
 
         // End of
@@ -264,7 +276,11 @@ void kernel_main() {
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 
+#ifdef RMSNORM
+            binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
             tile_regs_acquire();
             cb_in_obj.wait_front(block.full_block_size());
@@ -287,9 +303,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif
@@ -331,13 +348,13 @@ void kernel_main() {
             if constexpr (!(do_gamma == 1 or do_beta == 1)) {
                 cb_fusion = cb_out;
             }
-            experimental::CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+            CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
             pack_reconfig_data_format(cb_fusion);
             for (auto i : block.local()) {
                 pack_tile(i, cb_fusion);
             }
             tile_regs_release();
-            experimental::CircularBuffer(cb_fusion).push_back(block.full_block_size());
+            CircularBuffer(cb_fusion).push_back(block.full_block_size());
             cb_xmm_obj.pop_front(block.full_block_size());
 
             if constexpr (do_gamma == 1) {
@@ -348,7 +365,7 @@ void kernel_main() {
                     pack_reconfig_data_format(cb_out);
                 }
                 cb_gamma_obj.wait_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
                 mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, i, i);
@@ -364,7 +381,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_gamma_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
                 if constexpr (!do_beta) {
                     cb_out_obj.reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
@@ -372,11 +389,11 @@ void kernel_main() {
                     }
                     cb_out_obj.push_back(block.full_block_size());
                 } else {
-                    experimental::CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
+                    CircularBuffer(cb_fusion).reserve_back(block.full_block_size());
                     for (auto i : block.local()) {
                         pack_tile(i, cb_fusion);
                     }
-                    experimental::CircularBuffer(cb_fusion).push_back(block.full_block_size());
+                    CircularBuffer(cb_fusion).push_back(block.full_block_size());
                 }
 
                 tile_regs_release();
@@ -387,7 +404,7 @@ void kernel_main() {
                 reconfig_data_format(cb_fusion, cb_beta);
                 pack_reconfig_data_format(cb_out);
                 cb_beta_obj.wait_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).wait_front(block.full_block_size());
+                CircularBuffer(cb_fusion).wait_front(block.full_block_size());
                 add_bcast_rows_init_short(cb_fusion, cb_beta);
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, i, i);
@@ -398,7 +415,7 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 cb_beta_obj.pop_front(block.full_block_size());
-                experimental::CircularBuffer(cb_fusion).pop_front(block.full_block_size());
+                CircularBuffer(cb_fusion).pop_front(block.full_block_size());
                 cb_out_obj.reserve_back(block.full_block_size());
                 for (auto i : block.local()) {
                     pack_tile(i, cb_out);

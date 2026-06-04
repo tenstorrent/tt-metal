@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -106,17 +107,13 @@ def run(
     # correct matmul behavior with sharded memory configs.
     op_kwargs = build_op_kwargs(kwargs)
 
-    # matmul needs memory_config for output placement. build_op_kwargs filters
-    # memory_config by default, so restore the traced memory_config when present,
-    # falling back to output_memory_config.
-    if "memory_config" not in op_kwargs:
-        traced_memory_config = kwargs.get("memory_config")
-        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
-            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+    # build_op_kwargs filters memory_config (infrastructure key), but matmul
+    # accepts it as an op kwarg.  Re-inject from the traced kwargs when present.
+    raw_mc = kwargs.get("memory_config")
+    if raw_mc is not None and raw_mc != "__ABSENT__":
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
 
-            op_kwargs["memory_config"] = parse_dict_value("memory_config", traced_memory_config)
-        elif output_memory_config is not None:
-            op_kwargs["memory_config"] = output_memory_config
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", raw_mc) if isinstance(raw_mc, dict) else raw_mc
 
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -132,7 +129,14 @@ def run(
     a_is_tile = input_a_layout == ttnn.TILE_LAYOUT
     b_is_tile = input_b_layout == ttnn.TILE_LAYOUT
 
-    if len(shape_a) >= 2 and len(shape_b) >= 2:
+    # Skip tile-alignment expansion when V2 placements are set: V2 vector shapes
+    # already encode the global tensor shape per the mesh distribution scheme,
+    # and asymmetric K-sharding (A K-sharded, B K-replicated) intentionally has
+    # different pre-shard inner dims.  Expanding here causes per-chip K mismatch
+    # (e.g. A-chip-K=2880 vs B-chip-K=23040).
+    have_placement = bool(input_a_tensor_placement) or bool(input_b_tensor_placement)
+
+    if len(shape_a) >= 2 and len(shape_b) >= 2 and not have_placement:
         inner_a = shape_a[-1]  # A's width
         inner_b = shape_b[-2]  # B's height
         aligned_a = _tile_align(inner_a) if a_is_tile else inner_a
@@ -154,8 +158,31 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(shape_b)
 
-    # Matrix multiplication - convert to float32 for PyTorch operations
-    torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
+    # Align A and B inner dims for torch golden when V2 K-sharded shapes diverge.
+    # When A is K-sharded across the mesh but B is K-replicated, V2 stores A with
+    # global K (=K_chip * mesh_factor) and B with K=K_chip.  torch.matmul needs
+    # matching K, so tile B along K by the inferred mesh factor.
+    torch_a_for_golden = torch_input_tensor_a.float()
+    torch_b_for_golden = torch_input_tensor_b.float()
+    if torch_a_for_golden.ndim >= 2 and torch_b_for_golden.ndim >= 2:
+        a_K = torch_a_for_golden.shape[-1]
+        b_K = torch_b_for_golden.shape[-2]
+        if a_K != b_K and a_K % b_K == 0:
+            mesh_factor = a_K // b_K
+            repeat = [1] * torch_b_for_golden.ndim
+            repeat[-2] = mesh_factor
+            torch_b_for_golden = torch_b_for_golden.repeat(*repeat)
+        elif b_K != a_K and b_K % a_K == 0:
+            mesh_factor = b_K // a_K
+            repeat = [1] * torch_a_for_golden.ndim
+            repeat[-1] = mesh_factor
+            torch_a_for_golden = torch_a_for_golden.repeat(*repeat)
+
+    # Trace-validation mode: every chip receives the FULL per-chip A and B via
+    # replicate_with_topology and runs matmul independently. The gathered output
+    # is the per-chip matmul tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
+    torch_output_tensor = torch.matmul(torch_a_for_golden, torch_b_for_golden)
 
     # Apply activation to golden if specified — check both op kwarg and program_config.fused_activation
     activation = op_kwargs.get("activation")
@@ -300,6 +327,10 @@ def run(
             pcc_threshold = 0.999
         elif "HiFi2" in fidelity:
             pcc_threshold = 0.98
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
     pcc = check_with_pcc(torch_output_tensor, output_tensor, pcc_threshold)
 
     return [pcc, e2e_perf]

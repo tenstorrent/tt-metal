@@ -13,10 +13,15 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_positional_args,
+    extract_named_tensor_kwargs,
+)
 
 TIMEOUT = 300
 
@@ -62,6 +67,40 @@ def mesh_device_fixture():
         del device
 
 
+def _topk_input_shard_axis_and_factor(placement_dict):
+    if not isinstance(placement_dict, dict):
+        return None, 1
+    plac_raw = placement_dict.get("placement")
+    dist_raw = placement_dict.get("distribution_shape")
+    if plac_raw is None or dist_raw is None:
+        return None, 1
+    if isinstance(plac_raw, (list, tuple)):
+        plac_items = [str(x).strip().strip("'") for x in plac_raw]
+    else:
+        s_inner = str(plac_raw).strip()
+        if s_inner.startswith("[") and s_inner.endswith("]"):
+            s_inner = s_inner[1:-1]
+        plac_items = [x.strip().strip("'") for x in s_inner.split(",") if x.strip()]
+    if isinstance(dist_raw, (list, tuple)):
+        dist_items = [int(x) for x in dist_raw]
+    else:
+        d_inner = str(dist_raw).strip()
+        if d_inner.startswith("[") and d_inner.endswith("]"):
+            d_inner = d_inner[1:-1]
+        dist_items = [int(x.strip()) for x in d_inner.split(",") if x.strip()]
+    axis = None
+    factor = 1
+    for entry, n in zip(plac_items, dist_items):
+        if entry.startswith("PlacementShard("):
+            try:
+                d = int(entry[len("PlacementShard(") : -1])
+            except ValueError:
+                continue
+            axis = d
+            factor *= n
+    return axis, factor
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -105,6 +144,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # Trace-validation mode: every chip receives the FULL per-chip input via
+    # replicate_with_topology and runs topk independently. The gathered output
+    # is the per-chip topk tiled along the shard axis — handled by
+    # reconcile_golden_to_actual below.
     torch_values, torch_indices = torch.topk(
         torch_input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag
     )
@@ -133,10 +176,50 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Create pre-allocated indices_tensor if the traced config had one
+    indices_tensor_info = extract_named_tensor_kwargs(kwargs, "indices_tensor")
+    ttnn_indices_tensor = None
+    if indices_tensor_info and indices_tensor_info["shape"] is not None:
+        idx_shape = (
+            tuple(indices_tensor_info["shape"])
+            if isinstance(indices_tensor_info["shape"], (list, tuple))
+            else indices_tensor_info["shape"]
+        )
+        idx_dtype = indices_tensor_info.get("dtype") or ttnn.uint16
+        idx_layout = indices_tensor_info.get("layout") or ttnn.TILE_LAYOUT
+        idx_mem = indices_tensor_info.get("memory_config") or ttnn.DRAM_MEMORY_CONFIG
+        idx_placement = indices_tensor_info.get("tensor_placement")
+        torch_indices = torch.zeros(idx_shape, dtype=torch.int32)
+        if not is_host:
+            if is_mesh_device and idx_placement:
+                ttnn_indices_tensor = create_tensor_on_mesh(
+                    torch_indices,
+                    device,
+                    idx_dtype,
+                    idx_layout,
+                    idx_mem,
+                    idx_placement,
+                )
+            else:
+                ttnn_indices_tensor = ttnn.from_torch(
+                    torch_indices,
+                    dtype=idx_dtype,
+                    layout=idx_layout,
+                    device=device,
+                    memory_config=idx_mem,
+                )
+        else:
+            ttnn_indices_tensor = ttnn.from_torch(torch_indices, dtype=idx_dtype, layout=idx_layout)
+
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
+    topk_kwargs = dict(op_kwargs)
+    if ttnn_indices_tensor is not None:
+        topk_kwargs["indices_tensor"] = ttnn_indices_tensor
+    topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, **topk_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]

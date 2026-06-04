@@ -11,6 +11,10 @@
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
 
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
 namespace tt::tt_metal {
 class Hal;
 enum class CommandQueueDeviceAddrType : uint8_t;
@@ -36,9 +40,12 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
-        bool are_cqs_dram_backed);
+        bool are_fd_kernels_on_same_core,
+        const tt::llrt::RunTimeOptions& rtoptions);
 
     uint32_t prefetch_q_entries() const;
+
+    uint32_t prefetch_q_entry_size_bytes() const;
 
     uint32_t prefetch_q_size() const;
 
@@ -68,6 +75,21 @@ public:
 
     uint32_t dispatch_s_buffer_pages() const;
 
+    // L1 layout for the DEVICE_PRINT dispatch region (placed immediately after the dispatch_s CB):
+    // noc_locations and l1_cache OVERLAP at the same L1 address. The kernel reads noc_locations[]
+    // once during init() and caches everything into LDM (rw_noc_addresses, cache_buffer_offsets,
+    // cache_buffer_sizes), so after init the L1 region can be reused as the l1_cache buffer.
+    // This is safe because:
+    //   * sizeof(NocLocationInputInfo) (12B) < rw_pointers_entry_size (>= 16B), so the
+    //     noc_locations bytes occupy strictly less L1 than the kernel's first writes will use.
+    //   * the kernel's first writes to that L1 region happen AFTER the noc_locations cache loop.
+    // Everything is precomputed in the constructor from rtoptions + hal; callers (DispatchSKernel)
+    // just read the addresses and pass the runtime per-device print-core count to the kernel
+    // via static_config_.device_print_noc_locations_count.
+    uint32_t dispatch_s_device_print_l1_cache_size() const;
+    uint32_t device_print_dispatch_noc_locations_addr() const;
+    uint32_t device_print_dispatch_l1_cache_addr() const;
+
     uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const;
 
     uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
@@ -87,6 +109,8 @@ private:
     uint32_t cmddat_q_base_ = 0;
     uint32_t scratch_db_base_ = 0;
     uint32_t dispatch_buffer_base_ = 0;
+    uint32_t dispatch_s_device_print_l1_cache_size_ = 0;
+    uint32_t dispatch_s_buffer_end_ = 0;
 
     uint32_t dispatch_buffer_block_size_pages_ = 0;
     std::vector<uint32_t> device_cq_addrs_;

@@ -5,8 +5,8 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -30,8 +30,8 @@ void kernel_main() {
     constexpr auto cb_id_out = tt::CBIndex::c_2;
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);
@@ -80,7 +80,7 @@ void kernel_main() {
                             uint32_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
-                                const uint64_t dst_noc_addr = get_noc_addr(row_abs_idx, dst) + current_chunk_offset;
+                                const uint64_t dst_noc_addr = dst.get_noc_addr(row_abs_idx) + current_chunk_offset;
                                 noc_async_write(l1_read_addr, dst_noc_addr, current_write_len);
                                 l1_read_addr += current_chunk_bytes;
                             }

@@ -91,6 +91,7 @@ class TorchMoe(nn.Module):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int,
         hidden_dim: int,
@@ -113,7 +114,10 @@ class TorchMoe(nn.Module):
             num_routed_experts: Total number of routed experts
             num_experts_per_tok: Number of experts each token routes to
             metadata_len: Length of metadata per token
-            max_dispatched_tokens_per_expert: Max tokens per expert buffer
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the
+                number of tokens any single expert may receive (full sequence length).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
+                buffer per chip (shared across all local experts).
             seq_len_per_chip: Sequence length per chip
             emb_dim: Embedding dimension (input/output dimension)
             hidden_dim: FFN intermediate dimension
@@ -167,6 +171,7 @@ class TorchMoe(nn.Module):
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             num_dispatch_groups=num_dispatch_groups,
@@ -217,6 +222,7 @@ class TorchMoe(nn.Module):
         indices: torch.Tensor = None,
         expert_offsets: torch.Tensor = None,
         expert_token_counts: torch.Tensor = None,
+        expert_region_offsets: torch.Tensor = None,
         return_intermediates: bool = False,
     ) -> tuple[torch.Tensor, Optional[MoEIntermediates]]:
         """
@@ -258,8 +264,8 @@ class TorchMoe(nn.Module):
             gate_scores = weights
             gate_indices = indices
 
-            # Compute expert_offsets and expert_token_counts from indices
-            expert_offsets, expert_token_counts, _ = get_gate_outputs(
+            # Compute expert_offsets, expert_token_counts, and expert_region_offsets from indices
+            expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
                 indices,
                 self.dispatch_group_size,
                 self.num_routed_experts,
@@ -271,6 +277,7 @@ class TorchMoe(nn.Module):
         else:
             assert weights is not None and indices is not None
             assert expert_offsets is not None and expert_token_counts is not None
+            assert expert_region_offsets is not None
 
         # Step 1: Run shared expert on original input
         with torch.no_grad():
@@ -279,7 +286,11 @@ class TorchMoe(nn.Module):
         # Step 2: Dispatch tokens to expert buffers
         dispatched_buffer, metadata = self.dispatch_module(x, weights, indices, expert_offsets)
 
-        # Step 3: Run routed experts on dispatch buffer slices
+        # Step 3: Run routed experts on dispatch buffer slices.
+        # dispatched_buffer is 4D: (num_dispatch_groups, dispatch_group_size,
+        # max_dispatch_buffer_token_size, emb_dim). Each expert's
+        # token region lives at expert_region_offsets[group, chip, global_expert] within
+        # the flat token dim (TILE_SIZE-aligned), matching the real dispatch kernel layout.
         expert_outputs = torch.zeros_like(dispatched_buffer)
         for group in range(self.num_dispatch_groups):
             for chip in range(self.dispatch_group_size):
@@ -297,15 +308,16 @@ class TorchMoe(nn.Module):
                     token_count = expert_token_counts[group, 0, global_expert].item()
 
                     if token_count > 0:
-                        expert_input = dispatched_buffer[group, chip, local_expert, :token_count, :]
+                        start = int(expert_region_offsets[group, chip, global_expert].item())
+                        expert_input = dispatched_buffer[group, chip, start : start + token_count, :]
                         with torch.no_grad():
                             expert_output = self.routed_experts[global_expert](expert_input.float())
-                        expert_outputs[group, chip, local_expert, :token_count, :] = expert_output
+                        expert_outputs[group, chip, start : start + token_count, :] = expert_output
 
         # Step 4: Combine routed expert outputs
         # TorchDispatchModule now outputs linearized mesh coords directly in metadata field 0,
         # so no transformation is needed before calling combine.
-        combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts)
+        combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts, expert_region_offsets)
 
         # Step 5: Apply gate weights and sum over topk
         # combined_output: (dispatch_group_size, seq_len, topk, emb_dim)
@@ -329,6 +341,7 @@ class TorchMoe(nn.Module):
                 combined_output=combined_output,
                 routed_output=routed_output,
                 expert_token_counts=expert_token_counts,
+                expert_region_offsets=expert_region_offsets,
             )
 
         return final_output, intermediates

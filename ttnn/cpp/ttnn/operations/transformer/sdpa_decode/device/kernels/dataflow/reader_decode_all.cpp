@@ -51,14 +51,32 @@ void kernel_main() {
     constexpr uint32_t k_mcast_semaphore_id = get_compile_time_arg_val(32);
     constexpr bool q_locally_available = get_compile_time_arg_val(33) == 1;
     constexpr bool use_k_mcast = get_compile_time_arg_val(34) == 1;
+    constexpr uint32_t Bmask = get_compile_time_arg_val(35);
+    // 0 = unbounded cache (legacy); nonzero = wrap virtual tile index mod this value
+    // before page_table lookup. Value is in TILE rows (= cache_position_modulo /
+    // TILE_HEIGHT). Validated to be a multiple of block_size_t at op level.
+    constexpr uint32_t capacity_t = get_compile_time_arg_val(36);
 
-    constexpr auto q_args = TensorAccessorArgs<35>();
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto pos_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
+    // #44366: cur_pos is consumed by both the writer (c_8) and compute (c_15).
+    // Using one shared CB races — whichever consumer pops first drains the
+    // count and the other hangs in cb_wait_front. Each consumer gets its own CB.
+    constexpr uint32_t cb_writer_cur_pos = tt::CBIndex::c_8;
+    constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
+    constexpr uint32_t cb_compute_cur_pos = tt::CBIndex::c_15;
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -86,6 +104,7 @@ void kernel_main() {
     if (q_addr == 0) {
         return;
     }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -95,17 +114,23 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            cb_reserve_back(cb_index_id, 1);
-            uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+            // Reader fills cb_writer_cur_pos (c_8) first (from DRAM, or via the
+            // aliased sharded buffer) then copies the same stick into
+            // cb_compute_cur_pos (c_15) via an L1->L1 read.
+            cb_reserve_back(cb_writer_cur_pos, 1);
+            uint32_t index_cb_wr_ptr = get_write_ptr(cb_writer_cur_pos);
             if constexpr (!is_cur_pos_tensor_sharded) {
                 const auto addrg = TensorAccessor(pos_args, pos_addr);
-                // index_tensor has one page to read
                 uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
                 noc_async_read_barrier();
             }
-            cb_push_back(cb_index_id, 1);
+            cb_reserve_back(cb_compute_cur_pos, 1);
+            uint32_t index_cb_compute_wr_ptr = get_write_ptr(cb_compute_cur_pos);
+            noc_async_read(get_noc_addr(index_cb_wr_ptr), index_cb_compute_wr_ptr, index_stick_size_B);
+            noc_async_read_barrier();
+            cb_push_back(cb_writer_cur_pos, 1);
+            cb_push_back(cb_compute_cur_pos, 1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
             cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
         }
@@ -152,13 +177,6 @@ void kernel_main() {
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
     uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t_dynamic;
 
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
-
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -202,9 +220,9 @@ void kernel_main() {
 
         for (uint32_t tile = 0; tile < PNHt; ++tile) {
             uint64_t sink_noc_addr = attention_sink_reader.get_noc_addr(tile);
-            // Use noc_async_read with explicit size instead of noc_async_read_tile because
+            // Use noc_async_read with explicit size instead of noc_async_read_page because
             // the CB may use half tiles (16x32) while the DRAM buffer stores full tiles (32x32).
-            // noc_async_read_tile would read buffer->aligned_page_size() bytes, overflowing the CB.
+            // noc_async_read_page would read buffer->aligned_page_size() bytes, overflowing the CB.
             noc_async_read(sink_noc_addr, attention_sink_write_ptr, attention_sink_tile_bytes);
             attention_sink_write_ptr += attention_sink_tile_bytes;
         }
@@ -218,7 +236,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
     if constexpr (is_paged_attention) {
-        constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
         cb_reserve_back(cb_id_page_table, num_pages_to_read);
         // Read page table from DRAM
@@ -241,7 +258,7 @@ void kernel_main() {
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
-        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * PNHt * St;
+        const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         // Setup multicast parameters for K streaming (vertical multicast)
@@ -268,7 +285,8 @@ void kernel_main() {
                     k_tile_bytes,
                     barrier_threshold,
                     is_page_table_sharded,
-                    use_k_mcast>(
+                    use_k_mcast,
+                    capacity_t>(
                     k_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,
@@ -292,7 +310,8 @@ void kernel_main() {
                     v_tile_bytes,
                     barrier_threshold,
                     is_page_table_sharded,
-                    reuse_k>(
+                    reuse_k,
+                    capacity_t>(
                     v_chunk_tiles,
                     cur_head,
                     Sk_chunk_t_dynamic,

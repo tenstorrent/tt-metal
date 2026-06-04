@@ -37,8 +37,31 @@ from typing import Union
 
 from loguru import logger
 
+# Support both `import ttnn.graph_report` (package) and standalone
+# `import graph_report` from tests that put ttnn/ttnn on sys.path to skip
+# loading the C++-backed ttnn/__init__.py. Branch on __package__ so real
+# import failures inside stack_trace_source surface instead of being masked.
+if __package__:
+    from .stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
+else:
+    from stack_trace_source import (
+        CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL,
+        CREATE_SOURCE_FILES_TABLE_SQL,
+        CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL,
+        get_source_file_id,
+        normalize_source_path_from_stack_trace,
+        read_source_file,
+    )
+
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 3
+DATABASE_SCHEMA_VERSION = "3"
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
 _STACK_FILE_LINE_RE = re.compile(r'^\s*File "([^"]+)", line (\d+)', re.MULTILINE)
@@ -162,6 +185,32 @@ def compute_tensor_lifetime_records(
             }
         )
     return records
+
+
+def _prepare_stack_traces_with_source_refs(
+    stack_traces_batch: list[tuple[int, str]],
+) -> tuple[list[tuple[str, str]], list[tuple[int, str, str | None]]]:
+    """Return deduped (path, contents) rows and per-row (op_id, trace, path_or_none for FK lookup)."""
+    source_files_by_path: dict[str, str] = {}
+    stack_rows: list[tuple[int, str, str | None]] = []
+
+    for operation_id, stack_trace in stack_traces_batch:
+        normalized_path = normalize_source_path_from_stack_trace(stack_trace)
+        if normalized_path is None:
+            stack_rows.append((operation_id, stack_trace, None))
+            continue
+
+        if normalized_path not in source_files_by_path:
+            file_contents = read_source_file(normalized_path)
+            if file_contents is None:
+                stack_rows.append((operation_id, stack_trace, None))
+                continue
+            source_files_by_path[normalized_path] = file_contents
+
+        stack_rows.append((operation_id, stack_trace, normalized_path))
+
+    source_files_batch = list(source_files_by_path.items())
+    return source_files_batch, stack_rows
 
 
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
@@ -316,15 +365,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Stack traces table (when stack trace capture is enabled)
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS stack_traces (
-            operation_id int,
-            stack_trace text
-        )
-    """
-    )
+    # Source files (deduped); stack_traces optionally reference source_files.id
+    cursor.execute(CREATE_SOURCE_FILES_TABLE_SQL)
+    cursor.execute(CREATE_STACK_TRACES_TABLE_WITH_SOURCE_SQL)
 
     # Input/output tensors
     cursor.execute(
@@ -432,6 +475,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         )
     """
     )
+    cursor.execute(CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL)
 
 
 def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
@@ -1250,6 +1294,7 @@ def import_graph(
             seen_dt.add(key)
             filtered_dt.append(dt)
     device_tensors_batch = filtered_dt
+    source_files_batch, stack_traces_with_paths = _prepare_stack_traces_with_source_refs(stack_traces_batch)
 
     # Batch inserts
     if captured_graph_batch:
@@ -1264,8 +1309,14 @@ def import_graph(
         cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?)""", nodes_batch)
     if edges_batch:
         cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
-    if stack_traces_batch:
-        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?)""", stack_traces_batch)
+    path_to_source_id: dict[str, int] = {}
+    for path, contents in source_files_batch:
+        path_to_source_id[path] = get_source_file_id(cursor, path, contents)
+    stack_traces_rows = [
+        (op_id, trace, path_to_source_id[path] if path else None) for op_id, trace, path in stack_traces_with_paths
+    ]
+    if stack_traces_rows:
+        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?)""", stack_traces_rows)
     if operations_batch:
         cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?)""", operations_batch)
     if operation_arguments_batch:

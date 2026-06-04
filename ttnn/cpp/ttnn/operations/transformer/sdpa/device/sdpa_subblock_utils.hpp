@@ -8,6 +8,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "kernels/sdpa_streaming_qktv.hpp"
+
 namespace ttnn::prim::detail {
 
 // Determine the largest subblock size for matmul that:
@@ -52,6 +54,16 @@ static inline uint32_t find_valid_granularity(uint32_t tile_count, uint32_t max_
         granularity--;
     }
     return granularity;
+}
+
+// Streaming cb_out sizing: 2-slot ping-pong of matmul row-groups (pending SALAD + matmul
+// in-flight). qktv_h comes from the shared helper in sdpa_streaming_qktv.hpp so host and
+// kernel can't drift — see that header for the formula and rationale.
+static inline uint32_t streaming_cb_out_tiles(
+    uint32_t out_out_subblock_h, uint32_t out_out_subblock_w, uint32_t dst_size, uint32_t Sq_chunk_t, uint32_t vDHt) {
+    const uint32_t qktv_h =
+        ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t);
+    return 2u * qktv_h * vDHt;
 }
 
 }  // namespace ttnn::prim::detail

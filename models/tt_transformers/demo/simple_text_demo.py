@@ -16,8 +16,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -74,6 +76,13 @@ class TokenAccuracy:
 
 def get_accuracy_thresholds(model_args):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+    centralized_targets = resolve_accuracy_targets(
+        model_name=model_args.base_model_name,
+        sku=model_args.device_name,
+    )
+    if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
+        return float(centralized_targets["top1"]), float(centralized_targets["top5"])
+
     # Read PERF.md
     perf_file = "models/tt_transformers/PERF.md"
     with open(perf_file, "r") as f:
@@ -352,6 +361,13 @@ def prepare_generator_args(
 # mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+_trace_region_size = (
+    100000000
+    if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith(("Qwen2.5-72B-Instruct", "Qwen2.5-32B-Instruct")))
+    else 50000000
+)
+
+
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
@@ -829,7 +845,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 50000000, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": _trace_region_size, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -922,6 +938,9 @@ def test_demo_text(
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    if use_prefetcher and not is_blackhole():
+        logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
+        use_prefetcher = False
     use_prefetcher = (
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
@@ -1584,9 +1603,10 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
             config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
@@ -1617,6 +1637,12 @@ def test_demo_text(
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 43,
+                # P150x4 == bh_quietbox_2 (2x P300, 4 dies). Today's
+                # determine_device_name labels this hardware "P150x4"; the
+                # canonical name is P300x2. Numbers from workflow 26664009397.
+                "P150x4_Llama-3.1-8B": 53,
+                "P150x4_Llama-3.3-70B": 136,
+                "P150x4_Qwen3-32B": 207,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1632,6 +1658,10 @@ def test_demo_text(
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 20,
                 "T3K_Qwen3-32B": 24,
+                # P150x4 == bh_quietbox_2; see note above.
+                "P150x4_Llama-3.1-8B": 23.0,
+                "P150x4_Llama-3.3-70B": 16.30,
+                "P150x4_Qwen3-32B": 8.7,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

@@ -127,6 +127,14 @@ target_include_directories(
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
+
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(tt_metal PRIVATE TT_METAL_USE_EMULE=1)
+    # PRIVATE: only libtt_metal.so itself needs -rdynamic (to export TLS symbols
+    # for dlopen'd JIT kernels). No need to propagate to all consumers.
+    target_link_options(tt_metal PRIVATE -rdynamic)
+endif()
+
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(

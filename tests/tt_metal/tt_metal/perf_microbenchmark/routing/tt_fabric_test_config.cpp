@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_config.hpp"
+#include "tt_fabric_test_constants.hpp"
 #include <optional>
 #include <variant>
 #include "routing/tt_fabric_test_common_types.hpp"
@@ -888,15 +889,42 @@ void CmdlineParser::print_help() {
     log_info(LogTest, "");
     log_info(LogTest, "Progress Monitoring Options:");
     log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
+    log_info(
+        LogTest,
+        "  --show-progress-detail                       Enable per-endpoint granular monitoring (implies "
+        "--show-progress).");
     log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
     log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
+    log_info(
+        LogTest,
+        "  --hung-confirmation-rounds <N>               Consecutive stall rounds before confirming hung (default: "
+        "3).");
+    log_info(
+        LogTest,
+        "  --wait-on-hang                               Block indefinitely on confirmed hang (interactive bringup "
+        "mode).");
+    log_info(
+        LogTest,
+        "  --validation-summary-file <path>              Summary report file path (default: "
+        "pairwise_validation_summary.log).");
+    log_info(
+        LogTest,
+        "  --validation-detail-file <path>               Detailed report file path (default: "
+        "pairwise_validation_detailed.log).");
 }
 
 // Display methods
 bool CmdlineParser::show_workers() { return test_args::has_command_option(input_args_, "--show-workers"); }
 
 // Progress monitoring methods
-bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
+bool CmdlineParser::show_progress() {
+    return test_args::has_command_option(input_args_, "--show-progress") ||
+           test_args::has_command_option(input_args_, "--show-progress-detail");
+}
+
+bool CmdlineParser::show_progress_detail() {
+    return test_args::has_command_option(input_args_, "--show-progress-detail");
+}
 
 uint32_t CmdlineParser::get_progress_interval() {
     return test_args::get_command_option_uint32(input_args_, "--progress-interval", 2);
@@ -904,6 +932,22 @@ uint32_t CmdlineParser::get_progress_interval() {
 
 uint32_t CmdlineParser::get_hung_threshold() {
     return test_args::get_command_option_uint32(input_args_, "--hung-threshold", 30);
+}
+
+uint32_t CmdlineParser::get_hung_confirmation_rounds() {
+    return test_args::get_command_option_uint32(input_args_, "--hung-confirmation-rounds", 3);
+}
+
+bool CmdlineParser::wait_on_hang() { return test_args::has_command_option(input_args_, "--wait-on-hang"); }
+
+std::string CmdlineParser::get_validation_summary_file() {
+    return test_args::get_command_option(
+        input_args_, "--validation-summary-file", std::string(DEFAULT_VALIDATION_SUMMARY_FILE));
+}
+
+std::string CmdlineParser::get_validation_detail_file() {
+    return test_args::get_command_option(
+        input_args_, "--validation-detail-file", std::string(DEFAULT_VALIDATION_DETAIL_FILE));
 }
 
 // YamlConfigParser private helpers
@@ -1546,12 +1590,23 @@ void TestConfigBuilder::validate_chip_multicast(
 
 void TestConfigBuilder::validate_sync_pattern(
     const TrafficPatternConfig& pattern, const SenderConfig& sender, const TestConfig& test) const {
-    // The NeighborExchange topology uses unicast sync patterns, so we perform a different check
-    if (test.fabric_setup.topology == tt::tt_fabric::Topology::NeighborExchange) {
+    TT_FATAL(
+        pattern.destination.has_value() && pattern.destination->hops.has_value(),
+        "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
+        test.name,
+        sender.device);
+
+    // Z-link sync packets are CHIP_UNICAST regardless of topology because Z is an
+    // inter-mesh hop that cannot be combined with N/S/E/W multicast trees.
+    const auto& hops = pattern.destination->hops.value();
+    const auto z_it = hops.find(RoutingDirection::Z);
+    const bool is_z_sync = (z_it != hops.end()) && (z_it->second > 0);
+
+    if (test.fabric_setup.topology == tt::tt_fabric::Topology::NeighborExchange || is_z_sync) {
         TT_FATAL(
             pattern.ftype.has_value() && pattern.ftype.value() == ChipSendType::CHIP_UNICAST,
             "Test '{}': Line sync pattern for sender on device {} must use CHIP_UNICAST for NeighborExchange "
-            "topology.",
+            "topology (or for Z-link sync packets).",
             test.name,
             sender.device);
     } else {
@@ -1561,12 +1616,6 @@ void TestConfigBuilder::validate_sync_pattern(
             test.name,
             sender.device);
     }
-
-    TT_FATAL(
-        pattern.destination.has_value() && pattern.destination->hops.has_value(),
-        "Test '{}': Line sync pattern for sender on device {} must have destination specified by 'hops'.",
-        test.name,
-        sender.device);
 
     TT_FATAL(
         pattern.ntype.has_value() && pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC,
@@ -1779,7 +1828,7 @@ void TestConfigBuilder::expand_sequential_all_to_all_unicast(
 void TestConfigBuilder::expand_all_devices_uniform_pattern(
     ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
     log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
-    std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
+    std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
     TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
     for (const auto& src_node : devices) {
@@ -2008,7 +2057,8 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
     base_sync_pattern.num_packets = 1;                              // Single sync signal
     base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
 
-    // Start by calculating multi-directional hops
+    // Cardinal-direction sync (N/S/E/W). Z-link sync is appended below because
+    // the cardinal hop map is keyed by direction and would collapse multi-Z.
     auto [multi_directional_hops, multi_directional_sync_val] =
         this->route_manager_.get_sync_hops_and_val(src_device, devices);
 
@@ -2030,6 +2080,37 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
         sync_pattern.destination = DestinationConfig{.hops = single_direction_hops};
         sync_patterns.push_back(std::move(sync_pattern));
     }
+
+    // Z-link neighbor sync. Only emitted for NeighborExchange because the other topologies
+    // sync via full mcast across the mesh, which does not currently extend across Z-links.
+    // For NeighborExchange this is a no-op on non-Z systems (control plane returns empty)
+    // and on Z systems emits a single CHIP_UNICAST {Z:1} pattern when any Z neighbor
+    // exists. Multi-Z fan-out would require one pattern per partner (the hop map can't
+    // distinguish among multiple Z partners), which today's chips don't need on the
+    // supported rev-C galaxy multi-mesh; see the log_warning below for the case where
+    // someone exercises a topology with more than one Z neighbor per chip.
+    if (topology == tt::tt_fabric::Topology::NeighborExchange) {
+        const auto z_neighbors = this->route_manager_.get_all_neighbor_node_ids(src_device, RoutingDirection::Z);
+        if (z_neighbors.size() > 1) {
+            log_warning(
+                LogTest,
+                "Device {} has {} Z-link neighbors; sync currently sends a single {{Z:1}} packet "
+                "which the fabric will deliver to only one Z partner. Each chip in the supported "
+                "rev-C galaxy multi-mesh has exactly one Z neighbor; if you hit this on a different "
+                "topology, extend create_sync_patterns_for_topology to fan out by device.",
+                src_device,
+                z_neighbors.size());
+        }
+        if (!z_neighbors.empty()) {
+            TrafficPatternConfig z_sync = base_sync_pattern;
+            z_sync.ftype = ChipSendType::CHIP_UNICAST;
+            z_sync.destination =
+                DestinationConfig{.hops = std::unordered_map<RoutingDirection, uint32_t>{{RoutingDirection::Z, 1}}};
+            sync_patterns.push_back(std::move(z_sync));
+            sync_val += 1;
+        }
+    }
+
     return {sync_patterns, sync_val};
 }
 

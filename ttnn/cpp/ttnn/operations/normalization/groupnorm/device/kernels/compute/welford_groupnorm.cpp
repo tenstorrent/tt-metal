@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_SCALAR
-
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
@@ -23,7 +20,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     /*
@@ -123,6 +120,21 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
+    // Welford-fp32 alias for cb_in0 (non-TILIZE_IN path). Shares L1 memory with cb_in0 but has
+    // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
+    // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    // Boolean indicating whether the welford kernel uses the alias CB.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
+    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
+    // alias branch (intake CB is cb_in0_welford, see welford_fp32_alias). On this path,
+    // transpose_wh_tile routes through llk_math_transpose_dest, whose math-side init
+    // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
+    // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
+    // transpose. For bf16 input, transpose routes through SrcA without touching the
+    // math-thread replay buffer, so no re-init is needed.
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
@@ -168,18 +180,19 @@ void kernel_main() {
     constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
-    experimental::CircularBuffer cb_beta(cb_beta_id);
-    experimental::CircularBuffer cb_eps(cb_eps_id);
-    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
-    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
-    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
-    experimental::CircularBuffer cb_gamma(cb_gamma_id);
-    experimental::CircularBuffer cb_in(cb_in_id);
-    experimental::CircularBuffer cb_in0(cb_in0_id);
-    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
-    experimental::CircularBuffer cb_out(cb_out_id);
-    experimental::CircularBuffer cb_x(cb_x_id);
-    experimental::CircularBuffer cb_xmm(cb_xmm_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_eps(cb_eps_id);
+    CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
+    CircularBuffer cb_input_mask(cb_input_mask_id);
+    CircularBuffer cb_out(cb_out_id);
+    CircularBuffer cb_x(cb_x_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -209,6 +222,24 @@ void kernel_main() {
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
 
+    if constexpr (welford_unpack_fp32_active) {
+        // Full transpose_wh hw init for the welford intake CB. The factory marks this CB
+        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN
+        // alias branch.
+        // Neither binary_op_init_common (above) nor, on the TILIZE_IN path, the tilize<>
+        // call unpack-configure the intake CB: binary_op_init_common only configures cb_in0,
+        // and tilize<> configures its source (cb_in_rm_id), not its output (c_29). So we
+        // need the full transpose_wh_init here (not the _short variant used later in the
+        // welford loop) to emit the UnpackToDestFp32 hw_configure for the intake CB. Without
+        // it the welford intake transpose silently falls back to the SrcA / TF32 path,
+        // losing FP32 precision.
+#ifdef TILIZE_IN
+        transpose_wh_init(cb_in_id, cb_ex_partial_id);
+#else
+        transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+#endif
+    }
+
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
@@ -217,11 +248,6 @@ void kernel_main() {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = (block_h % num_out_blocks);
-    }
-    uint32_t cb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
-    if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
-        cb_ex_external_tiles_required++;
     }
 
     // Get pointer to the reciprocal LUT
@@ -276,13 +302,33 @@ void kernel_main() {
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.wait_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        // The reader pushes cb_in0 and cb_in0_welford in separate push_back
+                        // calls (cb_in0 first, alias second); cb_in0.wait_front above only
+                        // synchronizes on the first. Wait on the alias to synchronize on the
+                        // second before transpose_wh_tile reads via the alias below.
+                        cb_in0_welford.wait_front(1);
+                    }
 #ifdef TILIZE_IN
                     transpose_wh_init_short(cb_in_id);
                     transpose_wh_tile(cb_in_id, 0, input_dst);
 #else
-                    transpose_wh_init_short(cb_in0_id);
-                    transpose_wh_tile(cb_in0_id, 0, input_dst);
+                    transpose_wh_init_short(cb_in0_welford_id);
+                    transpose_wh_tile(cb_in0_welford_id, 0, input_dst);
 #endif
+
+                    // Re-establish the welford SFPU replay buffer state. When transpose_wh_tile
+                    // takes the unpack-to-DEST fp32 path, transpose_wh_tile calls
+                    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
+                    // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
+                    // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
+                    // transpose-dest ops.
+                    // When the unpack-to-DEST fp32 path is inactive, transpose_wh_tile routes
+                    // through SrcA without touching the math-thread replay buffer, so re-init is
+                    // not needed.
+                    if constexpr (welford_unpack_fp32_active) {
+                        welford_init<WelfordInitMode::PreserveStats>();
+                    }
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -321,6 +367,9 @@ void kernel_main() {
                         }
                     }
                     cb_in0.pop_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        cb_in0_welford.pop_front(1);
+                    }
                 }
                 block_xy_coord += num_channels_per_group;
             }
@@ -391,6 +440,12 @@ void kernel_main() {
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     cb_in0.wait_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        // The reader pushes cb_in0 and cb_in0_welford in lockstep; wait on the
+                        // alias so its rd_ptr advance (via pop_front below) is synchronized with
+                        // the reader's wr_ptr advance on the alias.
+                        cb_in0_welford.wait_front(1);
+                    }
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -497,6 +552,9 @@ void kernel_main() {
                         }
                     }
                     cb_in0.pop_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        cb_in0_welford.pop_front(1);
+                    }
 
                     if constexpr (do_gamma) {
                         mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);

@@ -15,8 +15,9 @@ TP strategy (Megatron-LM / C++ DistributedLlama):
                           out-of-range tokens, all-reduces hidden vectors.
                           No weight all-gather; only hidden-dim communication.
   - Norms (QK, layer, final): Replicated
-  - LM head:             Always ColumnParallel; supports sharded_loss in
-                          both tied and untied modes
+  - LM head:             Always ColumnParallel with vocab-sharded output
+                          (paired with vocab_parallel_cross_entropy_loss)
+                          in both tied and untied modes
 
 Communication per layer: 2 all-reduces (attention + MLP).
 
@@ -54,7 +55,12 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
-from model_qwen3 import Qwen3Config, Qwen3RMSNorm, ConcatLastDim, linear
+from ttml.models.qwen3 import (
+    Qwen3Config,
+    Qwen3RMSNorm,
+    ConcatLastDim,
+)
+from model_qwen3 import linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
 from utils.param_utils import (
@@ -83,6 +89,9 @@ class ColumnParallelLinear(AbstractModuleBase):
 
     Weight full shape:  (1, 1, out_features, in_features)
     Per-device shape:   (1, 1, out_features/tp, in_features)
+
+    Output is kept vocab-sharded across TP devices — callers wanting full
+    [..., out_features] tensors must all-gather along dim 3 themselves.
     """
 
     def __init__(
@@ -90,11 +99,9 @@ class ColumnParallelLinear(AbstractModuleBase):
         in_features,
         out_features,
         has_bias=False,
-        gather_output=False,
         shard_dim=None,
     ):
         super().__init__()
-        self.gather_output = gather_output
         self.shard_dim = shard_dim
 
         self.weight = Parameter(make_sharded_weight((1, 1, out_features, in_features), 2, shard_dim))
@@ -106,10 +113,7 @@ class ColumnParallelLinear(AbstractModuleBase):
     def forward(self, x):
         x = ttml.ops.distributed.broadcast(x, self.shard_dim)
         bias_t = self.col_bias.tensor if self.col_bias is not None else None
-        x = linear(x, self.weight.tensor, bias_t)
-        if self.gather_output:
-            x = ttml.ops.distributed.all_gather(x, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED)
-        return x
+        return linear(x, self.weight.tensor, bias_t)
 
 
 # ---------------------------------------------------------------------------
@@ -183,21 +187,18 @@ class DistributedQwen3Attention(AbstractModuleBase):
             self.hidden_size,
             q_out,
             has_bias=config.attention_bias,
-            gather_output=False,
             shard_dim=shard_dim,
         )
         self.k_proj = ColumnParallelLinear(
             self.hidden_size,
             kv_out,
             has_bias=config.attention_bias,
-            gather_output=False,
             shard_dim=shard_dim,
         )
         self.v_proj = ColumnParallelLinear(
             self.hidden_size,
             kv_out,
             has_bias=config.attention_bias,
-            gather_output=False,
             shard_dim=shard_dim,
         )
         self.o_proj = RowParallelLinear(
@@ -212,11 +213,12 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
         rope_scaling = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling_factor != 0.0 and config.rope_original_context_length != 0:
-            rope_scaling.original_context_length = config.rope_original_context_length
-            rope_scaling.scaling_factor = config.rope_scaling_factor
-            rope_scaling.high_freq_factor = config.rope_high_freq_factor
-            rope_scaling.low_freq_factor = config.rope_low_freq_factor
+        rs = config.rope_scaling
+        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
+            rope_scaling.original_context_length = rs.original_context_length
+            rope_scaling.scaling_factor = rs.scaling_factor
+            rope_scaling.high_freq_factor = rs.high_freq_factor
+            rope_scaling.low_freq_factor = rs.low_freq_factor
 
         self.rope_params = ttml.ops.rope.build_rope_params(
             sequence_length=config.max_position_embeddings,
@@ -388,20 +390,17 @@ class DistributedQwen3Model(AbstractModuleBase):
 class DistributedQwen3ForCausalLM(AbstractModuleBase):
     """TP Qwen3 with LM head (ColumnParallel).
 
-    The LM head is always a ``ColumnParallelLinear``.  When
-    ``tie_word_embeddings`` is True the same vocab-sharded weight is reused
-    for input embedding (Megatron-LM VocabParallelEmbedding: local lookup →
-    mask → all-reduce) and output projection, enabling ``sharded_loss`` in
-    both tied and untied modes.
+    The LM head is always a ``ColumnParallelLinear`` whose output stays
+    vocab-sharded across TP devices (``[..., V/tp_size]`` per device); pair
+    it with :func:`ttml.ops.distributed.vocab_parallel_cross_entropy_loss`.
+    Callers wanting full-vocab logits (e.g. for sampling) must all-gather
+    along dim 3 themselves.
 
-    When *sharded_loss* is ``True`` the LM head keeps its output sharded
-    across TP devices (``gather_output=False``).  The caller is responsible
-    for matching the loss target shape and scaling the loss gradient by
-    ``1/tp_size`` so that the per-element gradient equals the global mean.
-
-    When ``tie_word_embeddings`` is True, callers must pass ``input_ids_np``
-    (numpy uint32 token IDs) to :meth:`forward` for the vocab-parallel
-    embedding preprocessing.
+    When ``tie_word_embeddings`` is True the same vocab-sharded weight is
+    reused for input embedding (Megatron-LM VocabParallelEmbedding: local
+    lookup → mask → all-reduce) and output projection; callers must pass
+    ``input_ids_np`` (numpy uint32 token IDs) to :meth:`forward` for the
+    vocab-parallel embedding preprocessing.
     """
 
     def __init__(
@@ -411,7 +410,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
         shard_dim=None,
         use_checkpoint=False,
         track_memory=0,
-        sharded_loss=False,
     ):
         super().__init__()
         self.create_name("DistributedQwen3ForCausalLM")
@@ -419,7 +417,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
         self.tie_word_embeddings = tie_word_embeddings
         self.shard_dim = shard_dim
         self.track_memory = track_memory
-        self.sharded_loss = sharded_loss
 
         vocab_tiled = ((config.vocab_size + 31) // 32) * 32
         lm_vocab = vocab_tiled if tie_word_embeddings else config.vocab_size
@@ -427,7 +424,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             config.hidden_size,
             lm_vocab,
             has_bias=False,
-            gather_output=(not sharded_loss),
             shard_dim=shard_dim,
         )
 

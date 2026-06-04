@@ -39,7 +39,6 @@ public:
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
     metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& board_type);
-    metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
@@ -54,6 +53,9 @@ public:
     CoreCoord get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const;
     CoreCoord get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const;
     CoreCoord get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const;
+    // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
+    // logical.y indexes dram_bank_endpoint_coords (worker endpoint first), not the raw subchannel id.
+    CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
     CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const tt::CoreType& core_type) const;
 
     CoreCoord get_dram_grid_size() const;

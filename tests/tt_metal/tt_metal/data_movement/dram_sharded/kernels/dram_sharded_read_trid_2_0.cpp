@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 // DRAM to L1 read
 void kernel_main() {
@@ -20,9 +20,9 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(4);
     constexpr uint32_t num_of_trids = get_compile_time_arg_val(5);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", num_banks * pages_per_bank * page_size_bytes);
@@ -36,20 +36,20 @@ void kernel_main() {
             dst_addr = l1_addr;
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
-                    noc.async_read<experimental::Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
+                    noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
                         dram_bank,
                         unicast_endpoint,
                         page_size_bytes,
                         {.bank_id = bank_id, .addr = src_addr + i * page_size_bytes},
                         {.addr = dst_addr},
-                        curr_trid);
+                        NocOptVals{.trid = curr_trid});
                     dst_addr += page_size_bytes;
                 }
                 curr_trid = (curr_trid % (num_of_trids - 1)) + 1;  // keep trid between 1 and num_of_trids-1
             }
         }
         for (uint32_t t = 1; t < num_of_trids; t++) {
-            noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(t);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = t});
         }
     }
 }

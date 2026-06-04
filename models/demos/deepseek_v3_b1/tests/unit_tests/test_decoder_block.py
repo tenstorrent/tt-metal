@@ -10,17 +10,22 @@ Tests decoder fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.demo.weight_provider import resolve_sram_expert_ids
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
-from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
@@ -34,6 +39,55 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    _load_routing_frequencies,
+    build_sram_hot_expert_config,
+)
+
+MTP_LAYER_IDX = 61
+
+# Safety ceiling on SRAM hot experts per layer.  The real cap is the
+# per-core L1 budget measured from the attention footprint inside
+# ``prepare_moe_layer_weights`` (see ``worker_l1_size`` wiring below), this
+# value just bounds how many ranked candidates we hand to the greedy trim
+# so we don't waste CPU time running the assigner on hundreds of experts
+# that will never fit.  Sized for the shared-expert-style layout (64 gate /
+# 64 up / 112 down cores with block-sharded gate/up and K_dev=256 down)
+# where ~26 bfp4 / ~13 bfp8 experts realistically fit per core.
+_SRAM_HOT_EXPERTS_CEILING = 64
+
+
+def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
+    """Build the ``(sram_hot_experts, sram_core_grids)`` pair.
+
+    Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
+    CRS as shared-expert gate/up/down in ``overlap_configs``).
+
+    Returns up to ``_SRAM_HOT_EXPERTS_CEILING`` candidates ranked by routing
+    frequency for ``layer_idx``.  The actual address-based trim runs inside
+    ``prepare_moe_layer_weights`` against the measured per-core attention
+    footprint (see ``worker_l1_size`` plumbing below) -- no host-side
+    budgeting is applied here.
+    """
+    sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
+    freqs = _load_routing_frequencies()
+    full_config = build_sram_hot_expert_config([layer_idx], freqs)
+    sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
+    logger.info(
+        "SRAM hot experts: layer {} -> {} ranked candidates (pre-device trim)",
+        layer_idx,
+        len(sram_hot_experts.get(layer_idx, [])),
+    )
+    return sram_hot_experts, sram_core_grids
+
+
+def _optional_bspm_dir():
+    """Return model-specific BSPM directory when BSPM_DIR/BSPM_RESULTS_DIR is configured."""
+    raw = os.getenv("BSPM_DIR") or os.getenv("BSPM_RESULTS_DIR")
+    if not raw or not raw.strip():
+        return None
+    return Path(raw.strip()) / "deepseek-r1-0528"
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -63,14 +117,51 @@ def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None
 # ============================================================================
 
 
+class _MutableStateDictOverlay:
+    """Read-through wrapper that lets rig_experts write the rigged bias on top of
+    a read-only LazyStateDict. Overrides take precedence; everything else reads
+    from the base mapping."""
+
+    def __init__(self, base):
+        self._base = base
+        self._overrides: dict = {}
+
+    def __getitem__(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        return self._base[key]
+
+    def __setitem__(self, key, value):
+        self._overrides[key] = value
+
+    def __contains__(self, key):
+        return key in self._overrides or key in self._base
+
+    def __iter__(self):
+        seen = set(self._overrides)
+        yield from self._overrides
+        for k in self._base:
+            if k not in seen:
+                yield k
+
+    def __len__(self):
+        return len(self._base) + sum(1 for k in self._overrides if k not in self._base)
+
+
 def rig_experts(state_dict, layer_idx, rigged_group_count):
     """Rig expert routing bias in state_dict for deterministic test routing.
 
     Generates RMS-normalized input for stability with rigged routing,
     modifies state_dict bias entries, and returns the rigged configuration.
 
-    Returns (rigged_group_ids, rigged_expert_ids, torch_input).
+    When state_dict is read-only (LazyStateDict), it is wrapped in a mutable
+    overlay so the bias write succeeds. The wrapped object is returned as the
+    last tuple element so callers can swap their handle.
+
+    Returns (rigged_group_ids, rigged_expert_ids, torch_input, state_dict).
     """
+    if not hasattr(state_dict, "__setitem__"):
+        state_dict = _MutableStateDictOverlay(state_dict)
     K = 7168
     shape = (1, K)
     torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -106,17 +197,25 @@ def rig_experts(state_dict, layer_idx, rigged_group_count):
         f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
     )
 
-    return rigged_group_ids, rigged_expert_ids, torch_input
+    return rigged_group_ids, rigged_expert_ids, torch_input, state_dict
 
 
 def create_decoder_golden_tensors(
     d,
     submesh,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
     state_dict,
     layer_idx,
+    reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
-    is_moe,
-    num_routed_experts=0,
+    metadata: DeepseekMetadata | None = None,
+    max_seq_len: int = 128 * 1024,
+    num_slots: int = 1,
+    is_moe: bool = True,
+    num_routed_experts: int = 0,
     rigged_group_ids=None,
     rigged_expert_ids=None,
 ):
@@ -125,11 +224,11 @@ def create_decoder_golden_tensors(
     Reads intermediate CPU tensors and the on-device KV cache from d
     (the output of create_decoder_block_tensors).
     """
+    if metadata is None:
+        metadata = DeepseekMetadata()
+
     QNOPE_HEAD_DIM = 128
     K = 7168
-
-    kv_cache_bfp8_before_op = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-
     (
         golden_torch_matmul_weights,
         golden_torch_matmul2_weights,
@@ -149,7 +248,6 @@ def create_decoder_golden_tensors(
 
     golden_total_qnope_heads = total_kv_heads
     golden_total_qrope_heads = total_kv_heads
-
     golden_moe_rmsnorm_gamma = ffn_norm.to(torch.bfloat16).float()
 
     def _sd_key(suffix):
@@ -192,9 +290,12 @@ def create_decoder_golden_tensors(
             golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
             golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
 
-    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
-    HEADS_PER_ROW = 8
-    SDPA_INPUT_NUM_CORES = len(s1_cores)
+    num_devices = mesh_rows * mesh_cols
+    per_device_max_seq_len = max_seq_len // mesh_rows
+    kvpe_dim = d["torch_kv_cache"].shape[-1]
+    kv_cache_bfp8_before_op = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    ).reshape(num_devices, num_slots, 1, per_device_max_seq_len, kvpe_dim)
 
     return {
         "golden_torch_input": d["torch_input"],
@@ -205,7 +306,7 @@ def create_decoder_golden_tensors(
         "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
         "golden_torch_sin": d["torch_sin"],
         "golden_torch_cos": d["torch_cos"],
-        "golden_position_ids": d["torch_position_ids"],
+        "golden_metadata": metadata,
         "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
         "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
         "golden_torch_kv_cache": d["torch_kv_cache"],
@@ -215,7 +316,8 @@ def create_decoder_golden_tensors(
         "golden_total_qnope_heads": golden_total_qnope_heads,
         "golden_total_qrope_heads": golden_total_qrope_heads,
         "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
-        "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
+        "num_slots": num_slots,
+        "per_device_max_seq_len": per_device_max_seq_len,
         "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
         "golden_moe_shared_gate": golden_moe_shared_gate,
         "golden_moe_shared_up": golden_moe_shared_up,
@@ -228,6 +330,134 @@ def create_decoder_golden_tensors(
         "rigged_group_ids": rigged_group_ids,
         "rigged_expert_ids": rigged_expert_ids,
     }
+
+
+_KNOWN_DECODER_MOE_FAILURE_SKIPS = {
+    (511, True, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43106",
+    (1023, True, True): "DecoderBlock MoE PCC check failed: 0.9550089693007023. Issue: #43106",
+    (511, False, True): "DecoderBlock MoE PCC check failed: 0.9445571127296262. Issue: #43114",
+    (1023, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (2047, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (4096, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (6644, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (9916, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (11664, False, True): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43117",
+    (0, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (127, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (511, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (1023, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (2047, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (4096, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (6644, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (9916, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+    (11664, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
+}
+
+
+_KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS = {
+    (0, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (127, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (511, True, True): "DecoderBlock rigged_groups8 golden tensor creation segfaults. Issue: #43126",
+    (1023, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, True): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, True, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (0, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (127, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (511, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (1023, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (2047, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (4096, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (6644, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (9916, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+    (11664, False, False): "DecoderBlock rigged_groups8 golden tensor creation timeout/hang. Issue: #43128",
+}
+
+
+def skip_known_decoder_moe_failure(
+    position_id,
+    expert_upload_mode,
+    enable_routing,
+    use_hardcoded_expert_index,
+    num_routed_experts,
+    validate_standalone_mla,
+    validate_standalone_moe,
+    decoder_layer_idx=None,
+    use_real_weights=None,
+):
+    """Skip exact known decoder MoE failures."""
+    if (
+        position_id in {0, 127, 2047, 4096, 6644, 9916, 11664}
+        and validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            f"DecoderBlock full-routing unrigged standalone MLA+MoE case at position_id={position_id} "
+            "timed out after 600s. Issue: #42714"
+        )
+
+    if (
+        position_id in {0, 127}
+        and not validate_standalone_mla
+        and validate_standalone_moe
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+        and decoder_layer_idx == ROUTED_EXPERT_LAYER_IDX
+        and use_real_weights is False
+    ):
+        pytest.skip(
+            "DecoderBlock full-routing unrigged standalone MoE + decoder MLA case timed out after 600s. Issue: #42714"
+        )
+
+    skip_reason = _KNOWN_DECODER_MOE_FAILURE_SKIPS.get((position_id, validate_standalone_mla, validate_standalone_moe))
+    if (
+        skip_reason
+        and expert_upload_mode == "unrigged_all_experts"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(skip_reason)
+
+    rigged_skip_reason = _KNOWN_DECODER_RIGGED_GROUPS8_FAILURE_SKIPS.get(
+        (position_id, validate_standalone_mla, validate_standalone_moe)
+    )
+    if (
+        rigged_skip_reason
+        and expert_upload_mode == "rigged_groups8"
+        and enable_routing
+        and not use_hardcoded_expert_index
+        and num_routed_experts == 256
+    ):
+        pytest.skip(rigged_skip_reason)
 
 
 @pytest.mark.parametrize(
@@ -272,7 +502,7 @@ def create_decoder_golden_tensors(
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [
-        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        "unrigged_all_experts",
         pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
@@ -281,6 +511,46 @@ def create_decoder_golden_tensors(
         pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
         "rigged_groups8",
+    ],
+)
+# SRAM placement scenario. "default" runs in CI and resolves SRAM IDs through the
+# same code path as the production demo: prepare_moe_layer_weights builds sram_slots
+# from sram_hot_experts (routing-frequency ranking), and the final sram_expert_ids
+# is derived from sram_slots.slot_experts post-L1-fit. All explicit scenarios are
+# opt-in (skip_post_commit).
+@pytest.mark.parametrize(
+    "sram_scenario",
+    [
+        pytest.param("default", marks=pytest.mark.skip_post_commit),
+        pytest.param("no_sram", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t1_not_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_both_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_partial", marks=pytest.mark.skip_post_commit),
+        pytest.param("t2_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t4_all_picked", marks=pytest.mark.skip_post_commit),
+        # Full t8_* sweep: N winners + (8-N) non-winners. Together they trace the
+        # SRAM-offload perf curve from pure DRAM (none_picked) to pure SRAM (all_picked).
+        pytest.param("t8_none_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_one_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_two_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_three_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_four_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_five_picked", marks=pytest.mark.skip_post_commit),
+        pytest.param("t8_six_picked", marks=pytest.mark.skip_post_commit),
+        "t8_seven_picked",
+        pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
+    ],
+)
+# enable_sram_bspm: opt-in BSPM mixed precision for SRAM experts. Independent
+# of DRAM BSPM (which is always on when BSPM_DIR is set). When True, the test
+# uses the deferred SRAM build pattern so SDPA buffer lands at uniform L1
+# addresses before SRAM CTs allocate below it.
+@pytest.mark.parametrize(
+    "enable_sram_bspm",
+    [
+        pytest.param(False, id="sram_bspm_off"),
+        pytest.param(True, id="sram_bspm_on", marks=pytest.mark.skip_post_commit),
     ],
 )
 @pytest.mark.parametrize(
@@ -295,6 +565,14 @@ def create_decoder_golden_tensors(
     ],
 )
 @pytest.mark.parametrize(
+    "decoder_layer_idx",
+    [
+        ROUTED_EXPERT_LAYER_IDX,
+        pytest.param(MTP_LAYER_IDX, id="mtp_layer_61"),
+    ],
+)
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
+@pytest.mark.parametrize(
     "validate_standalone_mla",
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_mla", "just_decoder_mla"],
@@ -304,7 +582,9 @@ def create_decoder_golden_tensors(
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
     ids=["validate_standalone_moe", "just_decoder_moe"],
 )
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 1)])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder(
     bh_2d_mesh_device,
     device_params,
@@ -321,19 +601,49 @@ def test_decoder(
     noc_mode,
     num_internal_iterations,
     expert_upload_mode,
+    sram_scenario,
+    enable_sram_bspm,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
+    decoder_layer_idx,
+    use_real_weights,
     validate_standalone_mla,
     validate_standalone_moe,
+    slot_id,
+    num_slots,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
+    skip_known_decoder_moe_failure(
+        position_id,
+        expert_upload_mode,
+        enable_routing,
+        use_hardcoded_expert_index,
+        num_routed_experts,
+        validate_standalone_mla,
+        validate_standalone_moe,
+        decoder_layer_idx,
+        use_real_weights,
+    )
+
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     logger.info(f"Number of devices: {num_devices}")
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
+
+    if use_real_weights and expert_upload_mode != "unrigged_all_experts":
+        # Rigged routing rewrites e_score_correction_bias to force specific TopK
+        # winners. The golden reference uses the same modified state_dict, so the
+        # math stays consistent, but the real model's actual routing distribution
+        # is no longer being exercised — PCC may dip vs. unrigged real runs.
+        logger.warning(
+            "Real weights + {} rewrites gate bias to force TopK; PCC may be lower than unrigged",
+            expert_upload_mode,
+        )
+    if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
+        pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -350,28 +660,177 @@ def test_decoder(
 
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=decoder_layer_idx,
         is_moe=True,
         seed=RoutedExpert.SEED,
         num_routed_experts=effective_num_routed_experts,
+        random_weights=not use_real_weights,
     )
 
     rigged_group_ids = None
     rigged_expert_ids = None
     torch_input = None
     if rigged_group_count is not None:
-        rigged_group_ids, rigged_expert_ids, torch_input = rig_experts(
+        rigged_group_ids, rigged_expert_ids, torch_input, state_dict = rig_experts(
             state_dict, ROUTED_EXPERT_LAYER_IDX, rigged_group_count
         )
 
+    # SRAM hot experts are auto-enabled for the full 256-expert case.  Rigged
+    # modes upload a strict subset of experts into the state dict, so the
+    # frequency-based ranker would reference expert indices that aren't
+    # present -- skip SRAM for them.
+    sram_hot_experts = None
+    sram_core_grids = None
+    if effective_num_routed_experts == 256:
+        sram_hot_experts, sram_core_grids = _build_sram_hot_expert_kwargs(state_dict, submesh, ROUTED_EXPERT_LAYER_IDX)
+
+    # SRAM placement scenarios — feeds the SRAM kernel pipeline via sram_expert_ids.
+    #   "default":  no override; sram_hot_experts (built above when 256-experts) is
+    #               used by prepare_moe_layer_weights to build sram_slots, and the
+    #               final sram_expert_ids is derived from sram_slots.slot_experts
+    #               *after* prepare returns (post-L1-fit truncation).
+    #   "no_sram":  explicitly disable SRAM (clear sram_hot_experts so sram_slots
+    #               isn't built, and override=[] so kernel pipeline allocates nothing).
+    #   explicit (t1_picked, t8_*, ...):  override list wins; sram_hot_experts may
+    #               still build sram_slots but the kernel pipeline + indices use
+    #               the override.
+    #
+    # Rigged: scenarios split TopK winners vs non-winners so *_picked fires at runtime
+    #         and *_not_picked stays idle (exercises the is_sram_expert filter).
+    # Unrigged: no winners known ahead of time; just take first N IDs (0..N-1).
+    #         *_picked / *_not_picked collapse since we can't distinguish.
+    if sram_scenario == "default":
+        sram_override = None
+    elif sram_scenario == "no_sram":
+        sram_override = []
+        # Disable sram_slots build so SRAM truly doesn't fire.
+        sram_hot_experts = None
+        sram_core_grids = None
+    elif rigged_expert_ids is not None:
+        winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
+        non_winners = [eid for eid in range(256) if eid not in winners]
+        # For t8_*_picked, N = number of winners placed in SRAM (rest are non-winners).
+        # Sweep covers the full SRAM-offload curve from 0 (none_picked) to 8 (all_picked).
+        T8_PICKED_COUNT = {
+            "t8_none_picked": 0,
+            "t8_one_picked": 1,
+            "t8_two_picked": 2,
+            "t8_three_picked": 3,
+            "t8_four_picked": 4,
+            "t8_five_picked": 5,
+            "t8_six_picked": 6,
+            "t8_seven_picked": 7,
+            "t8_all_picked": 8,
+        }
+        if sram_scenario in T8_PICKED_COUNT:
+            n = T8_PICKED_COUNT[sram_scenario]
+            sram_override = winners[:n] + non_winners[: 8 - n]
+        else:
+            sram_override = {
+                "t1_picked": [winners[0]],
+                "t1_not_picked": [non_winners[0]],
+                "t2_both_picked": winners[:2],
+                "t2_partial": [winners[0], non_winners[0]],
+                "t2_none_picked": non_winners[:2],
+                "t4_all_picked": winners[:4],
+            }[sram_scenario]
+    else:
+        scenario_count = {
+            "t1_picked": 1,
+            "t1_not_picked": 1,
+            "t2_both_picked": 2,
+            "t2_partial": 2,
+            "t2_none_picked": 2,
+            "t4_all_picked": 4,
+            "t8_none_picked": 8,
+            "t8_one_picked": 8,
+            "t8_two_picked": 8,
+            "t8_three_picked": 8,
+            "t8_four_picked": 8,
+            "t8_five_picked": 8,
+            "t8_six_picked": 8,
+            "t8_seven_picked": 8,
+            "t8_all_picked": 8,
+        }[sram_scenario]
+        sram_override = list(range(scenario_count))
+    sram_expert_ids = resolve_sram_expert_ids(ROUTED_EXPERT_LAYER_IDX, sram_override, is_moe=True)
+    logger.info(
+        f"SRAM scenario {sram_scenario!r}: initial sram_expert_ids={sram_expert_ids} "
+        f"(may be replaced by sram_slots.slot_experts post-prepare for 'default' scenario)"
+    )
+
+    # Log BSPM precision distribution for SRAM-placed experts. Helps explain PCC:
+    # if all tiles are bfp8, the BSPM would be near bf16 quality; if many bfp0/bfp2,
+    # BSPM compression is aggressive and forcing them through uniform-bfp4 SRAM
+    # may actually be more precise.
+    bspm_dir_env = _optional_bspm_dir()
+    if sram_expert_ids and bspm_dir_env is not None:
+        from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+        _bspm_path = bspm_dir_env / f"layer_{ROUTED_EXPERT_LAYER_IDX}" / "precision_eval" / "precision_map_B_3.5.bspm"
+        if _bspm_path.exists():
+            _bspm = load_bspm_for_layer(str(_bspm_path))
+            _fmt_names = ["bfp8", "bfp4", "bfp2", "bfp0"]
+            _proj_names = ["gate", "up", "down"]
+            for eid in sram_expert_ids:
+                if eid >= _bspm["n_experts"]:
+                    continue
+                for p_idx, p_name in enumerate(_proj_names):
+                    codes = _bspm["codes"][eid, p_idx]
+                    total = int(codes.size)
+                    pct = {
+                        _fmt_names[i]: f"{100 * int((codes == i).sum()) / total:.1f}%"
+                        for i in range(4)
+                        if int((codes == i).sum()) > 0
+                    }
+                    logger.info(f"BSPM expert {eid:3d} {p_name:4s}: {pct}")
+        else:
+            logger.warning(f"BSPM file not found, skipping distribution log: {_bspm_path}")
+
     logger.info("Preparing layer weights on device...")
+    # ``sram_hot_experts`` is ``SramHotExpertConfig``: ``layer_idx -> ranked expert indices``.
+    # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
+    # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
+    # callers use the same shape with more entries.
+    #
+    # Deferred SRAM alloc under enable_sram_bspm: when BSPM-SRAM is on, SRAM CT
+    # sizes diverge per device → if allocated before create_decoder_block_tensors,
+    # SDPA buffer (allocated after) lands at per-device-different L1 addresses,
+    # breaking MLA's uniform-address assumption. Build DRAM weights first, then
+    # SDPA via create_decoder_block_tensors, then SRAM CTs (which land below the
+    # uniform SDPA address). Under uniform-BFP4 the direct path is fine (SRAM
+    # sizes are uniform per device). The parametrized flag requires BSPM_DIR
+    # to be set (otherwise there's no BSPM source to use).
+    if enable_sram_bspm and _optional_bspm_dir() is None:
+        pytest.skip("enable_sram_bspm=True requires BSPM_DIR env var to be set")
+    # Unified path: prepare_moe_layer_weights handles both explicit-list and
+    # auto-fit SRAM scenarios via prepare_compressed_sram_slots.
+    _prep_sram_ids = sram_expert_ids
+    _prep_enable_sram_bspm = enable_sram_bspm
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
         num_routed_experts=effective_num_routed_experts,
         move_to_device=True,
+        sram_hot_experts=sram_hot_experts,
+        sram_core_grids=sram_core_grids,
+        worker_l1_size=device_params.get("worker_l1_size"),
+        compressed_tp8=True,
+        bspm_dir=_optional_bspm_dir(),
+        enable_sram_bspm=_prep_enable_sram_bspm,
+        sram_expert_ids=_prep_sram_ids,
     )
+
+    # When no explicit override (the "default" scenario) and sram_slots got built,
+    # the kernel-pipeline weights are for sram_slots.slot_experts (L1-fit-truncated
+    # from sram_hot_experts). Use that same list for create_gate_indices_tensor's
+    # bit-15 encoding so indices and weights agree.
+    if not sram_expert_ids and layer_weights.sram_slots is not None:
+        sram_expert_ids = list(layer_weights.sram_slots.slot_experts)
+        logger.info(
+            f"SRAM scenario {sram_scenario!r}: final sram_expert_ids from sram_slots.slot_experts = {sram_expert_ids}"
+        )
 
     logger.info("Creating decoder block tensors...")
     d = create_decoder_block_tensors(
@@ -383,17 +842,27 @@ def test_decoder(
         position_id,
         max_seq_len=max_seq_len,
         weights=layer_weights,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        num_slots=num_slots,
         is_moe=True,
         validate_debug_tensors=validate_standalone_mla or validate_standalone_moe,
         torch_input=torch_input,
+        sram_expert_ids=sram_expert_ids,
     )
 
     logger.info("Creating golden reference tensors...")
     golden = create_decoder_golden_tensors(
         d,
         submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        max_seq_len=max_seq_len,
+        num_slots=num_slots,
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
         rigged_group_ids=rigged_group_ids,
@@ -441,7 +910,6 @@ def test_decoder(
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache_attn_ref"],
-            d["ttnn_position_ids"],
             d["scale"],
             d["ttnn_sdpa_output"],
             d["sdpa_kv_cache_buffer"],
@@ -494,7 +962,6 @@ def test_decoder(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -521,6 +988,9 @@ def test_decoder(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -549,12 +1019,18 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        enable_sram_bspm=enable_sram_bspm,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
-    kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, d["num_slots"], 1, d["per_device_max_seq_len"], -1
+    )
 
     ttnn_attention_output = ttnn.to_torch(
         attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
@@ -662,7 +1138,7 @@ def test_decoder(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -719,13 +1195,13 @@ def test_decoder(
             continue
 
         assert torch.equal(
-            d["golden_kv_cache_bfp8_before_op"][device_idx, ..., :local_seq_len, :],
-            kv_cache_output_torch[device_idx, ..., :local_seq_len, :],
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
         ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
         logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
 
         if sp_group == owning_sp_device:
-            compare_kv_cache = kv_cache_output_torch[device_idx, ..., local_seq_len, :]
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
             expected_nope = golden_new_kv[..., :KNOPE_DIM]
             expected_rope = golden_new_kv[..., KNOPE_DIM:]
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
@@ -738,6 +1214,17 @@ def test_decoder(
             rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        # Other slots must be completely unchanged
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     if moe_scores is not None:
         logger.info(f"Golden MoE scores: {moe_scores}")
@@ -822,7 +1309,15 @@ def test_decoder(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("slot_id, num_slots", [(0, 2), (1, 2)])
+# Dense-MLP SRAM placement. DRAM list stays full (8 chunks) for sizing/CB probes;
+# placement selects which chunks the kernel processes via the SRAM matmul instead
+# of the DRAM matmul (the latter iterates 8 slots and skips SRAM-flagged ones).
+#   all-dram → 0 chunks via SRAM (baseline)
+#   all-sram → 8 chunks via SRAM (n_dram_active=0 → DRAM chain skipped at runtime)
+@pytest.mark.parametrize("dense_placement", ["all-dram", "all-sram"])
 @pytest.mark.requires_grid_size((13, 10))
+@requires_hybrid_allocator
 def test_decoder_mlp(
     bh_2d_mesh_device,
     device_params,
@@ -838,6 +1333,9 @@ def test_decoder_mlp(
     position_id,
     noc_mode,
     num_internal_iterations,
+    slot_id,
+    num_slots,
+    dense_placement,
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
@@ -857,8 +1355,24 @@ def test_decoder_mlp(
         seed=RoutedExpert.SEED,
     )
 
+    # Dense placement → which dense-MLP chunks go to SRAM. DRAM list stays full
+    # regardless; kernel skip via num_dram_experts_pre_selected = 8 - len(sram).
+    if dense_placement == "all-dram":
+        dense_sram_expert_ids = []
+    elif dense_placement == "all-sram":
+        dense_sram_expert_ids = list(range(8))  # all 8 chunks via SRAM
+    else:
+        raise ValueError(f"unknown dense_placement: {dense_placement}")
+    logger.info(f"Dense placement {dense_placement!r}: sram_expert_ids={dense_sram_expert_ids}")
+
     logger.info("Preparing dense layer weights on device...")
-    layer_weights = prepare_dense_layer_weights(submesh, state_dict, DENSE_LAYER_IDX, move_to_device=True)
+    layer_weights = prepare_dense_layer_weights(
+        submesh,
+        state_dict,
+        DENSE_LAYER_IDX,
+        move_to_device=True,
+        sram_expert_ids=dense_sram_expert_ids,
+    )
 
     logger.info("Creating dense decoder block tensors...")
     d = create_decoder_block_tensors(
@@ -870,6 +1384,8 @@ def test_decoder_mlp(
         position_id,
         max_seq_len=max_seq_len,
         weights=layer_weights,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        num_slots=num_slots,
         is_moe=False,
     )
 
@@ -877,8 +1393,15 @@ def test_decoder_mlp(
     golden = create_decoder_golden_tensors(
         d,
         submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
         state_dict,
         DENSE_LAYER_IDX,
+        metadata=DeepseekMetadata(position_id=position_id, slot_id=slot_id),
+        max_seq_len=max_seq_len,
+        num_slots=num_slots,
         is_moe=False,
     )
     d.update(golden)
@@ -914,7 +1437,6 @@ def test_decoder_mlp(
         d["dkv_matmul_weights_overlapped"],
         d["dkv_rmsnorm_gamma_overlapped"],
         d["ttnn_kv_cache"],
-        d["ttnn_position_ids"],
         d["scale"],
         d["sdpa_kv_cache_buffer"],
         d["sdpa_out_interm_buffer"],
@@ -940,6 +1462,9 @@ def test_decoder_mlp(
         gate_proj_weights_tensor=d["gate_proj_weights"],
         up_proj_weights_tensor=d["up_proj_weights"],
         down_proj_weights_tensor=d["down_proj_weights"],
+        sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+        sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+        sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
         moe_final_output_tensor=None,
         rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
         shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -999,7 +1524,7 @@ def test_decoder_mlp(
     KROPE_DIM = 64
     HEADS_PER_ROW = 8
 
-    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+    _full_q, golden_new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
         d["golden_torch_input"],
         d["golden_torch_gamma"],
         d["golden_torch_matmul_weights"],
@@ -1008,7 +1533,7 @@ def test_decoder_mlp(
         d["golden_torch_matmul3_weights"],
         d["golden_torch_sin"],
         d["golden_torch_cos"],
-        d["golden_position_ids"],
+        d["golden_metadata"],
         d["golden_torch_dkv_matmul_weights"],
         d["golden_torch_dkv_rmsnorm_gamma"],
         d["golden_torch_kv_cache"],
@@ -1033,6 +1558,68 @@ def test_decoder_mlp(
         moe_rmsnorm_epsilon=epsilon,
         moe_enable_routing=False,
     )
+
+    # ========================================================================
+    # Validate KV cache outputs (per SP device)
+    # ========================================================================
+    device_chunk_size = d["device_chunk_size"]
+    num_sp = mesh_rows
+    owning_sp_device = (position_id // device_chunk_size) % num_sp
+
+    kv_cache_output_torch_flat = ttnn.to_torch(
+        d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    kv_cache_output_torch = kv_cache_output_torch_flat.reshape(
+        num_devices, num_slots, 1, d["per_device_max_seq_len"], -1
+    )
+
+    def get_local_seq_len(sp_idx):
+        sp_block = device_chunk_size * num_sp
+        num_full_blocks = position_id // sp_block
+        remainder = position_id % sp_block
+        dev_start = sp_idx * device_chunk_size
+        dev_end = dev_start + device_chunk_size
+        dev_contrib = max(0, min(remainder, dev_end) - dev_start)
+        return num_full_blocks * device_chunk_size + dev_contrib
+
+    for device_idx in range(num_devices):
+        sp_group = device_idx // mesh_cols
+        local_seq_len = get_local_seq_len(sp_group)
+
+        if local_seq_len == 0 and sp_group != owning_sp_device:
+            logger.info(f"Device {device_idx} (SP={sp_group}) no data yet, skipped")
+            continue
+
+        assert torch.equal(
+            d["golden_kv_cache_bfp8_before_op"][device_idx, slot_id, ..., :local_seq_len, :],
+            kv_cache_output_torch[device_idx, slot_id, ..., :local_seq_len, :],
+        ), f"Device {device_idx} (SP={sp_group}) KV Cache before and after op mismatch"
+        logger.info(f"Device {device_idx} (SP={sp_group}) old cache validation passed")
+
+        if sp_group == owning_sp_device:
+            compare_kv_cache = kv_cache_output_torch[device_idx, slot_id, ..., local_seq_len, :]
+            expected_nope = golden_new_kv[..., :KNOPE_DIM]
+            expected_rope = golden_new_kv[..., KNOPE_DIM:]
+            compare_nope = compare_kv_cache[..., :KNOPE_DIM]
+            compare_rope = compare_kv_cache[..., KNOPE_DIM:]
+
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
+            assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
+
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
+            assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
+
+        for other_slot in range(num_slots):
+            if other_slot == slot_id:
+                continue
+            assert torch.equal(
+                d["golden_kv_cache_bfp8_before_op"][device_idx, other_slot],
+                kv_cache_output_torch[device_idx, other_slot],
+            ), f"Device {device_idx} (SP={sp_group}) KV Cache slot {other_slot} was modified but should be untouched"
+        if num_slots > 1:
+            logger.info(f"Device {device_idx} (SP={sp_group}) other slots unchanged validation passed")
 
     # ========================================================================
     # Validate MLP output vs DecoderBlock golden

@@ -30,6 +30,7 @@
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -53,6 +54,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
         case DataType::INT32: os << "int32"; break;
+        case DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -256,6 +258,15 @@ std::string to_string_impl(const Tensor& tensor) {
     }
 
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+        if (tensor.dtype() == DataType::FP8_E4M3) {
+            // FP8 is element-encoded and is already ROW_MAJOR (constrained in tensor_spec.cpp),
+            // but the downstream detail::to_string uses view_as<float> which would misinterpret
+            // FP8 bytes as floats. Pivot through FLOAT32 via host-side conversion
+            // (float8_e4m3::operator float) so print sees real float values. Checked before the
+            // ROW_MAJOR early return below because an FP8 tensor satisfies that early-return
+            // condition but still needs the dtype pivot.
+            return tt::tt_metal::to_dtype(tensor, DataType::FLOAT32);
+        }
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         }
@@ -292,7 +303,7 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto& mesh_device = storage.get_mesh_tensor().device();
+    const auto& mesh_device = storage.get_mesh_tensor().device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -327,6 +338,11 @@ std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
+template <>
+std::string to_string_impl<float8_e4m3>(const Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
 std::string to_string(const Tensor& tensor) {
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
@@ -343,27 +359,65 @@ HostTensor view(
     if (tensor.logical_volume() == 0) {
         TT_FATAL(new_logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
     }
-    bool is_row_major = tensor.layout() == Layout::ROW_MAJOR;
-    bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
     const auto& input_memory_config = tensor.memory_config();
-    TT_FATAL(
-        !input_memory_config.is_sharded() || !changing_last_dim ||
-            input_memory_config.shard_spec()->shape[1] == tensor.padded_shape()[-1],
-        "Changing the last dimension of a sharded tensor is not supported unless the shard width matches the input "
-        "last dimension. "
-        "Input shape: {}, New shape: {}, Shard width: {}",
-        tensor.padded_shape(),
-        new_padded_shape,
-        input_memory_config.shard_spec()->shape[1]);
-
     auto output_memory_config = input_memory_config;
-    if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
-        auto shard_spec = input_memory_config.shard_spec().value();
-        auto shard_volume = shard_spec.numel();
-        shard_spec.shape[1] = new_padded_shape[-1];  // update output shard to match new shard width
-        shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
-        output_memory_config =
-            MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+
+    if (input_memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        const auto old_rank = tensor.padded_shape().rank();
+        const auto& old_nd_spec = input_memory_config.nd_shard_spec().value();
+
+        // Rank-expansion of a 0D/1D tensor into a 2D shape — the original allow-listed
+        // case. Requires the expanded 2D shape to still match the input's logical footprint.
+        bool is_rank_expansion_to_2d = old_rank < 2 && new_padded_shape.rank() == 2 && new_padded_shape[0] == 1 &&
+                                       (old_rank == 0 || new_padded_shape[1] == tensor.padded_shape()[-1]);
+
+        // Logical-shape-only update: same rank and same padded shape as the input. No bytes
+        // move, the physical tile layout is unchanged, and the per-core shard location and
+        // size are unchanged. The caller is just reinterpreting which logical elements live
+        // in which physical positions (e.g. a reduction op trimming logical dim after keeping
+        // the padded tile intact). Safe for ND-sharded tensors.
+        bool is_same_physical_shape = new_padded_shape.rank() == old_rank && new_padded_shape == tensor.padded_shape();
+
+        TT_FATAL(
+            is_rank_expansion_to_2d || is_same_physical_shape,
+            "View is not supported for ND sharded tensors except for rank expansion to 2D "
+            "or same-physical-shape (logical-only) metadata updates. Input shape: {}, New shape: {}",
+            tensor.padded_shape(),
+            new_padded_shape);
+
+        if (is_same_physical_shape) {
+            // Keep the input's MemoryConfig as-is (including nd_shard_spec + flags) — no
+            // physical layout change means no metadata adjustment needed.
+            output_memory_config = input_memory_config;
+        } else {
+            // Rank-expansion-to-2D path: synthesize a new nd_shard_spec for the expanded shape.
+            ttsl::SmallVector<uint32_t> new_shard_shape =
+                old_rank == 0 ? ttsl::SmallVector<uint32_t>{1, 1}
+                              : ttsl::SmallVector<uint32_t>{1, old_nd_spec.shard_shape[-1]};
+            output_memory_config =
+                MemoryConfig(input_memory_config.buffer_type(), old_nd_spec.with_shard_shape(Shape(new_shard_shape)));
+        }
+    } else {
+        bool is_row_major = tensor.layout() == Layout::ROW_MAJOR;
+        bool changing_last_dim = new_padded_shape[-1] != tensor.padded_shape()[-1];
+        TT_FATAL(
+            !input_memory_config.is_sharded() || !changing_last_dim ||
+                input_memory_config.shard_spec()->shape[1] == tensor.padded_shape()[-1],
+            "Changing the last dimension of a sharded tensor is not supported unless the shard width matches the "
+            "input last dimension. "
+            "Input shape: {}, New shape: {}, Shard width: {}",
+            tensor.padded_shape(),
+            new_padded_shape,
+            input_memory_config.shard_spec()->shape[1]);
+
+        if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
+            auto shard_spec = input_memory_config.shard_spec().value();
+            auto shard_volume = shard_spec.numel();
+            shard_spec.shape[1] = new_padded_shape[-1];
+            shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
+            output_memory_config =
+                MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+        }
     }
 
     auto new_spec = tt::tt_metal::TensorSpec(
@@ -409,6 +463,13 @@ Tensor extract_shard_impl<bfloat8_b>(const Tensor& tensor, const uint32_t& core_
 template <>
 Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
+}
+
+template <>
+Tensor extract_shard_impl<float8_e4m3>(const Tensor&, const uint32_t&) {
+    // FP8_E4M3 sharded device tensors are not produced by any current op (combine emits
+    // interleaved output). Add a real implementation when a use case appears.
+    TT_THROW("extract_shard: FP8_E4M3 is not supported");
 }
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {

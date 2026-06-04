@@ -25,6 +25,12 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -383,6 +389,118 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
     }
 }
 
+TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        CBConfig cb_config;
+        CoreCoord core0(0, 0);
+        CoreRange cr(core0, core0);
+        CoreRangeSet cr_set({cr});
+
+        auto& mesh_device = devices_.at(id);
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+        Buffer* tensor_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(tensor_buffer, nullptr);
+
+        initialize_program(program_, cr_set);
+
+        const uint32_t core0_num_cbs = 2;
+        std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;
+        std::vector<CBHandle> cb_ids;
+        auto expected_cb_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        for (uint32_t buffer_idx = 0; buffer_idx < core0_num_cbs; buffer_idx++) {
+            CircularBufferConfig config1 =
+                CircularBufferConfig(cb_config.page_size, {{buffer_idx, cb_config.data_format}})
+                    .set_page_size(buffer_idx, cb_config.page_size);
+            auto cb = CreateCircularBuffer(program_, core0, config1);
+            golden_addresses_per_core[core0][buffer_idx] = expected_cb_addr;
+            cb_ids.push_back(cb);
+            expected_cb_addr += cb_config.page_size;
+        }
+
+        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+        UpdateDynamicCircularBufferAddress(program_, cb_ids[0], tensor);
+        golden_addresses_per_core[core0][0] = tensor_buffer->address();
+        validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+    }
+}
+
+// Verifies that the MeshTensor overloads of CircularBufferConfig::set_globally_allocated_address[_and_total_size]
+// produce a CircularBufferConfig with identical state to the underlying Buffer overload. CircularBufferConfig's
+// operator== compares total_size, globally_allocated_address, data_formats, page_sizes, tiles, and
+// shadow_global_buffer.
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        // Single-tile BFLOAT16 tensor → exactly one L1 page of cb_config.page_size (2048 B) bytes in one bank,
+        // matching the CB's total_size and satisfying the dynamic-CB bank-size validation.
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        CircularBufferConfig config_via_buffer = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(*underlying_buffer);
+        CircularBufferConfig config_via_tensor = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(tensor);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+    }
+}
+
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        const uint32_t new_total_size = cb_config.page_size / 2;
+
+        CircularBufferConfig config_via_buffer =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(*underlying_buffer, new_total_size);
+        CircularBufferConfig config_via_tensor =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(tensor, new_total_size);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+        EXPECT_EQ(config_via_buffer.total_size(), new_total_size);
+        EXPECT_EQ(config_via_tensor.total_size(), new_total_size);
+        EXPECT_EQ(config_via_buffer.globally_allocated_address(), underlying_buffer->address());
+        EXPECT_EQ(config_via_tensor.globally_allocated_address(), underlying_buffer->address());
+    }
+}
+
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto& cq = devices_.at(id)->mesh_command_queue();
@@ -540,6 +658,9 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {cb_index, /*use_dfbs=*/false}});
 
+        // DRAM buffers use page_size = buffer_size (whole buffer), so compute
+        // the per-tile stride directly. single_tile_size is the real per-tile
+        // stride here since tiles are packed contiguously inside the buffer.
         SetRuntimeArgs(
             program_,
             reader_kernel,
@@ -548,6 +669,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)src_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
         SetRuntimeArgs(
             program_,
@@ -557,6 +679,7 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
                 (uint32_t)dst_dram_buffer->address(),
                 0,
                 (uint32_t)num_tiles,
+                single_tile_size,
             });
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

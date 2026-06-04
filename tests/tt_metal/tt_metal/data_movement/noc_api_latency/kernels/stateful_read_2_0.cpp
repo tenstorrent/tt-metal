@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     constexpr uint32_t l1_local_addr = get_compile_time_arg_val(0);
@@ -15,8 +15,8 @@ void kernel_main() {
     uint32_t dst_x_coord = packed_dest_core_coordinates >> 16;
     uint32_t dst_y_coord = packed_dest_core_coordinates & 0xFFFF;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     noc.set_async_read_state(
         unicast_endpoint, transaction_size, {.noc_x = dst_x_coord, .noc_y = dst_y_coord, .addr = l1_local_addr});

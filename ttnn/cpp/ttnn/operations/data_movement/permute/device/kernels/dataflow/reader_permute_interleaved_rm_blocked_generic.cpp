@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_named_compile_time_arg_val("N");
@@ -50,6 +54,7 @@ void kernel_main() {
     uint32_t X_stride = src_strides[x_dim];
 
     const auto s0 = TensorAccessor(src_args, src_addr);
+    Noc noc;
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;
@@ -99,26 +104,29 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        cb_reserve_back(tt::CBIndex::c_0, x_block_size);
-        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        CircularBuffer cb(tt::CBIndex::c_0);
+        cb.reserve_back(x_block_size);
+        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 
         // We read in 'x_block_len' chunks along the X dimension
         uint32_t page_offset = 0;
         // Read along the X dimension
         for (uint32_t x = x_start; x < x_end; ++x) {
-            // Compute the address offset for this index
             uint64_t addr_offset = base_addr_offset + x * X_stride;
-            uint64_t src_noc_addr = s0.get_noc_addr(addr_offset, w_offset);
-
-            // Perform async read of the current line (w_block_len elements) into L1
-            noc_async_read(src_noc_addr, src_buffer_l1_addr + page_offset, w_read_size_bytes);
+            CoreLocalMem<uint32_t> dst(src_buffer_l1_addr + page_offset);
+            noc.async_read(
+                s0,
+                dst,
+                w_read_size_bytes,
+                {.page_id = (uint32_t)addr_offset, .offset_bytes = w_offset},
+                {.offset_bytes = 0});
 
             // Advance output pointer by one page size for next row
             page_offset += input_cb_page_size;
         }
         // Wait for all async reads to complete before proceeding
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         // Push the filled block into the circular buffer
-        cb_push_back(tt::CBIndex::c_0, x_block_size);
+        cb.push_back(x_block_size);
     }
 }

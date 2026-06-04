@@ -21,8 +21,7 @@ class UnpackKernelGenerator:
         for op in self.config.pipeline:
             for fused_compute in op.math.operations:
                 if fused_compute.unpacker is not None:
-                    unpacker_instance = fused_compute.unpacker()
-                    all_headers.update(unpacker_instance.get_headers())
+                    all_headers.update(fused_compute.unpacker.get_headers())
 
         # Generate include statements
         includes = "\n".join([f'#include "{header}"' for header in sorted(all_headers)])
@@ -134,8 +133,8 @@ class FusedKernelGenerator:
             "pack": self.pack_gen.generate(),
         }
 
-    def write_kernel(self, test_name: str, regenerate_cpp: bool = True):
-        if not regenerate_cpp:
+    def write_kernel(self, test_name: str):
+        if not self.config.global_config.regenerate_cpp:
             return
 
         kernels = self.generate_all()
@@ -144,6 +143,10 @@ class FusedKernelGenerator:
         if self.config.global_config.profiler_enabled:
             profiler_include += '#include "profiler.h"\n'
             profiler_include += '#include "perf.h"\n'
+
+        operands = self.config.operand_registry.generate_cpp(
+            self.config.global_config.dest_acc.value
+        )
 
         combined = (
             f"#define FUSED_TEST\n"
@@ -162,6 +165,8 @@ class FusedKernelGenerator:
             f"\n"
             f"#define UNUSED __attribute__((unused))\n"
             f"struct RuntimeParams {{}};\n"
+            f"\n"
+            f"{operands}"
             f"\n"
             f"{kernels['unpack']}"
             f"{kernels['math']}"

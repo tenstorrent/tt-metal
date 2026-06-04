@@ -3,27 +3,27 @@ on:
   workflow_dispatch:
     inputs:
       t3k_multihost:
-        description: 'Run T3K multi-host job'
+        description: "Run T3K multi-host job"
         required: false
         default: true
         type: boolean
       glx_2x_multihost:
-        description: 'Run Galaxy 2x multi-host job'
+        description: "Run Galaxy 2x multi-host job"
         required: false
         default: true
         type: boolean
       glx_4x_unit_tests:
-        description: 'Run Galaxy 4x unit tests'
+        description: "Run Galaxy 4x unit tests"
         required: false
         default: false
         type: boolean
       bh_lb_2x_multihost:
-        description: 'Run BH-Loudbox 2x multi-host job'
+        description: "Run BH-Loudbox 2x multi-host job"
         required: false
         default: true
         type: boolean
       bh_lb_4x_multihost:
-        description: 'Run BH-Loudbox 4x multi-host job'
+        description: "Run BH-Loudbox 4x multi-host job"
         required: false
         default: true
         type: boolean
@@ -52,8 +52,8 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
-    - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
+    - cron: "0 4 * * *" # 8 PM PST (4 AM UTC) - 4x6U schedule
+    - cron: "0 */3 * * *" # Every 3 hours - T3K and 2x6U schedule
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
@@ -63,12 +63,18 @@ run-name: >
       || 'Multi host Manual Run' }}
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -85,7 +91,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -137,7 +143,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -190,7 +196,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -242,7 +248,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -270,6 +276,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
@@ -294,7 +301,7 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
@@ -323,6 +330,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_CACHE=${{ steps.capture-home.outputs.home }}/.metal_cache
             -e ARCH_NAME=wormhole_b0
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro

@@ -108,7 +108,7 @@ def get_supported_trace_region_size(request, mesh_device):
         },
         "Qwen3-32B": {
             "T3K": 90000000,
-            "TG": 172000000,
+            "TG": 200000000,
             "P150": 90000000,
             "P300": 90000000,
             "P150x4": 90000000,
@@ -129,6 +129,7 @@ def get_supported_trace_region_size(request, mesh_device):
         "gemma-3-27b": {
             "T3K": 70000000,
             "TG": 70000000,
+            "P150x4": 70000000,
         },
         "DeepSeek-R1-Distill-Llama-70B": {
             "P150x4": 90000000,

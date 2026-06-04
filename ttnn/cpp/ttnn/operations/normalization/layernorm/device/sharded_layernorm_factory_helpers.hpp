@@ -164,6 +164,7 @@ struct CBSizeParams {
     bool use_two_stage_reduce = false;
     bool use_welford = false;
     bool skip_write_back = false;
+    bool rms_norm = false;
 
     // Computes all CB sizes and returns them in a struct
     struct Sizes {
@@ -297,7 +298,12 @@ struct KernelConfig {
     // Compute config
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
     bool math_approx_mode = false;
+
+    // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
+    // alias, while keeping the original CB descriptor with default value.
+    bool welford_fp32_alias = false;
 };
 
 // Struct to hold CB configuration for building CB descriptors
@@ -359,6 +365,9 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
+    // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
+    // alias, while keeping the original CB descriptor with default value.
+    bool welford_fp32_alias = false;
 };
 
 //////////////////////////////////////////////////////////////////////////////

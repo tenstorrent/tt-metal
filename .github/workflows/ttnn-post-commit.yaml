@@ -10,6 +10,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       wheel-artifact-name:
         required: true
         type: string
@@ -18,12 +22,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -41,6 +45,11 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
+      collect-coverage:
+        required: false
+        type: boolean
+        default: false
+        description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
 
 jobs:
   load-test-matrix:
@@ -51,7 +60,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
@@ -105,10 +114,11 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ matrix.test-group.sku != 'bh_p100' && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        TT_LOGGER_LEVEL: warn
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -119,9 +129,10 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
+          filter: blob:none
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -143,10 +154,51 @@ jobs:
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
 
+      - name: Set up coverage profiling
+        if: ${{ inputs.collect-coverage }}
+        run: |
+          mkdir -p /work/coverage
+          echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash -c '${{ matrix.test-group.cmd }}'
+
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload profdata artifact
+        if: ${{ inputs.collect-coverage && always() }}
+        run: |
+          if ! ls /work/coverage/*.profraw 1>/dev/null 2>&1; then
+            echo "No profraw files found, skipping upload"
+            exit 0
+          fi
+          llvm-profdata-20 merge -sparse /work/coverage/*.profraw \
+            -o /work/coverage/job.profdata
+          echo "Merged $(ls /work/coverage/*.profraw | wc -l) profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
+        shell: bash
+      - name: Upload profdata
+        if: ${{ inputs.collect-coverage && always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: profdata-${{ matrix.test-group.name }}
+          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}

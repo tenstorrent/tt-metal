@@ -10,8 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
-from helpers.chip_architecture import ChipArchitecture
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import GoldenType, PerfRunType
 
 from .block_data import BlockData
 from .compute_node import ComputeNode
@@ -49,13 +48,6 @@ class ComputePipeline:
                 math_units.append(operation.sfpu)
 
         return math_units
-
-    def get_reduce_pack_mask(self) -> str:
-        for operation in self.operations:
-            if operation.reduce_dim is not None:
-                return operation.reduce_dim.cpp_enum_value
-
-        return None
 
     def _batch_loop(
         self, operation: "FusedOperation", config: "GlobalConfig", body_fn
@@ -121,60 +113,6 @@ class ComputePipeline:
 
         return code
 
-    def unpack_operand_constants(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        buffer_A_address = operation.src_a.l1_address
-        buffer_B_address = operation.src_b.l1_address
-        buffer_A_tile_size = operation.buffer_A_tile_size
-        buffer_B_tile_size = operation.buffer_B_tile_size
-        unpack_a_src = operation.unpack_a_in
-        unpack_a_dst = operation.unpack_a_out
-        unpack_b_src = operation.unpack_b_in
-        unpack_b_dst = operation.unpack_b_out
-
-        code = (
-            f"    // Operation {stage}: Fused Unpack\n"
-            f"    UNUSED const Operand buffer_A{stage}({hex(buffer_A_address)}, {buffer_A_tile_size});\n"
-            f"    UNUSED const Operand buffer_B{stage}({hex(buffer_B_address)}, {buffer_B_tile_size});\n"
-            f"    UNUSED const std::uint32_t unpack_a_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_src.name});\n"
-            f"    UNUSED const std::uint32_t unpack_a_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_a_dst.name});\n"
-            f"    UNUSED const std::uint32_t unpack_b_src_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_src.name});\n"
-            f"    UNUSED const std::uint32_t unpack_b_dst_format{stage} = ckernel::to_underlying(DataFormat::{unpack_b_dst.name});\n"
-        )
-        return code
-
-    def unpack_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        unpa_tile_size = operation.tile_size_unpack_a
-        unpb_tile_size = operation.tile_size_unpack_b
-        dest_acc = config.dest_acc.cpp_enum_value
-        unpa_face_r_dim = operation.face_r_dim
-        unpb_face_r_dim = operation.face_r_dim
-        unpa_num_faces = operation.num_faces_A
-        unpb_num_faces = operation.num_faces_B
-
-        if stage == 1:
-            code = (
-                f"_llk_unpack_hw_configure_<{dest_acc}, false>(\n"
-                f"    unpack_a_src_format{stage}, unpack_b_src_format{stage}, unpack_a_dst_format{stage}, unpack_b_dst_format{stage},\n"
-                f"    {unpa_face_r_dim}, {unpb_face_r_dim}, {unpa_num_faces}, {unpb_num_faces}, {unpa_tile_size}, {unpb_tile_size}\n"
-                f");\n"
-            )
-        else:
-            code = (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, false>(\n"
-                f"    unpack_a_src_format{stage}, unpack_a_dst_format{stage}, {unpa_tile_size}\n"
-                f");\n"
-                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, false>(\n"
-                f"    unpack_b_src_format{stage}, unpack_b_dst_format{stage}, {unpb_tile_size}\n"
-                f");\n"
-            )
-        return code
-
     def unpacker_sync_with_packer(
         self,
         operation: "FusedOperation",
@@ -189,13 +127,13 @@ class ComputePipeline:
         return ""
 
     def unpack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
-        code = self.unpack_operand_constants(operation, config)
+        code = ""
 
         if config.profiler_enabled:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.unpack_hw_configure(operation, config)
+        code += config.sentinel.hw_configure_unpack(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -225,20 +163,6 @@ class ComputePipeline:
             code += 'ZONE_SCOPED("INIT")\n'
             code += "PROFILER_SYNC();\n"
             code += "}\n"
-
-        return code
-
-    def math_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        dest_acc = config.dest_acc.cpp_enum_value
-        if stage == 1:
-            code = f"_llk_math_hw_configure_<{dest_acc}>(math_format{stage}, math_format{stage});\n"
-        else:
-            code = f"_llk_math_reconfig_data_format_<{dest_acc}, false>(math_format{stage}, math_format{stage});\n"
-
-        code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
 
         return code
 
@@ -273,11 +197,9 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        math_format = operation.output.data_format
         dest_sync = operation.dest_sync.cpp_enum_value
 
         code = f"// Operation {stage}: Math Setup\n"
-        code += f"const std::uint32_t math_format{stage} = ckernel::to_underlying(DataFormat::{math_format.name});\n"
         code += f"constexpr DstSync dest_sync{stage} = {dest_sync};\n"
 
         return code
@@ -289,7 +211,11 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.math_hw_configure(operation, config)
+        code += config.sentinel.hw_configure_math(config, operation)
+
+        stage = operation.stage_id
+        dest_acc = config.dest_acc.cpp_enum_value
+        code += f"_llk_math_pack_sync_init_<dest_sync{stage}, {dest_acc}>();\n"
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -345,59 +271,16 @@ class ComputePipeline:
         self, operation: "FusedOperation", config: "GlobalConfig"
     ) -> str:
         stage = operation.stage_id
-        buffer_Res_tile_size = operation.buffer_Res_tile_size
-        pack_src = operation.pack_in
-        pack_dst = operation.pack_out
-        result_buffer_address = operation.output.l1_address
+        return f"// Operation {stage}: Packer\n"
 
-        return (
-            f"// Operation {stage}: Packer\n"
-            f"const Operand buffer_Res{stage}({hex(result_buffer_address)}, {buffer_Res_tile_size});\n"
-            f"const std::uint32_t pack_src_format{stage} = ckernel::to_underlying(DataFormat::{pack_src.name});\n"
-            f"const std::uint32_t pack_dst_format{stage} = ckernel::to_underlying(DataFormat::{pack_dst.name});\n"
-        )
-
-    def pack_hw_configure(
-        self, operation: "FusedOperation", config: "GlobalConfig"
-    ) -> str:
-        stage = operation.stage_id
-        bh_tilize = operation.bh_tilize.cpp_enum_value
-        dest_acc = config.dest_acc.cpp_enum_value
-        pack_size = operation.tile_size_pack
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
-
-        if stage == 1:
-            if config.architecture == ChipArchitecture.BLACKHOLE:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
-                    f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
-                    f");\n"
-                )
-            elif config.architecture == ChipArchitecture.WORMHOLE:
-                code = (
-                    f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
-                    f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}, {face_r_dim}, {num_faces}\n"
-                    f");\n"
-                )
-        else:
-            code = (
-                f"_llk_pack_reconfig_data_format_<{dest_acc}, false>(\n"
-                f"pack_src_format{stage}, pack_dst_format{stage}, {pack_size}\n"
-                f");\n"
-            )
-
-        return code
-
-    def _pack_reduce_mask_config(self) -> str:
-        reduce_dim = self.get_reduce_pack_mask()
-        if reduce_dim is not None:
-            return f"_llk_pack_reduce_mask_config_<false, {reduce_dim}>();\n"
+    def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
+        if operation.reduce_dim is not None:
+            reduce_dim = operation.reduce_dim.cpp_enum_value
+            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
         return ""
 
-    def _pack_reduce_mask_clear(self) -> str:
-        reduce_dim = self.get_reduce_pack_mask()
-        if reduce_dim is not None:
+    def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
+        if operation.reduce_dim is not None:
             return "_llk_pack_reduce_mask_clear_();\n"
         return ""
 
@@ -415,6 +298,24 @@ class ComputePipeline:
 
         return code
 
+    @staticmethod
+    def _pack_relu_config(config: "GlobalConfig", operation: "FusedOperation") -> str:
+        from helpers.golden_generators import PackGolden
+
+        pack_src_format = config.sentinel._pack_format.pack_src
+
+        relu_config = PackGolden.generate_relu_config(
+            operation.pack_relu, operation.relu_threshold, pack_src_format
+        )
+        return f"_llk_pack_relu_config_({relu_config});\n"
+
+    @staticmethod
+    def _pack_l1_accumulation_config(
+        config: "GlobalConfig", operation: "FusedOperation"
+    ) -> str:
+        l1_acc = operation.pack_l1_accumulation.cpp_enum_value
+        return f"_llk_pack_reconfig_l1_acc_({l1_acc});\n"
+
     def pack_body(self, operation: "FusedOperation", config: "GlobalConfig") -> str:
         code = self._pack_constants(operation, config)
 
@@ -422,9 +323,11 @@ class ComputePipeline:
             code += "{\n"
             code += 'ZONE_SCOPED("INIT")\n'
 
-        code += self.pack_hw_configure(operation, config)
-        code += self._pack_reduce_mask_config()
+        code += config.sentinel.hw_configure_pack(config, operation)
+        code += self._pack_reduce_mask_config(operation)
         code += self.packer().init(operation, config, None, None)
+        code += self._pack_relu_config(config, operation)
+        code += self._pack_l1_accumulation_config(config, operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -453,7 +356,7 @@ class ComputePipeline:
 
         code += self.packer_sync_with_unpacker(operation, config)
         code += self.packer().uninit(operation, config, None, None)
-        code += self._pack_reduce_mask_clear()
+        code += self._pack_reduce_mask_clear(operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"
@@ -463,15 +366,31 @@ class ComputePipeline:
 
     def golden(
         self,
-        input_tensor_a: torch.Tensor,
-        input_tensor_b: torch.Tensor,
         operation: "FusedOperation",
         config: "GlobalConfig",
+        golden_type: GoldenType,
     ) -> torch.Tensor:
-        tensor_a = torch.zeros(operation.src_a.dimensions)
-        tensor_b = torch.zeros(operation.src_b.dimensions)
+        tensor_a = torch.zeros(operation.math.operations[0].src_a.dimensions)
+        tensor_b = torch.zeros(operation.math.operations[0].src_b.dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.operations:
+            config.sentinel.configure_golden(config, operation, op)
+            if op.src_a is not None:
+                input_tensor_a = (
+                    op.src_a.raw_data
+                    if golden_type == GoldenType.L1_GOLDEN
+                    else op.src_a.master_golden
+                )
+            else:
+                input_tensor_a = None
+            if op.src_b is not None:
+                input_tensor_b = (
+                    op.src_b.raw_data
+                    if golden_type == GoldenType.L1_GOLDEN
+                    else op.src_b.master_golden
+                )
+            else:
+                input_tensor_b = None
             tensor_a, tensor_b, tensor_dst = op.golden(
                 input_tensor_a,
                 input_tensor_b,

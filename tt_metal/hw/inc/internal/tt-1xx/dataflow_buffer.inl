@@ -18,8 +18,6 @@
 #endif
 #endif  // COMPILE_FOR_TRISC
 
-namespace experimental {
-
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
     : local_dfb_interface_(get_local_cb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
 
@@ -119,7 +117,5 @@ inline void DataflowBuffer::finish_impl() {}
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const { return local_dfb_interface_.fifo_wr_ptr; }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const { return local_dfb_interface_.fifo_rd_ptr; }
-
-}  // namespace experimental
 
 #endif  // !ARCH_QUASAR

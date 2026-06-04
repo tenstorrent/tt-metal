@@ -5,7 +5,7 @@ from torch import nn
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 
 
 class RMSNorm(nn.Module):
@@ -60,7 +60,7 @@ class RMSNorm(nn.Module):
             tt_gathered_stats = ttnn.all_gather(
                 tt_stats,
                 dim=3,
-                num_links=1,
+                num_links=get_default_num_links(self.mesh_device),
                 cluster_axis=1,
                 mesh_device=self.mesh_device,
                 memory_config=tt_gathered_stats_memory_config,

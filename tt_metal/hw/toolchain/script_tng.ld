@@ -97,8 +97,11 @@ PHDRS {
 /* If not defined data is placed per-cpu after TLS.  */
 IF_KERNEL(IF_TLS(PROVIDE_HIDDEN(DATA_START = 0);))
 SECTIONS {
-  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000 */
-  .device_print_strings 0x6400000 :
+  /* DEVICE_PRINT string table – file-only section, VMA = 0x6400000.
+     (INFO) keeps section data in the ELF for the host parser to read via
+     section headers, but strips SHF_ALLOC so the linker doesn't expect it
+     in a PT_LOAD segment ("allocated section ... not in segment" warning). */
+  .device_print_strings 0x6400000 (INFO) :
   {
     __device_print_strings_start = .;
     KEEP(*(.device_print_strings))
@@ -107,7 +110,7 @@ SECTIONS {
   }
 
   /* DEVICE_PRINT strings info table – file-only section, VMA = 0x6500000 */
-  .device_print_strings_info 0x6500000 :
+  .device_print_strings_info 0x6500000 (INFO) :
   {
       __device_print_strings_info_start = .;
       KEEP(*(.device_print_strings_info))
@@ -140,18 +143,18 @@ SECTIONS {
     IF_KERNEL(*_object.o(.tdata .tbss))
     . = ALIGN(4);
     __ldm_tdata_init = .;
-    *(.tdata.start) /* define __tdata_start as TLS symbol) */
-    *(.tdata .tdata.* .gnu.linkonce.td.*)
+    *-crt0-tls.o(.tdata.start) /* define __tdata_start as TLS symbol) */
+    *(.tdata EXCLUDE_FILE (*-crt0-tls.o) .tdata.* .gnu.linkonce.td.*)
     . = ALIGN(4);
-    *(.tdata.end)
+    *-crt0-tls.o(.tdata.end)
   } :tdata :tls
   .tbss
   : IF_KERNEL(LOAD_AFTER_ALIGN(.tbss, .tdata))
   {
-    *(.tbss.start) /* define __tbss_start as TLS symbol) */
-    *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
+    *-crt0-tls.o(.tbss.start) /* define __tbss_start as TLS symbol) */
+    *(.tbss EXCLUDE_FILE (*-crt0-tls.o) .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
-    *(.tbss.end)
+    *-crt0-tls.o(.tbss.end)
   } :tdata :tls
 
 #if defined(TYPE_KERNEL)

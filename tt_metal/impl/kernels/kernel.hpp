@@ -6,24 +6,29 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
-#include "api/tt-metalium/experimental/host_api.hpp"
+#include "impl/host_api/temp_quasar_api.hpp"
+#include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
-#include "jit_build/jit_build_options.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
+
+class JitBuildOptions;
 
 enum Eth : uint8_t {
     SENDER = 0,
@@ -87,6 +92,25 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: local DFB accessor names -> logical DFB ids
 using DataflowBufferLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: local semaphore accessor names -> semaphore ids
+using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t>;
+
+// Metal 2.0: per-kernel resolved TensorBinding.
+// Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
+// TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
+// (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
+struct TensorBindingHandle {
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
+    uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
+    uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    // Count of runtime accessor field words that immediately follow the address slot
+    // in this binding's CRTA section. Non-zero only when the TensorParameter has
+    // dynamic_tensor_shape=true and is sharded: the runtime tensor's shape-in-pages
+    // is written here at enqueue time. The first runtime field word lives at byte
+    // offset addr_crta_offset + sizeof(uint32_t).
+    uint32_t num_runtime_field_crta_words = 0;
+};
 
 class Kernel : public JitBuildSettings {
 public:
@@ -146,6 +170,20 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_local_accessor_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+    void process_semaphore_local_accessor_handles(
+        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+    void process_tensor_binding_handles(std::function<void(
+                                            const std::string& accessor_name,
+                                            uint32_t cta_offset,
+                                            uint32_t addr_crta_offset,
+                                            uint32_t num_runtime_field_crta_words)>) const override;
+    const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
+    const std::vector<std::string>& get_runtime_arg_names() const override { return runtime_arg_names_; }
+    const std::vector<std::string>& get_common_runtime_arg_names() const override {
+        return common_runtime_arg_names_;
+    }
+    KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
+    bool is_metal2_kernel() const override { return is_metal2_kernel_; }
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -180,13 +218,18 @@ public:
     // Binary management (moved from KernelImpl)
     const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
-    bool binaries_exist_on_disk(const IDevice* device) const;
+    bool binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const;
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
     virtual void generate_binaries(IDevice* device, JitBuildOptions& build_options) const = 0;
-    virtual void read_binaries(IDevice* device) = 0;
+    virtual void read_binaries(IDevice* device, const std::string& binary_root) = 0;
 
-    void register_kernel_elf_paths_with_watcher(IDevice& device) const;
+    void register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const;
+
+    void set_precompiled_config(experimental::PrecompiledKernelConfig config);
+    const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
+        return precompiled_config_;
+    }
 
 protected:
     Kernel(
@@ -197,7 +240,15 @@ protected:
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
         const std::unordered_map<std::string, uint32_t>& named_compile_args,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {});
+        // Metal 2.0-only parameters below.
+        // If is_metal2_kernel is false, the remaining parameters are ignored and should be left default.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
+        const KernelCrtaLayout& crta_layout = {});
 
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
@@ -208,7 +259,16 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are
+    // populated only when is_metal2_kernel_ is true. Order of runtime_arg_names_ /
+    // common_runtime_arg_names_ determines byte-offset layout in the dispatch buffer.
+    const bool is_metal2_kernel_;
     const DataflowBufferLocalAccessorHandleMap dataflow_buffer_local_accessor_handles_;
+    const SemaphoreLocalAccessorHandleMap semaphore_local_accessor_handles_;
+    const std::vector<std::string> runtime_arg_names_;
+    const std::vector<std::string> common_runtime_arg_names_;
+    const std::vector<TensorBindingHandle> tensor_binding_handles_;
+    const KernelCrtaLayout crta_layout_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};
@@ -225,10 +285,20 @@ protected:
 
     // Build key -> binaries (moved from KernelImpl)
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+    std::optional<experimental::PrecompiledKernelConfig> precompiled_config_;
+
+    // User-supplied include paths (-I), resolved to absolute paths
+    // Populated by subclass constructors via set_compiler_include_paths()
+    std::vector<std::string> resolved_compiler_include_paths_;
+
+    // Resolve user-supplied include paths and store them on the kernel:
+    //  - Absolute paths pass through unmodified
+    //  - Relative paths are resolved against the current working directory
+    void set_compiler_include_paths(const std::vector<std::filesystem::path>& paths);
 
     virtual std::string config_hash() const = 0;
 
-    std::vector<std::string> file_paths(IDevice& device) const;
+    std::vector<std::string> file_paths(IDevice& device, const std::string& binary_root) const;
 
 private:
     void register_kernel_with_watcher();
@@ -240,7 +310,14 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const DataMovementConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -249,18 +326,25 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            runtime_arg_names,
+            common_runtime_arg_names,
+            tensor_binding_handles,
+            crta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "DataMovementKernel is not supported on Quasar. Use QuasarDataMovementKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~DataMovementKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -298,7 +382,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -336,7 +420,7 @@ public:
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -363,7 +447,14 @@ public:
         const KernelSource& kernel_src,
         const CoreRangeSet& cr_set,
         const ComputeConfig& config,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -372,11 +463,18 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            runtime_arg_names,
+            common_runtime_arg_names,
+            tensor_binding_handles,
+            crta_layout),
         config_(config) {
         TT_FATAL(
             MetalContext::instance().get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~ComputeKernel() override = default;
@@ -384,7 +482,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -435,7 +533,14 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarDataMovementConfig& config,
         const std::set<DataMovementProcessor>& dm_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::DM,
@@ -444,7 +549,13 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            runtime_arg_names,
+            common_runtime_arg_names,
+            tensor_binding_handles,
+            crta_layout),
         config_(config),
         dm_processors_(dm_processors.begin(), dm_processors.end()) {
         TT_FATAL(
@@ -455,6 +566,7 @@ public:
             "Number of DM cores per cluster specified in config must match number of DM cores per cluster that have "
             "been reserved");
         TT_FATAL(std::is_sorted(dm_processors_.begin(), dm_processors_.end()), "DM cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarDataMovementKernel() override = default;
@@ -462,7 +574,7 @@ public:
     uint32_t get_kernel_processor_type(int index) const override;
     std::vector<uint32_t> get_processor_indices_for_binary(int binary_index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -493,7 +605,14 @@ public:
         const CoreRangeSet& cr_set,
         const QuasarComputeConfig& config,
         const std::set<QuasarComputeProcessor>& compute_processors,
-        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {}) :
+        // Metal 2.0-only parameters below.
+        bool is_metal2_kernel = false,
+        const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles = {},
+        const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles = {},
+        const std::vector<std::string>& runtime_arg_names = {},
+        const std::vector<std::string>& common_runtime_arg_names = {},
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = {},
+        const KernelCrtaLayout& crta_layout = {}) :
         Kernel(
             HalProgrammableCoreType::TENSIX,
             HalProcessorClassType::COMPUTE,
@@ -502,7 +621,13 @@ public:
             config.compile_args,
             config.defines,
             config.named_compile_args,
-            dataflow_buffer_local_accessor_handles),
+            is_metal2_kernel,
+            dataflow_buffer_local_accessor_handles,
+            semaphore_local_accessor_handles,
+            runtime_arg_names,
+            common_runtime_arg_names,
+            tensor_binding_handles,
+            crta_layout),
         config_(config),
         compute_processors_(compute_processors.begin(), compute_processors.end()) {
         TT_FATAL(
@@ -515,13 +640,14 @@ public:
             "per Tensix engine must match number of compute cores per cluster that have been reserved");
         TT_FATAL(
             std::is_sorted(compute_processors_.begin(), compute_processors_.end()), "Compute cores must be ordered");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 
     ~QuasarComputeKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
-    void read_binaries(IDevice* device) override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
 
     bool configure(
         IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;

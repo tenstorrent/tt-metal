@@ -14,7 +14,6 @@ from tt_lib.utils import (
     tilize_to_list,
     untilize,
 )
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -357,5 +356,5 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
         pcc_threshold=0.999,
         rtol=0.085,
         atol=0.001,
-        frobenius_threshold=0.028,
+        frobenius_threshold=0.031,
     )

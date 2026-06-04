@@ -504,6 +504,12 @@ class TracedTorchTensor(torch.Tensor):
         *function_args: Any,
         **function_kwargs: Any,
     ) -> Any:
+        # For a leaf tensor with requires_grad=True, the default subclass constructor
+        # (torch.Tensor.__new__(cls, tensor)) returns an alias view with grad_fn=AliasBackward0,
+        # which is non-leaf and gets rejected by nn.Module.register_parameter. _make_subclass
+        # preserves leaf-ness so that nn.Parameter(torch.empty(...)) keeps working under tracing.
+        if isinstance(tensor, torch.Tensor) and tensor.is_leaf and not function_args and not function_kwargs:
+            return torch.Tensor._make_subclass(cls, tensor, tensor.requires_grad)
         return super().__new__(cls, tensor, *function_args, **function_kwargs)  # type: ignore[call-arg]
 
     def __init__(

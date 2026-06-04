@@ -11,6 +11,7 @@
 #include "ckernel.h"
 #include "../dataflow/simple_tls_check_defines.h"
 #include "api/kernel_thread_globals.h"
+#include "experimental/kernel_args.h"
 
 // uint32_t shared_global = 5;
 // uint32_t uninitialized_global;
@@ -18,7 +19,7 @@
 // thread_local uint32_t uninitialized_thread_local_var;
 
 void kernel_main() {
-    const uint32_t l1_base = get_arg_val<uint32_t>(0);
+    const uint32_t l1_base = get_arg(args::l1_result_addr);
     const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     const uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
     const uint32_t num_threads = get_num_threads();

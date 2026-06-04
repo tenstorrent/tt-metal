@@ -221,6 +221,37 @@ def dict_to_compute_kernel_config(cfg):
     )
 
 
+def _add_1d_matmul_extra_kwargs(kwargs, cfg):
+    """Preserve gather_in0 / hop_cores for 1D matmul program configs. These were
+    previously dropped, so a traced gather_in0=True matmul ran as a plain
+    (non-gather) 1D matmul — taking the general grid path (program grid must fit
+    the device grid) instead of the gather_in0 path (which validates the output
+    shard grid against the device grid). That made galaxy configs whose nominal
+    grid is 8-wide fail on COL dispatch even though the real (sparse, x<=6)
+    placement fits.
+
+    num_global_cb_receivers is intentionally NOT forwarded: values > 1 require a
+    global circular buffer (global_cb) that the trace does not capture, and it is
+    a gather-distribution optimization rather than a numerical-correctness
+    parameter, so it is left at the default 1 to keep the op runnable.
+    """
+    if cfg.get("gather_in0") is not None:
+        kwargs["gather_in0"] = bool(cfg["gather_in0"])
+    hop = cfg.get("hop_cores")
+    if isinstance(hop, list) and hop:
+        ranges = set()
+        for r in hop:
+            s = r.get("start") if isinstance(r, dict) else None
+            e = r.get("end") if isinstance(r, dict) else None
+            if isinstance(s, dict) and isinstance(e, dict):
+                ranges.add(
+                    ttnn.CoreRange(ttnn.CoreCoord(int(s["x"]), int(s["y"])), ttnn.CoreCoord(int(e["x"]), int(e["y"])))
+                )
+        if ranges:
+            kwargs["hop_cores"] = ttnn.CoreRangeSet(ranges)
+    return kwargs
+
+
 def dict_to_program_config(cfg, input_b_memory_config=None, input_a_memory_config=None):
     """Convert a program_config dict from traced JSON to a proper ProgramConfig object.
 
@@ -344,6 +375,10 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
                 fused_activation=fused_activation,
+                # Master-traced fuse_batch (default-False). Without this, the C++
+                # constructor defaults to True and the kernel asserts on the
+                # batch-shape requirement for any non-singleton-batch input_b.
+                fuse_batch=bool(cfg.get("fuse_batch", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
@@ -367,6 +402,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            _add_1d_matmul_extra_kwargs(kwargs, cfg)
             return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
 
         if type_name == "MatmulMultiCoreReuseProgramConfig":
@@ -500,6 +536,7 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
             if cfg.get("out_block_w") is not None:
                 kwargs["out_block_w"] = int(cfg["out_block_w"])
+            _add_1d_matmul_extra_kwargs(kwargs, cfg)
             try:
                 return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**kwargs)
             except Exception:
@@ -599,12 +636,16 @@ def dict_to_memory_config(mem_cfg):
     if not grid_list or not shard_shape:
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_ttnn)
 
-    core_ranges = set()
+    # Preserve insertion order so the kernel sees the same storage-core
+    # ordering master recorded (DRAM-sharded matmul asserts on it).
+    core_ranges = []
     for range_dict in grid_list:
         start = range_dict.get("start", {})
         end = range_dict.get("end", {})
         if "x" in start and "y" in start and "x" in end and "y" in end:
-            core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])))
+            core_ranges.append(
+                ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
+            )
 
     if not core_ranges:
         return ttnn.MemoryConfig(layout, buffer_type_ttnn)
@@ -1054,14 +1095,18 @@ class MasterConfigLoader:
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
             "DataType::BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::UINT16": ttnn.uint16,
+            "DataType::UINT8": ttnn.uint8,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
             "DataType.BFLOAT8_B": ttnn.bfloat8_b,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.UINT16": ttnn.uint16,
+            "DataType.UINT8": ttnn.uint8,
         }
         return dtype_mapping.get(dtype_str, ttnn.bfloat16)
 
@@ -1190,44 +1235,55 @@ class MasterConfigLoader:
             shard_shape = shard_spec_dict.get("shape")
             orientation_raw = shard_spec_dict.get("orientation")
 
-            # Validate required shard_spec fields
-            if not grid_list:
-                raise ValueError(f"Missing 'grid' in shard_spec: {shard_spec_dict}")
-            if not shard_shape:
-                raise ValueError(f"Missing 'shape' in shard_spec: {shard_spec_dict}")
-            if orientation_raw is None:
-                raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
+            # Validate required shard_spec fields — fall back to base sharded
+            # config (no shard_spec) when any field is missing.  This is common for
+            # Galaxy mesh-sharded tensors where grid metadata may not serialise
+            # cleanly.  The sweep run will use device-default sharding.
+            if not grid_list or not shard_shape or orientation_raw is None:
+                logger.debug(
+                    f"Incomplete shard_spec (grid={bool(grid_list)}, shape={bool(shard_shape)}, "
+                    f"orientation={orientation_raw is not None}), falling back to base sharded config"
+                )
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
             orientation_str = str(orientation_raw)
 
-            # Create CoreRangeSet from grid
-            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
-            core_ranges = set()
-            for range_dict in grid_list:
-                start = range_dict.get("start")
-                end = range_dict.get("end")
+            # Try to build full shard_spec; fall back to base sharded config
+            # if any field is malformed (Galaxy mesh configs may have unusual grid data).
+            try:
+                # Create CoreRangeSet from grid
+                # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+                core_ranges = set()
+                for range_dict in grid_list:
+                    start = range_dict.get("start")
+                    end = range_dict.get("end")
 
-                if not start or not end:
-                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
-                if "x" not in start or "y" not in start:
-                    raise ValueError(f"Invalid grid start (missing x/y): {start}")
-                if "x" not in end or "y" not in end:
-                    raise ValueError(f"Invalid grid end (missing x/y): {end}")
+                    if not start or not end:
+                        raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
+                    if "x" not in start or "y" not in start:
+                        raise ValueError(f"Invalid grid start (missing x/y): {start}")
+                    if "x" not in end or "y" not in end:
+                        raise ValueError(f"Invalid grid end (missing x/y): {end}")
 
-                core_range = ttnn.CoreRange(ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"]))
-                core_ranges.add(core_range)
+                    core_range = ttnn.CoreRange(
+                        ttnn.CoreCoord(start["x"], start["y"]), ttnn.CoreCoord(end["x"], end["y"])
+                    )
+                    core_ranges.add(core_range)
 
-            shard_grid = ttnn.CoreRangeSet(core_ranges)
+                shard_grid = ttnn.CoreRangeSet(core_ranges)
 
-            # Map orientation (supports both string names and integer enum values)
-            if orientation_str in ("COL_MAJOR", "1"):
-                orientation = ttnn.ShardOrientation.COL_MAJOR
-            elif orientation_str in ("ROW_MAJOR", "0"):
-                orientation = ttnn.ShardOrientation.ROW_MAJOR
-            else:
-                raise ValueError(f"Unknown orientation: {orientation_str}")
+                # Map orientation (supports both string names and integer enum values)
+                if orientation_str in ("COL_MAJOR", "1"):
+                    orientation = ttnn.ShardOrientation.COL_MAJOR
+                elif orientation_str in ("ROW_MAJOR", "0"):
+                    orientation = ttnn.ShardOrientation.ROW_MAJOR
+                else:
+                    raise ValueError(f"Unknown orientation: {orientation_str}")
 
-            # Create ShardSpec
-            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+                # Create ShardSpec
+                shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
+            except (ValueError, KeyError, TypeError) as shard_err:
+                logger.debug(f"Could not build shard_spec ({shard_err}), using base sharded config")
+                return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn)
 
             return ttnn.MemoryConfig(memory_layout_ttnn, buffer_type_ttnn, shard_spec)
 
@@ -1355,12 +1411,11 @@ class MasterConfigLoader:
                         parsed_layout = self.parse_layout(tensor_config.layout)
                         parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
-                        # Skip this config if memory_config parsing returned None
-                        # (happens with mesh-sharded tensors missing grid info)
+                        # Fall back to DRAM for unparseable memory configs instead
+                        # of skipping the entire config — ensures Galaxy mesh configs
+                        # still produce sweep vectors.
                         if parsed_mem_config is None:
-                            raise ValueError(
-                                f"Memory config parsing returned None (likely mesh-sharded tensor without grid)"
-                            )
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         positional_tensors.append(
                             {
@@ -1369,6 +1424,7 @@ class MasterConfigLoader:
                                 "layout": parsed_layout,
                                 "memory_config": parsed_mem_config,
                                 "tensor_placement": tensor_config.tensor_placement,
+                                "storage_type": tensor_config.storage_type,
                             }
                         )
                     else:
@@ -1386,8 +1442,8 @@ class MasterConfigLoader:
                         parsed_mem_config = self.parse_memory_config(tensor_config.memory_config, tensor_config.shape)
 
                         if parsed_mem_config is None:
-                            logger.warning(f"⚠️ Skipping named tensor kwarg '{key}' due to unparseable memory_config")
-                            continue
+                            logger.debug(f"Named tensor kwarg '{key}' has unparseable memory_config, using DRAM")
+                            parsed_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
                         config_dict[f"{key}_shape"] = tuple(tensor_config.shape)
                         config_dict[f"{key}_dtype"] = parsed_dtype
@@ -1423,6 +1479,9 @@ class MasterConfigLoader:
                     config_dict[f"input_{suffix}_layout"] = tensor["layout"]
                     config_dict[f"input_{suffix}_memory_config"] = tensor["memory_config"]
                     config_dict[f"input_{suffix}_tensor_placement"] = tensor.get("tensor_placement")
+                    storage = tensor.get("storage_type", "StorageType.DEVICE")
+                    if storage and "HOST" in str(storage):
+                        config_dict[f"input_{suffix}_storage_type"] = storage
 
                 if "output_memory_config" not in config_dict:
                     if "memory_config" in config_dict:

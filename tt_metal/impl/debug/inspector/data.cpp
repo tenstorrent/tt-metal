@@ -13,6 +13,8 @@
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <program_cache.hpp>
+#include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -68,6 +70,7 @@ Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions(
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
             get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
+            get_rpc_server().setGetSystemMeshCallback([this](auto result) { this->rpc_get_system_mesh(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -142,11 +145,13 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
         const auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
         auto shape = mesh_device.initShape(shape_view.dims());
         for (size_t k = 0; k < shape_view.dims(); ++k) {
-            shape.set(k, shape_view.get_stride(k));
+            shape.set(k, shape_view[k]);
         }
 
         mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
         mesh_device.setInitialized(mesh_device_data.initialized);
+        mesh_device.setProgramCacheEnabled(
+            const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
     }
 }
 
@@ -189,19 +194,37 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
 
 void Data::rpc_get_mesh_workload_runtime_entries(
     rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_entries_mutex);
-    auto write_pos = runtime_entries_write_pos;
-    size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
-    size_t start = write_pos - count;
+    std::lock_guard<std::mutex> ring_lock(runtime_entries_mutex);
+    std::lock_guard<std::mutex> trace_lock(trace_runtime_entries_mutex);
 
-    auto all_runtime_entries = results.initRuntimeEntries(count);
-    for (size_t i = 0; i < count; ++i) {
-        const auto& re = runtime_entries[(start + i) % kRuntimeEntriesCapacity];
-        auto entry = all_runtime_entries[i];
+    const size_t ring_count = std::min(runtime_entries_write_pos, kRuntimeEntriesCapacity);
+    const size_t ring_start = runtime_entries_write_pos - ring_count;
+
+    size_t trace_count = 0;
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        trace_count += bucket.size();
+    }
+
+    // Sentinel matches the default in rpc.capnp (UInt32 max == "not traced"). Capnp has no native null.
+    constexpr uint32_t kNoTraceId = 0xFFFFFFFFu;
+    auto all_runtime_entries = results.initRuntimeEntries(ring_count + trace_count);
+    size_t out_idx = 0;
+    auto fill = [&](const inspector::MeshWorkloadRuntimeEntry& re) {
+        auto entry = all_runtime_entries[out_idx++];
         entry.setWorkloadId(re.workload_id);
         entry.setRuntimeId(re.runtime_id);
         entry.setOperationName(std::string(re.operation_name));
         entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
+        entry.setTraceId(re.trace_id.has_value() ? **re.trace_id : kNoTraceId);
+    };
+
+    for (size_t i = 0; i < ring_count; ++i) {
+        fill(runtime_entries[(ring_start + i) % kRuntimeEntriesCapacity]);
+    }
+    for (const auto& [_, bucket] : trace_runtime_entries) {
+        for (const auto& re : bucket) {
+            fill(re);
+        }
     }
 }
 
@@ -541,7 +564,6 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(arc_debug_buffer_size);
     RT(validate_kernel_binaries);
     RT(record_noc_transfers);
-    RT(use_device_print);
 
     // Timeouts
     RT_CUSTOM("timeout_duration_for_operations", fmt::format("{}s", rt.get_timeout_duration_for_operations().count()));
@@ -663,6 +685,45 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
 #undef RT
 #undef RT_CUSTOM
 #undef RT_GUARDED
+
+void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results) {
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
+    auto system_mesh_builder = results.initSystemMesh();
+
+    const auto& global_shape = system_mesh.shape();
+    auto global_shape_builder = system_mesh_builder.initGlobalShape(global_shape.dims());
+    for (size_t i = 0; i < global_shape.dims(); ++i) {
+        global_shape_builder.set(i, global_shape[i]);
+    }
+
+    const auto& local_shape = system_mesh.local_shape();
+    auto local_shape_builder = system_mesh_builder.initLocalShape(local_shape.dims());
+    for (size_t i = 0; i < local_shape.dims(); ++i) {
+        local_shape_builder.set(i, local_shape[i]);
+    }
+
+    const auto local_offset = MetalContext::instance().get_control_plane().get_local_mesh_offset();
+    auto local_offset_builder = system_mesh_builder.initLocalOffset(local_offset.dims());
+    for (size_t i = 0; i < local_offset.dims(); ++i) {
+        local_offset_builder.set(i, local_offset[i]);
+    }
+
+    const auto mapped = system_mesh.get_mapped_devices(std::nullopt);
+    auto mapped_builder = system_mesh_builder.initMappedDevices(mapped.fabric_node_ids.size());
+    for (size_t i = 0; i < mapped.fabric_node_ids.size(); ++i) {
+        auto entry = mapped_builder[i];
+        const auto& fabric_node_id = mapped.fabric_node_ids[i];
+        entry.setFabricMeshId(*fabric_node_id.mesh_id);
+        entry.setFabricChipId(fabric_node_id.chip_id);
+
+        const auto& device_id = mapped.device_ids[i];
+        const bool is_local = device_id.is_local();
+        entry.setIsLocal(is_local);
+        if (is_local) {
+            entry.setLocalChipId(static_cast<uint32_t>(*device_id));
+        }
+    }
+}
 
 void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
     std::vector<ConfigurationEntry> all_entries;

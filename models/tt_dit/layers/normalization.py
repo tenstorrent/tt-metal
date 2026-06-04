@@ -44,12 +44,19 @@ class RMSNorm(Module):
             self.weight = None
             self.bias = None
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        compute_kernel_config=None,
+        program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+    ) -> ttnn.Tensor:
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
+            program_config=program_config,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
@@ -194,6 +201,7 @@ class DistributedRMSNorm(Module):
         rope_cos=None,
         rope_sin=None,
         trans_mat=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
@@ -224,6 +232,7 @@ class DistributedRMSNorm(Module):
             transformation_mat=trans_mat,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
+            dtype=dtype,
         )
         return x
 
@@ -478,11 +487,10 @@ class GroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
-        x = ttnn.group_norm(
-            x,
+        kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
             input_mask=self.mask.data,
@@ -493,6 +501,9 @@ class GroupNorm(Module):
             num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
+        if compute_kernel_config is not None:
+            kwargs["compute_kernel_config"] = compute_kernel_config
+        x = ttnn.group_norm(x, **kwargs)
         x = x.reshape([batch_size, height, width, channels])
 
         return x

@@ -23,9 +23,8 @@ Owner:
     tt-vjovanovic
 """
 
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
-from mpi4py import MPI
 import asyncio
 import capnp
 import os
@@ -39,7 +38,7 @@ script_config = ScriptConfig(
 InspectorData = inspector_capnp.Inspector
 
 
-class InspectorException(Exception):
+class InspectorException(TTTriageError):
     pass
 
 
@@ -170,13 +169,13 @@ def run(args, context) -> InspectorData:
     rank: int | None = None
 
     if not args["--inspector-disable-rank"]:
-        # If MPI is available, add rank to the RPC host and port
+        # If MPI rank is available, add rank to the RPC host and port
         try:
-            size = MPI.COMM_WORLD.Get_size()
-            if size > 1:
-                rank = MPI.COMM_WORLD.Get_rank()
-        except Exception:
-            # If MPI is not available or fails, fall back to rank-less mode without aborting.
+            rank_env = os.environ.get("TT_RUN_RANK")
+            if rank_env is not None:
+                rank = int(rank_env)
+        except Exception as e:
+            log_warning(f"Warning: MPI rank is not available or failed to parse, running in rank-less mode. Error: {e}")
             pass
 
     # First try to connect to Inspector RPC
@@ -204,10 +203,10 @@ def run(args, context) -> InspectorData:
         return InspectorRpcSerialized(log_directory)
     except:
         raise InspectorException(
-            "There is no Inspector RPC data, cannot continue. "
-            "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
-            "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
+            f"Inspector unavailable (no live RPC at {rpc_host}:{rpc_port}, no serialized logs at {log_directory}). "
+            "This usually means no Metal workload is currently running — there's nothing to triage.\n"
+            "  If you're debugging a live hang, keep the process alive while running triage in another terminal.\n"
+            "  If you're analyzing a past run, point --inspector-log-path at the saved logs."
         )
 
 

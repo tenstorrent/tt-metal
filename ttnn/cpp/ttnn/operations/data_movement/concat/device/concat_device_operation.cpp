@@ -24,33 +24,43 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
-    const bool is_sharded = input_tensors[0].is_sharded();
 
-    if (!is_sharded) {
+    if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
         return ConcatProgramFactory{};
     }
 
-    // Sharded cases - determine which specific factory to use
-    const bool output_is_sharded = args.output_mem_config.is_sharded();
-
-    if (output_is_sharded) {
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
-
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
-                return ConcatS2SRMProgramFactory{};
-            }
-            return ConcatS2STiledProgramFactory{};
-
-        }  // Multi-tensor s2s case
-        return ConcatS2SMultiProgramFactory{};
+    if (const bool output_is_sharded = args.output_mem_config.is_sharded(); !output_is_sharded) {
+        return ConcatS2IProgramFactory{};
     }
-    // Sharded-to-interleaved (s2i) case
-    return ConcatS2IProgramFactory{};
+
+    const bool input_nd_sharded = (TensorMemoryLayout::ND_SHARDED == input_tensors[0].memory_config().memory_layout());
+    const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
+    if (!input_nd_sharded && !output_nd_sharded) {
+        // specific cases for 2 tensors
+        if (input_tensors.size() == 2) {
+            if (input_tensors[0].layout() == input_tensors[1].layout()) {
+                if (3 == args.dim) {
+                    if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                        0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                        0 == input_tensors[1].padded_shape()[-1] % args.groups) {
+                        return ConcatS2SRMProgramFactory{};
+                    }
+                    if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
+                        return ConcatS2STiledProgramFactory{};
+                    }
+                }
+            }
+        }
+
+        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
+        if (2 == args.dim || 3 == args.dim) {
+            return ConcatS2SMultiProgramFactory{};
+        }
+    }
+
+    // default factory
+    // including ND sharded tensors
+    return ConcatProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -123,7 +133,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
             "Sharded output and inputs must have the same memory layout.");
-        TT_FATAL(args.output_mem_config.is_sharded(), "Output must be sharded if input is sharded.");
         TT_FATAL(
             args.output_mem_config.shard_spec().value().grid == first_input.shard_spec().value().grid,
             "Sharded output and inputs must have the same grid.");
@@ -164,6 +173,44 @@ Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
+}
+
+ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    auto hash = tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
+        operation_attributes.dim,
+        operation_attributes.groups,
+        operation_attributes.output_mem_config,
+        operation_attributes.sub_core_grids,
+        factory.index(),
+        tensor_args.input_tensors.size());
+
+    for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
+        const auto& tensor = tensor_args.input_tensors[tensor_index];
+        hash = ttsl::hash::hash_objects(
+            hash,
+            tensor_index,
+            tensor.logical_shape().rank(),
+            tensor.logical_shape(),
+            tensor.padded_shape(),
+            tensor.layout(),
+            tensor.dtype(),
+            tensor.memory_config());
+    }
+
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    hash = ttsl::hash::hash_objects(
+        hash,
+        tensor_args.input_tensors.size(),
+        output_spec.logical_shape().rank(),
+        output_spec.logical_shape(),
+        output_spec.padded_shape(),
+        output_spec.layout(),
+        output_spec.data_type(),
+        output_spec.memory_config());
+
+    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>

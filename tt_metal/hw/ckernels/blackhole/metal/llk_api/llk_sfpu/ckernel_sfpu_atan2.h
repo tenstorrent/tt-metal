@@ -88,10 +88,10 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
     v_endif;
 
     if constexpr (!is_fp32_dest_acc_en) {
-        r = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(r, sfpi::RoundMode::NearestEven));
+        r = sfpi::convert<sfpi::vFloat16b>(r, sfpi::RoundMode::NearestEven);
     }
 
-    r = sfpi::setsgn(r, y);
+    r = sfpi::copysgn(r, y);
 
     // If |x| = NaN or |y| = NaN, vec_min_max will ensure max=NaN as mentioned above.
     sfpi::vFloat infinity = std::numeric_limits<float>::infinity();

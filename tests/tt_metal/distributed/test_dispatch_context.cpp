@@ -122,34 +122,8 @@ TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 }
 
-// Note: Multiple init/terminate cycles within a single test (or on the same MeshDevice) are not
-// supported. The hardware state cannot be properly reset between cycles. The DispatchContext
-// singleton allows sequential tests (each with their own MeshDevice) to each do one init/terminate
-// cycle, but not multiple cycles per test.
-TEST(DispatchContext, DISABLED_ReInitAfterTerminateShouldFail) {
-    const auto& rt_options = MetalContext::instance().rtoptions();
-    if (rt_options.get_fast_dispatch()) {
-        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
-    }
-    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
-    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
-
-    const auto& cluster = MetalContext::instance().get_cluster();
-    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP()
-            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
-    }
-
-    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
-    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
-
-    // Unsupported path: re-initializing after terminate on the same MeshDevice currently fails and
-    // can leave the device in an unrecoverable state during teardown, so keep this test disabled.
-    EXPECT_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()), std::runtime_error);
-}
-
-// After SD -> enable FD -> disable FD, verify NOC/L1 bank tables by using an L1 buffer across the mesh.
-TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
+// Stress test repeated SD <-> FD round-trips: verify buffer I/O and workload dispatch remain correct across cycles
+TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
@@ -165,9 +139,7 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
 
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const uint32_t num_tiles = 64;
-
-    // Enable Fast Dispatch and create sharded L1 buffer
-    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    const uint32_t num_programs = 5;
 
     CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
     const uint32_t num_cores = 4;
@@ -177,53 +149,109 @@ TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
     std::array<uint32_t, 2> tensor2d_shape = {num_tiles, 1};
     ShardSpecBuffer shard_spec(shard_grid, shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    DeviceLocalBufferConfig fd_buffer_config{
+    DeviceLocalBufferConfig fd_l1_config{
         .page_size = single_tile_size,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = true};
-    ReplicatedBufferConfig fd_global_config{.size = num_tiles * single_tile_size};
-    auto fd_buf = MeshBuffer::create(fd_global_config, fd_buffer_config, mesh_device_.get());
+        .bottom_up = false};
+    ReplicatedBufferConfig fd_l1_global{.size = num_tiles * single_tile_size};
 
-    std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
-    std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
-    Finish(mesh_device_->mesh_command_queue());
-
-    // Verify sharded buffer readback in FD mode
-    std::vector<uint32_t> fd_dst_vec = {};
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        ReadShard(mesh_device_->mesh_command_queue(), fd_dst_vec, fd_buf, coord);
-        EXPECT_EQ(fd_dst_vec, fd_src_vec) << "Sharded buffer readback failed in FD mode";
-    }
-
-    // Transition from FD to SD
-    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
-
-    // Verify sharded buffer still works after FD->SD transition
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        std::vector<uint32_t> fd_buf_readback_in_sd = {};
-        ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
-        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
-    }
-
-    // Write and verify interleaved L1 buffer in SD mode. This remains a replicated MeshBuffer across the mesh, so
-    // validate it shard-by-shard rather than through EnqueueReadMeshBuffer(), which is only defined for sharded global
-    // layouts on multi-device meshes.
-    DeviceLocalBufferConfig sd_buffer_config{
+    DeviceLocalBufferConfig sd_l1_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
-    ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
-    auto sd_buf = MeshBuffer::create(sd_global_config, sd_buffer_config, mesh_device_.get());
+    ReplicatedBufferConfig sd_l1_global{.size = num_tiles * single_tile_size};
 
-    std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t), 0);
-    std::iota(sd_src_vec.begin(), sd_src_vec.end(), 200);
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
-    Finish(mesh_device_->mesh_command_queue());
+    DeviceLocalBufferConfig fd_dram_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig fd_dram_global{.size = num_tiles * single_tile_size};
 
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        std::vector<uint32_t> sd_dst_vec = {};
-        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
-        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed after FD->SD transition";
+    constexpr uint32_t num_cycles = 5;
+    for (uint32_t cycle = 0; cycle < num_cycles; cycle++) {
+        const uint32_t base = cycle * 10000;
+
+        // FD phase 1: sharded L1 buffer
+        experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+        auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
+        std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
+        std::iota(fd_src_vec.begin(), fd_src_vec.end(), base + 100);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+        Finish(mesh_device_->mesh_command_queue());
+
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<uint32_t> dst;
+            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
+        }
+
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+        // SD phase
+        // Verify FD-written sharded buffer is still readable after FD->SD transition.
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<uint32_t> dst;
+            ReadShard(mesh_device_->mesh_command_queue(), dst, fd_buf, coord);
+            EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 data mismatch after FD->SD transition at "
+                                       << coord;
+        }
+
+        // Write and verify interleaved L1 buffer in SD mode. Validated shard-by-shard because
+        // EnqueueReadMeshBuffer is only defined for sharded global layouts on multi-device meshes.
+        auto sd_buf = MeshBuffer::create(sd_l1_global, sd_l1_config, mesh_device_.get());
+        std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
+        std::iota(sd_src_vec.begin(), sd_src_vec.end(), base + 200);
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+        Finish(mesh_device_->mesh_command_queue());
+
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<uint32_t> dst;
+            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD interleaved L1 verification failed at " << coord;
+        }
+
+        // Run random workloads to stress the dispatch path and dirty compute state.
+        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+            num_programs, mesh_device_->compute_with_storage_grid_size(), 0);
+        for (uint32_t i = 0; i < num_programs; i++) {
+            auto random_workload = std::make_shared<MeshWorkload>();
+            random_workload->add_program(
+                MeshCoordinateRange(
+                    MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1}),
+                std::move(*programs[i]));
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, true);
+        }
+        Finish(mesh_device_->mesh_command_queue());
+
+        // Verify SD buffer is uncorrupted after running workloads.
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::vector<uint32_t> dst;
+            ReadShard(mesh_device_->mesh_command_queue(), dst, sd_buf, coord);
+            EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD buffer corrupted after running workloads at "
+                                       << coord;
+        }
+
+        // FD phase 2: DRAM buffer
+        experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+        auto fd2_buf = MeshBuffer::create(fd_dram_global, fd_dram_config, mesh_device_.get());
+        std::vector<uint32_t> fd2_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
+        std::iota(fd2_src_vec.begin(), fd2_src_vec.end(), base + 300);
+        for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
+            for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
+                WriteShard(mesh_device_->mesh_command_queue(), fd2_buf, fd2_src_vec, MeshCoordinate(y, x));
+            }
+        }
+        Finish(mesh_device_->mesh_command_queue());
+
+        for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
+            for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
+                std::vector<uint32_t> dst;
+                ReadShard(mesh_device_->mesh_command_queue(), dst, fd2_buf, MeshCoordinate(y, x));
+                EXPECT_EQ(dst, fd2_src_vec)
+                    << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ")";
+            }
+        }
+
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
     }
 }
 

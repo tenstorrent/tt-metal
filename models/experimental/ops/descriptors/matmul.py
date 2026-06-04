@@ -26,6 +26,7 @@ import ttnn
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
+@OpDescriptor.create(name="matmul")
 def matmul(
     input_a: "ttnn.Tensor",
     input_b: "ttnn.Tensor",
@@ -67,6 +68,10 @@ def matmul(
     if program_config is None:
         fp32 = getattr(compute_kernel_config, "fp32_dest_acc_en", False) if compute_kernel_config else False
         program_config = _default_program_config(input_a, input_b, transpose_a, transpose_b, core_range_set, fp32)
+
+    # allowed_worker_cores is required to be set by the ttnn.matmul API.
+    if getattr(program_config, "allowed_worker_cores", "missing") is None:
+        program_config.allowed_worker_cores = core_range_set
 
     # Use create_matmul_attributes to finalize params (computes bcast_batch, output_dtype, etc.)
     base_params = ttnn.MatmulParams()
@@ -113,11 +118,11 @@ def matmul(
         operation_params, tensor_args, output_tensors, core_range_set
     )
 
-    # Build OpDescriptor
-    inputs = [input_a, input_b]
-    outputs = list(output_tensors)
-
-    return OpDescriptor(program_descriptor, inputs, outputs, "matmul")
+    return OpDescriptor(
+        descriptor=program_descriptor,
+        input_tensors={"input_a": input_a, "input_b": input_b},
+        output_tensors=list(output_tensors),
+    )
 
 
 def _default_program_config(

@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -29,14 +32,20 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<5>();
     const auto s = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
+    CircularBuffer cb(cb_in0);
+
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {
-        cb_reserve_back(cb_in0, num_read_per_barrier);
-        uint32_t l1_write_addr = get_write_ptr(cb_in0);
+        cb.reserve_back(num_read_per_barrier);
+        const uint32_t cb_write_ptr = cb.get_write_ptr();
+        uint32_t l1_write_offset = 0;
 
         for (uint32_t i = 0; i < num_read_per_barrier; ++i) {
-            tt::data_movement::common::noc_async_read_sharded(l1_write_addr, s, i_stick, 0, stick_size_bytes);
-            l1_write_addr += stick_size_bytes;
+            // Restored native sharded multi-page split (see common.hpp helper).
+            tt::data_movement::common::noc_async_read_sharded(
+                cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
+            l1_write_offset += stick_size_bytes;
 
             curr_c++;
             i_stick += H;
@@ -53,7 +62,7 @@ void kernel_main() {
                 }
             }
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_in0, num_read_per_barrier);
+        noc.async_read_barrier();
+        cb.push_back(num_read_per_barrier);
     }
 }

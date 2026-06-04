@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 FORCE_INLINE uint32_t u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
@@ -27,8 +30,9 @@ void kernel_main() {
     constexpr uint32_t bytes_per_input_subblock = get_compile_time_arg_val(8);
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(9);
 
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
 
     constexpr auto src_args = TensorAccessorArgs<10>();
     const auto accessor_src = TensorAccessor(src_args, src_addr);
@@ -64,13 +68,18 @@ void kernel_main() {
         while (input_start_column < elements_per_tensor_row) {
             if (input_start_column >= output_start_column) {  // We need to read in a new input subblock
                 uint32_t input_page_id = row * num_input_pages_in_row + (input_start_column / elements_per_input_page);
-                uint64_t input_page_noc_addr = accessor_src.get_noc_addr(input_page_id);
-                uint64_t input_subblock_offset =
+                uint32_t input_subblock_offset =
                     ((input_start_column % elements_per_input_page) / elements_per_input_subblock) *
                     bytes_per_input_subblock;
                 uint32_t num_bytes_to_read = (input_end_column - input_start_column + 1) * bytes_per_element;
-                noc_async_read(input_page_noc_addr + input_subblock_offset, input_l1_write_addr, num_bytes_to_read);
-                noc_async_read_barrier();
+                CoreLocalMem<uint32_t> dst(input_l1_write_addr);
+                noc.async_read(
+                    accessor_src,
+                    dst,
+                    num_bytes_to_read,
+                    {.page_id = input_page_id, .offset_bytes = input_subblock_offset},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
             }
             if (input_end_column >= output_end_column) {  // Case where we are finishing writing an output subblock
                 uint32_t bytes_to_write_to_output_subblock;

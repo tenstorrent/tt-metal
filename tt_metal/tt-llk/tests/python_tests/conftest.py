@@ -6,21 +6,45 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
+
+# ttsim runs in-process (no ExalensServer). Its init must complete before any helpers.* import,
+# because helpers.chip_architecture.get_chip_architecture() reaches check_context() and this
+# conftest calls it at module-load time via the skip_for_* markers defined further down.
+# TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
+# TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
+# Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
+# and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
+# inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
+# is set.
+_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
+    "TT_UMD_SIMULATOR_PATH"
+)
+_IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+_SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
+    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
+)
+if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+    from ttexalens import tt_exalens_init as _tt_exalens_init
+
+    _tt_exalens_init.init_ttexalens(
+        simulation_directory=_SIMULATOR_PATH, use_4B_mode=False
+    )
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException, _send_arc_message
+from helpers.device import LLKAssertException
 from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
@@ -214,6 +238,15 @@ def pytest_configure(config):
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
 
+    # Device print is enabled on debug or trace.
+    resolved_log_level = (
+        config.getoption("--logging-level", default=None)
+        or os.getenv("LOGURU_LEVEL", "INFO")
+    ).upper()
+    TestConfig.DEVICE_PRINT_ENABLED = (
+        resolved_log_level in ("DEBUG", "TRACE") and not config.coverage_enabled
+    )
+
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         config.getoption("--coverage", default=False),
@@ -234,6 +267,8 @@ def pytest_configure(config):
     # Create directories from all processes - lock in create_directories handles race
     TestConfig.create_build_directories()
 
+    TestConfig.TEST_TARGET.update_from_pytest_config(config)
+
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 
     if _RECORD_TEST_ORDER := config.getoption("--record-test-order"):
@@ -248,9 +283,11 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
+    is_ttsim = _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
     if (
-        TestConfig.ARCH != ChipArchitecture.QUASAR
-        and not TestConfig.BUILD_MODE == BuildMode.PRODUCE
+        (is_ttsim or not TestConfig.TEST_TARGET.run_simulator)
+        and TestConfig.ARCH != ChipArchitecture.QUASAR
+        and TestConfig.BUILD_MODE != BuildMode.PRODUCE
     ):
         override_gprs_used_by_tensix_dump()
 
@@ -271,27 +308,32 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    initialize_test_target_from_pytest(config)
-    test_target = TestTargetConfig()
-
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        if test_target.run_simulator:
-            simulator_path = os.environ.get("TT_UMD_SIMULATOR_PATH")
-
-            if simulator_path is None:
+        if TestConfig.TEST_TARGET.run_simulator:
+            if _SIMULATOR_PATH is None:
                 pytest.exit(
-                    "ERROR: --run-simulator requires TT_UMD_SIMULATOR_PATH "
-                    "environment variable to be set.",
+                    "ERROR: --run-simulator requires TT_METAL_SIMULATOR "
+                    "(or TT_UMD_SIMULATOR_PATH) environment variable to be set.",
                     returncode=1,
                 )
 
-            # Only the controller process manages the server; xdist workers
-            # just connect to the already-running instance.
-            if not hasattr(config, "workerinput"):
+            if _SIMULATOR_PATH.endswith(".so"):
+                # ttsim: already initialized at module import above; runs in-process, no server.
+                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+                # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
+                if TestConfig.TEST_TARGET.reset_simulator_per_test:
+                    pytest.exit(
+                        "ERROR: --reset-simulator-per-test is not supported with ttsim. "
+                        "Re-run without it.",
+                        returncode=1,
+                    )
+            elif not hasattr(config, "workerinput"):
+                # RTL simulator: only the controller process manages the server; xdist workers
+                # just connect to the already-running instance.
                 global _exalens_server
                 _exalens_server = ExalensServer(
-                    simulator_path=simulator_path,
-                    port=test_target.simulator_port,
+                    simulator_path=_SIMULATOR_PATH,
+                    port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
             tt_exalens_init.init_ttexalens(use_4B_mode=False)
@@ -365,6 +407,62 @@ def _stringify_params(params):
     return f"[{' | '.join(parts)}]"
 
 
+# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
+#   [<clk>] ERROR: <Category>: <function>: <details>
+_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logreport(report):
+    # pytest-forked appends a crashed child's captured streams to report.sections
+    # using lowercase headers ("captured stdout"/"captured stderr"), but pytest's
+    # TestReport.capstdout/capstderr properties only match headers that start with
+    # "Captured stdout"/"Captured stderr" (capital C). The junit XML writer reads
+    # via those properties, so without renaming, <system-out> stays empty for
+    # forked crashes. Rename in place so the ttsim "ERROR: ..." line lands in the
+    # XML and any junit-XML-aware viewer (junit2html, CI, etc.) can render it.
+    sections = getattr(report, "sections", None)
+    if sections:
+        report.sections = [
+            (
+                ("Captured stdout call", content)
+                if name == "captured stdout"
+                else (
+                    ("Captured stderr call", content)
+                    if name == "captured stderr"
+                    else (name, content)
+                )
+            )
+            for name, content in sections
+        ]
+
+    # Rewrite the headline of forked-crash reports from the useless
+    #   ":-1: running the test CRASHED with signal 0"
+    # to the actual ttsim category/function so it shows up in the test summary,
+    # in <error message="..."> in the junit XML, and in CI annotations.
+    #
+    # We also normalize report.when from pytest-forked's sentinel "???" to "call".
+    # Without this, pytest-sugar (and other reporters that count by phase) treat
+    # forked-crash reports as setup-phase errors and miss them in the live
+    # pass/fail/skip footer; the junit writer also classifies them as <error>
+    # rather than <failure>. Setting when="call" makes the report indistinguish-
+    # able from a normal call-phase failure, which is what we actually want:
+    # the test ran, ttsim hit an unimplemented path mid-execution, the test
+    # failed.
+    if report.outcome == "failed" and "CRASHED with signal" in str(
+        report.longrepr or ""
+    ):
+        report.when = "call"
+        m = _TTSIM_ERR_RE.search(report.capstdout or "")
+        if m:
+            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
+            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+            props = list(getattr(report, "user_properties", []))
+            props.append(("ttsim_category", cat))
+            props.append(("ttsim_func", func))
+            report.user_properties = props
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     global _RECORD_TEST_ORDER
@@ -436,6 +534,10 @@ def pytest_runtest_makereport(item, call):
                     report.longrepr = f"LLK ASSERT HIT {test_file_and_func}{report.test_params} {exc_msg}"
                 elif exc_type == TimeoutError:
                     report.longrepr = f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    # Log the timeout error
+                    logger.error(
+                        f"TENSIX TIMED OUT {test_file_and_func}{report.test_params} {exc_msg}"
+                    )
                 elif exc_type == AssertionError:
                     # If we want to record test ordering, we already now from order report if test failed, thus to de-clutter logs,
                     # we will mark test as if it passed to speed the whole execution up
@@ -464,8 +566,7 @@ _reset_simulator_pending = False
 
 def pytest_runtest_teardown(item, nextitem):
     """Mark that a restart is needed before the next test."""
-    test_target = TestTargetConfig()
-    if not test_target.reset_simulator_per_test:
+    if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
     if nextitem is None:
         return
@@ -484,12 +585,10 @@ def pytest_runtest_setup(item):
     if _exalens_server is None:
         return
 
-    test_target = TestTargetConfig()
-
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -499,17 +598,13 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=test_target.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
         )
 
 
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_BUSY", test_target.device_id)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -547,10 +642,6 @@ def perf_report(request, worker_id):
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
         return
-
-    test_target = TestTargetConfig()
-    if not test_target.run_simulator and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        _send_arc_message("GO_IDLE", test_target.device_id)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()

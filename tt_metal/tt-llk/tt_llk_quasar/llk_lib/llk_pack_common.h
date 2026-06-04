@@ -8,6 +8,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "cpack_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 
 using namespace ckernel;
@@ -17,7 +18,7 @@ using namespace ckernel::trisc;
  * @brief Programs packer input data format (THCON) for the selected packer
  * @tparam PACK_SEL: p_pacr::PACK0 (math dest → L1) or p_pacr::PACK1 (SrcS → L1).
  * Actual PACK1 instructions require autoloop setup: use _llk_pack_srcs_config_ /
- * _llk_pack_srcs_ in llk_srcs_tdma.h — do not drive Packer 1 via llk_pack.h MOP APIs.
+ * _llk_pack_srcs_ in llk_srcs.h — do not drive Packer 1 via llk_pack.h MOP APIs.
  * @param tdma_desc: Contains destination register format
  */
 
@@ -35,6 +36,37 @@ inline void _llk_pack_hw_configure_(const tdma_descriptor_t& tdma_desc)
     else
     {
         cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, static_cast<std::uint8_t>(tdma_desc.reg_data_format));
+    }
+}
+
+/**
+ * Quasar pack dynamic input format: reprograms only THCON `PACKER*_REG0_IN_DATA_FORMAT`.
+ * L1 output encoding stays in the buffer descriptor; `pack_dst_format` is the BD/L1 DataFormat
+ * and is not written to packer config here.
+ *
+ * @tparam PACK_SEL           Packer to update (p_pacr::PACK0 or p_pacr::PACK1).
+ * @param pack_src_format     IN_DATA_FORMAT register value to program (packer gasket input).
+ * @param pack_dst_format     BD/L1 output DataFormat (used only for the conversion check).
+ */
+template <std::uint32_t PACK_SEL>
+inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format)
+{
+    static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
+
+    LLK_ASSERT(
+        ckernel::pack::is_quasar_pack_reconfig_pair_supported(pack_src_format, pack_dst_format),
+        "Unsupported Quasar packer IN_DATA_FORMAT for this dest register and L1 format.");
+
+    const auto in_fmt = static_cast<std::uint8_t>(pack_src_format);
+
+    // No STALLWAIT needed: THCON_PACKER<N>_REG0_IN_DATA_FORMAT is a shadow register on Quasar.
+    if constexpr (PACK_SEL == p_pacr::PACK0)
+    {
+        cfg_rmw(THCON_PACKER0_REG0_IN_DATA_FORMAT_RMW, in_fmt);
+    }
+    else
+    {
+        cfg_rmw(THCON_PACKER1_REG0_IN_DATA_FORMAT_RMW, in_fmt);
     }
 }
 

@@ -20,7 +20,7 @@
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include <tt-metalium/allocator_state.hpp>
+#include "allocator_state.hpp"
 
 namespace tt::tt_metal {
 enum class BufferType;

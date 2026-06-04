@@ -17,6 +17,7 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.model import Gemma4Model
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4.tt.precision import Gemma4Precision
 
 
 def create_tt_model(
@@ -30,6 +31,7 @@ def create_tt_model(
     paged_attention_config=None,
     create_kv_cache=True,
     model_path=None,
+    bounded_sliding_kv_cache: bool = False,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -45,6 +47,7 @@ def create_tt_model(
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)
+    model_args.model_cache_path = model_args.resolve_model_cache_path(model_path)
     # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
     hf_text_config = getattr(hf_config, "text_config", hf_config)
     model_args._hf_text_config = hf_text_config
@@ -70,7 +73,13 @@ def create_tt_model(
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
 
-    tensor_cache_path = str(model_args.weight_cache_path(model_path, dtype))
+    tensor_cache_path = str(model_args.weight_cache_path(dtype))
+
+    # Resolve per-module dtype overrides from precision_overrides.json. The
+    # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
+    # system still gets the 1x1 entry.
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    precision = Gemma4Precision.load(model_path, mesh_shape)
 
     model = Gemma4Model(
         mesh_device=mesh_device,
@@ -85,6 +94,8 @@ def create_tt_model(
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
         create_kv_cache=create_kv_cache,
+        precision=precision,
+        bounded_sliding_kv_cache=bounded_sliding_kv_cache,
     )
 
     return model_args, model, model.tt_kv_cache, state_dict

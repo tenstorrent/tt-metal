@@ -65,7 +65,6 @@ def test_sfpu_square_trisc3_quasar(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     src_A = prepare_square_inputs(

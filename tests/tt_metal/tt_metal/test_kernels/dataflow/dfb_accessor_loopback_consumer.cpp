@@ -19,7 +19,7 @@ void kernel_main() {
     uint32_t num_entries = get_arg_val<uint32_t>(2);
 
     // Construct the DataflowBuffer using the named accessor from kernel_bindings_generated.h
-    experimental::DataflowBuffer buf(dfb::a_dfb_named_bob);
+    DataflowBuffer buf(dfb::a_dfb_named_bob);
     uint32_t entry_size = buf.get_entry_size();
 
     for (uint32_t i = 0; i < num_entries; i++) {

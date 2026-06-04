@@ -15,14 +15,15 @@
 namespace tt::tt_metal {
 
 std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator::RegionAllocator::allocate_region(
-    uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id) {
+    uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id, bool top_down) {
     std::optional<uint32_t> best_addr;
     float best_cost = std::numeric_limits<float>::infinity();
     std::optional<uint32_t> best_region_sync_idx;
-    uint32_t addr = 0;
-    auto outer_it = regions_.begin();
     if (size == 0) {
         return {std::nullopt, 0};
+    }
+    if (top_down && size > ringbuffer_size_) {
+        return {std::nullopt, std::nullopt};
     }
 
     // Set of regions that have no future uses, so they can be evicted to avoid cluttering up regions_.
@@ -31,22 +32,16 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     // Once we've filled up the entire launch message buffer, we'll sync on that rather than on any older regions.
     constexpr uint32_t max_stall_history_size = dev_msgs::launch_msg_buffer_num_entries;
 
-    // Iterate over possible placements, including the very beginning of the ringbuffer and starting immediately after
-    // every region. One of these placements must be the best, since any other placement would be overlap the same or a
-    // smaller number of allocations by moving it forward to one of those positions.
-    // Then attempt to calculate the placement with the smallest total cost.
-    // TODO: sweepline algorithm, so the best postion can be calculated in linear time relative to the number of
-    // regions.
-    while (true) {
-        if (addr + size > ringbuffer_size_) {
-            break;
-        }
+    // Evaluates a single candidate placement at `addr`, optionally pruning the inner region scan
+    // by a `scan_begin` cursor (used in the bottom-up walk to avoid re-scanning regions that
+    // ended at or before previous placements). Updates best_addr/best_cost/best_region_sync_idx
+    // and marked_for_deletion in place. Returns true when the cost reached zero so the caller
+    // can stop searching.
+    auto evaluate = [&](uint32_t addr, std::map<uint32_t, MemoryUsage>::const_iterator scan_begin) {
         float cost = 0;
         std::optional<uint32_t> region_sync_idx;
         bool now_in_use = false;
-        // outer_it must be the first region that could possibly overlap [addr, addr + size), since in the last
-        // iteration we selected addr as the first address after the old version of outer_it.
-        for (auto it = outer_it; it != regions_.end(); ++it) {
+        for (auto it = scan_begin; it != regions_.end(); ++it) {
             auto region = *it;
             if (region.first >= addr + size) {
                 break;
@@ -77,36 +72,92 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 region_sync_idx = merge_syncs(region_sync_idx, region.second.trace_idx);
             }
         }
-        if (!now_in_use) {
-            if (region_sync_idx.has_value()) {
-                // Avoid evicting something that was last used recently, as that can cause a stall that is very bad for
-                // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
-                // highest cost for a program is normally around 10,000).
-                constexpr uint32_t desired_write_ahead = std::min(dev_msgs::launch_msg_buffer_num_entries, 7u);
-                constexpr float stall_badness = 100000000;
-                static_assert(
-                    max_stall_history_size > desired_write_ahead,
-                    "max_history_size must be greater than desired_write_ahead");
-                int region_idx_diff = trace_idx - *region_sync_idx;
-                if (region_idx_diff < desired_write_ahead) {
-                    // Stall badness is exponential.
-                    cost += stall_badness * (1 << (desired_write_ahead - region_idx_diff));
+        if (now_in_use) {
+            return false;
+        }
+        if (region_sync_idx.has_value()) {
+            // Avoid evicting something that was last used recently, as that can cause a stall that is very bad for
+            // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
+            // highest cost for a program is normally around 10,000).
+            constexpr uint32_t desired_write_ahead = std::min(dev_msgs::launch_msg_buffer_num_entries, 7u);
+            constexpr float stall_badness = 100000000;
+            static_assert(
+                max_stall_history_size > desired_write_ahead,
+                "max_history_size must be greater than desired_write_ahead");
+            int region_idx_diff = trace_idx - *region_sync_idx;
+            if (region_idx_diff < desired_write_ahead) {
+                // Stall badness is exponential.
+                cost += stall_badness * (1 << (desired_write_ahead - region_idx_diff));
+            }
+        }
+        if (cost < best_cost) {
+            best_cost = cost;
+            best_addr = addr;
+            best_region_sync_idx = region_sync_idx;
+        }
+        return cost == 0;
+    };
+
+    // Iterate over possible placements. One of these placements must be the best, since any other
+    // placement would overlap the same or a larger number of allocations by moving it to one of
+    // these slots. TODO: sweepline algorithm, so the best position can be calculated in linear
+    // time relative to the number of regions.
+    if (top_down) {
+        auto first_top_down_scan_begin = [&](const std::map<uint32_t, MemoryUsage>::const_reverse_iterator& reverse_begin,
+                                             std::map<uint32_t, MemoryUsage>::const_iterator default_begin,
+                                             uint32_t addr) {
+            auto scan_begin = default_begin;
+            for (auto scan = reverse_begin; scan != regions_.crend(); ++scan) {
+                if (scan->first + scan->second.size <= addr) {
+                    break;
+                }
+                scan_begin = std::prev(scan.base());
+            }
+            return scan_begin;
+        };
+
+        // Top-down walk: try the slot ending exactly at ringbuffer_size_, then the slots ending
+        // just before each existing region, in descending order of address.
+        uint32_t top_addr = ringbuffer_size_ - size;
+        bool stop = evaluate(top_addr, first_top_down_scan_begin(regions_.crbegin(), regions_.cend(), top_addr));
+        if (!stop) {
+            for (auto rit = regions_.crbegin(); rit != regions_.crend(); ++rit) {
+                if (rit->first < size) {
+                    // Slot would extend below the start of the buffer.
+                    break;
+                }
+                uint32_t addr = rit->first - size;
+                if (addr == top_addr) {
+                    continue;
+                }
+                auto after_candidate = std::prev(rit.base());
+                auto scan_begin = first_top_down_scan_begin(std::next(rit), after_candidate, addr);
+                if (evaluate(addr, scan_begin)) {
+                    break;
                 }
             }
-            if (cost < best_cost) {
-                best_cost = cost;
-                best_addr = addr;
-                best_region_sync_idx = region_sync_idx;
-            }
-            if (cost == 0) {
+        }
+    } else {
+        // Bottom-up walk: try the very beginning of the ringbuffer and the slots starting
+        // immediately after each existing region.
+        uint32_t addr = 0;
+        auto outer_it = regions_.begin();
+        while (true) {
+            if (addr + size > ringbuffer_size_) {
                 break;
             }
+            // outer_it must be the first region that could possibly overlap [addr, addr + size),
+            // since in the last iteration we selected addr as the first address after the old
+            // version of outer_it.
+            if (evaluate(addr, outer_it)) {
+                break;
+            }
+            if (outer_it == regions_.end()) {
+                break;
+            }
+            addr = outer_it->first + outer_it->second.size;
+            outer_it++;
         }
-        if (outer_it == regions_.end()) {
-            break;
-        }
-        addr = outer_it->first + outer_it->second.size;
-        outer_it++;
     }
 
     for (const auto& addr : marked_for_deletion) {
@@ -208,7 +259,10 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             auto& allocator = region_allocators_[index];
 
             uint64_t pid = node.program->get_id();
-            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
+            // Non-binary entries are never reused, so place them top-down to leave the bottom of
+            // the ringbuffer free for cached binaries.
+            auto [rta_sync_idx, rta_addr] =
+                allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid, /*top_down=*/true);
 
             nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, rta_sync_idx);
 
@@ -223,14 +277,18 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                     allocator.update_region_trace_idx(*mem_addr, i);
                 } else {
                     all_binaries_cached = false;
-                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
+                    // If this binary won't be used again later in the trace, treat it as
+                    // short-lived and pack it top-down. Otherwise allocate bottom-up so it can
+                    // remain cached for future invocations of the same program.
+                    bool binary_top_down = !extra_data_[i].next_use_idx[ExtraData::kBinary].has_value();
+                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid, binary_top_down);
                     if (!res.second.has_value()) {
                         // Clear the allocator and try again. Should succeed unless the total size
                         // of the program is larger than the config buffer.
                         allocator.reset_allocator();
-                        std::tie(rta_sync_idx, rta_addr) =
-                            allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid);
-                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid);
+                        std::tie(rta_sync_idx, rta_addr) = allocator.allocate_region(
+                            non_binary_size, i, ExtraData::kNonBinary, pid, /*top_down=*/true);
+                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid, binary_top_down);
                         TT_ASSERT(res.second.has_value(), "Failed to allocate binary region");
                         TT_ASSERT(
                             !subdevice_launch_window.empty(),

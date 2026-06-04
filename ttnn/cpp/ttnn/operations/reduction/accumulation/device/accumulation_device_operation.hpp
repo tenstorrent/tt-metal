@@ -6,15 +6,17 @@
 
 #include <cstdint>
 
-#include "accumulation_program_factory.hpp"
+#include "accumulation_device_operation_types.hpp"
 
 #include <optional>
 #include <type_traits>
 #include <variant>
 
 #include "hostdevcommon/kernel_structs.h"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -26,6 +28,30 @@ struct AccumulationDeviceOperation {
     using tensor_args_t = AccumulationInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
+
+    struct AccumulationProgramFactory {
+        enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {
+            SRC = tt::CBIndex::c_0,
+            DST = tt::CBIndex::c_1,
+            ACC = tt::CBIndex::c_2
+        };
+
+        static constexpr std::array<const char*, 3> KERNEL_PATHS{
+            "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+            "accumulation_reader.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/compute/accumulation_compute.cpp",
+            "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
+            "accumulation_writer.cpp"};
+
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static uint32_t calc_input_tile_offset(
+            const Shape& input_shape, const int32_t& dim, uint32_t tile_height = 32, uint32_t tile_width = 32);
+    };
+
     using program_factory_t = std::variant<AccumulationProgramFactory>;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;

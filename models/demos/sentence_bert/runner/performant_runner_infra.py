@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import transformers
 from loguru import logger
@@ -55,7 +57,10 @@ class SentenceBERTPerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.sequence_length = sequence_length
-        config = transformers.BertConfig.from_pretrained("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr")
+        config = transformers.BertConfig.from_pretrained(
+            "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+            local_files_only=os.getenv("CI") == "true",
+        )
         self.torch_model = BertModel(config).to(torch.bfloat16)
         self.torch_model = load_torch_model(
             self.torch_model, target_prefix="", model_location_generator=model_location_generator

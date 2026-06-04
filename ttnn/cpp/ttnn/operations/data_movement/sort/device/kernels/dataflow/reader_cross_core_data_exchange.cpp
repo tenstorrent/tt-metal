@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #include "cross_core_data_exchange_common.hpp"
 
@@ -32,8 +37,8 @@ void kernel_main() {
     constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(12);
     constexpr bool ascending = get_compile_time_arg_val(13) == 1;
 
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(14));
-    const uint32_t sem_barrier_addr = get_semaphore(get_compile_time_arg_val(15));
+    constexpr uint32_t sem_exchange_id = get_compile_time_arg_val(14);
+    constexpr uint32_t sem_barrier_id = get_compile_time_arg_val(15);
 
     constexpr auto input_tensor_args = TensorAccessorArgs<16>();
     constexpr auto index_tensor_output_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
@@ -61,25 +66,38 @@ void kernel_main() {
     const auto physical_core_lookup_table_accessor =
         TensorAccessor(physical_core_lookup_table_args, physical_core_lookup_table_buffer_addr);
 
+    Noc noc;
+    CircularBuffer physical_core_lookup_table_cb(physical_core_lookup_table_cb_index);
+    CircularBuffer input_tensor_cb(input_tensor_cb_index);
+    CircularBuffer index_tensor_output_cb(index_tensor_output_cb_index);
+
     // Read lookup table for physical core IDs
-    cb_reserve_back(physical_core_lookup_table_cb_index, one_tile);
-    const uint32_t physical_core_lookup_table_l1_write_addr = get_write_ptr(physical_core_lookup_table_cb_index);
-    uint64_t noc_addr = get_noc_addr(0, physical_core_lookup_table_accessor);
-    noc_async_read(noc_addr, physical_core_lookup_table_l1_write_addr, physical_core_lookup_table_tile_size_bytes);
-    noc_async_read_barrier();
+    physical_core_lookup_table_cb.reserve_back(one_tile);
+    noc.async_read(
+        physical_core_lookup_table_accessor,
+        physical_core_lookup_table_cb,
+        physical_core_lookup_table_tile_size_bytes,
+        {.page_id = 0, .offset_bytes = 0},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 
     // Semaphore setup
-    sem_ptr_t sem_self_exchange_ptr = reinterpret_cast<sem_ptr_t>(sem_exchange_addr);
+    Semaphore<> sem_exchange(sem_exchange_id);
+    Semaphore<> sem_barrier(sem_barrier_id);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Read input value data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            cb_reserve_back(input_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
+            input_tensor_cb.reserve_back(one_tile);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
-            noc_async_read_tile(tile_offset, input_tensor_accessor, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(input_tensor_cb_index, one_tile);
+            noc.async_read(
+                input_tensor_accessor,
+                input_tensor_cb,
+                input_tensor_tile_size_bytes,
+                {.page_id = tile_offset, .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            input_tensor_cb.push_back(one_tile);
         }  // w loop
 
         const uint32_t stages = ilog2(Wt);
@@ -106,8 +124,9 @@ void kernel_main() {
                     // This barrier ensures all cores reach the same stage before proceeding,
                     // preventing such conflicts.
                     sort_barrier(
+                        noc,
+                        sem_barrier,
                         physical_core_lookup_table_cb_index,
-                        sem_barrier_addr,
                         core_id,
                         leader_core_id,
                         number_of_cores_used,
@@ -118,6 +137,8 @@ void kernel_main() {
                         get_core_physical_coordinates(other_core_id, physical_core_lookup_table_cb_index);
 
                     sort_noc_exchange_Wt_tiles(
+                        noc,
+                        sem_exchange,
                         value_tensor_intermediate_cb_index,
                         index_tensor_intermediate_cb_index,
                         value_tensor_peer_cb_index,
@@ -126,22 +147,25 @@ void kernel_main() {
                         input_tensor_tile_size_bytes,
                         index_tensor_output_tile_size_bytes,
                         remote_core_physical.first,
-                        remote_core_physical.second,
-                        sem_self_exchange_ptr);
+                        remote_core_physical.second);
                 }  // if !(i >= global_tile_start && i < ...
             }  // sub
         }  // stages
 
         // Write output index data
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            cb_wait_front(index_tensor_output_cb_index, one_tile);
-            const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
+            index_tensor_output_cb.wait_front(one_tile);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
-            noc_async_write_tile(tile_offset, index_tensor_output_accessor, l1_write_addr_index);
-            noc_async_write_barrier();
-            cb_pop_front(index_tensor_output_cb_index, one_tile);
+            noc.async_write(
+                index_tensor_output_cb,
+                index_tensor_output_accessor,
+                index_tensor_output_tile_size_bytes,
+                {.offset_bytes = 0},
+                {.page_id = tile_offset, .offset_bytes = 0});
+            noc.async_write_barrier();
+            index_tensor_output_cb.pop_front(one_tile);
         }  // Wt loop
 
     }  // h loop
-    cb_push_back(physical_core_lookup_table_cb_index, one_tile);
+    physical_core_lookup_table_cb.push_back(one_tile);
 }

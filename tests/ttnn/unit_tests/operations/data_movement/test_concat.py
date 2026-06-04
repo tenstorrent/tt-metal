@@ -66,6 +66,28 @@ def test_concat(device, height, width, dim, dtype):
     assert_equal(torch_output_tensor, output)
 
 
+def test_concat_size_switches(device):
+    def to_tt(t, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # 1) decode-shape concat — caches a program
+    a = torch.rand(1, 1, 1, 64, dtype=torch.bfloat16)
+    tt_a = to_tt(a, device)
+    ttnn.concat([tt_a, tt_a], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # 2) prefill-shape concat — CRASH on this one
+    b = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    c = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    tt_b, tt_c = to_tt(b, device), to_tt(c, device)
+    ttnn.concat([tt_b, tt_c], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize(
     "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
     (
@@ -446,4 +468,23 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "shapes, dim",
+    [
+        ([[217413, 1]] * 4, 1),
+    ],
+)
+def test_concat_large_page_l1_budget(device, shapes, dim):
+    torch_inputs = [torch.rand(*shape, dtype=torch.float32) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32) for t in torch_inputs
+    ]
+    output = ttnn.concat(input_tensors, dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output)

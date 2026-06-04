@@ -130,7 +130,8 @@ struct DRAMStreamingMatmul {
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
         bool PopIndex = false,
-        bool WaitForOutput = false>
+        bool WaitForOutput = false,
+        uint32_t NumBuffers = 3>
     class Op {
     public:
         void operator()() {
@@ -150,6 +151,33 @@ struct DRAMStreamingMatmul {
             // bank_id and vc are per-core compile-time args
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
+
+            // Setup DRAM read for in1 — issued before the indexing block so the NOC
+            // cmd-buf register writes overlap with the cb_wait_front on the index CB.
+            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
+
+            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
+            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
+            // Set up NOC state for page reads
+            noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
+
+            constexpr uint32_t num_buffers = NumBuffers;
+            static_assert(num_buffers >= 2, "Need at least double buffering");
+            constexpr uint32_t extra_blocks_in_flight = (num_buffers >= 3) ? 1 : 0;
+
+            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+            uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+
+            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
+            uint32_t cb_in1_base;
+            if constexpr (ResetCBIn1) {
+                cb_in1_base = CBIn1ResetAddr;
+            } else {
+                auto& cb_in1_iface = get_local_cb_interface(CTArgs::cb_in1);
+                cb_in1_base = cb_in1_iface.fifo_limit - cb_in1_iface.fifo_size;
+            }
+            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
             // Expert indexing: compute DRAM offset based on expert index.
             // Contract: for a given projection (gate/up/down), all expert weight tensors must
@@ -181,35 +209,11 @@ struct DRAMStreamingMatmul {
                 expert_offset_bytes = expert_idx * expert_size_bytes;
             }
 
-            // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
-            reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-
-            // Setup DRAM read for in1
-            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
-            uint32_t l1_write_addr_in1;
             uint32_t l1_read_addr_in1 = expert_offset_bytes;
 
-            // Set up NOC state for page reads
-            noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
-
-            // Triple-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3;
-            constexpr uint32_t extra_blocks_in_flight = 1;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
-
-            cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
-            l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
-
-            // CB base for boundary wrapping: compile-time addr when looping, runtime addr otherwise
-            uint32_t cb_in1_base;
-            if constexpr (ResetCBIn1) {
-                cb_in1_base = CBIn1ResetAddr;
-            } else {
-                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
-            }
-            uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
             // Read in1: for each N column, read num_subblocks_k K subblocks
             for (uint32_t n = 0; n < num_iterations; ++n) {
@@ -312,19 +316,22 @@ struct DRAMStreamingMatmul {
                         tile_regs_commit();
 
                         // Run SiLU on PACK thread
-                        TTI_SEMWAIT(
+                        PACK(TTI_SEMWAIT(
                             p_stall::STALL_TDMA | p_stall::STALL_CFG,
                             semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO);
+                            p_stall::STALL_ON_ZERO));
                         PACK(TT_SETC16(
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         if constexpr (CTArgs::tile_r_dim <= 4) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2 /*ITER*/>(
+                                0 /*dst_index*/, VectorMode::R)));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 4>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 4 /*ITER*/>(
+                                0 /*dst_index*/, VectorMode::R)));
                         } else {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 8>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 8 /*ITER*/>(
+                                0 /*dst_index*/, VectorMode::R)));
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

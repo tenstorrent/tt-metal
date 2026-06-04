@@ -6,6 +6,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       package-artifact-name:
         required: true
         type: string
@@ -24,7 +28,7 @@ on:
         type: boolean
         default: false
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 
@@ -33,7 +37,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -50,7 +54,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Checkout actions
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/download-artifact-with-retry
           sparse-checkout-cone-mode: false
@@ -119,6 +123,7 @@ jobs:
           echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
 
       - name: Run a test
         id: test
@@ -128,6 +133,7 @@ jobs:
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           TT_METAL_WATCHER_TEST_MODE: 1
+          TT_LOGGER_LEVEL: warn
         run: |
           /usr/bin/${{ inputs.product }}-validation-smoke
 
@@ -162,7 +168,7 @@ jobs:
           fi
 
       - name: Checkout repository for Codecov mapping
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         if: ${{ inputs.upload-coverage }}
         with:
           submodules: recursive
@@ -171,9 +177,9 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         if: ${{ !cancelled() && inputs.upload-coverage && (
-              (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
-              || (github.event_name == 'push' && github.ref_name == 'main')
-            ) }}
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
+          || (github.event_name == 'push' && github.ref_name == 'main')
+          ) }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:

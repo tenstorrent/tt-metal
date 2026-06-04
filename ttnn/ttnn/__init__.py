@@ -124,11 +124,20 @@ from ttnn._ttnn.multi_device import (
     using_distributed_env,
     Rank,
     Size,
+    SubcontextId,
     init_distributed_context,
     is_initialized as distributed_context_is_initialized,
     get_rank as distributed_context_get_rank,
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
+    allgather_int as distributed_context_allgather_int,
+    subcontext_id as distributed_context_subcontext_id,
+    subcontext_count as distributed_context_subcontext_count,
+    subcontext_sizes as distributed_context_subcontext_sizes,
+    subcontext_size as distributed_context_subcontext_size,
+    local_to_world_rank as distributed_context_local_to_world_rank,
+    world_rank as distributed_context_world_rank,
+    world_size as distributed_context_world_size,
 )
 
 from ttnn._ttnn.events import (
@@ -207,6 +216,7 @@ from ttnn.types import (
     bfloat8_b,
     bfloat4_b,
     bfloat16,
+    fp8_e4m3,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -290,7 +300,10 @@ from ttnn.device import (
     synchronize_device,
     dump_device_memory_state,
     get_memory_view,
+    get_allocator_base_address,
     get_max_worker_l1_unreserved_size,
+    get_dram_alignment,
+    get_l1_alignment,
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,
     disable_asynchronous_slow_dispatch,
@@ -340,8 +353,12 @@ from ttnn.core import (
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
     split_work_to_cores,
+    grid_to_cores,
     get_current_command_queue_id_for_thread,
 )
+
+tile_size = ttnn._ttnn.tensor.tile_size
+element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
 import ttnn.database
@@ -486,6 +503,7 @@ from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
+    PaddingMode,
     get_conv_output_dim,
     Conv2dSliceConfig,
     Conv2dDRAMSliceHeight,

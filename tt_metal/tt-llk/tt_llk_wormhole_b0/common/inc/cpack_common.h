@@ -567,6 +567,7 @@ inline void reconfig_packer_data_format(
     const std::uint32_t num_faces  = 4,
     const bool partial_face        = false)
 {
+    // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -674,7 +675,7 @@ inline void reconfig_packer_data_format(
     set_packer_strides(pack_src_format);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -685,6 +686,9 @@ inline void configure_pack(
     const bool narrow_tile          = false,
     const std::uint32_t relu_config = 0)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Wormhole B0 pack hardware configuration supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -750,7 +754,7 @@ inline void configure_pack(
 
     // To untilize narrow tile (32x16) we just pack 2 faces back to back
     // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
 
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
@@ -1003,16 +1007,17 @@ enum class PackerProgramType
 };
 
 /**
- * Checks whether all packers' config and counters match the expected formats and face dimension.
+ * Validates that all packers' config and counters match the expected formats and face dimension.
+ * On mismatch, issues DEVICE_PRINT (when enabled) and LLK_ASSERT. Typically invoked via
+ * `LLK_ASSERT_BLOCK(are_packers_configured_correctly<...>(...))` in llk_pack_tile_api.h.
  *
  * @param pack_src_format   Expected input data format for all packers
  * @param pack_dst_format   Expected output data format for all packers
- * @param face_r_dim       Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
- * @param nop_count        Number of nop operations to ensure configuration writes complete (default 10)
- * @return true if all packer configurations match the expected values, false otherwise
+ * @param face_r_dim        Expected face row dimension (pack_reads_per_xy_plane) (default FACE_R_DIM)
+ * @param nop_count         Number of nop operations to ensure configuration writes complete (default 10)
  */
 template <PackerProgramType program_type = PackerProgramType::ProgramByTile>
-__attribute__((noinline)) bool are_packers_configured_correctly(
+__attribute__((noinline)) void are_packers_configured_correctly(
     const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t nop_count = 10)
 {
     // Ensure configuration writes complete before subsequent operations
@@ -1039,9 +1044,26 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
     {
         pack_config_u config = {.val = {0}};
         config.val[2]        = cfg[config_word2_addrs[i]];
-        if (config.f.in_data_format != expected_src || config.f.out_data_format != expected_dst)
+
+        if (config.f.in_data_format != expected_src)
         {
-            return false;
+            // DEVICE_PRINT(
+            // "#2101 are_packers_configured_correctly: packer {} pack_src_format mismatch. expected: {}, actual: {}\n", i, expected_src,
+            // config.f.in_data_format);
+            LLK_ASSERT(
+                (config.f.in_data_format == expected_src),
+                "are_packers_configured_correctly: pack_src_format mismatch. Uncomment DEVICE_PRINT #2101 to inspect "
+                "packer index and expected/actual.");
+        }
+        if (config.f.out_data_format != expected_dst)
+        {
+            // DEVICE_PRINT(
+            // "#2102 are_packers_configured_correctly: packer {} pack_dst_format mismatch. expected: {}, actual: {}\n", i, expected_dst,
+            // config.f.out_data_format);
+            LLK_ASSERT(
+                (config.f.out_data_format == expected_dst),
+                "are_packers_configured_correctly: pack_dst_format mismatch. Uncomment DEVICE_PRINT #2102 to inspect "
+                "packer index and expected/actual.");
         }
 
         if constexpr (program_type == PackerProgramType::ProgramByFace)
@@ -1050,11 +1072,18 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
             counters.val             = cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i];
             if (counters.f.pack_reads_per_xy_plane != face_r_dim)
             {
-                return false;
+                // DEVICE_PRINT(
+                // "#2103 are_packers_configured_correctly: packer {} pack_reads_per_xy_plane mismatch. expected: {}, actual: {}\n",
+                // i,
+                // face_r_dim,
+                // counters.f.pack_reads_per_xy_plane);
+                LLK_ASSERT(
+                    (counters.f.pack_reads_per_xy_plane == face_r_dim),
+                    "are_packers_configured_correctly: pack_reads_per_xy_plane / face_r_dim mismatch. Uncomment "
+                    "DEVICE_PRINT #2103 to inspect packer index and expected/actual.");
             }
         }
     }
-    return true;
 }
 
 } // namespace ckernel::packer

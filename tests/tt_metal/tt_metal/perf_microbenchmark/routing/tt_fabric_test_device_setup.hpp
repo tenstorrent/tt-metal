@@ -37,27 +37,42 @@ using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric::fabric_tests {
 
+// ConnectionKey identifies a unique physical fabric connection from this src device.
+// (direction, link_idx) maps 1:1 to a specific eth channel (eth_chan); we store eth_chan
+// directly to make the dedup intent explicit. The first-hop neighbor through this link is
+// stored on the Connection (Connection::next_hop_dst), not on the key. Multiple traffic
+// configs whose final destinations all route through the same eth chan + VC dedup to one
+// ConnectionKey here (e.g. Z-link sub-torus all-to-all). Multi-Z disambiguation between
+// neighbor meshes is preserved naturally because separate Z eth chans have distinct
+// (link_idx, eth_chan) values.
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
     uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+    chan_id_t eth_chan = 0;
 
     bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id &&
+               eth_chan == other.eth_chan;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx, vc_id) < std::tie(other.direction, other.link_idx, other.vc_id);
+        return std::tie(direction, link_idx, vc_id, eth_chan) <
+               std::tie(other.direction, other.link_idx, other.vc_id, other.eth_chan);
     }
 };
 
-// Hash function for ConnectionKey to enable unordered_map
+// Hash function for ConnectionKey to enable unordered_map.
+// (direction, link_idx) already determines eth_chan, but we hash all fields for clarity.
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
-        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
-               (std::hash<uint8_t>()(key.vc_id) << 2);
+        std::size_t h = std::hash<int>()(static_cast<int>(key.direction));
+        h ^= std::hash<uint32_t>()(key.link_idx) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint8_t>()(key.vc_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<chan_id_t>()(key.eth_chan) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
     }
 };
 
@@ -65,6 +80,12 @@ struct ConnectionKeyHash {
 enum class TestWorkerType : uint8_t { SENDER, RECEIVER, SYNC, MUX };
 
 struct Connection {
+    // Representative first-hop neighbor through this fabric connection. Used as the dst
+    // when calling append_fabric_(vc2_)connection_rt_args / mux rt-args. For NESW this is
+    // the direction's unique neighbor; for Z this is the actual peer chip on the other end
+    // of the eth chan (resolved via the control plane).
+    FabricNodeId next_hop_dst{MeshId{0}, 0};
+
     std::set<CoreCoord> sender_cores;           // Data senders (full-size channels)
     std::set<CoreCoord> receiver_cores;         // Credit senders (header-only channels)
     std::set<CoreCoord> sync_cores;             // Sync senders (header-only channels)
@@ -119,13 +140,12 @@ public:
         }
     }
 
-    // Register a connection from a core in a specific direction and link
+    // Register a connection for a core. The ConnectionKey identifies the physical fabric
+    // link (eth_chan + vc_id); next_hop_dst is the first-hop neighbor through that link
+    // and is recorded once on the Connection on first registration (it must be invariant
+    // for a given key).
     void register_client(
-        const CoreCoord& core,
-        RoutingDirection direction,
-        uint32_t link_idx,
-        TestWorkerType worker_type,
-        uint8_t vc_id = 0);
+        const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -167,7 +187,6 @@ public:
         const CoreCoord& core,
         TestWorkerType worker_type,
         const std::shared_ptr<IDeviceInfoProvider>& device_info_provider,
-        const std::shared_ptr<IRouteManager>& route_manager,
         const FabricNodeId& fabric_node_id,
         tt::tt_metal::Program& program_handle) const;
 
@@ -263,11 +282,12 @@ public:
 struct TestMux : TestWorker {
 public:
     TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
-    void set_config(FabricMuxConfig* config, ConnectionKey connection_key);
+    void set_config(FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     bool validate_results(std::vector<uint32_t>& /*data*/) const override { return true; }  // Mux doesn't validate
 
     FabricMuxConfig* config_ = nullptr;
     ConnectionKey connection_key_{};
+    FabricNodeId next_hop_dst_{MeshId{0}, 0};
 };
 
 struct TestDevice {
@@ -291,7 +311,8 @@ public:
     void add_sender_traffic_config(CoreCoord logical_core, TestTrafficSenderConfig config);
     void add_sender_sync_config(CoreCoord logical_core, TestTrafficSyncConfig sync_config);
     void add_receiver_traffic_config(CoreCoord logical_core, const TestTrafficReceiverConfig& config);
-    void add_mux_worker_config(CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key);
+    void add_mux_worker_config(
+        CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     void create_kernels();
 
     // Latency test kernel creation (called directly by TestContext)
@@ -397,8 +418,12 @@ private:
     void create_sync_kernel();
     void create_mux_kernels();
 
-    // Helper: Common connection registration logic for senders and receivers
-    // Registers a fabric connection for the specified direction and link
+    // Helper: Common connection registration logic for senders and receivers.
+    // Registers a fabric connection for the specified direction, link, and VC. The eth chan
+    // and the first-hop neighbor (used as the dst when calling the fabric API later) are
+    // derived internally from (src, direction, link_idx) — the caller's final dst is not
+    // part of the dedup key, so multiple traffic configs with different final dsts that
+    // share the same physical link collapse to one ConnectionKey.
     ConnectionKey register_fabric_connection(
         CoreCoord logical_core,
         TestWorkerType worker_type,

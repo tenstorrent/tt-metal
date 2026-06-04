@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
+#include <cstdint>
+
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_cdf.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -82,8 +85,8 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
     sfpi::vFloat x_poly = x * poly;  // x * poly ≈ -9 to -13 (safe range)
 
     // Step 5: Exponent bit manipulation on the FUSED result
-    sfpi::vInt xpoly_exp = sfpi::exexp_nodebias(x_poly);  // Extract exponent of x*poly
-    sfpi::vInt new_exp = xpoly_exp + k_int;               // Shift by 2^k
+    sfpi::vInt xpoly_exp = sfpi::exexp(x_poly, sfpi::ExponentMode::NoDebias);  // Extract exponent of x*poly
+    sfpi::vInt new_exp = xpoly_exp + k_int;                                    // Shift by 2^k
 
     // Step 6: FTZ check on FINAL result (x * exp(t)), not intermediate exp(t)
     sfpi::vFloat result = sfpi::vConst0;
@@ -139,8 +142,8 @@ inline sfpi::vFloat calculate_gelu_chebyshev(sfpi::vFloat val) {
             2.98325768482e-05,
             val);
 
-        // Ensure result has the same sign as input using setsgn
-        result = setsgn(result, val);
+        // Ensure result has the same sign as input using copysgn
+        result = copysgn(result, val);
     }
     v_endif;
 
@@ -222,8 +225,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
-        sfpi::vInt exponential_part = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));
-        sfpi::vInt fractional_part = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
+        sfpi::vInt exponential_part = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
+        sfpi::vInt fractional_part = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
 
         sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
         frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
@@ -264,27 +267,171 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
-        _init_gelu_<APPROXIMATION_MODE>();
+        sfpi::vConstFloatPrgm0 = 0.5f;
+
+        // // >= 3.0f
+        // lreg2_hi=0.50;//3800
+        // lreg6_hi=0.0f;//7c00
+        // // 2.0f -> 3.0f
+        // lreg2_lo= 0.5402f;//3852
+        // lreg6_lo= -0.1194f;//AFA4
+        // // 1.5f -> 2.0f
+        // lreg1_hi= .6099f; //38E1
+        // lreg5_hi= -.2635f; //B437
+        // // 1.0f -> 1.5f
+        // lreg1_lo=0.6189;//38F3
+        // lreg5_lo=-.2797;//B479
+        // // 0.5f -> 1.0f
+        // lreg0_hi=.4939f;//37E7
+        // lreg4_hi=-.1605f;//B122
+        // // 0.0f -> 0.5f
+        // lreg0_lo=0.1928f;//322B
+        // lreg4_lo=-0.0150f;//A3AE
+        _sfpu_load_imm32_(0, 0x37E7322B);
+        _sfpu_load_imm32_(4, 0xB12286D8);
+
+        _sfpu_load_imm32_(1, 0x38E138F3);
+        _sfpu_load_imm32_(5, 0xB437B479);
+
+        _sfpu_load_imm32_(2, 0x38003852);
+        _sfpu_load_imm32_(6, 0x7c00afa4);
     }
     // Accurate mode: no init needed (correction polynomial replaces reciprocal)
 }
 
 template <bool APPROXIMATION_MODE>
 void gelu_derivative_init() {
-    _init_gelu_derivative_<APPROXIMATION_MODE>();
+    std::uint32_t imm0;
+    std::uint32_t imm1;
+    std::uint32_t imm2;
+    std::uint32_t imm3;
+    std::uint32_t imm4;
+    std::uint32_t imm5;
+
+    if constexpr (APPROXIMATION_MODE) {
+        // Using a 6 piece LUT to calculate and model gelu_derivative directly
+        // x <= 0.5 --> 0.8x + 0.5
+        // x <= 1.0 --> 0.4x + 0.7
+        // x <= 1.5 --> 0.1x + 0.99
+        // x <= 2.0 --> -0.09x + 1.27
+        // x <= 3.0 --> -0.075x + 1.235
+        // x >  3.0 --> 1.0
+        // imm0[15:0] = A0=0.8    = 0x3A66 -- imm0[31:16] = A1=0.4   = 0x3666
+        imm0 = 0x36663A66;
+        // imm1[15:0] = A2=0.1    = 0x2E66 -- imm1[31:16] = A3=-0.09 = 0xADC3
+        imm1 = 0xADC32E66;
+        // imm2[15:0] = A4=-0.075 = 0xACCD -- imm2[31:16] = A5=0     = 0x7C00
+        imm2 = 0x7C00ACCD;
+        // imm3[15:0] = B0=0.5    = 0x3800 -- imm3[31:16] = B1=0.7   = 0x399A
+        imm3 = 0x399A3800;
+        // imm4[15:0] = B2=0.99   = 0x3BEC -- imm4[31:16] = B3=1.27  = 0x3D14
+        imm4 = 0x3D143BEC;
+        // imm5[15:0] = B4=1.235  = 0x3CF1 -- imm5[31:16] = B5=1.0   = 0x3C00
+        imm5 = 0x3C003CF1;
+        _sfpu_load_imm32_(0, imm0);
+        _sfpu_load_imm32_(1, imm1);
+        _sfpu_load_imm32_(2, imm2);
+        _sfpu_load_imm32_(4, imm3);
+        _sfpu_load_imm32_(5, imm4);
+        _sfpu_load_imm32_(6, imm5);
+    } else {
+        // Initialisation for use of _calculate_exponential_body_<false>.
+        exp_init<false, 0x3F800000>();
+
+        imm0 = 0x28FF;
+        imm1 = 0x3020;
+        _sfpu_load_imm16_(0, imm0);
+        _sfpu_load_imm16_(1, imm1);
+    }
+}
+
+template <bool APPROXIMATION_MODE>
+inline sfpi::vFloat calculate_gelu_core(sfpi::vFloat in) {
+    // SFPU microcode:
+    // result = (APPROX_MODE == 1)
+    //   ? (1 + erf(x/sqrt(2)))
+    //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
+    sfpi::vFloat result;
+    if constexpr (APPROXIMATION_MODE) {
+        result = in;
+    } else {
+        // f = (0.044715*x^3 + x)
+        result = (in * in) * (in * sfpi::sFloat16b(0.044715f)) + in;
+        result *= sfpi::sFloat16b(0.79788f);
+    }
+
+    return result;
+}
+
+template <int ITERATIONS>
+inline void calculate_gelu_appx() {
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // sfpi::vFloat in = sfpi::dst_reg[0];
+        // sfpi::vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
+
+        // sfpi::vFloat half_in = in * half;
+        // result = lut(result, l0, l1, l2);
+        // result = half_in * result + half_in;
+
+        // sfpi::dst_reg[0] = result;
+
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
+        sfpi::vFloat half_in = in * half;
+        sfpi::vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        result = half_in + result;
+
+        sfpi::dst_reg[0] = result;
+
+        sfpi::dst_reg++;
+
+        // sfpi::dst_reg++;
+        // TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
+        ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
+        // TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
+        // TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
+        // TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
+    }
+
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+}
+
+template <int ITERATIONS>
+inline void calculate_gelu_accurate() {
+    constexpr bool scaled = true;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result = _calculate_cdf_appx_(in, scaled);
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
-        _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+        calculate_gelu_appx<ITERATIONS>();
     } else {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat result = calculate_gelu_piecewise(in);
             if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             }
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
@@ -294,53 +441,94 @@ inline void calculate_gelu() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+    if constexpr (APPROXIMATION_MODE) {
+        constexpr int lut_mode = 1;  // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
+
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+        sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+        sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+        sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+// SFPU microcode:
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
+            v_if(val < 0.0F) { val = val + 1.0f; }
+            v_endif;
+            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg++;
+        }
+
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+        sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+        sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+        sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+        sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+    } else {
+        constexpr std::uint32_t imm2 = 0xFF10;
+
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+
+// SFPU microcode:
+#pragma GCC unroll 0
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat neg_half_sq_in = in * in * -0.5f;
+
+            // exp = e^(val)
+            sfpi::vFloat exp = _calculate_exponential_body_<false>(neg_half_sq_in);
+
+            // exp = exp * 1/sqrt(2*pi)
+            sfpi::vFloat partial = exp * in * sfpi::sFloat16b(0.3989423F);
+
+            sfpi::vFloat result = calculate_gelu_core<true>(in);
+
+            result = lut(result, l0, l1, imm2);
+
+            sfpi::dst_reg[0] = partial + result + 0.5f;
+            sfpi::dst_reg++;
+        }
+
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    }
 }
 
 // =============================================================================
-// GELU Derivative - Polynomial Approximation (NEW)
+// GELU Derivative - Polynomial Approximation
 // =============================================================================
 // GELU'(x) = Φ(x) + x*φ(x) where Φ is CDF, φ is PDF of standard normal
-// Uses piecewise polynomials for high accuracy
+//
+// Uses the identity GELU'(x) + GELU'(-x) = 1 (provable from Φ(x) + Φ(-x) = 1
+// and φ(x) = φ(-x)), so GELU'(x) - 0.5 is an odd function of x, expressible as
+// x * h(x²) for some function h. This halves the polynomial degree.
+//
+// Three active regions (plus zero default):
+//   x >= 3.1719:          Saturation to 1
+//   -3 <= x < 3.1719:     Core: 0.5 + x * h(x²), degree-8 in u=x²
+//   -13.375 < x < -3:     Asymptotic: x * exp(-x²/2) with Mills ratio correction
+//   x <= -13.375:          Zero (BF16 natural saturation)
 // =============================================================================
 
-// Degree-16 polynomial for GELU'(x) over [-3, 3]
-// Coefficients from Sollya fpminimax
-constexpr float GELU_DERIV_CORE_C0 = 0.49999025f;
-constexpr float GELU_DERIV_CORE_C1 = 0.79791743f;
-constexpr float GELU_DERIV_CORE_C2 = 1.7774066e-4f;
-constexpr float GELU_DERIV_CORE_C3 = -0.26595619f;
-constexpr float GELU_DERIV_CORE_C4 = -4.5130015e-4f;
-constexpr float GELU_DERIV_CORE_C5 = 5.9655134e-2f;
-constexpr float GELU_DERIV_CORE_C6 = 4.1692785e-4f;
-constexpr float GELU_DERIV_CORE_C7 = -9.2725726e-3f;
-constexpr float GELU_DERIV_CORE_C8 = -1.8569338e-4f;
-constexpr float GELU_DERIV_CORE_C9 = 1.0372815e-3f;
-constexpr float GELU_DERIV_CORE_C10 = 4.4518791e-5f;
-constexpr float GELU_DERIV_CORE_C11 = -8.0475649e-5f;
-constexpr float GELU_DERIV_CORE_C12 = -5.8852397e-6f;
-constexpr float GELU_DERIV_CORE_C13 = 3.8346534e-6f;
-constexpr float GELU_DERIV_CORE_C14 = 4.0404797e-7f;
-constexpr float GELU_DERIV_CORE_C15 = -8.3111068e-8f;
-constexpr float GELU_DERIV_CORE_C16 = -1.1251415e-8f;
-
-// Degree-8 SHIFTED polynomial for GELU'(x) over [-5, -3]
-// SHIFTED: Evaluate p(t) where t = x + 4, so t ∈ [-1, 1] for x ∈ [-5, -3]
-// This avoids catastrophic cancellation in float32 Horner's method
-// Coefficients from Sollya fpminimax with shifted variable
-constexpr float GELU_DERIV_LEFT_C0 = -5.03619085066020488739013671875e-4f;
-constexpr float GELU_DERIV_LEFT_C1 = -1.872996450401842594146728515625e-3f;
-constexpr float GELU_DERIV_LEFT_C2 = -3.2110414467751979827880859375e-3f;
-constexpr float GELU_DERIV_LEFT_C3 = -3.30785498954355716705322265625e-3f;
-constexpr float GELU_DERIV_LEFT_C4 = -2.20105494372546672821044921875e-3f;
-constexpr float GELU_DERIV_LEFT_C5 = -8.814539178274571895599365234375e-4f;
-constexpr float GELU_DERIV_LEFT_C6 = -9.72292109508998692035675048828125e-5f;
-constexpr float GELU_DERIV_LEFT_C7 = 9.22545223147608339786529541015625e-5f;
-constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
-
-// Note: FL1 and FL2 polynomial coefficients removed - fused x*exp(t) method
-// achieves Max ULP ≤ 1 across the entire (-13.375, -5] range, outperforming
-// the Sollya polynomials which had Max ULP = 3 (FL1) and 42 (FL2).
+// Degree-8 polynomial h(u) for GELU'(x) = 0.5 + x * h(x²) over [-3, 3.1719]
+// Exploits odd-function decomposition: only 9 coefficients instead of 17.
+// Evaluation: 1 MUL (u=x²) + 9 MAD (Horner on u) + 1 MUL (x*h) + 1 ADD (+0.5)
+// = ~12 ops, vs ~32 ops for degree-16 in x.
+// Coefficients from Sollya fpminimax.
+constexpr float GELU_DERIV_H0 = 7.9788309336e-01f;
+constexpr float GELU_DERIV_H1 = -2.6593554020e-01f;
+constexpr float GELU_DERIV_H2 = 5.9766173363e-02f;
+constexpr float GELU_DERIV_H3 = -9.4142099842e-03f;
+constexpr float GELU_DERIV_H4 = 1.1061388068e-03f;
+constexpr float GELU_DERIV_H5 = -9.7448595625e-05f;
+constexpr float GELU_DERIV_H6 = 6.0921474869e-06f;
+constexpr float GELU_DERIV_H7 = -2.3764030743e-07f;
+constexpr float GELU_DERIV_H8 = 4.2734988881e-09f;
 
 // GELU Derivative Evaluation with Polynomial Approximation
 // Saturation thresholds derived from exhaustive BF16 research (DAZ+FTZ model):
@@ -349,65 +537,36 @@ constexpr float GELU_DERIV_LEFT_C8 = 3.57478638761676847934722900390625e-5f;
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default to 0 for x < -3
+    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.375
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
     v_if(x >= 3.1719f) { result = sfpi::vConst1; }
-    // Core region [-3, 3.1719], degree 16 polynomial
-    // Polynomial reproduces the "hump" where GELU'(x) > 1
+    // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
+    // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
+    // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        result = PolynomialEvaluator::eval(
-            x,
-            GELU_DERIV_CORE_C0,
-            GELU_DERIV_CORE_C1,
-            GELU_DERIV_CORE_C2,
-            GELU_DERIV_CORE_C3,
-            GELU_DERIV_CORE_C4,
-            GELU_DERIV_CORE_C5,
-            GELU_DERIV_CORE_C6,
-            GELU_DERIV_CORE_C7,
-            GELU_DERIV_CORE_C8,
-            GELU_DERIV_CORE_C9,
-            GELU_DERIV_CORE_C10,
-            GELU_DERIV_CORE_C11,
-            GELU_DERIV_CORE_C12,
-            GELU_DERIV_CORE_C13,
-            GELU_DERIV_CORE_C14,
-            GELU_DERIV_CORE_C15,
-            GELU_DERIV_CORE_C16);
+        sfpi::vFloat u = x * x;
+        sfpi::vFloat h = PolynomialEvaluator::eval(
+            u,
+            GELU_DERIV_H0,
+            GELU_DERIV_H1,
+            GELU_DERIV_H2,
+            GELU_DERIV_H3,
+            GELU_DERIV_H4,
+            GELU_DERIV_H5,
+            GELU_DERIV_H6,
+            GELU_DERIV_H7,
+            GELU_DERIV_H8);
+        result = 0.5f + x * h;
     }
-    // Left region [-5, -3], degree 8 SHIFTED polynomial
-    // SHIFTED: t = x + 4 maps x ∈ [-5, -3] to t ∈ [-1, 1]
-    // This avoids catastrophic cancellation in float32 Horner's method
-    v_elseif(x >= -5.0f) {
-        sfpi::vFloat t = x + 4.0f;  // Shift to [-1, 1] range
-        result = PolynomialEvaluator::eval(
-            t,
-            GELU_DERIV_LEFT_C0,
-            GELU_DERIV_LEFT_C1,
-            GELU_DERIV_LEFT_C2,
-            GELU_DERIV_LEFT_C3,
-            GELU_DERIV_LEFT_C4,
-            GELU_DERIV_LEFT_C5,
-            GELU_DERIV_LEFT_C6,
-            GELU_DERIV_LEFT_C7,
-            GELU_DERIV_LEFT_C8);
-    }
-    // Deep negative region (-13.375, -5]: use asymptotic formula with fused x*exp(t)
-    // The fused method achieves Max ULP ≤ 1 across this entire range, outperforming
-    // the Sollya polynomials (FL1, FL2) which had Max ULP = 3 and 42 respectively.
+    // Tail region (-13.375, -3): asymptotic formula with fused x*exp(t)
+    // LEFT polynomial eliminated — the asymptotic formula achieves Max ULP ≤ 1
+    // across the entire (-13.375, -3) range.
     // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) where φ(x) = exp(-x²/2) / sqrt(2π)
     //
-    // Uses exp_deep_negative_tail() - a specialized inline exp with direct exponent
-    // bit manipulation (exexp_nodebias + setexp) instead of general-purpose
-    // _sfpu_exp_f32_accurate_(). This follows consolidated research recommendations:
-    // - Cody-Waite range reduction with LN2_HI + LN2_LO for extended precision
-    // - Degree-5 Taylor polynomial for exp(r)
-    // - Direct exponent field manipulation for 2^k scaling (FREE bit ops!)
-    // - Explicit FTZ via exponent field check
-    //
-    // Performance: ~15-18 ops (inline) vs ~25-30 ops (external function)
-    // Accuracy: < 1 ULP for exp computation, sub-ULP for GELU'
+    // Uses x_times_exp_negative_tail() for fused x * exp(t) to avoid intermediate
+    // underflow. Cody-Waite range reduction + degree-5 Taylor + direct exponent
+    // bit manipulation.
     //
     // For APPROXIMATION_MODE=true: use simple x*φ(x) (~1% relative error)
     // For APPROXIMATION_MODE=false: use Mills ratio correction (<0.01% relative error)
@@ -417,19 +576,11 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
-        // Use FUSED x * exp(t) to avoid intermediate underflow!
-        // exp(t) alone can underflow (e.g., exp(-88.6) ≈ 3e-39 < BF16 min normal),
-        // but x * exp(t) stays representable (e.g., -13.3 * 3e-39 = -4e-38 > min normal).
-        // The fused function multiplies x by poly BEFORE the 2^k exponent shift.
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
 
         if constexpr (APPROXIMATION_MODE) {
-            // Fast mode: leading term only, ~1% relative error at x=-9
-            // result = x * φ(x) = x * exp(-x²/2) / sqrt(2π)
             result = x_exp * INV_SQRT_2PI;
         } else {
-            // Accurate mode: Mills ratio correction for <0.01% relative error
-            // GELU'(x) ≈ φ(x) * (x - 1/x + 1/x³) = x * φ(x) * (1 - 1/x² + 1/x⁴)
             sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);  // 1/x²
             sfpi::vFloat inv_x4 = inv_x2 * inv_x2;           // 1/x⁴
             sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
@@ -437,7 +588,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
         }
     }
     // For x <= -13.375, saturate to 0
-    // This is the BF16 natural saturation threshold where GELU'(x) rounds to 0.
     v_endif;
 
     return result;
@@ -450,7 +600,7 @@ inline void calculate_gelu_derivative_polynomial() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE>(val);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
@@ -460,7 +610,11 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        _init_reciprocal_<false, false>();
+        // Call _init_sfpu_reciprocal_ directly: gelu derivative uses _sfpu_reciprocal_<2>
+        // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
+        // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
+        // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
+        _init_sfpu_reciprocal_<false>();
     }
 }
 

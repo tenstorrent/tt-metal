@@ -11,23 +11,29 @@
 
 namespace ttnn::operations::moreh::moreh_norm {
 
-MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::ProgramFactoryWOther::create(
+tt::tt_metal::ProgramDescriptor MorehNormOperation::ProgramFactoryWOther::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
     const auto& input = tensor_args.input;
     const auto p = operation_attributes.p;
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = input.device();
-    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.padded_shape();
     const auto input_rank = input_shape.rank();
+    auto logical_shape = input.logical_shape();
+    if (logical_shape.rank() < 2) {
+        logical_shape = logical_shape.to_rank(2);
+    }
 
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];
@@ -37,7 +43,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
 
     const auto num_units = input.physical_volume() / H / W * Ht;
 
-    const auto origin_w = input.logical_shape()[input_rank - 1];
+    const auto origin_w = logical_shape[input_rank - 1];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -73,19 +79,71 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     const uint32_t im1_t{1};  // calculate f(x) over dimension
     const uint32_t im2_t{1};  // reduce f(x)
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},    // input
-            {tt::CBIndex::c_1, in1_t},    // one
-            {tt::CBIndex::c_2, in2_t},    // mask_w
-            {tt::CBIndex::c_16, out0_t},  // output
-            {tt::CBIndex::c_24, im0_t, intermed_data_format},
-            {tt::CBIndex::c_25, im1_t, intermed_data_format},
-            {tt::CBIndex::c_26, im2_t, intermed_data_format},
-        });
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * tile_size(cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * tile_size(cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_t * tile_size(cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * tile_size(cb_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im0_t * tile_size(intermed_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = intermed_data_format,
+            .page_size = tile_size(intermed_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im1_t * tile_size(intermed_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_25),
+            .data_format = intermed_data_format,
+            .page_size = tile_size(intermed_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im2_t * tile_size(intermed_data_format),
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_26),
+            .data_format = intermed_data_format,
+            .page_size = tile_size(intermed_data_format),
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -97,124 +155,138 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "writer_moreh_norm_w.cpp";
 
-    std::vector<uint32_t> reader_ct_args = {};
+    KernelDescriptor::CompileTimeArgs reader_ct_args;
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_ct_args);
-    std::vector<uint32_t> writer_ct_args = {};
+    KernelDescriptor::CompileTimeArgs writer_ct_args;
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_ct_args);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = reader_kernel_file;
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = writer_kernel_file;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<std::string, std::string> compute_defines{};
+    std::map<std::string, std::string> compute_defines_map{};
 
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    if (p == 0.0) {
-        compute_defines["REDUCE_OP"] = "PoolType::SUM";
-        compute_defines["IS_ZERO"] = "1";
+    compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+    if (p == 0.0f) {
+        compute_defines_map["REDUCE_OP"] = "PoolType::SUM";
+        compute_defines_map["IS_ZERO"] = "1";
     } else {
-        compute_defines["REDUCE_OP"] = "PoolType::MAX";
+        compute_defines_map["REDUCE_OP"] = "PoolType::MAX";
         if (p == -std::numeric_limits<float>::infinity()) {
-            compute_defines["MINUS_INF"] = "1";
+            compute_defines_map["MINUS_INF"] = "1";
         }
     }
+    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
 
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/ord_other/moreh_norm_w/kernels/"
         "moreh_norm_w_kernel.cpp";
 
-    const auto compute_kernels_id_1 = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_units_per_core_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
-    KernelHandle compute_kernels_id_2{0};
-    if (!core_group_2.ranges().empty()) {
-        compute_kernels_id_2 = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_units_per_core_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = compute_kernel_file;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source = compute_kernel_file;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {};
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = math_approx_mode,
+        };
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    auto* const input_buf = input.buffer();
+    auto* const output_buf = output.buffer();
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_units_per_core;
-        KernelHandle compute_kernel_id;
         if (core_group_1.contains(core)) {
             num_units_per_core = num_units_per_core_group_1;
-            compute_kernel_id = compute_kernels_id_1;
+            compute_desc_1.emplace_runtime_args(
+                core,
+                {
+                    num_units_per_core,
+                    static_cast<uint32_t>(Wt),
+                    static_cast<uint32_t>(origin_w),
+                });
         } else if (core_group_2.contains(core)) {
             num_units_per_core = num_units_per_core_group_2;
-            compute_kernel_id = compute_kernels_id_2;
+            compute_desc_2.emplace_runtime_args(
+                core,
+                {
+                    num_units_per_core,
+                    static_cast<uint32_t>(Wt),
+                    static_cast<uint32_t>(origin_w),
+                });
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
-            input.buffer()->address(),
-            static_cast<uint32_t>(is_dram(input)),
-            num_units_per_core,
-            Wt,
-            tile_offset,
-            origin_w};
-        SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
+        reader_desc.emplace_runtime_args(
+            core,
+            {input_buf,
+             static_cast<uint32_t>(is_dram(input)),
+             num_units_per_core,
+             static_cast<uint32_t>(Wt),
+             tile_offset,
+             static_cast<uint32_t>(origin_w)});
 
         // writer
-        const std::vector<uint32_t> writer_runtime_args{
-            output.buffer()->address(), static_cast<uint32_t>(is_dram(output)), num_units_per_core, Wt, tile_offset};
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
-
-        // compute
-        const std::vector<uint32_t> compute_runtime_args{
-            num_units_per_core,
-            Wt,
-            origin_w,
-        };
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
+        writer_desc.emplace_runtime_args(
+            core,
+            {output_buf,
+             static_cast<uint32_t>(is_dram(output)),
+             num_units_per_core,
+             static_cast<uint32_t>(Wt),
+             tile_offset});
 
         tile_offset += num_units_per_core * Wt;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
-}
-
-void MorehNormOperation::ProgramFactoryWOther::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& reader_kernels_id = cached_program.shared_variables.reader_kernels_id;
-    auto& writer_kernels_id = cached_program.shared_variables.writer_kernels_id;
-    auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    for (uint32_t icore = 0; icore < num_cores_to_be_used; icore++) {
-        CoreCoord core = {icore / num_cores_y, icore % num_cores_y};
-        // readers
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
-            runtime_args[0] = tensor_args.input.buffer()->address();
-        }
-
-        // writer
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
-            runtime_args[0] = output.buffer()->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
 }  // namespace ttnn::operations::moreh::moreh_norm

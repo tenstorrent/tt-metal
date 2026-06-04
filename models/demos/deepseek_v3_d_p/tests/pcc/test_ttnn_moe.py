@@ -11,6 +11,7 @@ Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
 import random
+from pathlib import Path
 
 import pytest
 import torch
@@ -50,16 +51,22 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     log_validation_results,
     visualize_expert_dispatch_table,
 )
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
+# dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
+# integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
+# Real traffic never approaches the worst case, so half-capacity is sufficient.
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, gate_fallback_mode, run_pcc_check",
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check",
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 2, GateComputeMode.HOST_ALL, True),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 5, GateComputeMode.HOST_ALL, True, marks=pytest.mark.timeout(900)),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
+        # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
     ],
 )
@@ -72,7 +79,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="linear-8",
@@ -83,10 +90,21 @@ from tests.ttnn.utils_for_testing import comp_pcc
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
         ),
         pytest.param(
             (8, 4),
@@ -94,7 +112,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
-            1,
+            2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
@@ -110,7 +128,7 @@ def test_ttnn_moe(
     hidden_dim,
     num_routed_experts,
     num_experts_per_tok,
-    capacity_factor,
+    dispatch_buffer_capacity_factor,
     run_pcc_check,
     num_links,
     topology,
@@ -123,8 +141,18 @@ def test_ttnn_moe(
     and run forward(x) end-to-end. Validation compares intermediates directly.
     """
 
-    mesh_device.disable_and_clear_program_cache()  # temporary disabling program cache; because cached all gather semaphores at wrong place cause this test case to OOM
-    # pytest  models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+    # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
+    # Cached all-gather semaphores get placed at the wrong offset for that specific config.
+    # Test ID matched: test_ttnn_moe[blackhole-linear-8-1600-7168-2048-64-8-2-GateComputeMode.HOST_ALL-True]
+    n_sp_devices_pre, n_tp_devices_pre = mesh_device.shape
+    if (
+        n_sp_devices_pre == 8
+        and n_tp_devices_pre == 1
+        and num_routed_experts == 64
+        and gate_fallback_mode == GateComputeMode.HOST_ALL
+        and run_pcc_check
+    ):
+        mesh_device.disable_and_clear_program_cache()
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -137,6 +165,7 @@ def test_ttnn_moe(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     n_sp_devices, n_tp_devices = mesh_device.shape
+    layer_idx = 0
 
     logger.debug(f"\n{'='*60}")
     logger.debug("TtMoe PCC Test")
@@ -149,25 +178,79 @@ def test_ttnn_moe(
         f"emb_dim={emb_dim}, experts={num_routed_experts}"
     )
 
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    (
+        experts_per_chip,
+        metadata_len,
+        max_dispatch_buffer_token_size,
+        max_dispatched_tokens_per_expert,
+    ) = compute_constants(
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices,
+        dispatch_group_size,
+        dispatch_buffer_capacity_factor,
     )
     logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
-    logger.debug(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
+    logger.debug(
+        f"max_dispatch_buffer_token_size={max_dispatch_buffer_token_size}, max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}"
+    )
 
     # ========================================
-    # Step 1: Create weights
+    # Step 1: Create weights (cache-aware)
     # ========================================
-    if run_pcc_check:
+    moe_cache_dir = Path(
+        f"/tmp/deepseek_v3_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
+    )
+    moe_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    init_checker(moe_cache_dir)
+    ttnn_cache_complete = TtMoe.check_cache_complete(
+        moe_cache_dir, layer_idx=layer_idx, experts_per_chip=experts_per_chip
+    )
+    need_torch_weights = not ttnn_cache_complete or run_pcc_check
+    logger.info(f"Cache status: TTNN={ttnn_cache_complete}, need_torch_weights={need_torch_weights}")
+
+    if need_torch_weights:
+        logger.info("Creating torch weights...")
         profiler.start("weights_creation")
-        all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
-        shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
+        if run_pcc_check:
+            all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim)
+            shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim)
+        else:
+            all_routed_weights = None
+            shared_expert_weights = None
+        gate_weights = create_gate_weights(num_routed_experts, emb_dim)
         profiler.end("weights_creation")
+
+        # Build TTNN cache if not already complete
+        if not ttnn_cache_complete:
+            logger.info("Building TTNN cache...")
+            profiler.start("ttnn_cache_build")
+            TtMoe.build_ttnn_cache(
+                gate_weights=gate_weights,
+                routed_expert_weights=all_routed_weights,
+                shared_expert_weights=shared_expert_weights,
+                experts_per_chip=experts_per_chip,
+                emb_dim=emb_dim,
+                hidden_dim=hidden_dim,
+                mesh_device=mesh_device,
+                routed_expert_weights_dtype=ttnn.bfloat4_b,
+                shared_expert_weights_dtype=ttnn.bfloat8_b,
+                cache_path=moe_cache_dir,
+                layer_idx=layer_idx,
+            )
+            profiler.end("ttnn_cache_build")
+
+        # For non-PCC runs, free the heavy weights now that TTNN cache is built
+        if not run_pcc_check:
+            all_routed_weights = None
+            shared_expert_weights = None
     else:
+        logger.info("TTNN cache complete, skipping torch weight creation")
         all_routed_weights = None
         shared_expert_weights = None
-
-    gate_weights = create_gate_weights(num_routed_experts, emb_dim)
+        gate_weights = None
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -192,7 +275,7 @@ def test_ttnn_moe(
     tt_x = ttnn.from_torch(
         x,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
@@ -210,6 +293,7 @@ def test_ttnn_moe(
             num_experts_per_tok=num_experts_per_tok,
             metadata_len=metadata_len,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
@@ -239,6 +323,7 @@ def test_ttnn_moe(
         num_experts_per_tok=num_experts_per_tok,
         metadata_len=metadata_len,
         max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
@@ -252,6 +337,8 @@ def test_ttnn_moe(
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         gate_weights=gate_weights,
         gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=moe_cache_dir,
+        layer_idx=layer_idx,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -351,6 +438,7 @@ def test_ttnn_moe(
         # fmt: on
 
         expert_token_counts = torch_intermediates.expert_token_counts
+        expert_region_offsets = torch_intermediates.expert_region_offsets
 
         for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
             if tt_tensor is None or torch_tensor is None:
@@ -365,6 +453,7 @@ def test_ttnn_moe(
             result = validate_fn(
                 torch_ref,
                 tt_host,
+                expert_region_offsets,
                 expert_token_counts,
                 expert_dispatch_table,
                 num_dispatch_groups,

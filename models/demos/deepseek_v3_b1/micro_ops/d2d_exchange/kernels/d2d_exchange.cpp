@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
+#include "../../../unified_kernels/termination.hpp"
 
 constexpr uint32_t sender_socket_config_addr = get_compile_time_arg_val(0);
 constexpr uint32_t receiver_socket_config_addr = get_compile_time_arg_val(1);
@@ -19,18 +19,6 @@ constexpr uint32_t partial_packet_size = get_compile_time_arg_val(6);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(7);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(9);
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
 
 FORCE_INLINE void write_data_to_local_core_with_ack(
     SocketSenderInterface& sender_socket, uint32_t l1_read_addr, uint64_t dst_addr, uint32_t page_size) {
@@ -147,9 +135,6 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, page_size);
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-    DPRINT << "Starting d2d exchange kernel" << ENDL();
-    DEVICE_PRINT("Starting d2d exchange kernel\n");
-
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
         downstream_enc.d2d.downstream_noc_x,
         downstream_enc.d2d.downstream_noc_y,
@@ -191,7 +176,7 @@ void kernel_main() {
 
     while (true) {
         socket_reserve_pages(sender_socket, 1);
-        if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
 

@@ -78,6 +78,12 @@ class DispatcherCoreData:
     # Host-assigned id from the previous launch message entry (best-effort).
     # Not serialized by default; used by scripts that need accurate previous-op tracking.
     previous_host_assigned_id: int | None = None
+    # Inspector/control-plane-sourced block type for this core. Used by callers to reason about
+    # active-vs-idle ETH without re-consulting the cluster descriptor.
+    block_type: BlockType | None = None
+    # Hint surfaced when find_kernel fails — explains the most likely cause (program cache off,
+    # or workload destroyed despite cache being on) so callers can append it to "PC not in range" style errors.
+    kernel_lookup_warning: str | None = None
 
 
 class DispatcherData:
@@ -89,6 +95,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
+        self.metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -261,6 +268,20 @@ class DispatcherData:
             )
         return self._build_env_cache[device_unique_id]
 
+    def _kernel_missing_hint_for_device(self, metal_device_id: int) -> str | None:
+        mesh_devices = self.inspector_data.getMeshDevices().meshDevices
+        containing = [md for md in mesh_devices if metal_device_id in md.devices]
+        disabled = [md.meshId for md in containing if not md.programCacheEnabled]
+        if disabled:
+            return (
+                f"Program cache is disabled on MeshDevice(s) {disabled} containing this device. "
+                f"Enable program cache to see the callstack."
+            )
+        return (
+            "No host-side live program owns the kernel on this device —"
+            " the program should remain alive on host while its kernel is running."
+        )
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -400,10 +421,13 @@ class DispatcherData:
             raise
         except Exception:
             pass
+        kernel_lookup_warning: str | None = None
         try:
             kernel = self.find_kernel(watcher_kernel_id)
         except Exception:
-            pass
+            if watcher_kernel_id != -1 and self.metal_device_id_mapping.has_unique_id(location._device.unique_id):
+                metal_device_id = self.metal_device_id_mapping.get_metal_device_id(location._device.unique_id)
+                kernel_lookup_warning = self._kernel_missing_hint_for_device(metal_device_id)
         try:
             previous_kernel = self.find_kernel(watcher_previous_kernel_id)
         except Exception:
@@ -422,13 +446,13 @@ class DispatcherData:
         except Exception:
             pass
         try:
-            host_assigned_id = mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id
+            host_assigned_id = int(mailboxes.launch[launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except Exception:
             pass
         try:
-            previous_host_assigned_id = mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id
+            previous_host_assigned_id = int(mailboxes.launch[previous_launch_msg_rd_ptr].kernel_config.host_assigned_id)
         except TimeoutDeviceRegisterError:
             raise
         except:
@@ -537,11 +561,16 @@ class DispatcherData:
                 f"failed to read subordinate sync from mailboxes. {MAILBOX_CORRUPTED_MESSAGE}",
             )
 
+        # Path picking must use the same source of truth as block_type above (inspector /
+        # metal control plane), not location.device.active_eth_block_locations (cluster
+        # descriptor / exalens).
+        is_active_eth = block_type == "active_eth"
+
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
         if block_type == "dram":
             firmware_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
-        elif location in location.device.active_eth_block_locations:
+        elif is_active_eth:
             if proc_name.lower() == "erisc":
                 firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
             elif proc_name.lower() == "erisc0":
@@ -565,7 +594,7 @@ class DispatcherData:
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
-            if location in location.device.active_eth_block_locations:
+            if is_active_eth:
                 if proc_name.lower() == "erisc":
                     kernel_path = kernel.path + "/erisc/erisc.elf"
                 elif proc_name.lower() == "erisc0":
@@ -591,14 +620,16 @@ class DispatcherData:
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000
             # In wormhole we only use text offset to calculate the kernel offset for active ETH
-            elif location in location.device.active_eth_block_locations and location.device.is_wormhole():
+            elif is_active_eth and location.device.is_wormhole():
                 kernel_offset = kernel_text_offset
             elif block_type == "dram":
                 # DRAM kernel ELFs are linked at their actual load address (kernel_text_offset),
                 # not at address 0 like Tensix kernels, so no base adjustment is needed.
                 kernel_offset = kernel_text_offset
             else:
-                kernel_offset = kernel_config_base + kernel_text_offset
+                # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
+                # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
+                kernel_offset = (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
         else:
             kernel_path = None
             kernel_xip_path = None
@@ -630,6 +661,8 @@ class DispatcherData:
             enables=enables,
             subordinate_sync=subordinate_sync,
             watcher_enabled=watcher_enabled,
+            block_type=block_type,
+            kernel_lookup_warning=kernel_lookup_warning,
         )
 
 

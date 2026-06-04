@@ -32,6 +32,9 @@ bool can_use_sharded_optimized_factory(
             return false;
         }
     }
+    if (operation_attributes.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED) {
+        return false;  // ND_SHARDED output should take the default factory.
+    }
     return !operation_attributes.sub_core_grids.has_value();
 }
 
@@ -167,7 +170,11 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] =
             operation_attributes.output_padded_shape.volume() / operation_attributes.output_padded_shape[-1];
-        auto mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            input_tensor.memory_config().memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);  // If the input is using the legacy sharded optimized program
+                          // factory, the output has the same shard spec as the input.
         return TensorSpec(
             input_shape,
             TensorLayout::fromPaddedShape(

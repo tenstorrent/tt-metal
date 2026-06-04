@@ -8,6 +8,7 @@
 #include "tt_align.hpp"
 #include "hostdev/dev_msgs.h"
 #include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::dram;
 
 #include <algorithm>
@@ -32,6 +33,10 @@ namespace dram_fabric_telemetry {
 #include "hal/generated/fabric_telemetry_impl.hpp"
 }
 
+namespace dram_realtime_profiler_msgs {
+#include "hal/generated/realtime_profiler_msgs_impl.hpp"
+}
+
 HalCoreInfoType create_dram_mem_map() {
     static_assert(sizeof(mailboxes_t) <= MEM_DRISC_MAILBOX_SIZE);
     static_assert(MEM_DRISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
@@ -40,7 +45,7 @@ HalCoreInfoType create_dram_mem_map() {
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = 0;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_DRISC_L1_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DRISC_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_DRISC_MAILBOX_ADDRESS_HOST(launch);
@@ -66,7 +71,7 @@ HalCoreInfoType create_dram_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_DRISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_DRISC_KERNEL_CONFIG_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
@@ -114,7 +119,8 @@ HalCoreInfoType create_dram_mem_map() {
         false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         dram_dev_msgs::create_factory(),
-        dram_fabric_telemetry::create_factory()};
+        dram_fabric_telemetry::create_factory(),
+        dram_realtime_profiler_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::blackhole

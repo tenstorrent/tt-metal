@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 
 using namespace sfpi;
@@ -106,7 +106,7 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
-    sfpi::vInt p_exp = sfpi::exexp_nodebias(poly);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0 (natural zero saturation)
@@ -207,7 +207,7 @@ inline void calculate_tanh_derivative_sech2() {
 
         // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, sfpi::RoundMode::NearestEven));
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
 
         sfpi::dst_reg[0] = result;

@@ -68,6 +68,7 @@ constexpr uint32_t BRISC_WR_CMD_BUF = 0;      // for large writes
 constexpr uint32_t BRISC_RD_CMD_BUF = 1;      // for all reads
 constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
 constexpr uint32_t BRISC_AT_CMD_BUF = 3;      // for atomics
+constexpr uint32_t NUM_NOC_CMD_BUFS = 4;
 
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used
 // (36 bits of address followed by coordinates) This means that lo and mid registers need to have the address portion
@@ -119,10 +120,8 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 #if defined(COMPILE_FOR_AERISC)
     constexpr uint32_t base = MEM_AERISC_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_AERISC_NOC_COUNTER_SIZE;
 #else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
-    constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 #endif
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.
@@ -186,6 +185,11 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
     return *ptr;
 }
 
+inline __attribute__((always_inline)) void NOC_CFG_WRITE_REG(uint32_t noc, uint32_t reg_id, uint32_t val) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
+    *(volatile uint32_t*)offset = val;
+}
+
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
@@ -232,6 +236,26 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 // Clears NOC_PACKET_TAG register for the specified cmd_buf.
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t noc, uint32_t cmd_buf) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, 0);
+}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t noc) {
+    for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+        noc_clear_packet_tag(noc, cmd_buf);
+    }
+}
+
+inline __attribute__((always_inline)) void noc_clear_all_packet_tags() {
+    for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+        noc_clear_packet_tags(noc);
+    }
+}
+
+// Kernels that do not explicitly set transaction IDs should naturally use transaction ID 0 for multicast writes after
+// kernel handoff. Only write/atomic-capable command buffers matter for this assert.
+inline __attribute__((always_inline)) bool ncrisc_noc_packet_tags_cleared(uint32_t noc) {
+    return NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_PACKET_TAG) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, NCRISC_AT_CMD_BUF, NOC_PACKET_TAG) == 0;
 }
 
 // Restores cmd_buf from state; waits for cmd_buf ready before writing.

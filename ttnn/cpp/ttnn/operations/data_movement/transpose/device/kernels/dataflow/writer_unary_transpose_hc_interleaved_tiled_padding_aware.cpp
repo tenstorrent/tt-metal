@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Retrieve arguments
@@ -43,6 +47,10 @@ void kernel_main() {
 
     // Initialize address generator
     const auto s = TensorAccessor(dst_args, dst_addr);
+
+    Noc noc;
+    CircularBuffer cb(cb_id_out0);
+    CircularBuffer cb_padding(tt::CBIndex::c_1);
 
     // Calculate actual data height in the last tile
     constexpr uint32_t H_last_tile = H - (H_t - 1) * TILE_HEIGHT;
@@ -84,8 +92,8 @@ void kernel_main() {
         uint32_t output_h = h * TILE_HEIGHT;
 
         // Synchronization and read address retrieval
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb.wait_front(1);
+        uint32_t l1_read_addr = cb.get_read_ptr();
 
         // Determine the number of faces in the height dimension
         uint8_t num_faces_h = (h == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
@@ -126,11 +134,14 @@ void kernel_main() {
                     // Compute the linear index
                     uint32_t linear_idx = base_linear_idx + output_h_face_line * C_t * W_t;
 
-                    // Compute the write address
-                    uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
-
                     // Perform asynchronous write
-                    noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                    CoreLocalMem<uint32_t> src(l1_read_addr);
+                    noc.async_write(
+                        src,
+                        s,
+                        SUBTILE_LINE_BYTES,
+                        {.offset_bytes = 0},
+                        {.page_id = linear_idx, .offset_bytes = offset});
 
                     // Increment the read address
                     l1_read_addr += SUBTILE_LINE_BYTES;
@@ -144,17 +155,17 @@ void kernel_main() {
         }
 
         // Ensure all asynchronous writes are completed before proceeding
-        noc_async_write_barrier();
+        noc.async_write_barrier();
 
         // Remove the processed tile from the front of the buffer
-        cb_pop_front(cb_id_out0, 1);
+        cb.pop_front(1);
     }
 
     // add padding
     if constexpr (needs_padding) {
-        cb_wait_front(tt::CBIndex::c_1, 1);
+        cb_padding.wait_front(1);
 
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
+        uint32_t l1_read_ptr = cb_padding.get_read_ptr();
 
         constexpr uint32_t c_t = C_t - 1;
         constexpr uint8_t C_in_tile = C % TILE_HEIGHT;
@@ -181,13 +192,14 @@ void kernel_main() {
                     // Offset to the start of the current face along the width of the tile
                     uint32_t face_w_offset = face_w * face_height_width;
                     uint32_t offset = (face_c_offset + face_w_offset + sub_tile_line_start * FACE_WIDTH) * element_size;
-                    uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
                     uint32_t write_size = SUBTILE_LINE_BYTES * (FACE_HEIGHT - sub_tile_line_start);
-                    noc_async_write(l1_read_ptr, write_noc_base_addr, write_size);
+                    CoreLocalMem<uint32_t> pad_src(l1_read_ptr);
+                    noc.async_write(
+                        pad_src, s, write_size, {.offset_bytes = 0}, {.page_id = linear_idx, .offset_bytes = offset});
                 }
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(tt::CBIndex::c_1, 1);
+        noc.async_write_barrier();
+        cb_padding.pop_front(1);
     }
 }

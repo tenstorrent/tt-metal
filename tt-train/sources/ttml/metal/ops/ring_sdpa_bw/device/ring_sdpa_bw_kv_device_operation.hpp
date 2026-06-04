@@ -39,7 +39,7 @@ namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_bw::kv::RingSDPABwKVDeviceOperation::tensor_return_value_t ttml_ring_sdpa_bw_kv(
     const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& u_scaler,
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,

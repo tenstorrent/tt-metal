@@ -11,16 +11,16 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/debug/dprint_pages.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const tt::CBIndex input_cb = tt::CBIndex::c_0;
     const tt::CBIndex partial_prod_cb = tt::CBIndex::c_2;
     const tt::CBIndex final_output_cb = tt::CBIndex::c_3;
 
-    experimental::CircularBuffer input_cb_obj(input_cb);
-    experimental::CircularBuffer partial_prod_cb_obj(partial_prod_cb);
-    experimental::CircularBuffer final_output_cb_obj(final_output_cb);
+    CircularBuffer input_cb_obj(input_cb);
+    CircularBuffer partial_prod_cb_obj(partial_prod_cb);
+    CircularBuffer final_output_cb_obj(final_output_cb);
 
     const int one_tile = 1;
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);

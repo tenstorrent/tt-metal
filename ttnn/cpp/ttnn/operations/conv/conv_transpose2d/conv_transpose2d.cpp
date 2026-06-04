@@ -90,7 +90,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
         .padding = padding,
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
-        .is_transpose = true};
+        .is_transpose = true,
+        .padding_mode = conv_config.padding_mode};
 
     // ConvTranspose2d is implemented via the Conv2d u_op with flipped weights.
     // The input tensor is first passed to the halo op that pads the input.
@@ -114,6 +115,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
         dims.input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    // Grouped conv_transpose2d embeds grouping by expanding the weights before the conv2d micro-op.
+    const uint32_t conv_groups = groups > 1 ? 1 : groups;
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
@@ -146,7 +149,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             ConvTranspose2dDimensions::CONV2D_STRIDE,
             dilation,
             ConvTranspose2dDimensions::CONV2D_PADDING,
-            groups,
+            conv_groups,
             bias_tensor.has_value(),
             compute_config);
         auto_shard = true;
@@ -192,6 +195,15 @@ ConvTranspose2dResult conv_transpose2d_L1(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
+    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
+        conv_groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        conv_is_1d_depthwise,
+        parallel_config.shard_scheme,
+        in_channels_padded,
+        kernel_size[1],
+        dilation[1],
+        input_tensor_post_tm.dtype());
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -203,7 +215,10 @@ ConvTranspose2dResult conv_transpose2d_L1(
         kernel_size[1],
         dims.output_width,
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        false,
+        conv_is_1d_depthwise,
+        coalesce_1d_depthwise_kw_reads);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -238,12 +253,15 @@ ConvTranspose2dResult conv_transpose2d_L1(
             mm_conv && auto_shard,
             out_channels,  // explicit out_channels for grouped convolutions
             bias_tensor.has_value(),
-            false,                                      // enable_kernel_stride_folding
-            false,                                      // full_inner_dim
-            false,                                      // enable_activation_reuse
+            false,  // enable_kernel_stride_folding
+            false,  // full_inner_dim
+            false,  // enable_activation_reuse
+            coalesce_1d_depthwise_kw_reads,
             ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
-        tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-            transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel), bias_tensor, params, device);
+        ttnn::Tensor transformed_weight_tensor =
+            transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel);
+        tie(weight_tensor_on_device, bias_tensor_on_device) =
+            prepare_conv_weights_biases_and_move_to_device(transformed_weight_tensor, bias_tensor, params, device);
     }
     Tensor output;
     if (mm_conv) {
@@ -290,6 +308,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         Tensor halo_output = ttnn::halo(
             input_tensor_post_tm,
             sliding_window_config,
+            compute_config,
             0,
             false,
             parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
@@ -319,7 +338,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
-            groups,
+            conv_groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation,
             opt_conv_op_parallel_config,
@@ -637,6 +656,7 @@ public:
         slice_halo_config.core_range_set = sliced_input_tensor_memory_config.shard_spec().value().grid;
         slice_halo_config.snap_to_tile = true;
         slice_halo_config.is_transpose = true;
+        slice_halo_config.padding_mode = conv_config.padding_mode;
         const uint32_t input_channels_alignment = get_input_channels_alignment(
             conv_config.shard_layout.value(),
             conv_config.output_layout,
@@ -730,6 +750,7 @@ public:
             if (!conv_config.weights_dtype.has_value()) {
                 conv_config.weights_dtype = weight_dtype_;
             }
+            const uint32_t conv_groups = groups > 1 ? 1 : groups;
             auto conv2d_dims = compute_conv_transpose2d_dimensions(
                 input_slice_height,
                 input_slice_width,
@@ -767,10 +788,10 @@ public:
                 output_dtype,
                 std::nullopt,
                 kernel_size,
-                stride,
+                ConvTranspose2dDimensions::CONV2D_STRIDE,
                 dilation,
-                padding_n4,
-                groups,
+                ConvTranspose2dDimensions::CONV2D_PADDING,
+                conv_groups,
                 has_bias,
                 compute_config);
         }

@@ -67,7 +67,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "tile.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -76,6 +75,11 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/jit_build/jit_build_utils.hpp"
+#include "impl/jit_server/remote_compile_coordinator.hpp"
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -148,28 +152,54 @@ using detail::ProgramImpl;
 
 namespace {
 
-void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    // ZoneScoped;
-    // const std::string tracyPrefix = "GenerateBinaries_";
-    // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
-    try {
-        jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        kernel->generate_binaries(device, build_options);
-    } catch (std::runtime_error& ex) {
-        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+// Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
+void generate_kernel_source_files(
+    IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
+    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    jit_build_genfiles_descriptors(env, build_options);
+    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
+    } else {
+        jit_build_genfiles_kernel_include(env, *kernel, kernel->kernel_source());
     }
 }
 
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+// Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
+KernelCompileDescriptor build_kernel_descriptor(
+    IDevice* device,
+    const std::shared_ptr<Kernel>& kernel,
+    const JitBuildOptions& build_options,
+    std::size_t kernel_hash) {
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+
+    uint32_t core_type =
+        MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+    uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+
+    KernelCompileDescriptor desc;
+    desc.kernel_hash = kernel_hash;
+    desc.request.build_key = build_env.build_key();
+    desc.request.kernel_name = kernel->name() + "/" + std::to_string(kernel_hash);
+    desc.request.gpp = build_env.build_env.get_gpp();
+    static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
+    desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
+
+    int num_binaries = kernel->expected_num_binaries();
+    for (int i = 0; i < num_binaries; ++i) {
+        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
+        desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
+    }
+
+    return desc;
+}
 
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // watcher/dprint enabled are accounted for in the build key.
-    tt::FNV1a hasher;
+    tt::StableHasher hasher;
     hasher.update(build_key);
     hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
     hasher.update(kernel->compute_hash());
@@ -186,6 +216,40 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
 #endif
     return compile_hash;
+}
+
+std::string ensure_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env,
+    size_t kernel_hash) {
+    if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
+        if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
+                kernel->name(),
+                kernel_hash,
+                precompiled_config->precompiled_dir);
+            return precompiled_config->precompiled_dir;
+        }
+
+        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
+            throw experimental::PrecompiledKernelNotFoundError(
+                kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
+        }
+    }
+
+    jit_build_once(kernel_hash, [&] {
+        try {
+            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            kernel->generate_binaries(device, build_options);
+        } catch (std::runtime_error& ex) {
+            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        }
+    });
+    return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
 
@@ -262,6 +326,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         std::unordered_map<std::string, uint32_t> named_compile_args(
             kernel_descriptor.named_compile_time_args.begin(), kernel_descriptor.named_compile_time_args.end());
 
+        std::vector<std::filesystem::path> compiler_include_paths(
+            kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
+
         auto config = std::visit(
             tt::stl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -269,14 +336,16 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
-                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
+                        kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        std::move(compiler_include_paths)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
                     -> std::variant<DataMovementConfig, ComputeConfig> {
@@ -288,6 +357,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
@@ -303,6 +373,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
+                        .compiler_include_paths = std::move(compiler_include_paths),
                     };
                 },
             },
@@ -400,6 +471,40 @@ void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHa
     TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
 }
 
+void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
+    TT_FATAL(
+        primary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: primary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        primary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(
+        secondary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: secondary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        secondary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+
+    auto& primary_dfb = dataflow_buffers_[primary_id];
+    auto& secondary_dfb = dataflow_buffers_[secondary_id];
+
+    TT_FATAL(
+        !primary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: primary DFB id {} is already a secondary of DFB id {}. Alias chains are not allowed.",
+        primary_id,
+        primary_dfb->alias_primary_id.value());
+    TT_FATAL(
+        !secondary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
+        secondary_id,
+        secondary_dfb->alias_primary_id.value());
+
+
+    dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
+    dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
+}
+
 void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
@@ -437,15 +542,11 @@ uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const 
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(
-    const KernelSpecName& name,
-    const std::unordered_map<CoreCoord, size_t>& num_runtime_args_per_node,
-    size_t num_common_runtime_args) {
+void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(
-        name, KernelRTASchema{num_runtime_args_per_node, num_common_runtime_args});
+    auto [it, inserted] = metal2_registry_->kernel_rta_schemas.try_emplace(name, schema);
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
@@ -469,6 +570,75 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
         }
     }
     return names;
+}
+
+void ProgramImpl::register_tensor_parameter(
+    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+    TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return nullptr;
+    }
+    return &it->second.spec;
+}
+
+bool ProgramImpl::get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.dynamic_tensor_shape;
+}
+
+bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.match_padded_shape_only;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->tensor_parameter_layouts.size());
+        for (const auto& [name, entry] : metal2_registry_->tensor_parameter_layouts) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
+void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+}
+
+const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<std::pair<uint32_t, std::string>> empty;
+    if (!metal2_registry_) {
+        return empty;
+    }
+    return metal2_registry_->dfb_borrowed_bindings;
 }
 // ============================================================================
 
@@ -1250,6 +1420,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::optional<DeviceAddr> lowest_address =
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
+    const auto& allocator = device->allocator_impl();
+    const bool hybrid_mode = allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
+
+    // In HYBRID mode, per-core allocations live on each per-device allocator (not the mesh
+    // allocator). Collect the physical allocators we must consult so we can see per-core state.
+    std::vector<AllocatorImpl*> physical_allocators;
+    if (hybrid_mode) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                physical_allocators.push_back(dev->allocator_impl().get());
+            }
+        } else {
+            physical_allocators.push_back(allocator.get());
+        }
+    }
 
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
@@ -1263,6 +1448,23 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 cb_region_end,
                 max_l1_size);
+        }
+        if (hybrid_mode) {
+            // Per-core allocations (experimental_set_per_core_allocation) can land at different
+            // addresses per core, so query only the banks this CB covers on each physical allocator.
+            // Prevents per-core tensors on unrelated cores from spuriously tightening this CB's
+            // budget, and lets us see per-core state that lives on per-device (not mesh) allocators.
+            lowest_address = std::nullopt;
+            for (const auto& core : cb_allocator.core_range) {
+                for (auto* phys_alloc : physical_allocators) {
+                    auto bank_id = phys_alloc->get_bank_ids_from_logical_core(BufferType::L1, core).front();
+                    auto addr = phys_alloc->get_lowest_occupied_l1_address(bank_id);
+                    if (addr.has_value()) {
+                        lowest_address =
+                            lowest_address.has_value() ? std::make_optional(std::min(*lowest_address, *addr)) : addr;
+                    }
+                }
+            }
         }
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW(
@@ -1336,6 +1538,47 @@ void detail::ProgramImpl::add_semaphore(
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
+uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
+    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(
+        MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
+        "Coordinates out of range");
+
+    std::optional<uint32_t> semaphore_id;
+    std::bitset<NUM_SEMAPHORES> used_semaphore_ids;
+    for (const auto& core_range : crs.ranges()) {
+        for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
+            for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
+                CoreCoord logical_core(x, y);
+                auto existing = this->semaphores_on_core(logical_core, core_type);
+                if (existing.size() == NUM_SEMAPHORES) {
+                    TT_THROW(
+                        "Cannot add semaphore on core {}. Max number of semaphores ({}) reached!",
+                        logical_core.str(),
+                        NUM_SEMAPHORES);
+                }
+                for (const auto& semaphore : existing) {
+                    used_semaphore_ids.set(semaphore.get().id());
+                }
+            }
+        }
+    }
+    for (uint32_t sem_id = 0; sem_id < NUM_SEMAPHORES; sem_id++) {
+        if (!used_semaphore_ids.test(sem_id)) {
+            semaphore_id = sem_id;
+            break;
+        }
+    }
+    TT_FATAL(
+        semaphore_id.has_value(),
+        "Unable to initialize semaphore on CoreRangeSet {}: all {} IDs are in use",
+        crs.str(),
+        NUM_SEMAPHORES);
+
+    this->add_semaphore(crs, *semaphore_id, initial_value, core_type);
+    return *semaphore_id;
+}
+
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
     std::vector<std::set<CoreCoord>> unique_cores;
@@ -1399,53 +1642,26 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
     }
 }
 
-void detail::ProgramImpl::set_cb_data_fmt(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+void detail::ProgramImpl::set_cb_data_fmt_and_tile(
+    const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
     // ZoneScoped;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_dataformat_all_cores(
-                    static_cast<CBIndex>(buffer_index), circular_buffer->data_format(buffer_index));
-            }
-        }
-    }
-}
-
-void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
-    for (const auto& logical_cr : crs) {
-        const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
-        for (const auto& circular_buffer : cbs_on_core) {
-            for (auto buffer_index : circular_buffer->buffer_indices()) {
-                auto tile = circular_buffer->tile(buffer_index);
-                if (tile.has_value()) {
-                    build_options.set_cb_tile_dims_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        tile->get_num_faces(),
-                        tile->get_partial_face(),
-                        tile->get_face_shape()[0],
-                        tile->get_narrow_tile(),
-                        tile->get_tile_shape()[0],
-                        tile->get_tile_shape()[1]);
-                    build_options.set_cb_tile_size_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
-                } else {
-                    Tile t;
-                    build_options.set_cb_tile_size_all_cores(
-                        static_cast<CBIndex>(buffer_index),
-                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
-                }
+                const CBIndex cb_index = static_cast<CBIndex>(buffer_index);
+                const DataFormat data_format = circular_buffer->data_format(buffer_index);
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
     }
 }
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
-    // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Mock) {
+    // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1779,7 +1995,6 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
-    ContextId context_id = extract_context_id(device);
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1799,59 +2014,94 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
+    bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
 
-    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
-                   tt::TargetDevice::Mock;
-
-    for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(force_slow_dispatch, kernel);
-            launch_build_step(
-                [kernel, device, this, &build_env, is_mock] {
-                    JitBuildOptions build_options(build_env.build_env);
-                    kernel->set_build_options(build_options);
-                    if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(kernel);
-                    }
-                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
-
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
-
-                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                    kernel->set_full_name(kernel_path_suffix);
-                    build_options.set_name(kernel_path_suffix);
-
-                    if (!is_mock) {
-                        kernel->register_kernel_elf_paths_with_watcher(*device);
-                    }
-
-                    jit_build_once(kernel_hash, [&] {
-                        if (!is_mock) {
-                            GenerateBinaries(device, build_options, kernel);
-                        } else {
-                            // Create empty stub binaries for mock devices
-                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
-                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
-                        }
-                    });
-
-                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                },
-                events);
+    auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
+        JitBuildOptions build_options(build_env.build_env);
+        kernel->set_build_options(build_options);
+        if (this->compiled_.empty()) {
+            this->set_remote_circular_buffer_init(kernel);
         }
-    }
-    sync_build_steps(events);
+        this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+        this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
-    // Mock devices don't have binaries to read
-    if (!is_mock) {
-        for (const auto& kernels : kernels_) {
-            for (const auto& pair : kernels) {
-                const auto& kernel = pair.second;
-                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
+        // Blackhole-only: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated compute
+        // kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp width
+        // formats that are supported mostly in tt-metal. This conservative check fires whenever a compute
+        // kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
+        if (build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE &&
+            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+            std::any_of(
+                build_options.hlk_desc.buf_dataformat_arr.begin(),
+                build_options.hlk_desc.buf_dataformat_arr.end(),
+                is_fp8_format)) {
+            TT_FATAL(
+                build_options.fp32_dest_acc_en,
+                "Blackhole: Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+                "an 8-bit float format. Kernel: {}",
+                kernel->name());
+        }
+
+        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+
+        const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+        kernel->set_full_name(kernel_path_suffix);
+        build_options.set_name(kernel_path_suffix);
+
+        return std::pair{std::move(build_options), kernel_hash};
+    };
+
+    if (remote_enabled) {
+        // Remote path: prep and submit are sequential.  Parallelism is on compilation which happens on the remote
+        // server.
+        // TODO: precompiled kernel is not supported in remote mode
+        auto endpoints = jit_server::JitCompileRpcClient::endpoints_from_env();
+        TT_FATAL(
+            !endpoints.empty(),
+            "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
+            "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
+        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
+
+        std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
+
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                auto [build_options, kernel_hash] = prep_kernel(kernel);
+                coordinator.submit(kernel_hash, [&]() {
+                    generate_kernel_source_files(device, build_options, kernel);
+                    return build_kernel_descriptor(device, kernel, build_options, kernel_hash);
+                });
+                submitted_kernels.emplace_back(kernel, std::move(build_options));
+            }
+        }
+
+        coordinator.finish();
+
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
+        for (const auto& [kernel, build_options] : submitted_kernels) {
+            kernel->read_binaries(device, binary_root);
+            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+        }
+    } else {
+        // Local path: parallel build via thread pool.
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                launch_build_step(
+                    [&, kernel] {
+                        auto [build_options, kernel_hash] = prep_kernel(kernel);
+                        const std::string binary_root =
+                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                        kernel->read_binaries(device, binary_root);
+                        kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                    },
+                    events);
             }
         }
         sync_build_steps(events);
@@ -2176,6 +2426,15 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
             [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }
     sync_build_steps(events);
+}
+
+void detail::ProgramCompileGroup::finalize_offsets() {
+    std::lock_guard lock(mutex_);
+    for (auto& [device, program] : program_device_map_) {
+        if (!program->impl().is_finalized()) {
+            program->impl().finalize_offsets(device);
+        }
+    }
 }
 
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
