@@ -104,7 +104,18 @@ private:
 // per call and the hook is cleanly removed on end, so per-test wrapping is safe;
 // only the clear must be suppressed to accumulate — clear the collector once up
 // front via ProgramCollector::clear() / up_front_clear instead.)
-void begin_collect(bool clear = true);
+//
+// real_alloc=false (default): NO_DISPATCH mocks every buffer at address 0 → zero device
+// memory, scales to any model, but kernels that bake a buffer address into compile-time
+// args (e.g. pool reader_indices) or branch on addresses (e.g. move forward/backward)
+// collect the addr-0 variant and MISS on the real run. real_alloc=true: let the allocator
+// assign REAL addresses during collect (dispatch still blocked) so those build the same
+// program the real run will → they warm. The L1 allocator is deterministic across processes,
+// so a fresh-device collect and a fresh-device real run land buffers at identical addresses.
+// COST: real device memory (~the real run's peak; a collect OOM is a faithful signal the real
+// run would OOM too) + the alloc/free sequence must match the real run (it does if collect
+// replays the same forward). Use real_alloc for models that fit; addr-0 for the giant ones.
+void begin_collect(bool clear = true, bool real_alloc = false);
 
 // End the collect pass: stops NO_DISPATCH capture and deactivates the collector.
 // Collected programs remain in ProgramCollector::instance() until parallel_compile

@@ -368,7 +368,8 @@ void py_graph_module(nb::module_& m) {
         "up_front_begin_collect",
         &ttnn::up_front_compile::begin_collect,
         nb::arg("clear") = true,
-        R"doc(up_front_begin_collect(clear=True) -> None
+        nb::arg("real_alloc") = false,
+        R"doc(up_front_begin_collect(clear=True, real_alloc=False) -> None
 
         Begin a precompile "collect" pass. Enables NO_DISPATCH graph capture (buffer
         allocations mocked at address 0, nothing dispatched) and marks the collector
@@ -380,6 +381,11 @@ void py_graph_module(nb::module_& m) {
         up_front_begin_collect(clear=False)/up_front_end_collect() so programs from
         every test pile into one deduped set for a single up_front_compile() at the
         end. Clear once up front with up_front_clear() when accumulating.
+
+        real_alloc=False (default): NO_DISPATCH mocks buffers at address 0 (zero device
+        memory). real_alloc=True: assign REAL addresses during collect (dispatch still
+        blocked) so address-baked / address-branched kernels build the same program the real
+        run will and thus warm — at the cost of real device memory (~the real run's peak).
 
         Run on a COLD device program cache with the cache ENABLED so each op is a miss
         (reaches the collector) and carries a distinct program hash.

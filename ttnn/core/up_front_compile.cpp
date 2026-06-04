@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>  // tt::tt_metal::detail::CompileProgram
 
 #include "ttnn/graph/graph_processor.hpp"
+#include <tt-metalium/graph_tracking.hpp>  // GraphTracker (for real-alloc hook tweak)
 
 namespace ttnn::up_front_compile {
 
@@ -75,7 +76,7 @@ std::vector<tt::tt_metal::Program*> ProgramCollector::program_pointers() {
     return out;
 }
 
-void begin_collect(bool clear) {
+void begin_collect(bool clear, bool real_alloc) {
     if (clear) {
         ProgramCollector::instance().clear();
     }
@@ -84,6 +85,19 @@ void begin_collect(bool clear) {
     // so the collect pass uses no real device memory. The funnel's stash + early
     // return (device_operation.hpp) handles program collection.
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    if (real_alloc) {
+        // Real-alloc collect: unblock the allocator so buffers get REAL (deterministic)
+        // addresses — so address-baked kernels (e.g. pool reader_indices) and
+        // address-branched program selection (e.g. move forward/backward) build the SAME
+        // program the real run will, and thus warm. Dispatch/write stay blocked (no compute).
+        // Costs real device memory (~the real run's peak) and requires the dealloc lifecycle
+        // to run (deallocate is host-side, so it does). See up_front_compile.hpp.
+        if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+            if (auto* ph = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get())) {
+                ph->set_block_alloc(false);
+            }
+        }
+    }
 }
 
 void end_collect() {

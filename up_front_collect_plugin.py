@@ -49,6 +49,10 @@ import pytest
 _ACTIVE = os.environ.get("UP_FRONT_COLLECT") == "1"
 _WORKERS = int(os.environ.get("UP_FRONT_COLLECT_WORKERS", "0"))  # 0 => hardware_concurrency
 _DEVICE_ID = int(os.environ.get("UP_FRONT_COLLECT_DEVICE_ID", "0"))
+# UP_FRONT_REAL_ALLOC=1: collect with REAL buffer addresses (dispatch still blocked) instead of
+# addr-0 mocking, so address-baked / address-branched kernels (pool reader, move fwd/bwd) warm.
+# Costs real device memory (~the real run's peak) — only use when the model fits.
+_REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
 
 # Bodies that drive trace/graph capture can't run under NO_DISPATCH (it blocks the
 # dispatch + alloc that recording needs). Heuristic: scan the test function source.
@@ -87,7 +91,7 @@ def pytest_runtest_call(item):
         return (yield)  # let it run normally; it cold-compiles in pass 2
 
     _stats["bodies"] += 1
-    ttnn.graph.up_front_begin_collect(clear=False)  # accumulate; NO_DISPATCH wraps ONLY the body
+    ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
         return (yield)  # pytest runs the body with its real fixtures; ops stash into the collector
     except Exception:
