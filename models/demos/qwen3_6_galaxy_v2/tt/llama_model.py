@@ -771,7 +771,15 @@ class TtTransformer(LightweightModule):
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
-        rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
+        if self.is_qwen36:
+            # qwen3.6 decode uses the partial-RoPE [32,32] rot_idxs (a single scalar
+            # position replicated across the tile), NOT the llama [32]-batch column-shard
+            # path (get_rm_rot_idxs asserts shape==[32]). Mirrors the working demo
+            # (text_demo_qwen36: get_qwen36_rm_rot_idxs). Single-user decode.
+            cur_pos_int = int(rot_current_pos.reshape(-1)[0].item())
+            rope_idxs = self.rope_setup.get_qwen36_rm_rot_idxs(cur_pos_int, on_host=True)
+        else:
+            rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
         cur_pos_shard_dim = 0
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
@@ -822,7 +830,10 @@ class TtTransformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
+        if self.is_qwen36:
+            tt_rot_mats = self.rope_setup.get_qwen36_rm_rot_mats(rope_idxs)
+        else:
+            tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
@@ -990,10 +1001,15 @@ class TtTransformer(LightweightModule):
             else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
             skip_negative_entries=True,
         )
-        ttnn.plus_one(
-            rot_mat_idxs,
-            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-        )
+        if not self.is_qwen36:
+            # qwen3.6 rot_mat_idxs is a [32,32] partial-RoPE tile (plus_one's single-core
+            # grid does not match it); the eager server path rebuilds rot_idxs from the
+            # fresh current_pos every step (prepare_inputs_decode), so no in-place
+            # increment is needed.
+            ttnn.plus_one(
+                rot_mat_idxs,
+                sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            )
 
     def ttnn_decode_forward(
         self,
@@ -1016,7 +1032,10 @@ class TtTransformer(LightweightModule):
         # False). Keep consistent with prepare_decode_inputs_host / shard configs.
         if self.is_qwen36:
             is_cur_pos_sharded = False
-        rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+        if self.is_qwen36:
+            rot_mats = self.rope_setup.get_qwen36_rm_rot_mats(rot_mat_idxs)
+        else:
+            rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
@@ -1181,7 +1200,11 @@ class TtTransformer(LightweightModule):
                 # per-user maxdiff vs user0: for identical users this MUST be ~0;
                 # the first layer where it's nonzero is where per-user divergence enters.
                 _nrows = _rows.shape[0]
-                _udiff = max((_rows[u] - _rows[0]).abs().max().item() for u in range(1, min(_nrows, 32))) if _nrows > 1 else 0.0
+                _udiff = (
+                    max((_rows[u] - _rows[0]).abs().max().item() for u in range(1, min(_nrows, 32)))
+                    if _nrows > 1
+                    else 0.0
+                )
                 print(
                     f"[DUMP_HIDDEN] after layer {i} ({'h' if h is not None else 'x'}) dev0 "
                     f"absmean={_td.abs().mean():.4f} max={_td.abs().max():.4f} per_user_maxdiff={_udiff:.4f} "
