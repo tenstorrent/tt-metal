@@ -242,6 +242,8 @@ template <
     uint32_t logWt,
     uint32_t logk,
     uint32_t input_cb_index,
+    uint32_t expert_mask_cb_index,
+    uint32_t masked_temp_cb_index,
     uint32_t index_cb_index,
     uint32_t input_transposed_cb_index,
     uint32_t index_transposed_cb_index,
@@ -259,19 +261,28 @@ void top_k() {
     ckernel::topk_tile_init();
 
     CircularBuffer input_cb(input_cb_index);
+    CircularBuffer expert_mask_cb(expert_mask_cb_index);
+    CircularBuffer temp_cb(masked_temp_cb_index);
     CircularBuffer index_cb(index_cb_index);
     CircularBuffer input_transposed_cb(input_transposed_cb_index);
     CircularBuffer index_transposed_cb(index_transposed_cb_index);
     CircularBuffer values_cb(values_cb_index);
     CircularBuffer output_ind_cb(output_ind_cb_index);
 
-    if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+    // Initialize for expert mask bcast-add (first operation in this kernel).
+    // Input is read once here: input + expert_mask -> masked_temp_cb (2-tile scratch),
+    // then immediately transposed into the sort pipeline. Eliminates a separate pre-pass
+    // and saves Ht*Wt - 2 tiles of L1 compared to a full masked_input_cb.
+    if constexpr (first_call) {
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(
+            input_cb_index, expert_mask_cb_index, masked_temp_cb_index);
+    } else {
+        reconfig_data_format(input_cb_index, expert_mask_cb_index);
+        add_bcast_rows_init_short(input_cb_index, expert_mask_cb_index);
     }
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = false;
-        input_transposed_cb.reserve_back(Wt);
-        index_transposed_cb.reserve_back(Wt);
+
+    // Wait for all Wt expert_mask tiles once (same row broadcast for every Ht row)
+    expert_mask_cb.wait_front(Wt);
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
@@ -285,13 +296,13 @@ void top_k() {
             transpose_wh_tile(input_cb_index, 0, 0);
             transpose_wh_tile(input_cb_index, 1, 1);
 
-            reconfig_data_format_srca(index_cb_index);
-            transpose_wh_init_short(index_cb_index);
-            transpose_wh_tile(index_cb_index, 0, 2);
-            transpose_wh_tile(index_cb_index, 1, 3);
+        reconfig_data_format_srca(index_cb_index);
+        transpose_wh_init_short(index_cb_index);
+        transpose_wh_tile(index_cb_index, 0, 2);
+        transpose_wh_tile(index_cb_index, 1, 3);
 
-            // llk_topk_sort -> inplace
-            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
+        // llk_topk_sort -> inplace
+        ckernel::topk_local_sort(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -300,10 +311,10 @@ void top_k() {
             pack_tile(0, input_transposed_cb_index);
             pack_tile(1, input_transposed_cb_index);
 
-            // pack index tiles into cb_intermed1
-            pack_reconfig_data_format(index_transposed_cb_index);
-            pack_tile(2, index_transposed_cb_index);
-            pack_tile(3, index_transposed_cb_index);
+        // pack index tiles into cb_intermed1
+        pack_reconfig_data_format(index_transposed_cb_index);
+        pack_tile(2, index_transposed_cb_index);
+        pack_tile(3, index_transposed_cb_index);
 
             input_cb.pop_front(2);
             index_cb.pop_front(2);
@@ -402,7 +413,7 @@ void top_k() {
         }
         index_transposed_cb.wait_front(Wt);
         index_transposed_cb.pop_front(Wt);
-    }
+}
     // sfpu::_init_sfpu_config_reg();
 }
 
@@ -427,21 +438,21 @@ void kernel_main() {
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
     constexpr uint32_t tile_width = get_compile_time_arg_val(17);
-    constexpr uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
+    constexpr uint32_t masked_temp_cb_index = get_compile_time_arg_val(18);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
-    // mask out invalid experts: input + expert_mask -> masked_input_cb (separate CB to avoid in-place issues)
-    add_block_bcast_rows_to_cb(input_cb_index, expert_mask_cb_index, masked_input_cb_index, Ht, Wt);
-
-    // top-k (reads from masked_input_cb)
+    // top-k: expert_mask is applied to each pair of input tiles inside top_k before transposing.
+    // Input is read once (fused mask+transpose+sort), eliminating a separate pre-pass.
     top_k<
         Ht,
         Wt,
         K,
         logWt,
         logk,
-        masked_input_cb_index,
+        input_cb_index,
+        expert_mask_cb_index,
+        masked_temp_cb_index,
         index_cb_index,
         input_transposed_cb_index,
         index_transposed_cb_index,
