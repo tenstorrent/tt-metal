@@ -2,6 +2,8 @@
 
 **Role:** You are the main BrAIn session. You orchestrate the campaign. You do NOT do analysis or verification yourself — you spawn Opus subagents for that. Your job is: manage state, spawn agents, interpret their structured output, update Confluence, and DM @ebanerjeeTT.
 
+> **⚠️ CRITICAL RULE — NO EXCEPTIONS: Every Agent spawn MUST use `run_in_background: true`. A synchronous Agent call blocks the entire session — you will be unable to respond to the user for the duration of the subagent's work (potentially hours). This has caused real outages. If you are about to spawn an Agent without `run_in_background: true`, stop and fix it first.**
+
 ---
 
 ## What Main BrAIn Does Directly
@@ -82,9 +84,8 @@ Activated when the user says "use the just find one protocol" or similar.
 1. Write mode to campaign-state.json (see above).
 2. Spawn the find agent with `target: 1` and `mode: just_find_one`.
 3. Take the first qualifying finding returned — ignore the rest.
-4. Spawn one verify agent for that finding. Wait for its verdict.
-5. Complete Confluence update and DM if applicable.
-6. **Stop. Reset `mode` back to `backfill` in campaign-state.json. Do not spawn another find agent.**
+4. Spawn one verify agent (background) for that finding. When it returns `probes_dispatched`, DM @ebanerjeeTT the run links. When user confirms runs are done, re-spawn verify agent for Mode 2 (result reading). Complete Confluence update and DM when result verdict arrives.
+5. **Stop. Reset `mode` back to `backfill` in campaign-state.json. Do not spawn another find agent.**
 
 The Continuous Campaign Rule does NOT apply in Just Find One mode.
 
@@ -99,12 +100,12 @@ Each session runs this loop:
 If context was compressed:
 1. Read MEMORY.md.
 2. Read campaign-state.json — find active candidates, pending run IDs, current step.
-3. For any candidate with `status: "awaiting_probes"`: the verify agent may still be running. Check if there's a pending result in `campaign-state.json`. If the verify agent already returned a verdict (written to campaign-state.json), proceed to step 4 (Confluence + DM). If not, re-spawn the verify agent with the existing run IDs to poll and return verdict.
+3. For any candidate with `status: "awaiting_probes"`: probes are in flight. Check `active_runs` for run IDs. DM @ebanerjeeTT with current run URLs if not already done. Do NOT re-spawn the verify agent yet — wait for the user to confirm runs are done, then re-spawn in Mode 2 (result reading).
 4. For any candidate with `confluence_updated: false` or `dm_sent: false`: complete those before new work.
 
 ### 2. Spawn the Find Agent
 
-Spawn an Opus subagent with `run_in_background: true`, model `opus`, pointing it at `RUNBOOK_SUBAGENT.md`:
+Spawn an Opus subagent — **`run_in_background: true`, model `opus`** — pointing it at `RUNBOOK_SUBAGENT.md`:
 
 Before spawning, read `campaign-state.json` to get the current `mode` field. Then spawn:
 
@@ -153,7 +154,7 @@ Then for each finding in `findings[]`:
 
 ### 4. Spawn the Verify Agent
 
-For each finding that needs verification or pr_ci_proof_check, spawn an Opus subagent with `run_in_background: true`, pointing it at `RUNBOOK_VERIFY.md`:
+For each finding that needs verification or pr_ci_proof_check, spawn an Opus subagent — **`run_in_background: true`, model `opus`** — pointing it at `RUNBOOK_VERIFY.md`:
 
 ```
 You are a bug escape verification subagent. Read and follow /workspace/group/bug-escapes-data/RUNBOOK_VERIFY.md exactly.
@@ -174,28 +175,39 @@ For multi-card hardware (T3K, Galaxy): only one verify agent at a time per machi
 
 ### 5. Interpret Verify Agent Output
 
-**Immediately DM @ebanerjeeTT** with the probe URLs as soon as the verdict JSON arrives (probes were already dispatched by the verify agent):
+The verify agent now returns one of two classes of verdict: **dispatch verdicts** (probes just launched) or **result verdicts** (probes finished, Mode 2).
 
+#### Dispatch verdicts (verify agent's first invocation)
+
+| `verdict` | Action |
+|---|---|
+| `probes_dispatched` | **Immediately DM @ebanerjeeTT** with run links (see template below). Update Confluence tracking page with ⏳ and run IDs. Wait for user to confirm runs are done. |
+| `no_artifact` | DM @ebanerjeeTT: "Could not dispatch probes for {escape_id} — no compatible Merge Gate artifact found. Notes: {notes}". Update campaign-state.json `status: "no_artifact"`. Do not retry automatically. |
+| `aborted_wrong_test` | DM @ebanerjeeTT with details. Do not retry automatically. |
+
+DM template for `probes_dispatched`:
 ```
 🧪 Probes dispatched for {escape_id} — {test_name}
 
-BEFORE: {before_job_url}
-AFTER:  {after_job_url}
+BEFORE: {before_run_url}
+AFTER:  {after_run_url}
 
-Verdict: {verdict}
+Artifact reuse: {artifact_reuse} (BEFORE from run {before_reuse_run_id}, AFTER from run {after_reuse_run_id})
 ```
 
-**Link format rule (MANDATORY):** Always use job-level links in the format `https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}/job/{job_id}` — NOT run-level links (`/actions/runs/{run_id}`). The verify agent verdict JSON provides `before_run_id`, `before_job_id`, `after_run_id`, `after_job_id` — construct job URLs from these. This rule applies to both DMs and all Confluence page updates.
+#### When user says runs are done — re-spawn verify agent (Mode 2)
 
-Then act on the verdict:
+Re-spawn the verify agent with the same finding JSON. It will detect existing run IDs in campaign-state.json and enter Mode 2 (result reading). It returns a result verdict.
+
+#### Result verdicts (verify agent's Mode 2)
 
 | `verdict` | Action |
 |---|---|
 | `confirmed` | Update Confluence (tracking + confirmed table + chart). DM @ebanerjeeTT. |
 | `refuted` | All candidate commits exhausted. Write to seen-escapes.json as `refuted`. No Confluence update. No DM. |
-| `refuted_wrong_fix` | Fix hypothesis was wrong but untried candidate commits remain. Update campaign-state.json with `status: "refuted_wrong_fix"`. **Only re-spawn the verify agent with the next candidate commit if no new unprocessed candidates exist.** New escapes take priority. No DM. No Confluence update. |
-| `inconclusive_timeout` | Update campaign-state.json with `status: "retry_next_session"`. No DM. |
-| `aborted_wrong_test` | Verify agent couldn't match test to workflow flag. DM @ebanerjeeTT with details. Do not retry automatically. |
+| `refuted_wrong_fix` | Fix hypothesis wrong, untried candidates remain. Update campaign-state.json `status: "refuted_wrong_fix"`. **Re-spawn verify agent with next candidate only if no new unprocessed candidates exist.** New escapes take priority. No DM. No Confluence update. |
+| `inconclusive_timeout` | Runs not yet complete. Update campaign-state.json `status: "retry_next_session"`. No DM. |
+| `aborted_wrong_test` | Test not found in logs. DM @ebanerjeeTT with details. Do not retry automatically. |
 
 ### 6. Confluence Updates
 
