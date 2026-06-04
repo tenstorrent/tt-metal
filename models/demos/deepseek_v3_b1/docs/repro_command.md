@@ -271,6 +271,24 @@ Result on main:
 So PR #45419 mainlined multichip *integration* + fastwrite, but the 8-chip decoder *kernel
 execution* hang is unchanged — a still-open craq-sim limitation, independent of tt-metal base.
 
+#### Update 2026-06-04 — correct 8xP150 descriptor + proto (per Nachiket), hang still persists
+
+Nachiket (Slack) flagged: use the **8xP150 descriptor and proto**, and the **Galaxy
+descriptor can confuse things**. I had been running a **hand-rolled, transposed** mesh-graph
+proto (`dims:[2,4] dim_types:[LINE,RING]`, i.e. torus-X) while the test opens
+`MeshShape(4,2)` with `fabric_config=FABRIC_2D`. The correct pair (validated for 4×2/8-chip)
+is:
+- cluster desc: `tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_8xP150.yaml`
+- mesh-graph proto: `craq-sim/tests/fixtures/blaze/p150_4x2_mesh_graph_descriptor.textproto`
+  (`dims:[4,2]`, **no** `dim_types` → pure mesh, matching `FABRIC_2D`). NOT torus_x, NOT galaxy.
+
+Switching to these: 8 devices discovered, **no 2×2 auto-downgrade**, topology maps clean —
+fixing a real misconfiguration in my setup. **But the decoder kernel still hangs identically**
+(`Running dense decoder operation pos=127` → sim clock frozen, 0 heartbeats >60 s, host in
+`Synchronize → finish_nolock`). So the topology descriptor was wrong and worth fixing, but it
+is **not** the cause of the hang — Wall 2 is confirmed independent of the descriptor/proto.
+`/tmp/run_alt_pcc.sh` now points at the correct descriptor + proto.
+
 Env to enable fastwrite (already in `/tmp/run_alt_pcc.sh`; native on main):
 
 ```bash
