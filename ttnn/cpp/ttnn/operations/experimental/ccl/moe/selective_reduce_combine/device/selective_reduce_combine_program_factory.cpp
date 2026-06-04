@@ -43,19 +43,25 @@ std::vector<uint32_t> data_parallel_split(
     return data_parallel_sizes_bytes;
 }
 
-uint32_t compute_num_worker_cores(
+SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     const uint32_t hidden_size,
     const uint32_t num_token_parallel_cores,
-    const uint32_t num_data_parallel_cores) {
-    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t num_data_parallel_cores_attr) {
+    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto input_dtype = input_tensor.dtype();
-    const uint32_t max_packet_size_bytes =
-        input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
+    const uint32_t max_packet_size_bytes = input_dtype == tt::tt_metal::DataType::BFLOAT16
+                                               ? std::bit_floor(fabric_max_packet_size_bytes)
+                                               : fabric_max_packet_size_bytes;
     const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
-    const auto data_parallel_sizes_bytes =
-        data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
-    return num_token_parallel_cores * static_cast<uint32_t>(data_parallel_sizes_bytes.size());
+    auto data_parallel_sizes_bytes =
+        data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores_attr);
+    const uint32_t num_data_parallel_cores = static_cast<uint32_t>(data_parallel_sizes_bytes.size());
+    return {
+        .data_parallel_sizes_bytes = std::move(data_parallel_sizes_bytes),
+        .num_data_parallel_cores = num_data_parallel_cores,
+        .num_worker_cores = num_token_parallel_cores * num_data_parallel_cores,
+    };
 }
 
 auto launch_mux_workers(
@@ -328,11 +334,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // in validate mux_core_range_set.size() == 2(directions) * num_links
     const auto& mux_core_range_set = operation_attributes.mux_core_range_set;
 
-    const auto data_parallel_sizes_bytes =
-        detail::data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
-
-    num_data_parallel_cores = data_parallel_sizes_bytes.size();
-    const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
+    const auto worker_layout =
+        detail::compute_worker_layout(input_tensor, hidden_size, num_token_parallel_cores, num_data_parallel_cores);
+    const auto& data_parallel_sizes_bytes = worker_layout.data_parallel_sizes_bytes;
+    num_data_parallel_cores = worker_layout.num_data_parallel_cores;
+    const auto num_worker_cores = worker_layout.num_worker_cores;
     const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
     const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
 

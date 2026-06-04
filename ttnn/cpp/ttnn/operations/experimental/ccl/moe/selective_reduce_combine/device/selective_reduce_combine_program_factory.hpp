@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <vector>
+
 #include "selective_reduce_combine_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -12,7 +15,13 @@ namespace ttnn::experimental::prim {
 
 namespace detail {
 
-uint32_t compute_num_worker_cores(
+struct SelectiveReduceCombineWorkerLayout {
+    std::vector<uint32_t> data_parallel_sizes_bytes;
+    uint32_t num_data_parallel_cores = 0;
+    uint32_t num_worker_cores = 0;
+};
+
+SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     uint32_t hidden_size,
     uint32_t num_token_parallel_cores,
