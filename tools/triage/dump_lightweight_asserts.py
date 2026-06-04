@@ -220,10 +220,11 @@ def dump_lightweight_asserts(
         arguments_and_locals = None
         assert_code = "?"
         if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
+            fi = callstack_data.kernel_callstack_with_message.callstack[0].file_info
             assert_code = extract_assert_code(
-                callstack_data.kernel_callstack_with_message.callstack[0].file,
-                callstack_data.kernel_callstack_with_message.callstack[0].line,
-                callstack_data.kernel_callstack_with_message.callstack[0].column,
+                fi.file if fi is not None else None,
+                fi.line if fi is not None else None,
+                fi.column if fi is not None else None,
             )
             arguments_and_locals = ""
             top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
