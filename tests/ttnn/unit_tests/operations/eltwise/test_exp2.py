@@ -182,6 +182,7 @@ def test_exp2_fp32_special_values(device):
                     0.25,
                     1.0,
                     127.0,
+                    float.fromhex("0x1.fffffep+6"),  # largest float32 below 128: finite, near FLT_MAX
                     128.0,
                     float("inf"),
                 ],
