@@ -13,7 +13,6 @@ mesh_descriptors {
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  # Instances: mesh ids 0..1 (all 2x4)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }

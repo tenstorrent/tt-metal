@@ -472,9 +472,14 @@ def _build_first_stage_input():
     input_tensor = ttnn.from_torch(
         torch_input, dtype=ttnn_dtype_from_torch_dtype(torch.uint32), layout=ttnn.ROW_MAJOR_LAYOUT
     )
+    # Reproduce SyntheticWeightProvider.load_embedding's table (seed 42, randn(VOCAB, HIDDEN) bf16)
+    # to get the expected embedding row for token_id. torch.randn fills a contiguous tensor
+    # row-major from the seeded generator, so generating only the first token_id+1 rows yields a
+    # row bit-identical to the full (VOCAB, HIDDEN) table's row (holds while HIDDEN is even, so
+    # rows align with the normal kernel's value pairs). Avoids a ~1.8GB host allocation on rank 0.
     generator = torch.Generator().manual_seed(42)
     expected = torch.randn(
-        LogicalModelDimensions.VOCAB_SIZE,
+        token_id + 1,
         LogicalModelDimensions.HIDDEN_SIZE,
         generator=generator,
         dtype=torch.bfloat16,

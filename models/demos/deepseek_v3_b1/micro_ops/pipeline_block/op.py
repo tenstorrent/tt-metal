@@ -584,54 +584,73 @@ class PipelineBlock:
 
         forwarders = []
 
-        if input_edge is not None and (stage_plan.host_io.needs_d2h or local_intra_socket_pair is not None):
-            upstream_socket = self._create_socket_resource_for_edge(
-                input_edge,
-                pipeline_core_coord,
-                upstream_d2d_socket_fifo_size,
-                ttnn.SocketEndpoint.RECEIVER,
-            )
-            downstream_socket = (
-                self.host_io.get_upstream_socket() if stage_plan.host_io.needs_d2h else local_intra_socket_pair[0]
-            )
-            forwarders.append(
-                self._build_forwarder_from_existing_sockets(
-                    input_edge.dst,
-                    upstream_socket,
-                    downstream_socket,
-                    upstream_d2d_socket_page_size,
-                    pipeline_core_coord,
-                )
-            )
-
-        if output_edge is not None:
-            if stage_plan.host_io.needs_h2d:
-                upstream_socket = self.host_io.get_downstream_socket()
-            elif local_intra_socket_pair is not None:
-                upstream_socket = local_intra_socket_pair[1]
-            else:
-                assert input_edge is not None, "Expected an input edge for split output forwarding"
+        def build_input_forwarder():
+            # Receiver edge: incoming activation (or split cross-rank intra) -> D2H / local intra pair.
+            if input_edge is not None and (stage_plan.host_io.needs_d2h or local_intra_socket_pair is not None):
                 upstream_socket = self._create_socket_resource_for_edge(
                     input_edge,
                     pipeline_core_coord,
                     upstream_d2d_socket_fifo_size,
                     ttnn.SocketEndpoint.RECEIVER,
                 )
-            downstream_socket = self._create_socket_resource_for_edge(
-                output_edge,
-                pipeline_core_coord,
-                downstream_d2d_socket_fifo_size,
-                ttnn.SocketEndpoint.SENDER,
-            )
-            forwarders.append(
-                self._build_forwarder_from_existing_sockets(
-                    output_edge.src,
-                    upstream_socket,
-                    downstream_socket,
-                    downstream_d2d_socket_page_size,
-                    pipeline_core_coord,
+                downstream_socket = (
+                    self.host_io.get_upstream_socket() if stage_plan.host_io.needs_d2h else local_intra_socket_pair[0]
                 )
-            )
+                forwarders.append(
+                    self._build_forwarder_from_existing_sockets(
+                        input_edge.dst,
+                        upstream_socket,
+                        downstream_socket,
+                        upstream_d2d_socket_page_size,
+                        pipeline_core_coord,
+                    )
+                )
+
+        def build_output_forwarder():
+            # Sender edge: H2D / local intra / split-recv -> outgoing activation.
+            if output_edge is not None:
+                if stage_plan.host_io.needs_h2d:
+                    upstream_socket = self.host_io.get_downstream_socket()
+                elif local_intra_socket_pair is not None:
+                    upstream_socket = local_intra_socket_pair[1]
+                else:
+                    assert input_edge is not None, "Expected an input edge for split output forwarding"
+                    upstream_socket = self._create_socket_resource_for_edge(
+                        input_edge,
+                        pipeline_core_coord,
+                        upstream_d2d_socket_fifo_size,
+                        ttnn.SocketEndpoint.RECEIVER,
+                    )
+                downstream_socket = self._create_socket_resource_for_edge(
+                    output_edge,
+                    pipeline_core_coord,
+                    downstream_d2d_socket_fifo_size,
+                    ttnn.SocketEndpoint.SENDER,
+                )
+                forwarders.append(
+                    self._build_forwarder_from_existing_sockets(
+                        output_edge.src,
+                        upstream_socket,
+                        downstream_socket,
+                        downstream_d2d_socket_page_size,
+                        pipeline_core_coord,
+                    )
+                )
+
+        # MeshSocket construction blocks on the cross-host handshake. Fabric loopback closes the
+        # pipeline into a ring (last stage -> stage-0 loopback entry), so if every rank created its
+        # receiver socket before its sender the whole ring deadlocks: each rank blocks on its
+        # incoming handshake and never reaches its outgoing one. The pipeline-start stage is the
+        # only rank that owns both a forward sender (H2D -> stage 1) and a loopback receiver
+        # (last stage -> D2H); building its sender first -- mirroring legacy _init_first_stage --
+        # breaks the cycle so the handshakes cascade around the ring. Every other stage keeps
+        # receiver-first ordering (relied on by the linear/host-loopback and split cases).
+        if stage_plan.host_io.needs_h2d and stage_plan.host_io.needs_d2h:
+            build_output_forwarder()
+            build_input_forwarder()
+        else:
+            build_input_forwarder()
+            build_output_forwarder()
 
         self._plan_forwarders = forwarders
         self.entry_socket_interface = forwarders[0] if len(forwarders) == 1 else forwarders
