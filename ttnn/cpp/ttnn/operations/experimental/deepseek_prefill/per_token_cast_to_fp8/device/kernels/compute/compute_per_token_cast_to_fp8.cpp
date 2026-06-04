@@ -11,7 +11,7 @@
 //      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
 //   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles) per tile -> cb_out_tile.
 //   4. untilize cb_out_tile -> cb_output_e4m3 (scaled, cast to e4m3).
-// The writer extracts column 0 of cb_scale_tiles into the scale output [H, W/128].
+// The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
 

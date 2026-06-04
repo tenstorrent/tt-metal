@@ -54,11 +54,14 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
+    // Row-major circular-buffer pages still use one logical tile. The quantization kernels then stream
+    // those pages as tile-height batches of 128-element scale blocks.
+    constexpr uint32_t ROW_MAJOR_TILE_ELEMS = 1024;
     TT_FATAL(
-        tile_h * tile_w == common::ROW_MAJOR_TILE_ELEMS,
+        tile_h * tile_w == ROW_MAJOR_TILE_ELEMS,
         "per_token_cast_to_fp8: tile_h * tile_w must equal ROW_MAJOR_TILE_ELEMS={} for row-major block tilization, got "
         "{}x{}",
-        common::ROW_MAJOR_TILE_ELEMS,
+        ROW_MAJOR_TILE_ELEMS,
         tile_h,
         tile_w);
     TT_FATAL(

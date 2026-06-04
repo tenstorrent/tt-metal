@@ -114,7 +114,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
 
     make_fp32_tile_cb(cb_tile_idx, COL_BLOCK_TILES);                  // tilized input
     make_fp32_tile_cb(cb_scaler_idx, 1);                              // reduce scaler (1.0), reader-filled
-    make_fp32_tile_cb(cb_abs_idx, 2 * common::SCALE_GROUP_TILES);     // per-group abs tiles
+    make_fp32_tile_cb(cb_abs_idx, 2 * COL_BLOCK_TILES);               // per-group abs tiles
     make_fp32_tile_cb(cb_scale_tiles_idx, 2 * GROUPS_PER_BLOCK);      // col0 = scale
     make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * GROUPS_PER_BLOCK);  // col0 = 1/scale
     make_fp32_tile_cb(cb_out_tile_idx, COL_BLOCK_TILES);              // divided tiles -> untilize
