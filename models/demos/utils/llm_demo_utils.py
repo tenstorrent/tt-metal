@@ -28,27 +28,36 @@ class AccuracyRegressionWarning(UserWarning):
     """Warning emitted when measured accuracy drifts from configured thresholds."""
 
 
-def _normalize_ttft_metrics(metrics: dict, source_name: str) -> dict:
+def _normalize_ttft_metrics(metrics: dict, source_name: str, *, ttft_in_ms: bool) -> dict:
     """
-    Normalize TTFT aliases to seconds and enforce key precedence.
+    Collapse the two time-to-first-token aliases to a single seconds value.
 
-    `prefill_time_to_first_token` is interpreted as milliseconds and takes precedence
-    over `prefill_time_to_token` when both are present.
+    `prefill_time_to_first_token` and `prefill_time_to_token` both map to the same
+    measured quantity (TTFT); `prefill_time_to_first_token` takes precedence when
+    both are present. The resulting seconds value is written back under both keys.
+
+    Units are explicit, not inferred from which key is present, so a seconds value
+    is never silently divided by 1000:
+      - `ttft_in_ms=True`  for centralized targets, where `prefill_time_to_first_token`
+        is stored in milliseconds (converted to seconds here).
+      - `ttft_in_ms=False` for measured values, which are already in seconds.
+    `prefill_time_to_token` is always treated as seconds regardless of the flag.
     """
     normalized_metrics = dict(metrics)
-    has_ttft_ms = metrics.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY) is not None
-    has_ttft_s = metrics.get(PREFILL_TIME_TO_TOKEN_KEY) is not None
+    has_ttft_first = metrics.get(PREFILL_TIME_TO_FIRST_TOKEN_KEY) is not None
+    has_ttft_to = metrics.get(PREFILL_TIME_TO_TOKEN_KEY) is not None
 
-    if has_ttft_ms and has_ttft_s:
+    if has_ttft_first and has_ttft_to:
         logger.warning(
             f"Both {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and {PREFILL_TIME_TO_TOKEN_KEY} are set in {source_name}; "
             f"using {PREFILL_TIME_TO_FIRST_TOKEN_KEY} and ignoring {PREFILL_TIME_TO_TOKEN_KEY}."
         )
 
     ttft_value_seconds = None
-    if has_ttft_ms:
-        ttft_value_seconds = float(metrics[PREFILL_TIME_TO_FIRST_TOKEN_KEY]) / 1000.0
-    elif has_ttft_s:
+    if has_ttft_first:
+        value = float(metrics[PREFILL_TIME_TO_FIRST_TOKEN_KEY])
+        ttft_value_seconds = value / 1000.0 if ttft_in_ms else value
+    elif has_ttft_to:
         ttft_value_seconds = float(metrics[PREFILL_TIME_TO_TOKEN_KEY])
 
     if ttft_value_seconds is not None:
@@ -190,13 +199,18 @@ def verify_perf(
             seq_len=seq_len,
         )
         if expected_perf_metrics is None:
-            raise ValueError(
+            # Missing coverage is a warning, not a hard failure: it must not abort the
+            # test before benchmark data is written. Enforcement of presence is handled
+            # by the centralized target validation step in CI.
+            logger.warning(
                 f"No centralized perf targets found for model={model_name}, sku={sku}, "
-                f"batch_size={batch_size}, seq_len={seq_len}"
+                f"batch_size={batch_size}, seq_len={seq_len}; skipping perf check."
             )
+            return
 
-    measurements = _normalize_ttft_metrics(measurements, "measurements")
-    expected_perf_metrics = _normalize_ttft_metrics(expected_perf_metrics, "expected_perf_metrics")
+    # Measured values are already in seconds; centralized targets store TTFT in milliseconds.
+    measurements = _normalize_ttft_metrics(measurements, "measurements", ttft_in_ms=False)
+    expected_perf_metrics = _normalize_ttft_metrics(expected_perf_metrics, "expected_perf_metrics", ttft_in_ms=True)
     tolerance_config = {k: v for k, v in expected_perf_metrics.items() if is_tolerance_key(k)}
     expected_perf_metrics = {k: v for k, v in expected_perf_metrics.items() if not is_tolerance_key(k)}
 
@@ -303,10 +317,14 @@ def verify_accuracy(
             seq_len=seq_len,
         )
         if expected_accuracy_metrics is None:
-            raise ValueError(
+            # Missing coverage is a warning, not a hard failure: it must not abort the
+            # test before benchmark data is written. Enforcement of presence is handled
+            # by the centralized target validation step in CI.
+            logger.warning(
                 f"No centralized accuracy targets found for model={model_name}, sku={sku}, "
-                f"batch_size={batch_size}, seq_len={seq_len}"
+                f"batch_size={batch_size}, seq_len={seq_len}; skipping accuracy check."
             )
+            return
 
     measured_top1 = measurements.get("top1_token_accuracy", measurements.get("top1"))
     measured_top5 = measurements.get("top5_token_accuracy", measurements.get("top5"))

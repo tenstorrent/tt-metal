@@ -372,51 +372,83 @@ def _resolve_paths(path_profile: PathProfile) -> tuple[Path, Path, Path]:
     return targets_yaml_path, benchmark_dir, tests_yaml_path
 
 
-def main() -> int:
-    """Run centralized target validation over benchmark artifacts."""
-    args = parse_args()
-    path_profile = PathProfile(args.path_profile)
-    targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
+class ValidationResult:
+    """Structured findings from a validation run.
+
+    Holds raw findings only — no printing and no exit-code policy. Callers
+    (CI ``main()`` and the local pytest hook) format output and decide how to
+    treat ``missing_entries`` (strict vs warning-only). ``schema_errors`` is
+    fatal: when present, no benchmark comparison is performed.
+
+    Implemented as a plain class (not a dataclass) on purpose: this module uses
+    ``from __future__ import annotations`` and is loaded via
+    ``importlib.util.module_from_spec`` (by the CI tests and the local pytest
+    hook) without being registered in ``sys.modules``, which breaks dataclass
+    field-type resolution.
+    """
+
+    def __init__(self) -> None:
+        self.schema_errors: list[str] = []
+        self.gap_warnings: list[str] = []
+        self.hard_failures: list[str] = []
+        self.missing_entries: list[str] = []
+        self.num_benchmark_files: int = 0
+
+
+def validate(
+    targets_yaml_path: Path,
+    benchmark_dir: Path,
+    tests_yaml_path: Path | None = None,
+    sku_override: str | None = None,
+) -> ValidationResult:
+    """Validate benchmark artifacts against centralized perf/accuracy targets.
+
+    Reads files but performs no stdout side effects and makes no exit-code
+    decision — it returns a :class:`ValidationResult` for the caller to act on.
+    This is the shared core used by both the CI entrypoint (``main()``) and the
+    local opt-in pytest hook so the two can never diverge.
+
+    ``tests_yaml_path`` is only used for the active-combo gap report; pass
+    ``None`` (e.g. for local runs) to skip it.
+    """
+    result = ValidationResult()
+
     # Keep resolver path controlled from this module to avoid passing dynamic file paths
     # into model_targets APIs (Cycode SAST: unsanitized dynamic input in file path).
     model_targets.TARGETS_YAML_PATH_DEFAULT = str(targets_yaml_path)
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):
-        print(f"::error::Invalid YAML document at {targets_yaml_path}: expected top-level mapping")
-        return 1
+        result.schema_errors.append(
+            f"Invalid YAML document at {targets_yaml_path}: expected top-level mapping"
+        )
+        return result
+
     schema_errors = _validate_targets_schema(targets_yaml)
     if schema_errors:
-        for error in schema_errors:
-            print(f"::error::{error}")
-        return 1
+        result.schema_errors = schema_errors
+        return result
 
-    gap_warnings = _validate_gap_coverage(tests_yaml_path, targets_yaml)
-    for warning in gap_warnings:
-        print(f"::warning::{warning}")
+    if tests_yaml_path is not None and tests_yaml_path.exists():
+        result.gap_warnings = _validate_gap_coverage(tests_yaml_path, targets_yaml)
 
     benchmark_files = _benchmark_files(benchmark_dir)
-    if not benchmark_files:
-        print(f"::warning::No benchmark JSON files found under {benchmark_dir}")
-        return 0
-
-    hard_failures: list[str] = []
-    missing_entries: list[str] = []
+    result.num_benchmark_files = len(benchmark_files)
 
     for benchmark_file in benchmark_files:
         run = _load_json(benchmark_file)
         model_name = run.get("ml_model_name")
         if not isinstance(model_name, str):
-            hard_failures.append(f"{benchmark_file.name}: missing ml_model_name")
+            result.hard_failures.append(f"{benchmark_file.name}: missing ml_model_name")
             continue
 
-        sku = args.sku
+        sku = sku_override
         if sku is None:
             device_info = run.get("device_info", {})
             if isinstance(device_info, dict):
                 sku = device_info.get("card_type")
         if not isinstance(sku, str) or not sku.strip():
-            hard_failures.append(f"{benchmark_file.name}: missing sku (pass --sku in workflow)")
+            result.hard_failures.append(f"{benchmark_file.name}: missing sku (pass --sku in workflow)")
             continue
 
         batch_size = run.get("batch_size")
@@ -432,13 +464,13 @@ def main() -> int:
             include_todo=True,
         )
         if entry is None:
-            missing_entries.append(
+            result.missing_entries.append(
                 f"{benchmark_file.name}: no target entry for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
             continue
 
         if str(entry.get("status", "active")).lower() == "todo":
-            missing_entries.append(
+            result.missing_entries.append(
                 f"{benchmark_file.name}: target entry is TODO for model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
             )
             continue
@@ -470,10 +502,10 @@ def main() -> int:
             try:
                 measured_value = _extract_metric_value(metric_name, measured)
             except ValueError as exc:
-                hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
+                result.hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
                 continue
             if measured_value is None or math.isnan(measured_value):
-                hard_failures.append(
+                result.hard_failures.append(
                     f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
                 )
                 continue
@@ -489,22 +521,50 @@ def main() -> int:
                 tolerance=tolerance,
             )
             if metric_failure:
-                hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
+                result.hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
 
-    for failure in hard_failures:
+    return result
+
+
+def main() -> int:
+    """Run centralized target validation over benchmark artifacts (CI entrypoint)."""
+    args = parse_args()
+    path_profile = PathProfile(args.path_profile)
+    targets_yaml_path, benchmark_dir, tests_yaml_path = _resolve_paths(path_profile)
+
+    result = validate(
+        targets_yaml_path=targets_yaml_path,
+        benchmark_dir=benchmark_dir,
+        tests_yaml_path=tests_yaml_path,
+        sku_override=args.sku,
+    )
+
+    if result.schema_errors:
+        for error in result.schema_errors:
+            print(f"::error::{error}")
+        return 1
+
+    for warning in result.gap_warnings:
+        print(f"::warning::{warning}")
+
+    if result.num_benchmark_files == 0:
+        print(f"::warning::No benchmark JSON files found under {benchmark_dir}")
+        return 0
+
+    for failure in result.hard_failures:
         print(f"::error::{failure}")
 
-    for missing in missing_entries:
+    for missing in result.missing_entries:
         level = "::error::" if args.strict_missing else "::warning::"
         print(f"{level}{missing}")
 
-    if hard_failures:
+    if result.hard_failures:
         return 1
-    if args.strict_missing and missing_entries:
+    if args.strict_missing and result.missing_entries:
         return 1
     print(
-        f"Validation completed: {len(benchmark_files)} benchmark file(s), "
-        f"{len(hard_failures)} hard failures, {len(missing_entries)} missing/TODO entries"
+        f"Validation completed: {result.num_benchmark_files} benchmark file(s), "
+        f"{len(result.hard_failures)} hard failures, {len(result.missing_entries)} missing/TODO entries"
     )
     return 0
 

@@ -11,8 +11,6 @@ from typing import Any
 
 import yaml
 
-from models.tt_transformers.tt.multimodal.llama_vision_model import logger
-
 TARGETS_YAML_PATH_DEFAULT = str(Path(__file__).resolve().parents[2] / "model_targets.yaml")
 
 # Keep SKU aliases explicit and unambiguous so models with multiple
@@ -144,9 +142,6 @@ def resolve_target_entry(
         skus = model_block.get("skus", {})
         for sku_key, sku_block in skus.items():
             if normalize_sku(sku_key) != sku_norm:
-                logger.warning(
-                    f"skip {sku_key}: {normalize_sku(sku_key)} != {sku_norm}"
-                )  # TODO: tmp for debug, remove me
                 continue
             entries = sku_block.get("entries", [])
             matches = []
@@ -158,7 +153,10 @@ def resolve_target_entry(
                 if _entry_matches(entry, batch_size=batch_size, seq_len=seq_len):
                     matches.append(entry)
             if not matches:
-                return None
+                # This SKU key matched but has no entry for the requested
+                # batch/seq; keep scanning other SKU keys / models instead of
+                # giving up the whole search.
+                continue
             return sorted(matches, key=_entry_specificity, reverse=True)[0]
     return None
 

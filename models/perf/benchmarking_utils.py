@@ -13,7 +13,6 @@ from loguru import logger
 
 # Decouple dependency of model tests on infra folder unless running in CI
 IS_CI_ENV = os.getenv("CI") == "true"
-STRICT_PERF_TARGET_CHECKS_ENV = "STRICT_PERF_TARGET_CHECKS"
 if IS_CI_ENV:
     from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
 else:
@@ -35,27 +34,6 @@ UNIFIED_DEVICE_NAME_MAP = {
     "T3K": "t3k",
     "TG": "galaxy",
 }
-
-
-def strict_perf_target_checks_enabled() -> bool:
-    """Returns whether perf target checks should fail hard."""
-    value = os.getenv(STRICT_PERF_TARGET_CHECKS_ENV, "1").strip().lower()
-    return value not in {"0", "false", "no", "off"}
-
-
-def perf_target_check(condition: bool, message: str, exception_type: type[Exception] = AssertionError) -> bool:
-    """
-    Checks a perf condition in strict or warning-only mode.
-
-    Returns True when condition passes, False when condition fails in warning-only mode.
-    Raises `exception_type` when condition fails in strict mode.
-    """
-    if condition:
-        return True
-    if strict_perf_target_checks_enabled():
-        raise exception_type(message)
-    logger.warning(f"{STRICT_PERF_TARGET_CHECKS_ENV}=0, warning-only: {message}")
-    return False
 
 
 class BenchmarkProfiler:

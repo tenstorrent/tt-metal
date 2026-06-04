@@ -534,7 +534,7 @@ targets:
             status: active
             perf:
               decode_t/s/u: 5.5
-              decode_t/s/u_tolerance: 0.8
+              decode_t_s_u_tolerance: 0.8
               prefill_time_to_first_token: 115
             accuracy:
               top1: 89.5
