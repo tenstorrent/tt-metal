@@ -368,6 +368,7 @@ void kernel_main() {
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram_accessor, my_dram_page_idx, 0);
             if constexpr (num_targets_forward > 0) {
                 if (fwd_mux_args.connection_valid) {
+#ifndef WAN_ABL_SKIP_FABRIC
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
                         &fwd_mux_conn,
                         pkt_hdr_forward,
@@ -377,10 +378,12 @@ void kernel_main() {
                             dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
                         /*start_distance=*/1,
                         static_cast<uint8_t>(num_targets_forward));
+#endif
                 }
             }
             if constexpr (num_targets_backward > 0) {
                 if (bwd_mux_args.connection_valid) {
+#ifndef WAN_ABL_SKIP_FABRIC
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
                         &bwd_mux_conn,
                         pkt_hdr_backward,
@@ -390,6 +393,7 @@ void kernel_main() {
                             dram_dest_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, false},
                         /*start_distance=*/1,
                         static_cast<uint8_t>(num_targets_backward));
+#endif
                 }
             }
             // packed_local_cb is double-buffered; release this slot so the next
@@ -398,9 +402,11 @@ void kernel_main() {
             cb_pop_front(stats_packed_local_cb, 1);
 
             cumulative_expected_incs += (ring_size - 1);
+#ifndef WAN_ABL_SKIP_FABRIC
             if (cumulative_expected_incs > 0) {
                 noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_expected_incs);
             }
+#endif
             // Wait for all outstanding NoC operations to complete:
             //  - noc_async_write_barrier: the local L1 copy (and the fabric
             //    sender's NoC read from packed_local_addr, since send_chunk_from_address
@@ -416,6 +422,7 @@ void kernel_main() {
             noc_async_atomic_barrier();
 
             // ---- Phase A.5: Read remote-device pages (skip own — already L1-copied) ----
+#ifndef WAN_ABL_SKIP_GATHER_SCATTER
             for (uint32_t d = 0; d < ring_size; d++) {
                 if (d == my_device_index) {
                     continue;
@@ -425,6 +432,7 @@ void kernel_main() {
                 noc_async_read_page(dram_page_idx, stats_dram_accessor, local_slot_addr);
             }
             noc_async_read_barrier();
+#endif
 
             // Scatter packed bytes directly into COL 0 of stats_gathered_cb tiles
             // (32 strided fp32 stores per tile). The compute kernel then runs
@@ -439,6 +447,7 @@ void kernel_main() {
             //     col 0 indices 512, 528, ..., 752.
             cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
             const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
+#ifndef WAN_ABL_SKIP_GATHER_SCATTER
             for (uint32_t r = 0; r < rows_in_chunk; r++) {
                 for (uint32_t d = 0; d < ring_size; d++) {
                     // Own slot reads from packed_local (no L1 copy needed);
@@ -459,6 +468,7 @@ void kernel_main() {
                     }
                 }
             }
+#endif  // WAN_ABL_SKIP_GATHER_SCATTER
             cb_push_back(stats_packed_gathered_cb, ring_size);
             cb_pop_front(stats_packed_gathered_cb, ring_size);
 
@@ -500,7 +510,9 @@ void kernel_main() {
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t output_tile_idx =
                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
+#ifndef WAN_ABL_SKIP_OUTPUT_WRITE
                     noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
+#endif
                     output_rd_ptr += output_tile_bytes;
                 }
             }
