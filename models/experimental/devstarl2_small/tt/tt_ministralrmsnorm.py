@@ -210,7 +210,6 @@ class TtMinistralRMSNorm(RMSNorm):
         sharded_mem_cfg, program_config = _block_sharded_norm_configs(self.args, seq_len)
         if x.memory_config().is_sharded() and x.memory_config() == sharded_mem_cfg:
             x_sharded = x
-            owned_input = False
         else:
             # Materialize slice/views; do not deallocate caller tensor (residual is still live).
             x_owned = _owned_dram_interleaved_tile(x)

@@ -13,6 +13,7 @@ from transformers.models.mistral3.modeling_mistral3 import Mistral3Model
 
 import ttnn
 from models.common.sampling import SamplingGenerator
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -398,7 +399,7 @@ class TtDecodeInputBuffers:
     """DRAM decode trace inputs (token + positions); stable addresses for ``copy_host_to_device_tensor``."""
 
     token_ids: ttnn.Tensor  # uint32 [1, 1]
-    pos_uint32: ttnn.Tensor  # uint32 [1, 1]   - RoPE table lookup
+    pos_uint32: ttnn.Tensor  # uint32 [1, W] W=nearest_32(batch) - RoPE table lookup (trace-safe padding)
     pos_int32: ttnn.Tensor  # int32  [1, 1]   - paged_update_cache index
 
 
@@ -414,14 +415,17 @@ class TtDecodeTraceContext:
     sampling: Optional[SamplingGenerator] = None
 
 
-# Reused [1,1] host staging for decode buffer updates (avoids per-step torch alloc).
+# Reused host staging for decode buffer updates (avoids per-step torch alloc).
 _DECODE_STAGING_TOK = torch.zeros((1, 1), dtype=torch.int32)
-_DECODE_STAGING_POS = torch.zeros((1, 1), dtype=torch.int32)
+# Width 32 = nearest_32(1): matches RoPE embedding tile padding without device alloc during trace.
+_DECODE_POS_WIDTH = nearest_32(1)
+_DECODE_STAGING_POS = torch.zeros((1, _DECODE_POS_WIDTH), dtype=torch.int32)
 
 
 def tt_alloc_decode_input_buffers(mesh_device) -> TtDecodeInputBuffers:
     """Allocate the three small DRAM buffers consumed by traced decode steps."""
-    zero = torch.tensor([[0]], dtype=torch.int32)
+    zero_tok = torch.tensor([[0]], dtype=torch.int32)
+    zero_pos = torch.zeros((1, _DECODE_POS_WIDTH), dtype=torch.int32)
     common = dict(
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -429,9 +433,9 @@ def tt_alloc_decode_input_buffers(mesh_device) -> TtDecodeInputBuffers:
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     return TtDecodeInputBuffers(
-        token_ids=ttnn.from_torch(zero, dtype=ttnn.uint32, **common),
-        pos_uint32=ttnn.from_torch(zero, dtype=ttnn.uint32, **common),
-        pos_int32=ttnn.from_torch(zero, dtype=ttnn.int32, **common),
+        token_ids=ttnn.from_torch(zero_tok, dtype=ttnn.uint32, **common),
+        pos_uint32=ttnn.from_torch(zero_pos, dtype=ttnn.uint32, **common),
+        pos_int32=ttnn.from_torch(zero_tok, dtype=ttnn.int32, **common),
     )
 
 
@@ -443,6 +447,7 @@ def tt_update_decode_input_buffers(
 ) -> None:
     """Update decode buffers via ``copy_host_to_device_tensor`` (trace-stable addresses)."""
     _DECODE_STAGING_TOK[0, 0] = int(token_id)
+    _DECODE_STAGING_POS.zero_()
     _DECODE_STAGING_POS[0, 0] = int(decode_pos)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tok_host = ttnn.from_torch(
@@ -458,7 +463,7 @@ def tt_update_decode_input_buffers(
         mesh_mapper=mesh_mapper,
     )
     pos_i32_host = ttnn.from_torch(
-        _DECODE_STAGING_POS,
+        _DECODE_STAGING_POS[:, :1],
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=mesh_mapper,

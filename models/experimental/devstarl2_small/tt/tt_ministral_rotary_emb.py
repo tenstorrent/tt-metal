@@ -5,14 +5,16 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Optional, Tuple
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
-# Use HfRotarySetupOld + legacy rotary_embedding (new HF rope misrotates Q/K here).
+# HfRotarySetupOld API (get_rot_mats); legacy rotary_embedding in TtMinistralAttention.
 from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
 
 
@@ -140,32 +142,75 @@ def ministral3_hf_cos_sin_tables(
     return cos_hf, sin_hf
 
 
-def _upload_hf_cos_sin_4d(
+def _host_upload(
+    host_array: np.ndarray,
+    device: Any,
+    datatype: ttnn.DataType,
+    *,
+    layout: ttnn.Layout,
+) -> ttnn.Tensor:
+    """NumPy host buffer -> tilize/typecast on host -> ``to_device`` (no device Tilize/Untilize)."""
+    mapper = ttnn.replicate_tensor_to_mesh_mapper(device)
+    host_tt = ttnn.from_torch(
+        host_array,
+        layout=layout,
+        dtype=datatype,
+        mesh_mapper=mapper,
+    )
+    return ttnn.to_device(host_tt, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _upload_decode_embedding_tables(
     cos_hf: np.ndarray,
     sin_hf: np.ndarray,
     device: Any,
     datatype: ttnn.DataType,
-    *,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """ROW_MAJOR ``[max_seq_len, head_dim]`` for ``ttnn.embedding`` (weights must stay row-major)."""
+    return (
+        _host_upload(cos_hf, device, datatype, layout=ttnn.ROW_MAJOR_LAYOUT),
+        _host_upload(sin_hf, device, datatype, layout=ttnn.ROW_MAJOR_LAYOUT),
+    )
+
+
+def _upload_prefill_cos_sin_4d(
+    cos_hf: np.ndarray,
+    sin_hf: np.ndarray,
+    device: Any,
+    datatype: ttnn.DataType,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """TILE ``[1, 1, max_seq_len, head_dim]`` for legacy prefill ``rotary_embedding``."""
     cos_4d = cos_hf[np.newaxis, np.newaxis, ...]
     sin_4d = sin_hf[np.newaxis, np.newaxis, ...]
-    mapper = ttnn.replicate_tensor_to_mesh_mapper(device)
-    cos_tt = ttnn.from_torch(
-        cos_4d,
-        device=device,
-        layout=layout,
-        dtype=datatype,
-        mesh_mapper=mapper,
+    return (
+        _host_upload(cos_4d, device, datatype, layout=ttnn.TILE_LAYOUT),
+        _host_upload(sin_4d, device, datatype, layout=ttnn.TILE_LAYOUT),
     )
-    sin_tt = ttnn.from_torch(
-        sin_4d,
-        device=device,
-        layout=layout,
-        dtype=datatype,
-        mesh_mapper=mapper,
-    )
-    return cos_tt, sin_tt
+
+
+def _pad_rot_idx_to_nearest_32(
+    rot_idx: ttnn.Tensor,
+    *,
+    pad_tail: ttnn.Tensor | None = None,
+    pad_width: int = 0,
+) -> ttnn.Tensor:
+    """Pad index width to 32 so embedding can fuse TILE output (no post-embedding ``to_layout`` tilize).
+
+    Use a preallocated ``pad_tail`` (from :class:`TtMinistral3RotaryEmbedding`) during trace capture;
+    ``ttnn.zeros`` uploads are not allowed while a trace is being recorded.
+    """
+    if len(rot_idx.shape) == 1:
+        rot_idx = ttnn.unsqueeze(rot_idx, 0)
+    batch = int(rot_idx.shape[-1])
+    pad_size = nearest_32(batch) - batch
+    if pad_size == 0:
+        return rot_idx
+    if pad_tail is not None and pad_size == pad_width:
+        return ttnn.concat([rot_idx, pad_tail], dim=-1)
+    pad_shape = list(rot_idx.shape)
+    pad_shape[-1] = pad_size
+    pad = ttnn.zeros(pad_shape, device=rot_idx.device(), dtype=rot_idx.dtype, layout=rot_idx.get_layout())
+    return ttnn.concat([rot_idx, pad], dim=-1)
 
 
 class TtMinistral3RotaryEmbedding(HfRotarySetup):
@@ -183,40 +228,69 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
     ) -> None:
-        rope_theta = float(config.rope_parameters["rope_theta"])
-        super().__init__(
-            device=device,
-            batch_size=batch_size,
-            head_dim=head_dim,
-            max_seq_len=max_seq_len,
-            rope_theta=rope_theta,
-            use_qk_fused=use_qk_fused,
-            datatype=datatype,
-            shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
-            prefetcher=prefetcher,
-        )
+        if use_qk_fused:
+            raise NotImplementedError("use_qk_fused")
+        LightweightModule.__init__(self)
+        self.batch_size = batch_size
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.prefetcher = prefetcher
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
 
-        # Replace parent get_rot_mats_hf tables with HF/YaRN-aligned Ministral3 NumPy build.
         table_np = np.float32 if datatype == ttnn.bfloat16 else np.float64
         cos_hf, sin_hf = ministral3_hf_cos_sin_tables(head_dim, max_seq_len, config, table_dtype=table_np)
 
-        self.cos_matrix, self.sin_matrix = _upload_hf_cos_sin_4d(  # TILE layout for legacy rope op
-            cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
-        )
-        self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_hf_cos_sin_4d(
-            cos_hf, sin_hf, device, datatype, layout=ttnn.TILE_LAYOUT
-        )
-
-        self.cos_matrix_2d = ttnn.reshape(self.cos_matrix, (max_seq_len, head_dim))  # decode trace gather
-        self.sin_matrix_2d = ttnn.reshape(self.sin_matrix, (max_seq_len, head_dim))
+        self.cos_matrix_2d, self.sin_matrix_2d = _upload_decode_embedding_tables(cos_hf, sin_hf, device, datatype)
+        self.cos_matrix_prefill, self.sin_matrix_prefill = _upload_prefill_cos_sin_4d(cos_hf, sin_hf, device, datatype)
+        # Legacy decode slice path / prefill share TILE 4D views.
+        self.cos_matrix = self.cos_matrix_prefill
+        self.sin_matrix = self.sin_matrix_prefill
 
         self.transformation_mat = None
         self.transformation_mat_prefill = None
 
         self._ministral3_config = config
+        self._rot_idx_pad_width = nearest_32(batch_size) - batch_size
+        if self._rot_idx_pad_width > 0:
+            self._rot_idx_pad = ttnn.zeros(
+                (1, self._rot_idx_pad_width),
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        else:
+            self._rot_idx_pad = None
+
+    def get_rot_mats(
+        self,
+        position_idxs: Union["torch.Tensor", ttnn.Tensor, np.ndarray],
+        return_rot_idxs: bool = False,
+    ) -> List[ttnn.Tensor]:
+        """Decode cos/sin via embedding; ROW_MAJOR tables + padded indices -> fused TILE (no extra tilize)."""
+        import torch
+
+        if isinstance(position_idxs, np.ndarray):
+            position_idxs = torch.from_numpy(position_idxs)
+        if isinstance(position_idxs, ttnn.Tensor):
+            rot_idx = position_idxs
+            if rot_idx.dtype != ttnn.uint32:
+                rot_idx = ttnn.typecast(rot_idx, dtype=ttnn.uint32)
+            rot_idx = _pad_rot_idx_to_nearest_32(rot_idx, pad_tail=self._rot_idx_pad, pad_width=self._rot_idx_pad_width)
+        elif isinstance(position_idxs, torch.Tensor):
+            rot_idx = self.get_rot_idxs(position_idxs.reshape(-1))
+        else:
+            raise TypeError(f"position_idxs must be torch.Tensor or ttnn.Tensor, got {type(position_idxs)}")
+
+        cos_emb = ttnn.embedding(rot_idx, self.cos_matrix_2d, layout=ttnn.TILE_LAYOUT)
+        sin_emb = ttnn.embedding(rot_idx, self.sin_matrix_2d, layout=ttnn.TILE_LAYOUT)
+        cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)
+        sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)
+
+        if return_rot_idxs:
+            return [cos_sliced, sin_sliced], position_idxs
+        return [cos_sliced, sin_sliced]
 
     def slice_rot_mats_prefill(self, start_pos: int, seq_len: int) -> list:
         """Cos/sin ``[1,1,seq_len,head_dim]`` on device from ``start_pos`` (pad if needed)."""
