@@ -24,6 +24,7 @@ Tensor layout notes
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -140,6 +141,55 @@ def _keep_mask_btl(text_mask: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tens
     )
 
 
+# ``en_nlc = alignment_TaT @ d_nlc`` has shape M=T_aligned, K=T, N=d_hid+style_dim.
+# N is a model constant (192 for the profiled config); M=T_aligned and K=T are
+# sequence-dependent. A program-config / memory sweep on this exact shape
+# (models/experimental/tt_symbiote/tests/test_kokoro_base_matmul_sweep.py,
+# 64x32x192) found L1-width-sharded output fastest (~1.67x over DRAM), then a
+# 1D-mcast "full-N-row" config (~1.10x, output left DRAM-interleaved). Both only
+# run for batch==1; the default matmul handles every other case (incl. the B>1
+# path and the long-sequence/OLA regime the rest of the model relies on). We
+# bound M so the fast paths stay L1-resident and fall back otherwise.
+_TILE = 32
+_EN_M_CAP_SHARD = 2048  # max T_aligned (rows) for the L1-width-sharded output path
+_EN_M_CAP_MCAST = 4096  # max T_aligned (rows) for the 1D-mcast full-N-row path
+
+
+def _en_matmul_plan(alignment_TaT: ttnn.Tensor, d_nlc: ttnn.Tensor):
+    """Pick (program_config, out_memory_config, reshard_back) for the en_nlc matmul.
+
+    ``program_config`` / ``out_memory_config`` are ``None`` to mean "use the
+    ttnn defaults" (the current behaviour). ``reshard_back`` is True when the
+    output is produced sharded and must be converted back to the caller's
+    ``memory_config`` to preserve the return contract.
+    """
+    B = int(d_nlc.shape[0])
+    M = int(alignment_TaT.shape[-2])  # T_aligned
+    N = int(d_nlc.shape[-1])  # d_hid + style_dim
+    if B != 1 or (N % _TILE) != 0:
+        return None, None, False
+    cores = N // _TILE
+    if M <= _EN_M_CAP_SHARD:
+        out_mc = ttnn.create_sharded_memory_config(
+            (M, N), ttnn.CoreGrid(y=1, x=cores), ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR
+        )
+        return None, out_mc, True
+    if M <= _EN_M_CAP_MCAST:
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(cores, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=math.ceil(M / _TILE),
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        return pc, None, False
+    return None, None, False
+
+
 class TTProsodyPredictor:
     """ProsodyPredictor (text encoder + BiLSTM + duration head + F0/N branches) on TT."""
 
@@ -206,12 +256,20 @@ class TTProsodyPredictor:
 
         # ``en_BCT = d_NLC.permute(0,2,1) @ alignment`` ⇔ ``en_NLC = alignment^T @ d_NLC``.
         alignment_TaT = ttnn.permute(alignment_btTa, (0, 2, 1), memory_config=memory_config)
+        # Best swept config for this 64x32x192-class matmul (see _en_matmul_plan): a fast
+        # L1-width-sharded / 1D-mcast path when feasible (B==1, bounded T_aligned), else the
+        # default matmul. The sharded path reshards back to ``memory_config`` so downstream
+        # (F0Ntrain) sees the same interleaved layout as before.
+        en_pc, en_out_mc, en_reshard = _en_matmul_plan(alignment_TaT, d_nlc)
         en_nlc = ttnn.matmul(
             alignment_TaT,
             d_nlc,
-            memory_config=memory_config,
+            program_config=en_pc,
+            memory_config=en_out_mc if en_out_mc is not None else memory_config,
             compute_kernel_config=ck,
         )
+        if en_reshard:
+            en_nlc = ttnn.to_memory_config(en_nlc, memory_config)
         ttnn.deallocate(alignment_TaT)
         ttnn.deallocate(d_nlc)
         # en_nlc: [B, T_aligned, d_hid + style_dim]
