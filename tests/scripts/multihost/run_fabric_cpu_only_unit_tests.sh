@@ -2,8 +2,16 @@
 # Fabric CPU-only unit test driver (same commands as .github/workflows/fabric-cpu-only-tests-impl.yaml).
 # Run from repository root, or from anywhere (script cds to root). Requires a built tree under ./build.
 #
-# Example:
+# Example (run all groups sequentially):
 #   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+#
+# Example (run one group — same as CI matrix job):
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group phys-grouping
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group control-plane
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group t3k
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group wh-galaxy
+#   ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-galaxy
 #
 set -euo pipefail
 
@@ -15,11 +23,21 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
   export TT_METAL_HOME="$REPO_ROOT"
 fi
 
-# Fabric topology helper tests (pure unit + mock cluster)
+# Parse --group argument (default: run all groups sequentially)
+GROUP="all"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --group) GROUP="$2"; shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+run_group() { [[ "$GROUP" == "all" || "$GROUP" == "$1" ]]; }
 
 ####################################
 # Unit tests
 ####################################
+if run_group "unit"; then
 
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTopologyHelpers*"
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
@@ -33,6 +51,13 @@ TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_des
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologySatEncoderTest.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorTests*"
+
+fi # unit
+
+######################################
+# Physical Grouping tests
+######################################
+if run_group "phys-grouping"; then
 
 # Physical Grouping Descriptor tests with real PSDs (using tt-run)
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorSP4Tests*"
@@ -57,9 +82,13 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.Pinning*"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/wh_closetbox_3pod_ttswitch_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperTest.ClosetBoxSuperpod*PolicyTest"
 
+fi # phys-grouping
+
 ######################################
-# Single Host Tests
+# Control Plane / Single Host Tests
 ######################################
+if run_group "control-plane"; then
+
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*SingleGalaxy*
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*T3k*
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3kCustomMeshGraphControlPlaneTests*
@@ -70,9 +99,13 @@ TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_des
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_galaxy_xyz_cluster_desc.yaml TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 TT_METAL_MOCK_CLUSTER_DESC_PATH=tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_galaxy_xyz_cluster_desc.yaml TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
+fi # control-plane
+
 ######################################
 # T3K Tests
 ######################################
+if run_group "t3k"; then
+
 # Dual T3K Multi-host
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_t3k_ci_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests  --gtest_filter="MultiHost.TestDual2x4ControlPlaneInit"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_dual_host_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests  --gtest_filter="MultiHost.TestDual2x4ControlPlaneInit"
@@ -109,9 +142,13 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestClosetBox3PodTTSwitchControlPlaneInit"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/wh_closetbox_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestClosetBox3PodTTSwitchAPIs"
 
+fi # t3k
+
 ######################################
 # WH Galaxy Tests
 ######################################
+if run_group "wh-galaxy"; then
+
 # Dual Galaxy
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_mapping.yaml --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric1DSanity"
@@ -126,9 +163,13 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_quad_host_cluster_desc_mapping.yaml --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestQuadGalaxyFabric1DSanity"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_quad_host_cluster_desc_mapping.yaml --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestQuadGalaxyFabric2DSanity"
 
+fi # wh-galaxy
+
 ######################################
 # BH Galaxy Tests
 ######################################
+if run_group "bh-galaxy"; then
+
 # BH Galaxy 8x4 2x2 Hosts
 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_8x4_2x2_hosts_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root"  ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestControlPlaneInitNoMGD
 
@@ -165,3 +206,5 @@ tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_
 # BH Dual Galaxy Multi-host
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_bh_galaxy_experimental_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyControlPlaneInit"
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_bh_galaxy_experimental_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_bh_galaxy_experimental_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.BHDualGalaxyFabric2DSanity"
+
+fi # bh-galaxy
