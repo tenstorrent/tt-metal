@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-# SPDX-License-Identifier: Apache-2.0
 import argparse
+import inspect
 
 import pytest
 
@@ -22,6 +21,7 @@ from models.tt_transformers.tt.model_config import (
     TensorGroup,
     should_use_phi1_single_split_lm_head,
 )
+from models.tt_transformers.tt.rope import HfRotarySetup, HfRotarySetupOld, get_rot_mats_hf
 
 
 def test_phi1_accuracy_uses_bf16_attention_tensors_without_broad_hifi4_override():
@@ -115,6 +115,12 @@ def test_phi1_defaults_to_hf_rope():
 def test_non_phi_models_keep_legacy_rope_default():
     assert not resolve_hf_rope_mode("meta-llama/Llama-3.2-1B", False)
     assert resolve_hf_rope_mode("meta-llama/Llama-3.2-1B", True)
+
+
+def test_hf_rope_paths_accept_rotary_dim_for_phi1_partial_rotary():
+    assert "rotary_dim" in inspect.signature(get_rot_mats_hf).parameters
+    assert "rotary_dim" in inspect.signature(HfRotarySetup.__init__).parameters
+    assert "rotary_dim" in inspect.signature(HfRotarySetupOld.__init__).parameters
 
 
 @pytest.mark.parametrize(
