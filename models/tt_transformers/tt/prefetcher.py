@@ -37,6 +37,12 @@ VERIFIED_MODEL_CONFIGS = {
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
 }
 
+# Single source for ttnn weight-dtype -> tile byte size, shared by both prefetcher backends
+# (worker insert_tensor block sizing, DRAM-core GCB sizing, and the support checks). Keeping
+# one map avoids the two backends silently disagreeing if a dtype/tile size changes.
+TILE_BYTES = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+BYTES_PER_TILE_BFP8 = TILE_BYTES[ttnn.bfloat8_b]
+
 
 def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     """
@@ -104,7 +110,6 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     if not is_blackhole() or verified_model_name is None:
         return False
     TILE_SIZE, MAX_CB_PAGES = 32, 65535
-    BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
     MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
@@ -468,7 +473,7 @@ class Prefetcher(LightweightModule):
         """
         del program_config
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
-        bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+        bytes_in_tile = TILE_BYTES
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
                 f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}) for prefetcher."
@@ -545,3 +550,25 @@ class Prefetcher(LightweightModule):
         ttnn.deallocate(self.garbage)
         self.garbage = None
         return
+
+    def teardown(self) -> None:
+        """No-op for the worker-core path: shutdown happens per-forward in ``stop()``.
+
+        Present so callers can drive one lifecycle — ``run()``/``stop()`` per forward, then a
+        single ``teardown()`` at the end — across both prefetcher backends without branching on
+        the backend type. (``DramCorePrefetcher.stop()`` is the no-op there, and its ``teardown()``
+        stops the long-lived DRISC daemon.)
+        """
+        return
+
+    def weight_mem_config(
+        self, k: int, n: int, default: ttnn.MemoryConfig, is_galaxy: bool = False
+    ) -> ttnn.MemoryConfig:
+        """Memory config for a prefetched (K, N) weight.
+
+        The worker-core path keeps the caller's ``default`` (width-sharded) layout. Defined so
+        model code can call ``prefetcher.weight_mem_config(...)`` uniformly; the DRAM-core backend
+        overrides this to return its receiver-contiguous layout.
+        """
+        del k, n, is_galaxy
+        return default

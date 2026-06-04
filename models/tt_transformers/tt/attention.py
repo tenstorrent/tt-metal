@@ -240,11 +240,16 @@ class Attention(LightweightModule):
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
-        # Receiver-contiguous DRAM layout when the DRAM-core prefetcher is active (drop-in: the
-        # worker-core Prefetcher and the no-prefetcher path keep the width-sharded layout above).
-        _rc_mem_config = getattr(self.prefetcher, "recv_contig_weight_mem_config", None)
-        if _rc_mem_config is not None and not self.TG:
-            wqkv_mem_config = _rc_mem_config(configuration.dim, configuration.qkv_size // configuration.num_devices)
+        # The prefetcher picks the weight layout: the DRAM-core backend returns its
+        # receiver-contiguous layout, the worker-core backend returns the width-sharded default
+        # above (and galaxy/TG always keeps the default).
+        if self.prefetcher is not None:
+            wqkv_mem_config = self.prefetcher.weight_mem_config(
+                configuration.dim,
+                configuration.qkv_size // configuration.num_devices,
+                wqkv_mem_config,
+                is_galaxy=configuration.is_galaxy,
+            )
 
         qkv_list = []
         for i in range(self.num_devices_per_group):
@@ -339,16 +344,13 @@ class Attention(LightweightModule):
             return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
         if self.prefetcher is not None:
-            # Receiver-contiguous DRAM layout for the prefetched WO ring weight when the
-            # DRAM-core prefetcher is active; worker-core keeps the width-sharded ring config.
-            _rc_mem_config = getattr(self.prefetcher, "recv_contig_weight_mem_config", None)
-            wo_ring_mem_config = (
-                _rc_mem_config(
-                    configuration.dim // configuration.cluster_shape[0],
-                    configuration.dim // configuration.cluster_shape[1],
-                )
-                if _rc_mem_config is not None and not self.TG
-                else self.args.get_sharded_wo_ring_mem_config()
+            # The prefetcher picks the WO ring-weight layout: DRAM-core returns receiver-contiguous,
+            # worker-core (and galaxy/TG) keeps the width-sharded ring config.
+            wo_ring_mem_config = self.prefetcher.weight_mem_config(
+                configuration.dim // configuration.cluster_shape[0],
+                configuration.dim // configuration.cluster_shape[1],
+                self.args.get_sharded_wo_ring_mem_config(),
+                is_galaxy=configuration.is_galaxy,
             )
             self.wo_sharded_ring = ttnn.as_tensor(
                 pt_wo,

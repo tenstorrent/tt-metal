@@ -135,8 +135,8 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
     assert bench_out is not None
     elapsed = sum(per_forward_times)
 
-    if hasattr(prefetcher, "teardown"):
-        prefetcher.teardown()
+    # Both backends expose teardown() (worker's is a no-op); no backend branch needed.
+    prefetcher.teardown()
 
     per_forward_us = elapsed / repeats * 1e6
     sorted_us = sorted(t * 1e6 for t in per_forward_times)
