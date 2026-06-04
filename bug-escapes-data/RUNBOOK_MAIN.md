@@ -189,7 +189,7 @@ Update confirmed table and chart only after `verdict: "confirmed"`.
 - Stuck/blocked candidates
 
 **Never DM:**
-- Refuted candidates, routine polls, state saves, zero-result scans.
+- routine polls, state saves, zero-result scans.
 
 ---
 
