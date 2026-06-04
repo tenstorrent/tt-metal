@@ -12,6 +12,8 @@ Handles:
 - Renaming lm_head.weight → output.weight
 - Renaming embed_tokens → tok_embeddings
 """
+import json
+from pathlib import Path
 from typing import Dict
 
 import torch
@@ -105,3 +107,92 @@ def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         remapped[new_key] = tensor
 
     return remapped
+
+
+def is_fp8_checkpoint(model_path) -> bool:
+    """True when the checkpoint dir holds block-wise FP8 safetensors.
+
+    Detected by a ``*.weight_scale_inv`` entry in the safetensors index (the
+    per-block dequant scales that accompany float8_e4m3fn weights). Such a
+    checkpoint cannot be loaded via AutoModelForCausalLM here; use
+    ``load_qwen35_state_dict_fp8`` instead.
+    """
+    index_path = Path(model_path) / "model.safetensors.index.json"
+    if not index_path.is_file():
+        return False
+    try:
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+    except (KeyError, ValueError, OSError):
+        return False
+    return any(k.endswith(".weight_scale_inv") for k in weight_map)
+
+
+def load_qwen35_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
+    """Load Qwen3.5 FP8 weights: block-wise dequant + minimal key remap.
+
+    Produces the SAME internal key scheme as ``remap_qwen35_state_dict`` for the
+    shared/simple weights (``layers.N.mlp.*``, ``layers.N.self_attn.*``,
+    ``input_layernorm`` / ``post_attention_layernorm``, ``tok_embeddings``,
+    ``norm``, ``output``) so ``layer.py``'s substate extraction is unchanged.
+
+    The one deliberate difference vs the single-device remap: GDN ``linear_attn.*``
+    projections are kept RAW (fused ``in_proj_qkv``, fused ``conv1d``, plus
+    ``in_proj_z`` / ``in_proj_a`` / ``in_proj_b`` / ``out_proj`` / ``A_log`` /
+    ``dt_bias`` / ``norm.weight``) — NOT split or renamed — so the tensor-parallel
+    GDN weight-prep helpers (prepare_gdn_qkv / prepare_conv_taps) can reorder and
+    shard them per device. The TP module loaders branch on this raw layout.
+    """
+    from safetensors import safe_open
+
+    from models.demos.blackhole.qwen3_5_9b.tt.tp_common import dequant_fp8_block
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    with open(index_path) as f:
+        weight_map = json.load(f)["weight_map"]
+
+    file_to_keys: Dict[str, list] = {}
+    for key, filename in weight_map.items():
+        file_to_keys.setdefault(filename, []).append(key)
+
+    raw: Dict[str, torch.Tensor] = {}
+    for filename, keys in file_to_keys.items():
+        with safe_open(str(model_path / filename), framework="pt") as sf:
+            present = set(sf.keys())
+            for key in keys:
+                if key in present:
+                    raw[key] = sf.get_tensor(key)
+
+    # Dequantize FP8 (skip the scale tensors themselves)
+    dequantized: Dict[str, torch.Tensor] = {}
+    for key, tensor in raw.items():
+        if key.endswith(".weight_scale_inv"):
+            continue
+        if tensor.dtype == torch.float8_e4m3fn:
+            scale_key = key + "_scale_inv"
+            dequantized[key] = (
+                dequant_fp8_block(tensor, raw[scale_key]) if scale_key in raw else tensor.to(torch.bfloat16)
+            )
+        else:
+            dequantized[key] = tensor
+
+    state_dict: Dict[str, torch.Tensor] = {}
+    for key, tensor in dequantized.items():
+        if "visual" in key or key.startswith("mtp"):
+            continue
+        short = key
+        for prefix in ("model.language_model.", "model."):
+            if short.startswith(prefix):
+                short = short[len(prefix) :]
+                break
+        if "embed_tokens" in short:
+            state_dict["tok_embeddings.weight"] = tensor
+        elif key == "lm_head.weight" or short == "lm_head.weight":
+            state_dict["output.weight"] = tensor
+        else:
+            # Everything else (layers.N.mlp.*, self_attn.*, linear_attn.* RAW,
+            # input_layernorm/post_attention_layernorm, norm) passes through.
+            state_dict[short] = tensor
+
+    return state_dict

@@ -65,7 +65,7 @@ class Qwen35Model:
         logger.info(f"Loading {args.n_layers} transformer layers...")
         self.layers = []
         for i in tqdm(range(args.n_layers), desc="Loading layers"):
-            layer = Qwen35DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path)
+            layer = Qwen35DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path, tt_ccl=self.tt_ccl)
             self.layers.append(layer)
 
         # Final norm — framework RMSNorm (mesh-aware; applies the +1 zero-centered
@@ -83,10 +83,24 @@ class Qwen35Model:
             weight_dtype=ttnn.bfloat16,
             add_unit_offset=True,
             eps=args.norm_eps,
+            **(
+                dict(is_distributed=args.is_distributed_norm, ccl_topology=args.ccl_topology(), tt_ccl=self.tt_ccl)
+                if self.num_devices > 1
+                else {}
+            ),
         )
+        if self.num_devices > 1:
+            # TP: the post-last-layer hidden state is fractured; DistributedNorm
+            # gathers it back to a full replicated tensor for the LM head.
+            from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-        # LM Head — 2D [in, out] for ttnn.linear
-        lm_head_weight = state_dict["output.weight"].T.contiguous()  # [4096, vocab_size]
+            self.norm = DistributedNorm(self.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy)
+
+        # LM Head — 2D [in, out] for ttnn.linear. On a single device the weight
+        # is placed as-is; on a mesh it is REPLICATED (full vocab on every device)
+        # so the full-dim norm output produces full logits without a gather. (A
+        # vocab-sharded LM head + ConcatMeshToTensor is a later memory optimization.)
+        lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             dtype=ttnn.bfloat8_b,
@@ -94,6 +108,7 @@ class Qwen35Model:
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=tensor_cache_path / "output.weight" if tensor_cache_path else None,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)) if self.num_devices > 1 else {}),
         )
 
         self.vocab_size = args.vocab_size
@@ -154,6 +169,98 @@ class Qwen35Model:
 
         cache_path = args.weight_cache_path()
         return cls(device, args, state_dict, tensor_cache_path=cache_path)
+
+    def prefill_tp(self, token_ids, valid_len=None):
+        """Tensor-parallel full-model prefill (num_devices>1). Stateless: runs the
+        whole sequence from scratch through the fractured-residual TP layers and
+        returns the next-token logits at position valid_len-1.
+
+        token_ids: torch [1, T] (pad T to a multiple of 128 for the GDN chunk
+        kernel; right-padding does not affect the causal logit at valid_len-1).
+        Returns ttnn logits [1, 1, 1, vocab_size] (host).
+        """
+        from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import rot_mats_prefill
+
+        B, T = token_ids.shape
+        assert B == 1, "prefill_tp is single-sequence"
+        valid_len = valid_len or T
+
+        tok = ttnn.from_torch(
+            token_ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x = self.embd(tok)  # [1, T, dim_frac] (hidden dim sharded across mesh)
+        x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
+        cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
+
+        for layer in self.layers:
+            x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
+
+        x = self.norm(x, mode=Mode.PREFILL)  # DistributedNorm → full [1,1,T,dim]
+        x_last = x[:, :, valid_len - 1 : valid_len, :]
+        logits = ttnn.linear(x_last, self.lm_head_weight)  # replicated lm_head → full vocab (same on all devices)
+        # Logits are replicated across the mesh; take one replica → torch [vocab_size].
+        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        return lt[0].reshape(-1)[: self.vocab_size]
+
+    def reset_tp(self):
+        """Reset every TP layer's KV cache / GDN recurrent+conv state for a new sequence."""
+        for layer in self.layers:
+            layer.attention.reset_state()
+
+    def decode_tp(self, token_id, pos):
+        """Single-token TP decode at absolute position `pos` (B=1). Continues from
+        the KV cache + GDN state left by prefill_tp / prior decode steps.
+        Returns torch logits [vocab_size]."""
+        from models.demos.blackhole.qwen3_5_9b.tt.attention.rope_tp import rot_mats_decode
+
+        tok = ttnn.from_torch(
+            torch.tensor([[int(token_id)]], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x = self.embd(tok)  # [1,1,dim_frac]
+        x = ttnn.reshape(x, (1, 1, 1, x.shape[-1]))  # [1,1,B=1,dim_frac]
+        cos, sin = rot_mats_decode(
+            self.device,
+            self.args.rope_head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            torch.tensor([pos], dtype=torch.int32),
+        )
+        cur_pos_tt = ttnn.from_torch(
+            torch.tensor([pos], dtype=torch.int32),
+            dtype=ttnn.int32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        for layer in self.layers:
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
+        x = self.norm(x, mode=Mode.DECODE)
+        logits = ttnn.linear(x, self.lm_head_weight)
+        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        return lt[0].reshape(-1)[: self.vocab_size]
+
+    def generate_tp(self, prompt_ids, max_new_tokens=20):
+        """Stateful TP generation (num_devices>1): prefill the prompt (fills KV cache
+        + GDN state) then greedily decode one token at a time. Returns list of new ids."""
+        import math as _math
+
+        self.reset_tp()
+        T = len(prompt_ids)
+        T_pad = max(128, _math.ceil(T / 128) * 128)
+        padded = prompt_ids + [0] * (T_pad - T)
+        logits = self.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
+        nxt = int(torch.argmax(logits).item())
+        out = [nxt]
+        for pos in range(T, T + max_new_tokens - 1):
+            logits = self.decode_tp(nxt, pos)
+            nxt = int(torch.argmax(logits).item())
+            out.append(nxt)
+        return out
 
     def prefill(self, token_ids):
         B, T = token_ids.shape
