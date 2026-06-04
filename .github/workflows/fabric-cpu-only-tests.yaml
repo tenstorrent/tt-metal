@@ -1,0 +1,45 @@
+name: "Fabric cpu-only tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: wormhole_b0
+      timeout:
+        required: false
+        type: number
+        default: 15
+        description: "Test timeout in minutes"
+
+run-name: "Fabric cpu-only tests (${{ inputs.arch }})"
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-wheel: true
+
+  fabric-cpu-unit-tests:
+    needs: [check-harbor, build-artifact]
+    secrets: inherit
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: ${{ inputs.arch }}
+      timeout: ${{ inputs.timeout }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
