@@ -66,6 +66,10 @@ Conv2dWidthShardedProgramFactory::cached_program_t Conv2dWidthShardedProgramFact
 
     const auto output_channels = operation_attributes.output_channels;
     const auto untilize_out = operation_attributes.untilize_out;
+    TT_FATAL(
+        !ttnn::operations::conv::conv2d_bench_active(),
+        "conv_bench (TT_CONV_BENCH_MODE) only supports HEIGHT/BLOCK sharded convs; this is the width-sharded "
+        "factory. Use a height- or block-sharded conv config.");
     const auto has_bias = operation_attributes.has_bias;
     const auto& fused_activation = operation_attributes.activation;
     const auto& parallelization_config = operation_attributes.parallelization_config;

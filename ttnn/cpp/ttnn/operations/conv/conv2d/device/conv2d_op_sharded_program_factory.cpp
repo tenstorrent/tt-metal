@@ -645,7 +645,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    const bool packer_l1_acc_en = ttnn::operations::conv::conv2d_bench_active()
+                                      ? false  // conv_bench forces l1_acc off in every mode (fair + bug-free)
+                                      : determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -935,6 +937,47 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
 
     for (auto elem : compute_defines) {
         log_trace(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
+    }
+
+    // ── conv_bench dispatch (TT_CONV_BENCH_MODE; pure test scaffolding, conv_bench branch only) ──────────
+    const auto conv_bench_mode = ttnn::operations::conv::conv2d_bench_mode();
+    if (conv_bench_mode != ttnn::operations::conv::Conv2dBenchMode::None) {
+        TT_FATAL(
+            !is_conv_1d_depthwise_conv,
+            "conv_bench (TT_CONV_BENCH_MODE) does not support 1D-depthwise conv (different compute kernel). "
+            "Use a non-depthwise height/block-sharded conv.");
+        TT_FATAL(
+            untilize_out,
+            "conv_bench expects ROW_MAJOR output (untilize_out=true) — it is forced in conv2d.cpp::invoke; got "
+            "tiled output. Did the config take a non-standard path (e.g. slicing)?");
+        TT_FATAL(
+            conv_bench_mode != ttnn::operations::conv::Conv2dBenchMode::Main,
+            "TT_CONV_BENCH_MODE=main (literal no-helper kernel) is not wired on this build yet. Use helper_sbm "
+            "or helper_trm.");
+        if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor) {
+            TT_FATAL(
+                weight_num_subblocks > 1,
+                "conv_bench helper_trm is a NO-OP for this shape: out_subblock_w == per_core_N "
+                "(weight_num_subblocks==1), so TileRowMajor packs IDENTICALLY to SubblockMajor — it equals "
+                "helper_sbm and tells you nothing. Pick a config where per_core_N > DST capacity (e.g. "
+                "fp32_accum + more output channels) so out_subblock_w < per_core_N, or set "
+                "TT_CONV_BENCH_SUBBLOCK_W < per_core_N (per_core_N here = {}).",
+                weight_block_w_ntiles);
+            compute_defines["CONV_TILE_PACK_ROW_MAJOR"] = "1";
+        }
+        log_info(
+            tt::LogOp,
+            "CONV_BENCH[{}] height_sharded={} untilize_out={} per_core_N={} out_subblock={}x{} "
+            "weight_num_subblocks={} in0_num_blocks_w={} packer_l1_acc_en={} (bench forces l1_acc OFF)",
+            ttnn::operations::conv::conv2d_bench_mode_name(conv_bench_mode),
+            height_sharded,
+            untilize_out,
+            weight_block_w_ntiles,
+            out_subblock_h_ntiles,
+            out_subblock_w_ntiles,
+            weight_num_subblocks,
+            in0_num_blocks_w,
+            packer_l1_acc_en);
     }
 
     std::vector<uint32_t> writer_compile_time_args = {

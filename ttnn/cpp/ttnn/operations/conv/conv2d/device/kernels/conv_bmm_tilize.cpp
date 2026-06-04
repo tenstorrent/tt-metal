@@ -341,6 +341,26 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
+    // conv_bench helper_trm path: the factory emits CONV_TILE_PACK_ROW_MAJOR for TT_CONV_BENCH_MODE=helper_trm.
+    // The matmul helper then packs the interm row-major (TileRowMajor) instead of subblock-major, which lets
+    // the host relax subblock_w == per_core_N (conv2d_utils.cpp determine_largest_subblock_size). Two kernel
+    // consequences:
+    //   • pin_interm_to_captured_base MUST be false (matmul_block_helpers.inl static_asserts pin requires
+    //     SubblockMajor). With pin off the helper owns matmul_partials_cb reserve/push, so the pin-era manual
+    //     partials-pointer management below is skipped on this path.
+    //   • the untilize phase reads the row-major interm via the plain `untilize` helper (the row strip is
+    //     already contiguous tile-row order), NOT reblock_and_untilize (which is SubblockMajor-only).
+    // helper_sbm / main stay SubblockMajor (define absent → tile_pack_row_major=false). conv_bench forces
+    // packer_l1_acc OFF in every mode, so the row-major l1_acc spill / CB-format pitfalls never arise here.
+#ifdef CONV_TILE_PACK_ROW_MAJOR
+    constexpr bool tile_pack_row_major = true;
+#else
+    constexpr bool tile_pack_row_major = false;
+#endif
+    constexpr auto conv_output_layout = tile_pack_row_major ? compute_kernel_lib::OutputCBLayout::TileRowMajor
+                                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
+    constexpr bool pin_partials = !tile_pack_row_major;
+
     constexpr uint32_t out_block_w = in1_block_w;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
@@ -449,19 +469,24 @@ void kernel_main() {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
                 PACK((llk_pack_relu_config(ReluType::NO_RELU)));
             }
-            if constexpr (partials_cb_uses_output) {
-                // Re-capture per outer iter: matmul_partials_cb shares L1 with out_cb, so its
-                // rd/wr ptrs advance with each outer iter. The helper's pin uses this fresh
-                // capture as the per-iter pinned base.
-                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
-                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
-            } else {
-                // !partials_cb_uses_output: matmul_partials_cb has its own L1 region. Force its
-                // rd/wr ptrs back to the kernel-entry base each outer iter so the helper's
-                // per-K-block pin operates on the same fixed L1 cell. The helper's pin keeps
-                // ptrs steady within a K-loop; this reset keeps them steady across outer iters.
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
-                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+            // Manual matmul_partials_cb pointer management is the pin_interm_to_captured_base=true scheme
+            // (helper_sbm / main). On helper_trm pin is false and the matmul helper owns partials reserve/push,
+            // so skip the manual capture/reset entirely.
+            if constexpr (!tile_pack_row_major) {
+                if constexpr (partials_cb_uses_output) {
+                    // Re-capture per outer iter: matmul_partials_cb shares L1 with out_cb, so its
+                    // rd/wr ptrs advance with each outer iter. The helper's pin uses this fresh
+                    // capture as the per-iter pinned base.
+                    UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
+                    PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
+                } else {
+                    // !partials_cb_uses_output: matmul_partials_cb has its own L1 region. Force its
+                    // rd/wr ptrs back to the kernel-entry base each outer iter so the helper's
+                    // per-K-block pin operates on the same fixed L1 cell. The helper's pin keeps
+                    // ptrs steady within a K-loop; this reset keeps them steady across outer iters.
+                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr;)
+                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr;)
+                }
             }
 
             // ── skip-compute fast path: tilize each K-block, drop the activation, skip the
@@ -512,16 +537,16 @@ void kernel_main() {
                 /*transpose=*/false,
                 packer_l1_acc,
                 last_block_target,
-                compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                conv_output_layout,
                 compute_kernel_lib::matmul_config::InitMode::ShortAfterPreKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
                 MatmulPostFn,
                 PreKBlockFn,
-                /*pin_interm_to_captured_base=*/true>(
+                /*pin_interm_to_captured_base=*/pin_partials>(
                 cb_mm_in0, cb_in1, matmul_out_buf, cb_matmul_partials, shape, MatmulPostFn{}, pre_k_block);
 
-            if constexpr (!partials_cb_uses_output) {
+            if constexpr (!partials_cb_uses_output && !tile_pack_row_major) {
                 // Helper's pin path now keeps matmul_partials_cb's CB pointers
                 // at the captured base throughout the K-loop (one-shot reserve at
                 // entry, per-K-block packs at fixed tile offsets, one push_back at
@@ -563,7 +588,7 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_ACTIVATION
                 compute_kernel_lib::add_bias_bcast_rows<
                     compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCBLayout::SubblockMajor,
+                    conv_output_layout,
                     ConvSFPUPostCompute>(
                     cb_matmul_partials,
                     cb_bias,
@@ -572,13 +597,14 @@ void kernel_main() {
                     ConvSFPUPostCompute{},
                     bias_block_offset);
 #else
-                compute_kernel_lib::add_bias_bcast_rows<
-                    compute_kernel_lib::BiasBroadcast::RowBroadcast,
-                    compute_kernel_lib::OutputCBLayout::SubblockMajor>(
-                    cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
+                compute_kernel_lib::
+                    add_bias_bcast_rows<compute_kernel_lib::BiasBroadcast::RowBroadcast, conv_output_layout>(
+                        cb_matmul_partials, cb_bias, cb_untilize_mode_out, bias_shape, {}, bias_block_offset);
 #endif
 
-                if constexpr (untilize_out) {
+                // Pin-era rewind so the untilize below reads partials from the captured base (helper_sbm/main).
+                // helper_trm (pin off) uses normal CB semantics for the bias→untilize handoff, so skip it.
+                if constexpr (untilize_out && !tile_pack_row_major) {
                     UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
                     PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                 }
@@ -591,11 +617,11 @@ void kernel_main() {
                 if constexpr (pack_relu) {
                     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
                 }
-                if constexpr (packer_untilize) {
-                    // Narrow output block: gather subblock-major matmul output into row-major
-                    // and untilize via pack_untilize_dest. One call — reblock_and_untilize loops
-                    // over all in0_num_subblocks internally and owns the data-format reconfig
-                    // (srcA=matmul_partials, pack=out) + the pack_untilize init/uninit.
+                if constexpr (packer_untilize && !tile_pack_row_major) {
+                    // Narrow SubblockMajor output (helper_sbm / main): gather subblock-major matmul output
+                    // into row-major and untilize via pack_untilize_dest. reblock_and_untilize is
+                    // SubblockMajor-only (its layout template static_asserts), so helper_trm (TileRowMajor)
+                    // falls through to the plain `untilize` below — its row strip is already contiguous.
                     compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
                         in0_num_subblocks,
                         in1_num_subblocks,
@@ -604,10 +630,11 @@ void kernel_main() {
                         cb_matmul_partials,
                         cb_out);
                 } else {
-                    // Wide output: plain untilize. srcA reconfig to matmul_partials is handled
-                    // externally here because untilize is invoked with NoReconfigure (the pack
-                    // format came from the packer_l1_acc reconfig above). The reblock branch no
-                    // longer shares this reconfig — it self-reconfigs via reblock_and_untilize_init.
+                    // Wide output, OR helper_trm (any width): plain untilize — for TileRowMajor the interm
+                    // row strip is already contiguous tile-row order, so no reblock gather is needed.
+                    // srcA reconfig to matmul_partials is handled externally here because untilize is
+                    // invoked with NoReconfigure (the pack format came from the packer_l1_acc reconfig
+                    // above). The reblock branch self-reconfigs via reblock_and_untilize_init.
                     if constexpr (!fuse_bias) {
                         reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                     }

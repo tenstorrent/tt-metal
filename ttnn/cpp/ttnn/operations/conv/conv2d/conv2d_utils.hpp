@@ -34,6 +34,27 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 
 uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Conv kernel profiling harness (conv_bench branch — pure test scaffolding). Selected by env
+// TT_CONV_BENCH_MODE:
+//   main         → main's verbatim no-helper conv kernel (SubblockMajor, hand-written matmul).
+//   helper_sbm   → matmul-helper kernel, SubblockMajor (subblock_w == per_core_N enforced).
+//   helper_trm   → matmul-helper kernel, TileRowMajor (subblock_w == per_core_N relaxed).
+//   (unset)      → normal conv, completely untouched.
+// ALL bench modes force ROW_MAJOR output and packer_l1_acc=OFF so the three are a fair, bug-free
+// 3-way comparison (l1_acc-late-disable was the source of the prior CB-format/spill bugs; off-from-
+// the-start avoids them). Optional TT_CONV_BENCH_SUBBLOCK_H / _W force a specific out_subblock,
+// overriding the tuner (validated with TT_FATAL). The factory adds the remaining TT_FATAL guards.
+enum class Conv2dBenchMode : uint8_t { None, Main, HelperSubblock, HelperRowMajor };
+
+// Reads TT_CONV_BENCH_MODE once per process; TT_FATALs on an unrecognized value.
+Conv2dBenchMode conv2d_bench_mode();
+inline bool conv2d_bench_active() { return conv2d_bench_mode() != Conv2dBenchMode::None; }
+const char* conv2d_bench_mode_name(Conv2dBenchMode mode);
+
+// Manual out_subblock {h, w} from TT_CONV_BENCH_SUBBLOCK_H / _W (both or neither); nullopt if unset.
+std::optional<std::pair<uint32_t, uint32_t>> conv2d_bench_subblock_override();
+
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,

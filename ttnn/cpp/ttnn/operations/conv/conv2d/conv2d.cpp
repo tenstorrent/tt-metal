@@ -102,6 +102,14 @@ Result conv2d_L1(
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 
+    // conv_bench (TT_CONV_BENCH_MODE set; pure test scaffolding): force ROW_MAJOR output for ALL bench modes
+    // so main / helper_sbm / helper_trm are a fair 3-way comparison, the user never has to set output_layout,
+    // and the TILE-output path is never taken. packer_l1_acc is separately forced OFF (get_cb_info + factory)
+    // so the row-major l1_acc CB-format/spill pitfalls cannot occur.
+    if (ttnn::operations::conv::conv2d_bench_active()) {
+        conv_config.output_layout = Layout::ROW_MAJOR;
+    }
+
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
