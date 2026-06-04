@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
-      mgd: ${{ steps.extract-mgd.outputs.mgd }}
+      allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -42,22 +42,14 @@ jobs:
           fi
           echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
 
-      - name: Extract MGD configuration from SKU
-        id: extract-mgd
+      - name: Extract allocation configuration from SKU
+        id: extract-allocation
         run: |
           {
-            echo "mgd<<EOF"
-            python3 .github/scripts/utils/extract_mgd_from_sku.py "bh_${{ inputs.sp-config }}" .github/sku_config.yaml
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
             echo "EOF"
           } >> $GITHUB_OUTPUT
-
-      - name: Debug - Show extracted MGD
-        run: |
-          echo "=== Extracted MGD content ==="
-          cat << 'DEBUG_EOF'
-          ${{ steps.extract-mgd.outputs.mgd }}
-          DEBUG_EOF
-          echo "=== End MGD ==="
 
       - name: Verify test timeouts against budget
         run: |
@@ -139,69 +131,13 @@ jobs:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
           spec: |
-            allocationType: MGD
-            matchLabels:
-              exabox.tenstorrent.com/purpose: ci-metal
-            topologyKeys:
-              - exabox.tenstorrent.com/quad
-            mgd: |
-            ${{ needs.load-test-matrix.outputs.mgd }}
+            ${{ needs.load-test-matrix.outputs.allocation_spec }}
 
       - name: Get Allocation data
         uses: ./.github/actions/ttop-get-allocation-data
         id: get-allocation-data
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          namespace: ttop-ci
-
-      - name: Create reset environment
-        uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 5
-        with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationNamespace: ttop-ci
-          workerRepository: ${{ steps.parse-image.outputs.repository }}
-          workerTag: ${{ steps.parse-image.outputs.tag }}
-
-      - name: Setup tt-run for reset
-        uses: ./.github/actions/ttop-configure-tt-run
-        timeout-minutes: 5
-        with:
-          directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
-          copyToWorkers: false
-          ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
-
-      - name: Print hostnames
-        working-directory: /tmp
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-        run: |
-          mpirun --tag-output --pernode hostname
-
-      - name: Reset cards for ${{ matrix.test-group.name }}
-        working-directory: /tmp
-        timeout-minutes: 10
-        env:
-          OMPI_MCA_btl_tcp_if_exclude: docker0,lo
-          PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
-          PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
-          PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
-        run: |
-          mpirun --tag-output --pernode \
-            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 300'
-
-      - name: Delete reset environment
-        if: always()
-        uses: ./.github/actions/ttop-delete-environment
-        with:
-          environmentName:  ci-${{ github.run_id }}-reset-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Create test environment
@@ -213,6 +149,7 @@ jobs:
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
+          useDevHostMount: 'true'
           sharedVolumeEnabled: 'true'
 
       - name: Setup tt-run for test
@@ -220,7 +157,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgd: ${{ needs.load-test-matrix.outputs.mgd }}
+          mgdFile: /tmp/dummy/doesnotexist.textproto
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 
