@@ -86,6 +86,25 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // across the mesh (CCL-style); that one will require a multi-program artifact.
 // Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
 // (Should follow whatever style ProgramDescriptor port ends up using.)
+//
+// ANTI-PATTERN — do not pass raw tensor addresses through runtime arguments:
+//
+//   uint32_t addr = input.buffer()->address();  // WRONG
+//   // ...stuff `addr` into kernel_run_args.runtime_arg_values...
+//
+// The first dispatch succeeds; every subsequent program-cache hit then
+// silently uses a stale address. The cached Program's RTA was frozen at the
+// previous cache miss, but the next dispatch's tensor may live at a different
+// device address. Memory corruption follows.
+//
+// CORRECT: declare a TensorParameter on the ProgramSpec and bind it via a
+// TensorArgument on the ProgramRunArgs. The framework rebinds the device
+// address on every dispatch through the typed channel; kernels read the
+// binding through TensorAccessor.
+//
+// General rule: any value derived from a tensor's mutable state (address,
+// device, allocation) routes through TensorParameter, never through an RTA.
+// See ProgramSpecMeshWorkloadFactoryAdapter for the full RTA constraint.
 template <typename T>
 concept ProgramSpecFactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
                                     !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
