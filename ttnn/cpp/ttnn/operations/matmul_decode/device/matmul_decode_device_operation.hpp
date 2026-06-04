@@ -83,8 +83,5 @@ struct MatmulDecodeDeviceOperation {
 
 namespace ttnn::prim {
 ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const DataType> dtype = std::nullopt);
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const DataType> dtype = std::nullopt);
 }  // namespace ttnn::prim
