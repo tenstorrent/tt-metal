@@ -330,7 +330,9 @@ def test_resolution_sweep(
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
     run_id = f"{'x'.join(str(d) for d in mesh_shape)}_sp{sp_factor}tp{tp_factor}"
-    perf_csv_path = Path(f"wan2_1_{run_id}_shape_sweep_perf.csv")
+    out_dir = Path("outputs/sweep") / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    perf_csv_path = out_dir / f"wan2_1_{run_id}_shape_sweep_perf.csv"
 
     pipeline = _build_pipeline(
         mesh_device,
@@ -454,6 +456,7 @@ def test_resolution_sweep(
                     batch_size=batch_size,
                     height=height,
                     width=width,
+                    output_dir=out_dir,
                 )
                 _save_correctness_image(frames, batch_size, height, width, suffix=save_suffix)
 
@@ -585,7 +588,9 @@ def test_cfg_parallel(
     sp_factor = submesh_shape[sp_axis]
     tp_factor = submesh_shape[tp_axis]
     run_id = f"cfg2_{'x'.join(str(d) for d in submesh_shape)}_sp{sp_factor}tp{tp_factor}"
-    perf_csv_path = Path(f"wan2_1_{run_id}_shape_sweep_perf.csv")
+    out_dir = Path("outputs/sweep") / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    perf_csv_path = out_dir / f"wan2_1_{run_id}_shape_sweep_perf.csv"
 
     pipeline = _build_cfg_pipeline(
         mesh_device,
@@ -691,7 +696,14 @@ def test_cfg_parallel(
 
             if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
                 frames = result.frames if hasattr(result, "frames") else result[0]
-                _save_output_images(frames=frames, run_id=run_id, batch_size=batch_size, height=height, width=width)
+                _save_output_images(
+                    frames=frames,
+                    run_id=run_id,
+                    batch_size=batch_size,
+                    height=height,
+                    width=width,
+                    output_dir=out_dir,
+                )
                 _save_correctness_image(frames, batch_size, height, width)
 
         except Exception as e:
