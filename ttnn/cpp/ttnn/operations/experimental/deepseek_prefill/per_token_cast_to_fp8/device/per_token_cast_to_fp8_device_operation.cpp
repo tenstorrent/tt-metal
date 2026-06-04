@@ -4,14 +4,18 @@
 
 #include "per_token_cast_to_fp8_device_operation.hpp"
 
+#include <cstdint>
+#include <limits>
+
 #include <tt-metalium/constants.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
-namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
+namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8;
 
 namespace {
 
@@ -25,6 +29,18 @@ void validate_device_tensor(const Tensor& tensor, const std::string& name) {
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
+}
+
+ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
+    const auto rank = input_shape.size();
+    const uint32_t H = static_cast<uint32_t>(input_shape[rank - 1]);
+    ttsl::SmallVector<uint32_t> dims;
+    dims.reserve(rank);
+    for (size_t i = 0; i + 1 < rank; ++i) {
+        dims.push_back(static_cast<uint32_t>(input_shape[i]));
+    }
+    dims.push_back(H / fp8::BLOCK_W);
+    return ttnn::Shape(std::move(dims));
 }
 
 }  // namespace
@@ -65,23 +81,38 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         tile_h,
         tile_w);
     TT_FATAL(
-        common::BLOCK_W % tile_w == 0,
+        fp8::BLOCK_W % tile_w == 0,
         "per_token_cast_to_fp8: tile width {} must divide BLOCK_W={}",
         tile_w,
-        common::BLOCK_W);
+        fp8::BLOCK_W);
 
     const auto& shape = input.logical_shape();
-    TT_FATAL(shape.size() >= 2, "per_token_cast_to_fp8: input rank must be >= 2, got {}", shape.size());
+    const auto rank = shape.size();
+    TT_FATAL(rank >= 2, "per_token_cast_to_fp8: input rank must be >= 2, got {}", rank);
 
-    auto [M, H] = common::infer_M_H(shape);
+    uint64_t M = 1;
+    for (size_t i = 0; i + 1 < rank; ++i) {
+        M *= static_cast<uint64_t>(shape[i]);
+        TT_FATAL(
+            M <= std::numeric_limits<uint32_t>::max(),
+            "per_token_cast_to_fp8: folded row count M={} exceeds uint32_t range",
+            M);
+    }
+    TT_FATAL(
+        static_cast<uint64_t>(shape[rank - 1]) <= std::numeric_limits<uint32_t>::max(),
+        "per_token_cast_to_fp8: hidden dim H={} exceeds uint32_t range",
+        shape[rank - 1]);
+
+    const uint32_t folded_M = static_cast<uint32_t>(M);
+    const uint32_t H = static_cast<uint32_t>(shape[rank - 1]);
     // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). H must
     // stay a multiple of the 128-element block width so scale blocks are always full.
     TT_FATAL(
-        H % common::BLOCK_W == 0,
+        H % fp8::BLOCK_W == 0,
         "per_token_cast_to_fp8: hidden dim H={} must be a multiple of BLOCK_W={}",
         H,
-        common::BLOCK_W);
-    TT_FATAL(M > 0, "per_token_cast_to_fp8: M must be > 0");
+        fp8::BLOCK_W);
+    TT_FATAL(folded_M > 0, "per_token_cast_to_fp8: M must be > 0");
 }
 
 void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_hit(
@@ -102,7 +133,7 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
             attrs.output_memory_config));
 
     TensorSpec scale_spec(
-        common::scale_shape_from_input(input_shape),
+        scale_output_shape(input_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),

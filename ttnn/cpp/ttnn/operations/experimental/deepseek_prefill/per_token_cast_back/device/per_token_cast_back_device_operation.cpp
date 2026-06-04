@@ -4,14 +4,17 @@
 
 #include "per_token_cast_back_device_operation.hpp"
 
+#include <cstdint>
+#include <limits>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
-namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
+namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8;
 
 namespace {
 
@@ -72,17 +75,15 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         tile_h,
         tile_w);
     TT_FATAL(
-        common::BLOCK_W % tile_w == 0,
-        "per_token_cast_back: tile width {} must divide BLOCK_W={}",
-        tile_w,
-        common::BLOCK_W);
+        fp8::BLOCK_W % tile_w == 0, "per_token_cast_back: tile width {} must divide BLOCK_W={}", tile_w, fp8::BLOCK_W);
     TT_FATAL(
         attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
 
     const auto& e4m3_shape = input_e4m3.logical_shape();
     const auto& scale_shape = input_scale.logical_shape();
-    TT_FATAL(e4m3_shape.size() >= 2, "per_token_cast_back: input_e4m3 rank must be >= 2");
+    const auto rank = e4m3_shape.size();
+    TT_FATAL(rank >= 2, "per_token_cast_back: input_e4m3 rank must be >= 2");
     TT_FATAL(
         e4m3_shape.size() == scale_shape.size(),
         "per_token_cast_back: input_e4m3 ({}D) and input_scale ({}D) must have the same rank",
@@ -103,14 +104,25 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). The
     // e4m3 width must equal scale_width * 128, which keeps H a multiple of the block width.
     TT_FATAL(
-        H == H_scale * common::BLOCK_W,
+        H == H_scale * fp8::BLOCK_W,
         "per_token_cast_back: e4m3 last dim ({}) must equal scale last dim ({}) * BLOCK_W ({})",
         H,
         H_scale,
-        common::BLOCK_W);
+        fp8::BLOCK_W);
 
-    auto [M, _] = common::infer_M_H(e4m3_shape);
-    TT_FATAL(M > 0, "per_token_cast_back: row count M must be > 0");
+    uint64_t folded_M = 1;
+    for (size_t i = 0; i + 1 < rank; ++i) {
+        folded_M *= static_cast<uint64_t>(e4m3_shape[i]);
+        TT_FATAL(
+            folded_M <= std::numeric_limits<uint32_t>::max(),
+            "per_token_cast_back: folded row count M={} exceeds uint32_t range",
+            folded_M);
+    }
+    TT_FATAL(
+        static_cast<uint64_t>(e4m3_shape[rank - 1]) <= std::numeric_limits<uint32_t>::max(),
+        "per_token_cast_back: hidden dim H={} exceeds uint32_t range",
+        e4m3_shape[rank - 1]);
+    TT_FATAL(static_cast<uint32_t>(folded_M) > 0, "per_token_cast_back: row count M must be > 0");
 }
 
 void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(

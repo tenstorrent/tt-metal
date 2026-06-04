@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
-#include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
 // per_token_cast_back: LLK implementation (promoted from the experiments/e4m3-cast grouped spike).
 // out = decode(input_e4m3) * scale, with one fp32 scale per token per 128 elements. Per tile_h x
@@ -22,7 +22,34 @@
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
-namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
+namespace fp8 = ttnn::operations::experimental::deepseek_prefill::per_token_cast_to_fp8;
+
+namespace {
+
+std::pair<uint32_t, uint32_t> fold_M_H(const ttnn::Shape& shape) {
+    uint64_t M = 1;
+    for (size_t i = 0; i + 1 < shape.size(); ++i) {
+        M *= static_cast<uint64_t>(shape[i]);
+    }
+    return {static_cast<uint32_t>(M), static_cast<uint32_t>(shape[shape.size() - 1])};
+}
+
+uint32_t rows_for_core_from_split(
+    const CoreCoord& core,
+    const CoreRangeSet& core_range_set_1,
+    const CoreRangeSet& core_range_set_2,
+    uint32_t rows_per_core_g1,
+    uint32_t rows_per_core_g2) {
+    if (core_range_set_1.contains(core)) {
+        return rows_per_core_g1;
+    }
+    if (core_range_set_2.contains(core)) {
+        return rows_per_core_g2;
+    }
+    return 0;
+}
+
+}  // namespace
 
 PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory::create(
     const PerTokenCastBackParams& operation_attributes,
@@ -36,7 +63,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     auto& output = tensor_return_value;
 
     const auto& shape = input_e4m3.logical_shape();
-    auto [M, H] = common::infer_M_H(shape);  // M = rows, H = width (last dim)
+    auto [M, H] = fold_M_H(shape);  // M = rows, H = width (last dim)
 
     // Tile / face dims come from the tensor's tile spec.
     const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
@@ -46,15 +73,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t face_h = face_shape[0];
     const uint32_t face_w = face_shape[1];
 
-    // M and H are now arbitrary; the last tile-row / column-block may be partial (zero-padded by the
-    // reader, written back only for real rows/columns by the writer). H stays a multiple of 128 so
-    // 128-element scale blocks are always full and the scale tensor's last dim is H/128.
-    TT_FATAL(
-        H % common::BLOCK_W == 0, "per_token_cast_back: H={} must be a multiple of BLOCK_W={}", H, common::BLOCK_W);
-
     // A block is exactly one 128-element block per row. The input_e4m3/output CBs keep one-tile
     // pages, and the reader fills the [tile_h x 128] block as one contiguous run.
-    constexpr uint32_t block_w = common::BLOCK_W;  // BlockW: 128 elements
+    constexpr uint32_t block_w = fp8::BLOCK_W;  // BlockW: 128 elements
 
     const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
     const uint32_t block_wt = block_w / tile_w;  // BlockWt: tiles across the 128-wide block
@@ -179,14 +200,13 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
 
     // Each core's rows form a flat stream of 128-element scale blocks read/written in tile_h-block batches.
-    const uint32_t scale_blocks_per_row = H / common::BLOCK_W;  // H / 128
+    const uint32_t scale_blocks_per_row = H / fp8::BLOCK_W;  // H / 128
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t row_offset = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
-        uint32_t rows_for_core = core_range_set_1.contains(core)
-                                     ? rows_per_core_g1
-                                     : (core_range_set_2.contains(core) ? rows_per_core_g2 : 0);
+        const uint32_t rows_for_core =
+            rows_for_core_from_split(core, core_range_set_1, core_range_set_2, rows_per_core_g1, rows_per_core_g2);
         const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_row;
         const uint32_t num_blocks = tt::div_up(total_scale_blocks, tile_h);  // last block may be partial
 
