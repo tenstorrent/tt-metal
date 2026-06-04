@@ -159,6 +159,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/examples/example/example_nanobind.cpp
     cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
     cpp/ttnn/operations/examples/examples_nanobind.cpp
+    cpp/ttnn/operations/matmul_decode/matmul_decode_nanobind.cpp
     cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
     cpp/ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp

@@ -307,6 +307,7 @@ target_link_libraries(
         TTNN::Ops::KvCache
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
+        TTNN::Ops::MatmulDecode
         TTNN::Ops::Moreh
         TTNN::Ops::Prefetcher
         TTNN::Ops::Reduction
@@ -573,6 +574,7 @@ add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/kv_cache)
 add_subdirectory(cpp/ttnn/operations/loss)
 add_subdirectory(cpp/ttnn/operations/matmul)
+add_subdirectory(cpp/ttnn/operations/matmul_decode)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/point_to_point)
