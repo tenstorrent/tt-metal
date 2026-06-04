@@ -406,13 +406,21 @@ class Pi0_5ModelTTNN:
 
         # ---- 2) Prefix attention mask (additive bf16) ----
         # Both ends of attention must be real (bidirectional within prefix).
-        pad_2d = pad_mask[:, None] & pad_mask[None, :]
-        prefix_mask = torch.zeros(prefix_padded, prefix_padded, dtype=torch.bfloat16)
-        prefix_mask[:prefix_len, :prefix_len].masked_fill_(~pad_2d, _MASK_VAL)
-        if prefix_padded > prefix_len:
-            prefix_mask[prefix_len:, :] = _MASK_VAL
-            prefix_mask[:, prefix_len:] = _MASK_VAL
-        prefix_mask_4d = prefix_mask.unsqueeze(0).unsqueeze(0)
+        # Fast path: if every prefix slot is a real token AND prefix is already
+        # tile-aligned, the mask is identically zero — skip uploading and let
+        # SDPA take its no-mask code path (~14 µs/call faster on the prefill
+        # SDPA op, see traces). The consumer at sample_actions handles None.
+        prefix_attn_mask_skipped = int(prefix_real_count) == prefix_len and prefix_padded == prefix_len
+        if prefix_attn_mask_skipped:
+            prefix_mask_4d = None
+        else:
+            pad_2d = pad_mask[:, None] & pad_mask[None, :]
+            prefix_mask = torch.zeros(prefix_padded, prefix_padded, dtype=torch.bfloat16)
+            prefix_mask[:prefix_len, :prefix_len].masked_fill_(~pad_2d, _MASK_VAL)
+            if prefix_padded > prefix_len:
+                prefix_mask[prefix_len:, :] = _MASK_VAL
+                prefix_mask[:, prefix_len:] = _MASK_VAL
+            prefix_mask_4d = prefix_mask.unsqueeze(0).unsqueeze(0)
 
         # ---- 3) Prefix RoPE table at cumsum(pad)-1 positions ----
         # Padding tokens are masked out so their position doesn't matter, but
@@ -468,9 +476,14 @@ class Pi0_5ModelTTNN:
                 memory_config=mem,
             )
 
-        # SDPA requires attention masks in DRAM.
+        # SDPA requires attention masks in DRAM. prefix_attn_mask may be None
+        # (when all prefix tokens are real and tile-aligned — see fast path
+        # above); the SDPA call site handles None as "no masking" and takes
+        # the kernel's fast path (~14 µs/call cheaper on the prefill op).
         return {
-            "prefix_attn_mask": _upload(prefix_mask_4d, ttnn.DRAM_MEMORY_CONFIG),
+            "prefix_attn_mask": _upload(prefix_mask_4d, ttnn.DRAM_MEMORY_CONFIG)
+            if prefix_mask_4d is not None
+            else None,
             "prefix_cos": _upload(prefix_cos, ttnn.DRAM_MEMORY_CONFIG),
             "prefix_sin": _upload(prefix_sin, ttnn.DRAM_MEMORY_CONFIG),
             "expert_attn_mask": _upload(expert_mask_4d, ttnn.DRAM_MEMORY_CONFIG),

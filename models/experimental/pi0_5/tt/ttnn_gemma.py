@@ -923,7 +923,21 @@ class GemmaBlockTTNN:
         if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
             m_tiles = m_padded // 32
             hidden_tiles = self.config.width // 32
-            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
+            # PI0_LN_INTERLEAVED_SMALL_M=1 forces interleaved LN at M_tiles==1 (the
+            # denoise expert case). The sharded path at M_tiles=1 runs on 8 cores
+            # but adds an I2S+S2I round-trip (~1.15 µs/LN); the interleaved op may
+            # win net on this shape. Toggle for perf A/B testing.
+            import os as _os
+
+            disable_small_m_sharded = (
+                _os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
+            )
+            if disable_small_m_sharded:
+                norm_cfg = None
+            else:
+                norm_cfg = build_sharded_norm_pcfg(
+                    m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles))
+                )
             if norm_cfg is not None:
                 pc, memcfg_factory, _grid = norm_cfg
                 self._rms_norm_sharded_pcfg = pc
@@ -1320,11 +1334,23 @@ class AdaRMSGemmaBlockTTNN:
             mod_owned = True
 
         # Lazy build of the sharded RMSNorm config keyed on actual M.
+        # PI0_LN_INTERLEAVED_SMALL_M=1 disables the sharded path at M_tiles=1
+        # (denoise suffix case): the sharded path runs on only 8 cores and adds
+        # an I2S input convert + S2I output convert (~1.15 µs/LN). At this size
+        # interleaved LN may net out faster — toggle for perf A/B testing.
         m_padded = hidden_states.shape[1] if len(hidden_states.shape) == 3 else hidden_states.shape[2]
         if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
             m_tiles = m_padded // 32
             hidden_tiles = self.config.width // 32
-            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=max(1, m_tiles))
+            import os as _os
+
+            disable_small_m_sharded = (
+                _os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
+            )
+            if disable_small_m_sharded:
+                norm_cfg = None
+            else:
+                norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=max(1, m_tiles))
             if norm_cfg is not None:
                 pc, memcfg_factory, _grid = norm_cfg
                 self._rms_norm_sharded_pcfg = pc

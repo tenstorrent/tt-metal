@@ -151,6 +151,25 @@ def sdpa_prefill_chunk_sizes(
     k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
     q_chunk = min(base_q, q_aligned)
     k_chunk = min(base_k, k_aligned)
+    # Divisor-aware k_chunk: SDPA does not short-circuit on masked positions —
+    # if k_chunk does not divide k_aligned the last K-iter still processes the
+    # full k_chunk columns and masks the trailing ones, wasting compute. Prefer
+    # the largest power-of-2 ≤ base_k that divides k_aligned cleanly. For the
+    # pi0.5 denoise step (k_aligned=544): 544 % 128 = 32 → drops to 32, the
+    # only power-of-2 ≤ 128 that divides 544; cuts denoise SDPA ~1.7×. Power-
+    # of-2 candidates only — non-pow2 tile-aligned chunks (e.g. 96) trip the
+    # kernel's CB heuristics on some shapes.
+    if k_aligned % k_chunk != 0:
+        for cand in (256, 128, 64, 32):
+            if cand > base_k:
+                continue
+            if cand < tile:
+                break
+            if k_aligned % cand == 0:
+                k_chunk = cand
+                break
+        else:
+            k_chunk = tile
     return max(q_chunk, tile), max(k_chunk, tile)
 
 
