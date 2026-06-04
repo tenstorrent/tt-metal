@@ -27,7 +27,6 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
 
@@ -117,9 +116,9 @@ void kernel_main() {
     cb_pop_front(cb_mean, Ht);
 
     // ---------- Drain cb_variance → cb_out ----------
-    // Helper handles wait/pop on cb_variance, DST-register dance, format
-    // reconfig, and reserve/push on cb_out.
-    ckl::copy_tiles<ckl::CopyInputPolicy::WaitAndPop>(cb_variance, cb_out, Ht);
+    // Per-tile streaming copy with input + output format reconfig (chain owns
+    // wait/pop on cb_variance and reserve/push on cb_out).
+    ckl::copy<cb_variance, cb_out>(Ht);
 
     cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
 }

@@ -10,10 +10,10 @@
 // Supports: add(0), sub(1), mul(2), square(3), sfpu_square(4)
 // Supports: in_place(1) and normal(0) modes
 //
-// The binary work is expressed through compute_kernel_lib's eltwise convenience
-// layer (add/sub/mul/square -> eltwise_chain). The op_code/bcast_code/in_place
-// dispatch behavior is preserved exactly; the raw SFPU-square branch (op_code==4)
-// stays raw (it never used a binary helper).
+// All compute is expressed through compute_kernel_lib's eltwise convenience layer:
+// add/sub/mul/square (FPU) -> eltwise_chain, the SFPU-square branch (op_code==4) ->
+// unary<Square>, and the input/output copy phases -> copy<>. The op_code/bcast_code/
+// in_place dispatch behavior is preserved exactly.
 //
 // binary_op_helpers BinaryInputPolicy -> eltwise InputLifecycle mapping used here:
 //   WaitAndPopPerTile   -> Streaming      (A operand, per-tile front-relative; OperandKind::Scalar)
@@ -26,7 +26,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square (SFPU unary)
 
 namespace ckl = compute_kernel_lib;
 using namespace compute_kernel_lib;
@@ -195,27 +195,28 @@ void kernel_main() {
         // === IN-PLACE MODE ===
         compute_kernel_hw_startup(cb_input, cb_work);
 
-        // Phase 1: Copy A tiles from cb_input → cb_work
-        copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::NONE>(cb_input, cb_work, total_a_tiles);
+        // Phase 1: Copy A tiles from cb_input → cb_work (per-tile streaming, no reconfig).
+        ckl::copy<
+            cb_input,
+            cb_work,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::PackTileReconfig::None>(total_a_tiles);
 
         // Phase 2: In-place op on cb_work (reconfig handles format transition)
         if constexpr (op_code == 4) {
-            // SFPU SQUARE: unary square via SFPU (copy to DEST, square_tile, pack back)
-            // In-place pop-before-pack cycle, same as binary but using SFPU math.
-            square_tile_init();
-            for (uint32_t i = 0; i < total_a_tiles; ++i) {
-                cb_wait_front(cb_work, 1);
-                tile_regs_acquire();
-                copy_tile(cb_work, 0, 0);
-                square_tile(0);
-                cb_pop_front(cb_work, 1);
-                tile_regs_commit();
-                tile_regs_wait();
-                cb_reserve_back(cb_work, 1);
-                pack_tile(0, cb_work);
-                cb_push_back(cb_work, 1);
-                tile_regs_release();
-            }
+            // SFPU SQUARE (in-place): copy to DEST, square_tile, pack back to cb_work.
+            ckl::unary<
+                ckl::Square<>,
+                cb_work,
+                cb_work,
+                ckl::CopyTileReconfig::None,
+                ckl::OperandKind::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::PackTileReconfig::None>(shape);
         } else if constexpr (op_code == 3) {
             // FPU SQUARE: cb_work = cb_work * cb_work (binary MUL with same operand, in-place)
             ckl::square<cb_work, cb_work>(shape);
@@ -223,19 +224,31 @@ void kernel_main() {
             op_in_place<op_code, bcast_code, cb_work, cb_b>(shape);
         }
 
-        // Phase 3: Copy modified tiles from cb_work → cb_out
-        copy_tile_to_dst_init_short(cb_work);
-        copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::OUTPUT>(cb_work, cb_out, total_a_tiles);
+        // Phase 3: Copy modified tiles from cb_work → cb_out (per-tile streaming, output reconfig).
+        ckl::copy<
+            cb_work,
+            cb_out,
+            ckl::CopyTileReconfig::None,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::PackTileReconfig::Output>(total_a_tiles);
 
     } else {
         // === NORMAL (NON-IN-PLACE) MODE ===
         compute_kernel_hw_startup(cb_input, cb_b, cb_out);
 
         if constexpr (op_code == 4) {
-            // SFPU SQUARE (non-in-place): copy to DEST, square_tile, pack to cb_out
-            square_tile_init();
-            copy_tiles<CopyInputPolicy::WaitAndPop, CopyDataFormatReconfig::NONE>(
-                cb_input, cb_out, total_a_tiles, [](uint32_t dst_idx) { square_tile(dst_idx); });
+            // SFPU SQUARE (non-in-place): copy to DEST, square_tile, pack to cb_out.
+            ckl::unary<
+                ckl::Square<>,
+                cb_input,
+                cb_out,
+                ckl::CopyTileReconfig::None,
+                ckl::OperandKind::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::PackTileReconfig::None>(total_a_tiles);
         } else if constexpr (op_code == 3) {
             // FPU SQUARE: cb_out = cb_input * cb_input
             ckl::square<cb_input, cb_out>(shape);
