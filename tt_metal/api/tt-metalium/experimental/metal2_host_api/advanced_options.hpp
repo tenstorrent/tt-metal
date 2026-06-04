@@ -9,7 +9,6 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -50,7 +49,9 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
+    using NodeSpecificThreadCount = std::pair<Nodes, uint32_t>;  // {node_set, num_threads}
+    using NodeSpecificThreadCounts = std::vector<NodeSpecificThreadCount>;
+    NodeSpecificThreadCounts node_specific_thread_counts;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -92,8 +93,9 @@ struct KernelAdvancedOptions {
     // not listed default to num_runtime_varargs.
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
+    using NumVarargsPerNode = std::vector<std::pair<Nodes, uint32_t>>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
+    NumVarargsPerNode num_runtime_varargs_per_node;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Multi-threaded self-loop DFBs on compute kernels
@@ -115,12 +117,19 @@ struct KernelAdvancedOptions {
     // is present in the API for completeness, to surface any use cases that may arise.
     enum class DFBSelfLoopScope { INTRA, INTER };
 
-    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    Table<DFBSpecName, DFBSelfLoopScope> dfb_self_loop_connectivities;
+    struct DFBSelfLoopConnectivity {
+        DFBSpecName dfb_spec_name;
+        DFBSelfLoopScope scope = DFBSelfLoopScope::INTRA;
+        // If the INTER case were enabled, we would need an additional field to describe
+        // the inter-thread communication pattern here.
+    };
+    // Self-loop DFBs on compute kernels — see DFBSelfLoopConnectivity above.
+    std::vector<DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
 
 // (Convenience aliases for nested types)
 using DFBSelfLoopScope = KernelAdvancedOptions::DFBSelfLoopScope;
+using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -148,17 +157,20 @@ struct AdvancedKernelRunArgs {
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
-    using Varargs = std::vector<uint32_t>;
-
     // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
     // Specified per-node; length can vary per-node (as declared in schema).
-    Table<NodeCoord, Varargs> runtime_varargs;
+    struct NodeVarargs {
+        NodeCoord node;
+        std::vector<uint32_t> args;
+    };
+    std::vector<NodeVarargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)
     // Broadcast to every node the kernel runs on.
-    Varargs common_runtime_varargs;
+    using CommonVarargs = std::vector<uint32_t>;
+    CommonVarargs common_runtime_varargs;
 };
 
 struct SemaphoreAdvancedOptions {
