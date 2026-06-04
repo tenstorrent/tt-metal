@@ -30,9 +30,19 @@ static constexpr uint32_t FNV1A32_INIT = 0x811c9dc5u;
 static constexpr uint32_t FNV1A32_PRIME = 0x01000193u;
 #endif
 
-// Scalar FNV-1a-32 over a circular buffer's L1 bytes, printed via DPRINT.
-// fifo_rd_ptr / fifo_page_size on TRISC are stored in 16B units; shift by
-// cb_addr_shift (== CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT == 4) to get bytes.
+/**
+ * @brief Scalar FNV-1a-32 over a circular buffer's L1 bytes, printed via DPRINT.
+ *
+ * Pure RISC-V; touches no Tensix Engine state. fifo_rd_ptr / fifo_page_size on
+ * TRISC are stored in 16B units, so they are shifted by cb_addr_shift
+ * (== CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT == 4) to get bytes.
+ *
+ * @param cb_id: Circular buffer to hash.
+ * @param num_tiles: Number of tiles from the front of the CB to include.
+ * @param label: Caller tag echoed in the DPRINT line.
+ * @note Runs on whichever TRISC dispatches it; defaults to UNPACK (the thread
+ *       with a DPRINT buffer and a populated fifo_rd_ptr).
+ */
 inline void llk_hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
 #ifdef DEBUG_CB_HASH
     const uint32_t base_bytes = get_local_cb_interface(cb_id).fifo_rd_ptr << cb_addr_shift;

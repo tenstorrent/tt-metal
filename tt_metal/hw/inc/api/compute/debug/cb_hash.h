@@ -24,35 +24,28 @@
 namespace ckernel {
 
 // ===========================================================================
-// CB hash probes for bisecting non-deterministic kernels.
+// CB hash probes for bisecting non-deterministic kernels. Both hash an input
+// CB's contents and are gated on the compile flag DEBUG_CB_HASH (zero overhead
+// when off). Pick the variant by what you can afford to disturb:
 //
-// Both probes hash the L1 bytes of an input CB, DPRINT the result in a stable
-// diff-friendly format, and are gated on the compile flag DEBUG_CB_HASH (zero
-// overhead when off).
+//   hash_cb_trisc()  — TRISC scalar, no Tensix Engine state touched. Runs as
+//                      plain RISC-V on the UNPACK thread (override possible) and
+//                      DPRINTs the hash in a diff-friendly line:
+//                          hash[<label hex>] cb=<cb dec> tiles=<n dec> = <hash hex>
+//                      Cheap to drop in anywhere; the safe default when the SFPU
+//                      or DEST pipeline is itself under suspicion.
+//                      Algorithm: FNV-1a-32 (single u32, full 32-bit).
 //
-// Pick the variant by what you can afford to disturb and what you want to
-// catch:
-//
-//   hash_cb_trisc()       — TRISC scalar, no Tensix Engine state touched.
-//                     Runs as plain RISC-V on the UNPACK thread (override
-//                     possible). Cheap to drop in anywhere. Use when you
-//                     want a baseline hash that does not perturb the
-//                     compute pipeline.
-//                     Algorithm: FNV-1a-32 (single u32, full 32-bit).
-//
-//   hash_cb_sfpu()  — Lanewise SFPU hash on MATH, with a DEST → L1 → UNPACK
-//                     round trip. Exercises the same TRISC pipeline as
-//                     production compute (SFPU + DEST + cross-TRISC L1
-//                     handoff), so it can surface races that
-//                     hash_cb_trisc hides. Uses DEST and SFPU LReg state —
-//                     unsuitable when those are themselves under suspicion.
-//                     Algorithm: 23-bit FNV-like ("FNV23"), driven by the
-//                     SFPU multiplier width (SFPMUL24 on BH; shift-and-add
-//                     on WH). Not bit-equal to hash_cb_trisc — only compare
-//                     SFPU-hashes to SFPU-hashes.
-//
-// Output format (both variants):
-//     hash[<label hex>] cb=<cb_id dec> tiles=<n dec> = <hash hex>
+//   hash_cb_sfpu()   — Lanewise SFPU hash on MATH. Exercises the same TRISC
+//                      pipeline as production compute (SFPU + DEST + the
+//                      DEST -> PACK -> L1 path), so it can surface races that
+//                      hash_cb_trisc hides. Uses DEST and SFPU LReg state —
+//                      unsuitable when those are themselves under suspicion.
+//                      Does not print: it leaves a result tile in DEST for the
+//                      caller to pack out and XOR-fold host-side.
+//                      Algorithm: 23-bit FNV-like ("FNV23"), driven by the SFPU
+//                      multiplier width (SFPMUL24 on BH; shift-and-add on WH).
+//                      Not bit-equal to hash_cb_trisc — compare SFPU to SFPU only.
 // ===========================================================================
 
 // clang-format off
@@ -75,11 +68,11 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument  | Description                                              | Type     | Valid Range | Required |
- * |-----------|----------------------------------------------------------|----------|-------------|----------|
- * | cb_id     | The index of the circular buffer (CB) to hash            | uint32_t | 0 to 31     | True     |
- * | num_tiles | The number of tiles from the front of the CB to include  | uint32_t | >= 1        | True     |
- * | label     | A caller-chosen tag to identify this probe in the output | uint32_t | any         | True     |
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
+ * | Function | cb_id | Index of the circular buffer to hash | uint32_t | 0 to 31 | True |
+ * | Function | num_tiles | Tiles from the front of the CB to include | uint32_t | >= 1 | True |
+ * | Function | label | Caller tag echoed in the DPRINT line | uint32_t | any | True |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
@@ -121,10 +114,10 @@ ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  *
  * Return value: None
  *
- * | Argument  | Description                                              | Type     | Valid Range | Required |
- * |-----------|----------------------------------------------------------|----------|-------------|----------|
- * | in_cb     | CB holding the tiles to hash (INT32 format expected)     | uint32_t | 0 to 31     | True     |
- * | num_tiles | The number of tiles from the front of in_cb to include   | uint32_t | >= 1        | True     |
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
+ * | Function | in_cb | CB holding the tiles to hash (INT32 format expected) | uint32_t | 0 to 31 | True |
+ * | Function | num_tiles | Tiles from the front of in_cb to include | uint32_t | >= 1 | True |
  */
 // clang-format on
 #ifndef ARCH_QUASAR

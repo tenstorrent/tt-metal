@@ -4,7 +4,8 @@
 # Standalone LLK test for the SFPU-backed CB hash (23-bit FNV23).
 #
 # The kernel folds each INT32 tile into 32 per-lane FNV23 accumulators on the
-# SFPU (SFPLOAD / SFPXOR / shift-and-add, masked to 23 bits), then writes the
+# SFPU (SFPLOAD / SFPXOR / multiply — SFPMUL24 on BH, shift-and-add on WH —
+# masked to 23 bits), then writes the
 # accumulators back into DEST row 0 (the rest of the tile zeroed) and lets the
 # standard packer move the tile to L1. The host XOR-folds the whole result tile:
 # the zeroed rows contribute nothing, so the fold equals XOR(32 accumulators) —

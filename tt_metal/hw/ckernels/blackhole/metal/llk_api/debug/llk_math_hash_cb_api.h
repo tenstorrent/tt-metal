@@ -14,28 +14,28 @@
 // ===========================================================================
 // LLK MATH HASH CB (SFPU) — MATH-side surface for hash_cb_sfpu.
 //
-// Wraps the SFPU-backed FNV23 lanewise hash in llk_lib/debug/
-// llk_math_hash_cb.h. Orchestration (UNPACK + cross-thread handoff) is in
-// api/compute/debug/cb_hash.h; see that header for the user-facing contract.
-//
-// Call sequence:
-//   1. llk_math_hash_cb_init()                — seed per-lane accumulators
-//   2. llk_math_hash_cb_tile(dst_tile_idx)    — fold one DEST tile in
-//      (per input tile)
-//   3. llk_math_hash_cb_store_to_dest()       — write the 32 per-lane
-//                                              accumulators back into DEST
-//                                              (row 0; rest zeroed) for the
-//                                              packer to move to L1
+// Wraps the SFPU-backed FNV23 lanewise hash in llk_lib/debug/llk_math_hash_cb.h.
+// Orchestration is in api/compute/debug/cb_hash.h; see that header for the
+// user-facing contract. Call order: init -> tile (per input tile) -> store_to_dest.
 // ===========================================================================
 
+/**
+ * @brief Seed the per-lane FNV23 accumulators and configure DEST addressing.
+ *
+ * @pre Call once before any @ref llk_math_hash_cb_tile.
+ */
 inline void llk_math_hash_cb_init() {
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_init_();
 #endif
 }
 
-// Accumulate one DEST tile (already unpacked to DEST at `dst_tile_idx`, INT32
-// format) into the 32 per-lane FNV23 accumulators.
+/**
+ * @brief Fold one INT32 DEST tile into the 32 per-lane FNV23 accumulators.
+ *
+ * @param dst_tile_idx: DEST tile slot holding the input (the orchestration uses slot 0).
+ * @pre @ref llk_math_hash_cb_init, and the tile already datacopied into DEST.
+ */
 inline void llk_math_hash_cb_tile(uint32_t dst_tile_idx) {
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_tile_(dst_tile_idx);
@@ -44,9 +44,15 @@ inline void llk_math_hash_cb_tile(uint32_t dst_tile_idx) {
 #endif
 }
 
-// Write the 32 per-lane accumulators back into DEST (row 0; the rest of the
-// tile zeroed) so the standard packer can move the result tile to L1, where a
-// scalar consumer XOR-folds it. See api/compute/debug/cb_hash.h.
+/**
+ * @brief Write the 32 per-lane accumulators back into DEST for the packer.
+ *
+ * Leaves the accumulators in DEST row 0 (rest of the tile zeroed) so the packer
+ * can move the tile to L1, where a scalar consumer XOR-folds it.
+ *
+ * @pre @ref llk_math_hash_cb_tile has folded all input tiles.
+ * @post Caller packs DEST; see api/compute/debug/cb_hash.h.
+ */
 inline void llk_math_hash_cb_store_to_dest() {
 #ifdef DEBUG_CB_HASH
     ckernel::sfpu::_llk_math_hash_cb_store_to_dest_();
