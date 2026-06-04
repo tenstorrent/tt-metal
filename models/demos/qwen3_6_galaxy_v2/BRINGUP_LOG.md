@@ -3,6 +3,40 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-04 (cont.2) — full prefill forward runs end-to-end (eager, batch-1); device wedged on final confirm
+
+Drove the request prefill all the way through the model on the 32-chip mesh
+(eager, batch-1). Each blocker below was diagnosed against the WORKING demo
+(`text_demo_qwen36.py::_run_prefill`) and fixed by matching it. Fixes committed
+(tt-metal model + tt-inference-server catalog/plugin):
+
+1. **delta-attn user_id** ttnn-tensor → int row 0 (batch-1) — `qwen36_delta_attention.py`.
+2. **GDN seq-prefill L1 clash** → `QWEN36_GDN_SEQ_PREFILL=0` (ttnn chunk path).
+3. **prefill trace-capture** GDN clash → eager prefill (`_disable_prefill_tracing`,
+   generator_vllm) + worker `trace_mode=false`.
+4. **partial-RoPE subtile broadcast** → `get_or_create_prefill_rot_mats` now
+   builds the demo's partial cos/sin (rope_dim=64, `build_mrope_cos_sin`) and the
+   qwen36 attention slices to seq T (`llama_model.py`, `llama_attention.py`).
+5. **paged_fill_cache** ttnn-tensor user_id → `batch_idx_tensor=` (`llama_attention.py`).
+6. **distributed-norm all_gather hang** → `fabric_config: FABRIC_1D_RING`
+   (match the demo's `set_fabric_config`).
+7. **on-device sampling %32 / batch-32 warmup** → skip built-in warmup
+   (`prefill_warmup_completed=True`) + host sampling; `max_concurrency=1`
+   (max_batch_size=32 L1-OOMs the per-batch activation buffers at 256k).
+8. **ModelRunnerOutput** dropped `spec_token_ids` kwarg (vLLM API drift).
+
+**Result:** on the run before fix #8, the **full prefill forward completed on
+device and produced sampled tokens** — the only error was the #8 output kwarg,
+now fixed. The server is **code-complete for batch-1**; a single clean run
+should return the completion.
+
+**BLOCKER (hardware, not code):** the repeated `tt-smi -r` between dirty engine
+deaths wedged the galaxy — `tt-smi -glx_reset` now reports `ARC Status: 0/1
+initialized` and `Read 0xffffffff over PCIe ID 0: the board should be reset`.
+A board dropped off PCIe; software reset can't recover it. **Needs a host
+power-cycle / IPMI reset.** After recovery: relaunch (command in the prior
+entry) → curl should return "Paris" → then ISL-256k benchmarks.
+
 ## 2026-06-04 (cont.) — server reaches the model prefill forward; blocked on V2 prefill-kernel bugs
 
 After clearing ALL vLLM-plugin drift (below), the server now loads + schedules +

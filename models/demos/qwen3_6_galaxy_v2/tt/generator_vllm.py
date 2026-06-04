@@ -136,6 +136,12 @@ class Qwen3_5ForConditionalGeneration(Generator):
         # _disable_prefill_tracing hook. Decode is also eager (worker
         # override_tt_config.trace_mode=false).
         inst._disable_prefill_tracing = True
+        # Skip the built-in prefill warmup: it is hardcoded for batch-32 (loops
+        # batch in (1,32) + forces on-device sampling which asserts
+        # max_batch_size % 32 == 0). For batch-1 serving we sample on host
+        # (sample_on_device_mode=None), so warmup is unnecessary; the first
+        # request prefills directly (eager).
+        inst.prefill_warmup_completed = True
         return inst
 
     @property

@@ -27,6 +27,91 @@ def _qwen36_kv_cache_dtype():
     return ttnn.bfloat8_b if os.environ.get("QWEN36_KV_BF8", "0") == "1" else ttnn.bfloat16
 
 
+def _fa_debug_row_diff(tag, x, mesh_device, row_axis=-2, n_rows=4):
+    """BATCH-N decode localizer (env ``QWEN36_FA_DEBUG=1``).
+
+    Gather ``x`` to host (per-device-row copy, concat on the last dim so each
+    chip's shard is laid side-by-side) and print, for the first ``n_rows`` rows
+    along ``row_axis``, the max-abs-diff of row i vs row 0. With identical-in /
+    identical-KV across users, EVERY row must equal row 0 (diff ~0); the FIRST
+    op whose print shows a large row1-vs-row0 diff is the op that fails to thread
+    the user batch. Pure host-side readout — no device-state mutation — so it is
+    safe to drop anywhere in the forward (eager only; do NOT run under trace).
+    """
+    if os.environ.get("QWEN36_FA_DEBUG", "0") != "1":
+        return
+    try:
+        t = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+        sh = list(t.shape)
+        ax = row_axis if row_axis >= 0 else t.dim() + row_axis
+        R = t.shape[ax]
+        idx0 = [slice(None)] * t.dim()
+        idx0[ax] = 0
+        r0 = t[tuple(idx0)].float()
+        diffs = []
+        for i in range(1, min(n_rows, R)):
+            idxi = [slice(None)] * t.dim()
+            idxi[ax] = i
+            ri = t[tuple(idxi)].float()
+            diffs.append((i, float((ri - r0).abs().max().item())))
+        print(
+            f"[QWEN36_FA_DEBUG] {tag}: shape={sh} row_axis={ax} R={R}  "
+            f"row_i-vs-row0 maxabsdiff={diffs}  row0_absmax={float(r0.abs().max().item()):.4f}"
+        )
+    except Exception as e:  # never let instrumentation break the forward
+        print(f"[QWEN36_FA_DEBUG] {tag}: gather failed ({type(e).__name__}: {e})")
+
+
+def _fa_debug_route(tag, page_table, current_pos, mesh_device, n_rows=8):
+    """BATCH-N decode KV-ROUTING localizer (env ``QWEN36_FA_DEBUG=1``).
+
+    The batch-32 decode KV write/SDPA read ``page_table[my_batch_idx]`` and
+    ``current_pos[my_batch_idx]`` for ``my_batch_idx`` 0..N-1 ON EVERY DEVICE
+    (one user per height-shard core). For that to route each user's K/V into
+    THAT user's page, every device must hold ALL N users' page_table rows and
+    current_pos entries (replicated). This probe gathers page_table /
+    current_pos PER DEVICE (concat on dim 0) and prints the first ``n_rows``
+    rows of device 0 vs device 1 (= mesh column 0 vs column 1).
+
+    EXPECTED IF CORRECT: device0 and device1 hold the SAME N rows.
+    BUG SIGNATURE (suspected): page_table/current_pos are batch-sharded across
+    the 4 mesh columns (``prepare_decode_inputs_host`` dims=(None,-2) / (None,0)),
+    so device0 holds users 0..7 in rows 0..7 while device1 holds users 8..15 in
+    rows 0..7 — i.e. row ``r`` on column ``c`` is user ``8*c + r``, NOT user
+    ``r``. The op then writes column c's K/V for shard-core r (which carries the
+    REPLICATED user r) into user ``8*c+r``'s page → wrong KV for most users,
+    out-of-range page rows for shard idx >= 8 → fully garbage users.
+    """
+    if os.environ.get("QWEN36_FA_DEBUG", "0") != "1":
+        return
+    try:
+        pt = ttnn.to_torch(page_table, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        cp = ttnn.to_torch(current_pos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        # page_table per-device row count = pt.shape[-2] (sharded) ; reshape so dim0=device.
+        print(
+            f"[QWEN36_FA_DEBUG] {tag}: page_table gathered shape={list(pt.shape)} "
+            f"current_pos gathered shape={list(cp.shape)}"
+        )
+        # Heuristic device-split: ConcatMeshToTensor(dim=0) stacks per-device along dim0.
+        # Print the leading rows of the first two device shards for page_table col-0 and
+        # the leading current_pos entries — if column-sharded these differ between devices.
+        pt_flat = pt.reshape(-1, pt.shape[-1]) if pt.dim() >= 2 else pt.reshape(-1, 1)
+        cp_flat = cp.reshape(-1)
+        ndev = mesh_device.get_num_devices()
+        rows_per_dev = max(1, pt_flat.shape[0] // ndev)
+        for d in (0, 1):
+            r0 = d * rows_per_dev
+            seg = pt_flat[r0 : r0 + min(n_rows, rows_per_dev), 0].tolist()
+            print(f"[QWEN36_FA_DEBUG] {tag}: dev{d} page_table[:, col0] rows={seg}")
+        cps_per_dev = max(1, cp_flat.shape[0] // ndev)
+        for d in (0, 1):
+            c0 = d * cps_per_dev
+            seg = cp_flat[c0 : c0 + min(n_rows, cps_per_dev)].tolist()
+            print(f"[QWEN36_FA_DEBUG] {tag}: dev{d} current_pos[:{n_rows}]={seg}")
+    except Exception as e:
+        print(f"[QWEN36_FA_DEBUG] {tag}: route gather failed ({type(e).__name__}: {e})")
+
+
 # ---------------------------------------------------------------------------
 # qwen3.6 internal helpers (ported from
 # ``models/demos/qwen3_6_galaxy/tt/llama_attention.py`` — PCC-verified in v1)
@@ -67,23 +152,33 @@ def _qwen36_qknorm_flat_to_heads(
         x_normed_3d.deallocate(True)
         return out
 
-    # V2-11 (lever H): batched rms_norm path. Treat each head as its own
-    # batch element. The data ordering matches: [B, T, n_heads*hd] flat
-    # has head 0 at offset 0, head 1 at offset hd, ..., so reshape to
-    # [B*n_heads, T, hd] preserves head boundaries.
-    x_per_head = ttnn.reshape(x_flat, [B * n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # BATCH-32 FIX: the flat layout ``[B, T, n_heads*hd]`` packs heads in the
+    # INNER (last) dim — for a fixed (b, t) the 768 elements are
+    # ``[head0(hd), head1(hd), head2(hd)]``. The old "fast path" reshaped
+    # ``[B, T, n*hd] -> [B*n, T, hd]`` which only preserves head boundaries when
+    # ``T == 1``. For ``T > 1`` (prefill seq OR batch-N decode where N users live
+    # in dim-2) that reshape SCRAMBLES head/T: it produces a cyclic head rotation
+    # per row (row 0 stays head-ordered, rows 1..T-1 get rotated heads), which is
+    # exactly the batch-32 decode "row 0 valid, rows 1..N-1 garbage" failure.
+    #
+    # The correct transform of ``[B, T, n*hd] -> [B, n, T, hd]`` is
+    # ``reshape([B, T, n, hd]).permute(0, 2, 1, 3)``. rms_norm is per-row over the
+    # last dim (hd), so we run it on the ``[B, T, n, hd]`` view (last dim hd,
+    # weight broadcast over the B/T/n rows) BEFORE the permute. At ``T == 1`` this
+    # is byte-identical to the old fast path (verified), so N=1 decode is
+    # unchanged.
+    x_thd = ttnn.reshape(x_flat, [B, T, n_heads, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
     x_normed = ttnn.rms_norm(
-        x_per_head,
+        x_thd,
         weight=weight,
         epsilon=eps,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=compute_kernel_config,
     )
-    x_per_head.deallocate(True)
-    # Reshape back to [B, n_heads, T, hd].
-    out = ttnn.reshape(x_normed, [B, n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    if out is not x_normed:
-        x_normed.deallocate(True)
+    x_thd.deallocate(True)
+    # Permute [B, T, n_heads, hd] -> [B, n_heads, T, hd].
+    out = ttnn.permute(x_normed, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x_normed.deallocate(True)
     return out
 
 
@@ -100,11 +195,16 @@ def _qwen36_flat_to_heads(x_flat, B: int, n_heads: int, T: int, hd: int):
         view_4d.deallocate(True)
         return out
 
-    # V2-11: pure reshape — same data ordering. ttnn.reshape allows non-
-    # tile-aligned reshapes for ROW_MAJOR; the input here is TILE_LAYOUT
-    # from the preceding linear / slice, so we go via [B*n_heads, T, hd]
-    # which IS tile-aligned in the last dim (hd is tile-multiple).
-    out = ttnn.reshape(x_flat, [B, n_heads, T, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # BATCH-32 FIX (sibling of qknorm_flat_to_heads): the flat layout packs heads
+    # in the INNER dim, so ``[B, T, n*hd] -> [B, n, T, hd]`` is
+    # ``reshape([B, T, n, hd]).permute(0, 2, 1, 3)`` — NOT a bare reshape to
+    # ``[B, n, T, hd]`` (that scrambles head/T for T>1, cyclically rotating heads
+    # per row). At T==1 both are identical, so N=1 is unchanged. (qwen3.6 only
+    # calls this with n_heads==1 today, which hits the branch above; this branch
+    # is kept correct for n_heads>1 robustness.)
+    x_thd = ttnn.reshape(x_flat, [B, T, n_heads, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.permute(x_thd, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    x_thd.deallocate(True)
     return out
 
 
@@ -335,6 +435,11 @@ class TtLlamaAttention(LightweightModule):
             ccl_t = getattr(configuration, "ccl_topology", None)
             self.ccl_topology = ccl_t() if callable(ccl_t) else ccl_t
             self.is_multichip = getattr(configuration, "is_multichip", self.num_devices > 1)
+            # BATCH-32 decode: capture the sub-core grid + start core so the
+            # decode KV-write can height-shard the N user-batch rows one-per-core
+            # (mirrors the SCORES_BATCHED_MM_OUTPUT_MEMCFG core layout).
+            self.start_core = getattr(configuration, "start_core", None)
+            self.sub_core_grids = getattr(configuration, "sub_core_grids", None)
         else:
             self.grid_size = configuration.max_grid_size
 
@@ -1319,9 +1424,14 @@ class TtLlamaAttention(LightweightModule):
             use_chunk_for_fill = chunk_start_idx is not None and chunk_start_idx > 0
             fill_page_table = chunk_page_table if (use_chunk_for_fill and chunk_page_table is not None) else page_table
 
-            # Each shard gets one row, which is locally at index 0
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx=0)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, fill_page_table, batch_idx=0)
+            # Batch-32 per-user prefill: write THIS user's KV into user_id's paged
+            # blocks (page_table is replicated, so batch_idx=user_id selects
+            # page_table[user_id]'s physical blocks). The legacy batch_idx=0 wrote
+            # every user's KV into user-0's blocks → users 1..31's blocks stayed
+            # garbage → full-attn exploded (absmean 1e19 at the first full-attn
+            # layer). At batch-1/user_id=0 this is byte-identical.
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill, fill_page_table, batch_idx=user_id)
 
         else:
             ttnn.fill_cache(
@@ -1658,6 +1768,14 @@ class TtLlamaAttention(LightweightModule):
                 "TtLlamaAttention(is_qwen36=True) needs ``self.rope_setup`` set by the "
                 "decoder (V2-decoder wave). Forward path cannot apply partial RoPE without it."
             )
+        # cos/sin tables are cached for the full [0, max_seq_len) range; slice to
+        # this prefill window's seq length T. For prefix-caching (start_pos>0)
+        # model.forward already sliced rot_mats to [start:max], so [:T] here
+        # yields [start:start+T]. (Demo builds exact-seq tables; we slice cached.)
+        if cos_tt.shape[-2] != T:
+            _cs, _ss = list(cos_tt.shape), list(sin_tt.shape)
+            cos_tt = ttnn.slice(cos_tt, [0, 0, 0, 0], [_cs[0], _cs[1], T, _cs[3]])
+            sin_tt = ttnn.slice(sin_tt, [0, 0, 0, 0], [_ss[0], _ss[1], T, _ss[3]])
         q_rot = rope_setup.partial_rope_apply(q_rot_pre, cos_tt, sin_tt)
         k_rot = rope_setup.partial_rope_apply(k_rot_pre, cos_tt, sin_tt)
         q_rot_pre.deallocate(True)
@@ -1673,8 +1791,19 @@ class TtLlamaAttention(LightweightModule):
         # bf8 cache (the kernel quantizes on write — see fill_cache device op
         # dtype assert: input fp32/bf16 OR cache bf8/bf4), so no producer cast.
         if page_table is not None:
-            ttnn.experimental.paged_fill_cache(keys_cache, k_rot, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_cache, v_t, page_table, batch_idx=user_id)
+            # user_id is an int on the demo/eager path (batch_idx=) but a
+            # ttnn.Tensor on the vLLM Generator path; the device-tensor form
+            # must go through batch_idx_tensor=.
+            if isinstance(user_id, ttnn.Tensor):
+                ttnn.experimental.paged_fill_cache(
+                    keys_cache, k_rot, page_table, batch_idx_tensor=user_id
+                )
+                ttnn.experimental.paged_fill_cache(
+                    values_cache, v_t, page_table, batch_idx_tensor=user_id
+                )
+            else:
+                ttnn.experimental.paged_fill_cache(keys_cache, k_rot, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values_cache, v_t, page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(keys_cache, k_rot, user_id % max(self.max_batch_size, 1))
             ttnn.fill_cache(values_cache, v_t, user_id % max(self.max_batch_size, 1))
@@ -1772,11 +1901,17 @@ class TtLlamaAttention(LightweightModule):
             B, T, H = orig_shape
             x_3d = x
 
-        # Decode expects T=1; tile padding may show T=32 — slice back if needed.
+        # BATCH-32 decode (mirrors llama70b ``forward_decode``): dim-2 (T) is the
+        # USER BATCH N, not a time axis. At single-user decode (max_batch_size==1)
+        # the caller already feeds T=1 (the embedding is sliced to row 0 — see
+        # test_decode_perf_intrace), so the legacy "slice T back to 1" is now a
+        # no-op there and is removed. At batch-N the N users live in T and are
+        # threaded through QKVG → heads/RoPE → KV write → SDPA → WO as the batch
+        # dim — exactly the layout llama70b carries via ``tile_padded_batch_rows``.
+        # We keep ``N`` as the per-user batch and ``T_logical=1`` for the cache
+        # write's logical seq length.
+        N = T
         T_logical = 1
-        if T > T_logical:
-            x_3d = ttnn.slice(x_3d, [0, 0, 0], [B, T_logical, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            T = T_logical
 
         hd = self.head_dim
         n_q_pc = self.n_q_per_chip  # 3
@@ -1820,82 +1955,295 @@ class TtLlamaAttention(LightweightModule):
             _, _, _T_q, _N_q = list(xqkvg_partial.shape)
             xqkvg_partial = ttnn.reshape(xqkvg_partial, [B, _T_q, _N_q])
 
-        # 2. AllReduce on cols (cluster_axis=1, 4-way) to complete input-dim sum.
-        xqkvg = ttnn.all_reduce(
-            xqkvg_partial,
-            cluster_axis=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        xqkvg_partial.deallocate(True)
+        # llama-style batch-DP gate: active only when more than one user is fed
+        # (T>1) on qwen3.6. At single-user decode (T==1) the branch is skipped so
+        # batch-1 stays byte-identical. Set QWEN36_FA_BATCH_DP=0 to force the
+        # legacy user-REPLICATED 2D-TP path (all_reduce on cols) at batch>1.
+        _batch_dp = self.is_qwen36 and T > 1 and os.environ.get("QWEN36_FA_BATCH_DP", "1") == "1"
 
-        q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gate_flat = ttnn.slice(
-            xqkvg, [0, 0, q_dim_pc], [B, T, q_dim_pc + g_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        k_flat = ttnn.slice(
-            xqkvg,
-            [0, 0, q_dim_pc + g_dim_pc],
-            [B, T, q_dim_pc + g_dim_pc + k_dim_pc],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        v_flat = ttnn.slice(
-            xqkvg, [0, 0, q_dim_pc + g_dim_pc + k_dim_pc], [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        xqkvg.deallocate(True)
+        if _batch_dp:
+            # ============================================================
+            # BATCH-DP (llama mechanism, PLAIN reduce-scatter variant).
+            # reduce_scatter on cluster_axis=1 (the 4 cols) BOTH completes the
+            # hidden col-sum the legacy all_reduce did AND scatters the T=32 users
+            # -> slice_size=8 per col (output col c = sum over cols of users
+            # [8c:8c+8] = full qkv for that col's 8 users). Users return to 32 via
+            # the seam-B all_gather before WO.
+            #
+            # NOTE: the FUSED llama_rs_create_heads is NOT usable here — its
+            # kernels HARDCODE head_dim=128 / q_heads=8 (reader/writer
+            # constexpr; see test_rs_create_heads_micro.py which showed scrambled
+            # per-user output), and qwen is head_dim=256 / 6 q-slots. So we do the
+            # plain reduce-scatter and reuse qwen's EXISTING PCC-verified flat
+            # split + QK-norm + partial-RoPE at N=8 (byte-identical math to the
+            # replicated path, just 8 users instead of 32).
+            # ============================================================
+            slice_size = self.batch_size_per_device_group  # 8
+            xqkvg_partial_4d = ttnn.reshape(xqkvg_partial, [1, 1, T, total_pc])
+            xqkvg_partial.deallocate(True)
+            if os.environ.get("QWEN36_FA_DEBUG", "0") == "1":
+                # Pre-RS: the 32-user dim (dim-2) must be uniform (identical users).
+                _fa_debug_row_diff("rs_IN[1,1,32,2048]", xqkvg_partial_4d, self.mesh_device, row_axis=2, n_rows=8)
+            xqkvg_rs = ttnn.reduce_scatter(
+                xqkvg_partial_4d,
+                dim=2,  # scatter the 32-user dim -> 8/col across the 4 cols (sum across cols)
+                cluster_axis=1,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            xqkvg_partial_4d.deallocate(True)
+            if os.environ.get("QWEN36_FA_DEBUG", "0") == "1":
+                # Post-RS: the 8-user dim (dim-2) must STILL be uniform. If not, the
+                # reduce_scatter scrambled users (the in-model bug the replicated-input
+                # unit test could not catch).
+                _fa_debug_row_diff("rs_OUT[1,1,8,2048]", xqkvg_rs, self.mesh_device, row_axis=2, n_rows=8)
+            # Downstream carries slice_size (=8) users per chip.
+            N = slice_size
+            T = slice_size
+            xqkvg = ttnn.reshape(xqkvg_rs, [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            xqkvg_rs.deallocate(True)
 
-        q_normed = _qwen36_qknorm_flat_to_heads(
-            q_flat, self.q_norm_w, self.qk_norm_eps, B, n_q_pc, T, hd, self.compute_kernel_config_hifi4
-        )
-        k_normed = _qwen36_qknorm_flat_to_heads(
-            k_flat, self.k_norm_w, self.qk_norm_eps, B, n_kv_pc, T, hd, self.compute_kernel_config_hifi4
-        )
-        q_flat.deallocate(True)
-        k_flat.deallocate(True)
-        v_t = _qwen36_flat_to_heads(v_flat, B, n_kv_pc, T, hd)
-        v_flat.deallocate(True)
+            q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_flat = ttnn.slice(
+                xqkvg, [0, 0, q_dim_pc], [B, T, q_dim_pc + g_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            k_flat = ttnn.slice(
+                xqkvg,
+                [0, 0, q_dim_pc + g_dim_pc],
+                [B, T, q_dim_pc + g_dim_pc + k_dim_pc],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v_flat = ttnn.slice(
+                xqkvg, [0, 0, q_dim_pc + g_dim_pc + k_dim_pc], [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            xqkvg.deallocate(True)
 
-        rope_setup = getattr(self, "rope_setup", None)
-        if rope_setup is None:
-            raise AttributeError("TtLlamaAttention(is_qwen36=True) needs ``self.rope_setup`` set by the decoder.")
-        q_rot = rope_setup.partial_rope_apply(q_normed, cos_tt, sin_tt)
-        k_rot = rope_setup.partial_rope_apply(k_normed, cos_tt, sin_tt)
-        q_normed.deallocate(True)
-        k_normed.deallocate(True)
+            q_normed = _qwen36_qknorm_flat_to_heads(
+                q_flat, self.q_norm_w, self.qk_norm_eps, B, n_q_pc, T, hd, self.compute_kernel_config_hifi4
+            )
+            k_normed = _qwen36_qknorm_flat_to_heads(
+                k_flat, self.k_norm_w, self.qk_norm_eps, B, n_kv_pc, T, hd, self.compute_kernel_config_hifi4
+            )
+            q_flat.deallocate(True)
+            k_flat.deallocate(True)
+            v_t = _qwen36_flat_to_heads(v_flat, B, n_kv_pc, T, hd)
+            v_flat.deallocate(True)
+
+            rope_setup = getattr(self, "rope_setup", None)
+            if rope_setup is None:
+                raise AttributeError("TtLlamaAttention(is_qwen36=True) needs ``self.rope_setup`` set by the decoder.")
+            q_rot = rope_setup.partial_rope_apply(q_normed, cos_tt, sin_tt)
+            k_rot = rope_setup.partial_rope_apply(k_normed, cos_tt, sin_tt)
+            q_normed.deallocate(True)
+            k_normed.deallocate(True)
+        else:
+            # 2. AllReduce on cols (cluster_axis=1, 4-way) to complete input-dim sum.
+            xqkvg = ttnn.all_reduce(
+                xqkvg_partial,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            xqkvg_partial.deallocate(True)
+
+            q_flat = ttnn.slice(xqkvg, [0, 0, 0], [B, T, q_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_flat = ttnn.slice(
+                xqkvg, [0, 0, q_dim_pc], [B, T, q_dim_pc + g_dim_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            k_flat = ttnn.slice(
+                xqkvg,
+                [0, 0, q_dim_pc + g_dim_pc],
+                [B, T, q_dim_pc + g_dim_pc + k_dim_pc],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v_flat = ttnn.slice(
+                xqkvg, [0, 0, q_dim_pc + g_dim_pc + k_dim_pc], [B, T, total_pc], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            xqkvg.deallocate(True)
+
+            q_normed = _qwen36_qknorm_flat_to_heads(
+                q_flat, self.q_norm_w, self.qk_norm_eps, B, n_q_pc, T, hd, self.compute_kernel_config_hifi4
+            )
+            k_normed = _qwen36_qknorm_flat_to_heads(
+                k_flat, self.k_norm_w, self.qk_norm_eps, B, n_kv_pc, T, hd, self.compute_kernel_config_hifi4
+            )
+            q_flat.deallocate(True)
+            k_flat.deallocate(True)
+            v_t = _qwen36_flat_to_heads(v_flat, B, n_kv_pc, T, hd)
+            v_flat.deallocate(True)
+
+            rope_setup = getattr(self, "rope_setup", None)
+            if rope_setup is None:
+                raise AttributeError("TtLlamaAttention(is_qwen36=True) needs ``self.rope_setup`` set by the decoder.")
+            q_rot = rope_setup.partial_rope_apply(q_normed, cos_tt, sin_tt)
+            k_rot = rope_setup.partial_rope_apply(k_normed, cos_tt, sin_tt)
+            q_normed.deallocate(True)
+            k_normed.deallocate(True)
+        # BATCH-N localizer: q_rot is [1, n_q_pc, N, hd] (N users in dim-2). If
+        # the QK-norm flat->heads transform scrambled users, rows 1..N-1 diverge
+        # from row 0 HERE (the first place we can see per-user q post create-heads).
+        _fa_debug_row_diff("q_rot[1,nq,N,hd]", q_rot, self.mesh_device, row_axis=2)
 
         if kv_cache is not None:
             keys_cache, values_cache = kv_cache[0], kv_cache[1]
         else:
             keys_cache, values_cache = self.layer_past[0], self.layer_past[1]
 
+        if page_table is not None and N > 1:
+            # BATCH-N KV-ROUTING localizer: are page_table / current_pos
+            # REPLICATED (every device holds all N users, rows 0..N-1) — as the
+            # KV-write/SDPA path assumes — or BATCH-SHARDED across the 4 mesh
+            # columns (8 users/col, the llama70b convention used by
+            # prepare_decode_inputs_host dims=(None,-2)/(None,0))? If the per-
+            # device rows differ between dev0 (col0) and dev1 (col1), the write
+            # mis-routes every user (root cause of the user-6=0.0 garble).
+            _fa_debug_route("kv_write_route", page_table, current_pos, self.mesh_device)
+
         if page_table is not None:
-            # V2-9 trace-default: ``paged_update_cache`` requires the input
-            # (k_rot/v_t) to be HEIGHT_SHARDED on 1 core with shard_shape
-            # [tile_rows, hd]. k_rot/v_t arrive as DRAM-INTERLEAVED from
-            # ``_qwen36_qknorm_flat_to_heads`` / ``_qwen36_flat_to_heads``.
-            # Mirror v1's height-shard step (qwen3_6_galaxy/tt/llama_attention.py
-            # lines 1156-1180) — convert to height-sharded before the call.
-            tile_rows = ((T + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE  # 32
-            _height_shard_cfg = ttnn.create_sharded_memory_config(
-                shape=[tile_rows, hd],
-                core_grid=ttnn.CoreGrid(y=1, x=1),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            k_rot_sharded = ttnn.to_memory_config(k_rot, memory_config=_height_shard_cfg)
-            v_t_sharded = ttnn.to_memory_config(v_t, memory_config=_height_shard_cfg)
+            # V2-9 trace-default + BATCH-32: ``paged_update_cache`` requires the
+            # input to be HEIGHT_SHARDED with one BATCH row per core and shard
+            # shape [tile_rows, hd], and reads the BATCH from dim-1 of the input
+            # (device op asserts ``page_table.shape[0] == input.shape[1]``; per-
+            # user routing is via page_table + current_pos, exactly like
+            # llama70b's ``paged_fused_update_cache``).
+            #
+            # k_rot/v_t arrive as DRAM-INTERLEAVED [1, n_kv_pc, N, hd] from
+            # ``_qwen36_qknorm_flat_to_heads`` / ``_qwen36_flat_to_heads`` (n_kv_pc
+            # =1).
+            tile_rows = ((T_logical + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE  # 32
+            if N == 1:
+                # Single-user decode (byte-identical to the legacy path): the
+                # input is already [1, 1, 1, hd] (n_kv_pc==1, N==1) so dim-1 is
+                # the batch=1; just height-shard onto 1 core. No permute.
+                _height_shard_cfg = ttnn.create_sharded_memory_config(
+                    shape=[tile_rows, hd],
+                    core_grid=ttnn.CoreGrid(y=1, x=1),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                k_rot_sharded = ttnn.to_memory_config(k_rot, memory_config=_height_shard_cfg)
+                v_t_sharded = ttnn.to_memory_config(v_t, memory_config=_height_shard_cfg)
+                k_rot.deallocate(True)
+                v_t.deallocate(True)
+            else:
+                # BATCH-N: permute the N users (dim-2) into the batch dim-1 →
+                # [1, N, n_kv_pc, hd] (the op reads batch from dim-1 and asserts
+                # ``page_table.shape[0] == input.shape[1]``), then height-shard the
+                # N batch rows one-per-core. Per-user routing is page_table +
+                # current_pos[N], exactly like llama70b's paged_fused_update_cache.
+                k_kv = ttnn.permute(k_rot, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                v_kv = ttnn.permute(v_t, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                k_rot.deallocate(True)
+                v_t.deallocate(True)
+                # DISJOINT-CORE KV-WRITE FIX (paged_fused_update_cache requires K and
+                # V on NON-OVERLAPPING core ranges — it processes both caches in ONE
+                # program and asserts input_tensor1/input_tensor2 cores must not
+                # overlap). Previously K and V were both height-sharded onto the SAME
+                # N cores starting at ``self.start_core`` → the assert fired.
+                #
+                # Mirror llama70b: K and V live on separate core ranges. We walk a
+                # single contiguous block of 2*N cores in the sub_core_grid (same
+                # row-major order the fused op's batch→core routing uses), then split
+                # it into the FIRST N cores (K) and the SECOND N cores (V). Building
+                # both halves from ONE ordered walk guarantees:
+                #   - the two ranges are disjoint (no overlap → assert passes), and
+                #   - user ``i`` sits on the i-th core of its OWN range for BOTH K and
+                #     V (same per-user ROW_MAJOR row ordering), so the fused op routes
+                #     user i's K and user i's V to ``page_table[i]`` consistently —
+                #     preserving the earlier per-user-routing fix.
+                _kv_all_cores = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                    self.start_core, 2 * N, self.sub_core_grids, row_wise=True
+                )
+                _kv_cores_list = ttnn.corerange_to_cores(_kv_all_cores, row_wise=True)
+                _k_shard_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _kv_cores_list[:N]])
+                _v_shard_cores = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in _kv_cores_list[N : 2 * N]])
+                _k_height_shard_cfg = ttnn.create_sharded_memory_config(
+                    shape=[tile_rows, hd],
+                    core_grid=_k_shard_cores,
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                _v_height_shard_cfg = ttnn.create_sharded_memory_config(
+                    shape=[tile_rows, hd],
+                    core_grid=_v_shard_cores,
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                k_rot_sharded = ttnn.to_memory_config(k_kv, memory_config=_k_height_shard_cfg)
+                v_t_sharded = ttnn.to_memory_config(v_kv, memory_config=_v_height_shard_cfg)
+                k_kv.deallocate(True)
+                v_kv.deallocate(True)
             # paged_update_cache REQUIRES a fp32/bf16 producer (it rejects bf8
             # inputs — see paged_update_cache device op dtype assert). The bf8
             # cache (QWEN36_KV_BF8) is written from this bf16 producer; the
             # kernel quantizes on write, matching llama70b's decode path which
             # feeds a bf16 rotary output into its bf8 cache. Do NOT cast here.
-            ttnn.experimental.paged_update_cache(
-                keys_cache, k_rot_sharded, update_idxs_tensor=current_pos, page_table=page_table
-            )
-            ttnn.experimental.paged_update_cache(
-                values_cache, v_t_sharded, update_idxs_tensor=current_pos, page_table=page_table
-            )
+            if N > 1 and os.environ.get("QWEN36_FA_DEBUG", "0") == "1":
+                # The K/V going INTO the write, per user (one user per shard
+                # core). With identical decode input + identical seeded KV these
+                # MUST be ~equal across users (diff ~0). If they are equal here
+                # but the SDPA output diverges, the write INPUT is clean and the
+                # divergence is the per-user ROUTING (page_table/current_pos
+                # column-shard mismatch), not the create-heads/permute. Read back
+                # to DRAM-interleaved first so the row gather is well-defined.
+                try:
+                    _kdbg = ttnn.to_memory_config(k_rot_sharded, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    _fa_debug_row_diff("kv_write_INPUT_k[1,N,1,hd]", _kdbg, self.mesh_device, row_axis=1, n_rows=8)
+                    _kdbg.deallocate(True)
+                except Exception as e:
+                    print(f"[QWEN36_FA_DEBUG] kv_write_INPUT_k: gather failed ({type(e).__name__}: {e})")
+            if N > 1:
+                # BATCH-32 KV-WRITE-ROUTING FIX (mirror llama70b exactly):
+                # write K and V in ONE ``paged_fused_update_cache`` call instead
+                # of two sequential ``paged_update_cache`` calls.
+                #
+                # ROOT CAUSE of the per-user divergence (user-6 = 0.0): the two
+                # separate ``paged_update_cache`` calls each launch an independent
+                # async multi-core program that height-shards the N users one-per-
+                # core and routes core ``i`` via ``page_table[i]`` / ``current_pos[i]``
+                # (see writer_update_cache_interleaved_start_id.cpp: ``physical_block_id
+                # = page_table_ptr[update_idx/block_size]`` indexed by ``my_batch_idx
+                # == i``). Splitting K and V across two back-to-back programs over the
+                # SAME discontiguous sub-core grid leaves a window where one user's
+                # slot can be written stale/dropped (the all-zero user-6 symptom),
+                # because the two programs do not share the cross-core write-completion
+                # signalling. llama70b avoids this entirely by issuing a SINGLE fused
+                # K+V program (``paged_fused_update_cache``) whose internal batch→core
+                # →page routing is self-consistent across both caches in one pass.
+                #
+                # Both ops read batch from dim-1 (``B = input_tensor.padded_shape()[1]``)
+                # and derive ``my_batch_idx = i`` from ``corerange_to_cores(input_cores)``
+                # — the SAME ordering the height-shard placement uses (buffer.cpp:236),
+                # the SAME grid the SDPA q/output use (SCORES_BATCHED_MM_OUTPUT_MEMCFG)
+                # — so the [1, N, n_kv_pc, hd] height-sharded layout is exactly what the
+                # fused op expects for correct per-user routing at N=32. No manual
+                # re-ordering, no permute change: only the single-call fusion differs.
+                #
+                # K and V are sharded onto DISJOINT N-core ranges (see above): the op
+                # processes both caches in one program and asserts the two input core
+                # sets do not overlap. Each input independently enumerates its OWN
+                # range row-major (``my_batch_idx == i`` ⇒ i-th core of that range), so
+                # user i's K and user i's V both route to ``page_table[i]``.
+                ttnn.experimental.paged_fused_update_cache(
+                    keys_cache,
+                    k_rot_sharded,
+                    values_cache,
+                    v_t_sharded,
+                    update_idxs_tensor=current_pos,
+                    page_table=page_table,
+                )
+            else:
+                # N==1: byte-identical to the legacy single-core write path.
+                ttnn.experimental.paged_update_cache(
+                    keys_cache, k_rot_sharded, update_idxs_tensor=current_pos, page_table=page_table
+                )
+                ttnn.experimental.paged_update_cache(
+                    values_cache, v_t_sharded, update_idxs_tensor=current_pos, page_table=page_table
+                )
             k_rot_sharded.deallocate(True)
             v_t_sharded.deallocate(True)
         else:
@@ -1910,12 +2258,20 @@ class TtLlamaAttention(LightweightModule):
             # written from the bf16 producer (kernel quantizes on write).
             ttnn.update_cache(keys_cache, k_rot, _pos, batch_offset=0)
             ttnn.update_cache(values_cache, v_t, _pos, batch_offset=0)
-        k_rot.deallocate(True)
-        v_t.deallocate(True)
+            # k_rot/v_t are freed here only for the non-paged branch; the paged
+            # branch already deallocated them (it consumes them into the
+            # height-sharded / permuted KV-write inputs above).
+            k_rot.deallocate(True)
+            v_t.deallocate(True)
 
         if page_table is not None:
-            # Paged SDPA decode expects q: [1, B, n_q_pc, hd]
-            q_1bnd = ttnn.permute(q_rot, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # Paged SDPA decode expects q: [1, B, n_q_pc, hd] with the user batch
+            # B in dim-1 (the device op reads batch from q_shape[1] and asserts
+            # ``cur_pos.shape[-1] == B`` / ``page_table.shape[0] == B``).
+            # q_rot is [1, n_q_pc, N, hd] (N users in dim-2). Permute (0,2,1,3) →
+            # [1, N, n_q_pc, hd]. At N=1 this is [1,1,n_q_pc,hd] — identical to the
+            # legacy (2,0,1,3) permute of the single-user [1,n_q_pc,1,hd].
+            q_1bnd = ttnn.permute(q_rot, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             q_rot.deallocate(True)
             # V2-11 (lever F): tried bumping SDPA decode grid (1,1) → (4,1) /
             # (8,8) — both ran at the same wall-clock (~74.03 ms / step, no
@@ -1970,10 +2326,54 @@ class TtLlamaAttention(LightweightModule):
             _sdpa_compute_cfg = self.compute_kernel_config_hifi4
             if os.environ.get("QWEN36_SDPA_MULTICORE", "1") == "1":
                 _sdpa_progcfg = self.model_config["PAGED_SDPA_DECODE_PROGCFG"]
-                _sdpa_out_memcfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](
-                    self.batch_size_per_device_group
-                )
+                # The SDPA-decode output is height-sharded one batch row per core.
+                # q_1bnd carries N users in dim-1 (page_table + current_pos are
+                # replicated to all devices, so every device sees the full N-user
+                # batch — there is no batch-across-mesh-column split on this path),
+                # so the output needs N cores, not ``batch_size_per_device_group``.
+                # At N=1 this is 1 core — byte-identical to the legacy single-user
+                # config (batch_size_per_device_group is also 1 at max_batch=1).
+                _sdpa_out_memcfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](N)
                 _sdpa_compute_cfg = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
+                # BATCH-N correctness fix (match llama70b's decode SDPA q layout).
+                # The paged SDPA-decode kernel's multi-core combine is only valid
+                # when each (user) lands on its own output core AND that core's q
+                # is *locally available* (height-sharded one batch-row per core),
+                # exactly like llama70b's ``q_heads_1BQD`` (CREATE_HEAD_OUTPUT_MEMCFG,
+                # [32,head_dim] height-sharded across sub_core_grids). With a
+                # DRAM-interleaved q the reducer/output cores are placed by the
+                # sharded-output reorder while q is read by a decoupled DRAM tile
+                # offset (``q_batch_offset = cur_batch * PNHt*DHt``); at B=1 this is
+                # the only (validated) core so it is correct, but at B=N>1 the
+                # 48-core sub_core_grid only produces N(=32) outputs and the
+                # DRAM-q ↔ output-core coupling is the untested corner that
+                # garbles a subset of users (most PCC~0.98, a few PCC 0.0). Height-
+                # sharding q one user-row per core makes ``is_q_sharded`` true so
+                # each batch's q is read from *its own* output core's L1 (see
+                # reader_decode_all.cpp read_q: ``get_noc_addr(output_core_noc_x,
+                # output_core_noc_y, q_addr)``), reproducing llama70b's validated
+                # layout. q_1bnd is [1, N, n_q_pc, hd] → tile-pad the n_q_pc rows
+                # to a tile (32) and height-shard the N user-rows one-per-core on
+                # the SAME sub_core_grids + row_wise order the output uses, so the
+                # op's reducer/output reorder (cores_vec[0..N-1]) aligns with the
+                # q shard cores AND the output shard cores. At N=1 we keep the
+                # DRAM-q path untouched (byte-identical to the validated 128k
+                # single-user multi-core path).
+                if N > 1:
+                    _q_tile_rows = ((n_q_pc + _QWEN36_TILE - 1) // _QWEN36_TILE) * _QWEN36_TILE
+                    _q_shard_cores = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                        self.start_core, N, self.sub_core_grids, row_wise=True
+                    )
+                    _q_shard_cfg = ttnn.create_sharded_memory_config(
+                        shape=[_q_tile_rows, hd],
+                        core_grid=_q_shard_cores,
+                        strategy=ttnn.ShardStrategy.HEIGHT,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    )
+                    _q_sharded = ttnn.to_memory_config(q_1bnd, memory_config=_q_shard_cfg)
+                    q_1bnd.deallocate(True)
+                    q_1bnd = _q_sharded
             else:
                 _sdpa_progcfg = ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(1, 1),
@@ -2002,8 +2402,16 @@ class TtLlamaAttention(LightweightModule):
                 _attn_dram = ttnn.to_memory_config(attn_out_1bnd, ttnn.DRAM_MEMORY_CONFIG)
                 attn_out_1bnd.deallocate(True)
                 attn_out_1bnd = _attn_dram
-            attn_out = ttnn.permute(attn_out_1bnd, (1, 2, 0, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # SDPA out is [1, N, n_q_pc, hd] (batch N in dim-1). heads_to_flat
+            # wants [B=1, n_q_pc, T=N, hd], so permute (0,2,1,3) → [1, n_q_pc, N, hd].
+            # At N=1 this is [1,n_q_pc,1,hd] — identical to the legacy (1,2,0,3)
+            # permute of the single-user [1,1,n_q_pc,hd] SDPA output.
+            attn_out = ttnn.permute(attn_out_1bnd, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn_out_1bnd.deallocate(True)
+            # BATCH-N localizer: attn_out is [1, n_q_pc, N, hd] (N users in dim-2)
+            # — the post-SDPA per-user output. If q was correct but SDPA only
+            # computed batch 0, rows 1..N-1 diverge from row 0 HERE.
+            _fa_debug_row_diff("attn_out_post_sdpa[1,nq,N,hd]", attn_out, self.mesh_device, row_axis=2)
         else:
             # Non-paged: slice KV cache up to current_pos, GQA-expand, SDPA with explicit mask.
             # V2-decode-64L: tile-padding rows ``T_kv..T_kv_pad`` contain zeros (cache
@@ -2123,6 +2531,33 @@ class TtLlamaAttention(LightweightModule):
             attn_flat.deallocate(True)
             gate_sig.deallocate(True)
 
+        if _batch_dp:
+            # BATCH-DP seam B: restore the 8-users/col scatter back to all 32
+            # users BEFORE WO (mirrors llama70b's all_gather_concat at
+            # forward_decode L548). This MUST be before WO: WO output is
+            # col-sharded on HIDDEN (dims=(2,3)), so gathering users across cols
+            # after WO would mix different hidden shards. Here ``gated`` is still
+            # in head space [1, N=8, n_q_pc*hd=768] (this row's heads), so the
+            # 4-col gather concatenates user-shards 0-7|8-15|16-23|24-31 -> 32,
+            # matching the original reduce-scatter ordering. Each col then holds
+            # all 32 users for this row's heads; WO -> col-sharded hidden for 32
+            # users; the row all_reduce completes the head sum.
+            _gated_4d = ttnn.reshape(gated, [1, 1, N, n_q_pc * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gated.deallocate(True)
+            _gathered = ttnn.all_gather(
+                _gated_4d,
+                dim=2,
+                num_links=1,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            _gated_4d.deallocate(True)
+            N = self.max_batch_size  # 32
+            T = N
+            gated = ttnn.reshape(_gathered, [B, N, n_q_pc * hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            _gathered.deallocate(True)
+
         # V2-TP / V2-DRAM-P1: WO projection via DRAM-sharded matmul + all-reduce
         # on rows (cluster_axis=0, 8-way ring). Per chip: gated [B, T, 768] ×
         # wo [768, 1280] = partial [B, T, 1280]; row-axis all_reduce completes
@@ -2218,15 +2653,30 @@ class TtLlamaAttention(LightweightModule):
             )
             dense_partial.deallocate(True)
 
+        # B2 (QWEN36_FULLATTN_LAR_SKIP_CVT): when the WO LAR path produced a
+        # width-sharded L1 output, return it as-is (4D, 1 row) instead of the DRAM
+        # reshape/slice below. Symmetric to GDN _output_proj_and_reduce's
+        # QWEN36_DELTA_LAR_SKIP_CVT. The decoder's _l1_attn path consumes the
+        # L1-sharded output directly (broadcast 1→32 + relayout to DECODE_RESIDUAL,
+        # all L1). Only valid on the _use_wo_lar branch (sharded dense_out_full).
+        if _use_wo_lar and os.environ.get("QWEN36_FULLATTN_LAR_SKIP_CVT", "0") == "1":
+            return dense_out_full
         if len(list(dense_out_full.shape)) == 4:
             _shape = list(dense_out_full.shape)
             dense_out_full = ttnn.reshape(
                 dense_out_full, [_shape[0], _shape[-2], _shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
+        # Output carries the N user-batch rows in dim-2 (matches the residual
+        # stream the decoder adds to). Slice to N (not 1) so all N users survive;
+        # at N=1 this is the legacy slice-to-1 (byte-identical).
         out_T = list(dense_out_full.shape)[-2]
-        if out_T != T_logical:
-            dense_out = ttnn.slice(dense_out_full, [0, 0, 0], [B, T_logical, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if out_T != N:
+            dense_out = ttnn.slice(dense_out_full, [0, 0, 0], [B, N, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             dense_out_full.deallocate(True)
         else:
             dense_out = dense_out_full
+        # BATCH-N localizer: dense_out is [B, N, H] (N users in dim-1) — the final
+        # per-user attention output that feeds the decoder residual add. All N
+        # rows must equal row 0 for identical users.
+        _fa_debug_row_diff("dense_out_post_wo[B,N,H]", dense_out, self.mesh_device, row_axis=1)
         return dense_out

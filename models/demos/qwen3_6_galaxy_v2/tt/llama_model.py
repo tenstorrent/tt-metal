@@ -260,17 +260,58 @@ class TtTransformer(LightweightModule):
     def get_or_create_prefill_rot_mats(self):
         """
         Return device-side rot mats for prefill, cached once for max_seq_len.
+
+        qwen3.6 uses PARTIAL RoPE (rope_dim = head_dim*0.25 = 64); the attention
+        prefill (``_forward_prefill_qwen36``) expects rot_mats as a
+        ``(cos, sin)`` tuple of partial tables (shape [1, 1, T, rope_dim]) — the
+        same form the working demo builds via ``build_mrope_cos_sin``
+        (text_demo_qwen36._build_partial_rope_cos_sin_tt). The default llama
+        ``get_prefill_rot_mat`` builds FULL head_dim tables and breaks the
+        partial-RoPE eltwise broadcast, so qwen3.6 takes its own branch.
         """
         if self.tt_rot_mats_prefill is None:
-            self.tt_rot_mats_prefill = get_prefill_rot_mat(
-                head_dim=self.args.head_dim,
-                max_seq_len=self.args.max_seq_len,
-                mesh_device=self.mesh_device,
-                seq_len=int(self.args.max_seq_len),
-                scale_factor=self.args.rope_scaling_factor,
-                start_pos=0,
-            )
+            if self.is_qwen36:
+                self.tt_rot_mats_prefill = self._build_qwen36_prefill_partial_rope()
+            else:
+                self.tt_rot_mats_prefill = get_prefill_rot_mat(
+                    head_dim=self.args.head_dim,
+                    max_seq_len=self.args.max_seq_len,
+                    mesh_device=self.mesh_device,
+                    seq_len=int(self.args.max_seq_len),
+                    scale_factor=self.args.rope_scaling_factor,
+                    start_pos=0,
+                )
         return self.tt_rot_mats_prefill
+
+    def _build_qwen36_prefill_partial_rope(self):
+        """Partial-RoPE (cos, sin) tables for the full [0, max_seq_len) range,
+        rope_dim=64. Cached once; ``_forward_prefill_qwen36`` slices to the
+        prefill window's seq length. Mirrors the demo's working construction."""
+        from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
+
+        max_seq = int(self.args.max_seq_len)
+        positions = torch.arange(max_seq, dtype=torch.long)
+        positions_3d = torch.stack([positions, positions, positions], dim=0)
+        cos_ref, sin_ref = build_mrope_cos_sin(
+            positions_3d=positions_3d,
+            head_dim=self.args.head_dim,
+            partial_rotary_factor=getattr(self.args, "partial_rotary_factor", 0.25),
+            mrope_section=getattr(self.args, "mrope_section", [11, 11, 10]),
+            theta=getattr(self.args, "rope_theta", 10_000_000.0),
+        )
+        rot_mats = []
+        for t in (cos_ref, sin_ref):  # each [1, T, rope_dim]
+            rot_mats.append(
+                ttnn.from_torch(
+                    t.unsqueeze(0),  # -> [1, 1, T, rope_dim]
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            )
+        return rot_mats
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
         # qwen3.6 / olmo precedent: when use_prefetcher=False, skip the
@@ -1132,6 +1173,20 @@ class TtTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
             )
+            if os.environ.get("QWEN36_DUMP_HIDDEN", "0") == "1" and mode == "decode" and i in (0, 1, 2, 3, 4, 8):
+                _t = x if h is None else h
+                _td = ttnn.to_torch(ttnn.get_device_tensors(_t)[0]).float()
+                _rows = _td.reshape(-1, _td.shape[-1])  # [users(32), hidden] on dev0
+                _r0 = _rows[0, :6]
+                # per-user maxdiff vs user0: for identical users this MUST be ~0;
+                # the first layer where it's nonzero is where per-user divergence enters.
+                _nrows = _rows.shape[0]
+                _udiff = max((_rows[u] - _rows[0]).abs().max().item() for u in range(1, min(_nrows, 32))) if _nrows > 1 else 0.0
+                print(
+                    f"[DUMP_HIDDEN] after layer {i} ({'h' if h is not None else 'x'}) dev0 "
+                    f"absmean={_td.abs().mean():.4f} max={_td.abs().max():.4f} per_user_maxdiff={_udiff:.4f} "
+                    f"row0[:6]={[round(v,3) for v in _r0.tolist()]}"
+                )
         # ttnn.deallocate(h)
         if mode == "decode" and not is_qwen36_decode:
             if self.args.use_prefetcher:
@@ -1149,6 +1204,68 @@ class TtTransformer(LightweightModule):
         # primitives (DRAM-friendly). The 70B decode path uses the L1-sharded
         # variants which assume the batch-32 packed contract.
         if is_qwen36_decode:
+            # BATCH-N decode tail (batch_size > 1, distinct users): the prefill
+            # (single-user) norm + lm_head do NOT produce correct per-row logits
+            # at N rows (the root cause of the wrong batch-32 token). Route to the
+            # decode-mode (packed-N contract) norm + lm_head — the same L1-sharded
+            # path the 70B decode uses — which emits all N users' logits. The
+            # decode rms_allgather LAYERNORM buffer + the LM_HEAD all-reduce buffer
+            # are lazily registered on first use (B1 LAYERNORM precedent). Gated on
+            # batch_size > 1, so batch-1 / 32-row-identical (_carry32_tail below)
+            # is completely untouched (byte-identical).
+            if batch_size > 1 and os.environ.get("QWEN36_B32_DECODE_TAIL", "1") == "1":
+                # BISECT KNOB: QWEN36_B32_DECODE_TAIL=0 routes batch-32 through the
+                # proven row-0 _carry32_tail (prefill norm + prefill lm_head on row 0)
+                # below instead of this decode-mode tail — for identical users that
+                # isolates whether the backbone produces a correct row-0 hidden
+                # (token 248068 ⇒ backbone OK, decode-tail is the bug).
+                # The decode-mode lm_head's all_reduce consumes tt_lm_head_buffer_l1
+                # (llama_ccl.line_all_reduce:952); the non-qwen36 decode path sets it
+                # up at the top of forward, but the qwen36 branch skips that. The
+                # underlying tt_lm_head_buffer + lm_head_buffer_mem_cfg may not exist on
+                # this tt_ccl (qwen36 decode historically used the prefill lm_head), so
+                # build them on demand, then create the L1 copy (deallocated inside
+                # line_all_reduce each call).
+                # The LMHead was constructed with the PREFILL tt_ccl instance (init
+                # time); switch_mode updates the layers' tt_ccl but not the lm_head's,
+                # so its internal line_all_reduce would take the prefill CCL branch and
+                # mismatch. Point it at the model's current (decode) tt_ccl — the same
+                # instance the GDN/full-attn decode layers use — so the lm_head all-reduce
+                # takes the decode branch (tt_lm_head_buffer_l1, built just below).
+                self.lm_head.tt_ccl = self.tt_ccl
+                # NOTE: qwen36 decode lm_head now reduces via DRAM
+                # reduce_scatter+all_gather (see lm_head.py), so the large L1
+                # all_reduce_async buffer (ensure_lm_head_buffer / tt_lm_head_buffer_l1)
+                # is intentionally NOT allocated here — it would waste ~300 KB/core
+                # and its static CB clashed on core (0,0).
+                # Full llama decode contract (Option A): with switch_mode("decode")
+                # active (decode tt_ccl) + QWEN36_DECODE_L1_RESIDUAL (x arrives
+                # L1-sharded DECODE_RESIDUAL), run the decode-mode rms_allgather norm
+                # + decode lm_head — the batched primitives that emit correct per-row
+                # logits for N distinct users. (The prefill norm/lm_head are the
+                # single-user batch-1 shortcut; they corrupt row-0 logits at N rows.)
+                if os.environ.get("QWEN36_DUMP_HIDDEN", "0") == "1":
+                    _xpre = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+                    _r0 = _xpre.reshape(-1, _xpre.shape[-1])[0, :12]
+                    print(
+                        f"[DUMP_HIDDEN] B>1 pre-norm dev0 shape={list(_xpre.shape)} "
+                        f"absmean={_xpre.abs().mean():.4f} max={_xpre.abs().max():.4f} "
+                        f"nan={bool(_xpre.isnan().any())} row0[:12]={[round(v,3) for v in _r0.tolist()]}"
+                    )
+                x, _ = self.norm(x, res=None, mode="decode")
+                if os.environ.get("QWEN36_DUMP_HIDDEN", "0") == "1":
+                    _xpost = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+                    print(
+                        f"[DUMP_HIDDEN] post-norm dev0 shape={list(_xpost.shape)} "
+                        f"absmean={_xpost.abs().mean():.4f} max={_xpost.abs().max():.4f} "
+                        f"nan={bool(_xpost.isnan().any())}"
+                    )
+                lm_head_output = self.lm_head(
+                    x,
+                    self.prefetcher_setup.worker_sub_device_id if self.prefetcher_setup is not None else None,
+                    mode="decode",
+                )
+                return lm_head_output
             # The decoder loop exit is col-sharded [B, 1, T=1, H/4] (same
             # contract as prefill). Run the final norm + lm_head via the
             # prefill primitives (tt_distributed_rmsnorm; lm_head forward
@@ -1168,6 +1285,11 @@ class TtTransformer(LightweightModule):
             _carry32_tail = (
                 os.environ.get("QWEN36_DECODE_32ROW", "0") == "1"
                 or os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1"
+                # option-B bisect: batch-32 DP backbone reached here because the
+                # decode tail was disabled (QWEN36_B32_DECODE_TAIL=0). The DP
+                # backbone produced a 32-row residual; slice row 0 + run the proven
+                # prefill norm/lm_head (identical users ⇒ row 0 is the answer).
+                or (batch_size > 1 and os.environ.get("QWEN36_B32_DECODE_TAIL", "1") == "0")
             )
             if _carry32_tail and x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                 x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -1175,6 +1297,14 @@ class TtTransformer(LightweightModule):
                 _xb, _, _xt, _xh = list(x.shape)
                 if _xt != 1:
                     x = ttnn.slice(x, [0, 0, 0, 0], [_xb, 1, 1, _xh], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if os.environ.get("QWEN36_DUMP_HIDDEN", "0") == "1":
+                _xpre = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+                _r0 = _xpre.reshape(-1, _xpre.shape[-1])[0, :12]
+                print(
+                    f"[DUMP_HIDDEN] B1 pre-norm dev0 shape={list(_xpre.shape)} "
+                    f"absmean={_xpre.abs().mean():.4f} max={_xpre.abs().max():.4f} "
+                    f"row0[:12]={[round(v,3) for v in _r0.tolist()]}"
+                )
             x, _ = self.norm(x, res=None, mode="prefill")
             if get_last_token != -1:
                 x = x[:, :, get_last_token:, :]
