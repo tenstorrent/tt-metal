@@ -18,21 +18,21 @@ namespace ttnn::operations::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// TEMPLATE / SKELETON ONLY.
+// Full width-sharded matmul: B and the output are width(N)-sharded across the
+// core grid, with each core owning a contiguous slice of the N dimension. A is
+// width(K)-sharded across a subset of cores ("senders"); since every core needs
+// the full A to compute its N slice, the reader gathers A onto all cores.
 //
-// Full width-sharded matmul skeleton: the output's full width (N) is kept
-// resident across the core grid, with each core owning a contiguous slice of the
-// N dimension. This sets up the in0 / in1 / out circular buffers and the
-// per-core width split, but does NOT wire up kernels or runtime args, so it is
-// not functional.
+// This sets up the in0 / in1 / out / full_in0 circular buffers, the gather
+// semaphores, and the reader kernel. The reader multicasts each sender's A slice
+// to every core (assembling full_in0) and publishes B, which is already resident
+// in L1. Sender cores are split across both NoCs to balance multicast traffic.
 //
-// To make it functional:
-//   1. Add a reader kernel that streams A tiles (broadcast) and this core's
-//      slice of B tiles into cb_in0 / cb_in1.
-//   2. Add a compute kernel that does matmul_tiles accumulating over Kt for the
-//      core's N slice.
-//   3. Add a writer kernel that drains cb_out to the core's width shard.
-//   4. Populate per-core runtime args (buffer addresses, Mt/Kt, N-slice range).
+// Still TODO to make it functional:
+//   1. A compute kernel that does matmul_tiles over the gathered full A and this
+//      core's B slice, accumulating over K, into the output CB.
+//   2. A writer kernel (or sharded output CB handoff) to produce the output
+//      width shard.
 ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -192,7 +192,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         // Coordinator's physical (worker) coords == rectangle start corner.
         static_cast<uint32_t>(mcast_start_phys.x),
         static_cast<uint32_t>(mcast_start_phys.y),
-        // in1 (B) is already resident in L1; the reader just publishes its tiles.
+        // in1 (B), already resident in L1.
         in1_cb_index,
         K_tiles * inB_N_tiles_per_core,
     };
@@ -206,12 +206,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         sender_id_by_core[sender_cores[id]] = id;
     }
 
-    // Only the sender cores (those in inputA_core_range_set) drive the multicast
-    // and generate NoC traffic, so we balance just those across both NoCs: the
-    // first half use NOC0 and the second half use NOC1. Every other core only
-    // waits on semaphores, so it stays on the reader's default NoC.
-    // The kernel adapts to whichever NoC it runs on (it flips the mcast
-    // rectangle corners when noc_index == 1).
+    // Balance the multicasting sender cores across both NoCs; all other cores
+    // stay on the default NoC.
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
@@ -270,6 +266,34 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     if (!default_noc_cores.empty()) {
         desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
     }
+
+    // ---- Compute kernel ----
+    //
+    // Matmul over gathered full A and this core's B slice.
+    // Blocking: in0_block_w (K) = 1, out_block_h (M) = 8, out_block_w (N) = 1.
+    constexpr uint32_t out_block_h = 8;
+    const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
+    const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
+
+    log_info(tt::LogOp, "MatmulDecode: num_blocks_h: {}, last_out_block_h: {}", num_blocks_h, last_out_block_h);
+    KernelDescriptor compute_kernel_desc;
+    compute_kernel_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
+    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.core_ranges = output_core_range_set;
+    compute_kernel_desc.compile_time_args = {
+        M_tiles,
+        K_tiles,
+        inB_N_tiles_per_core,
+        inA_K_tiles_per_core,
+        last_out_block_h,
+        num_blocks_h,
+    };
+    compute_kernel_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+    };
+    desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;
 }
