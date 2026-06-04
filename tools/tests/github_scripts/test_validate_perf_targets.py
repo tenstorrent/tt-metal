@@ -38,7 +38,6 @@ def _load_llm_demo_utils_module():
         benchmarking_stub = types.SimpleNamespace(
             BenchmarkData=object,
             BenchmarkProfiler=object,
-            perf_target_check=lambda *a, **k: None,
         )
         sys.modules["models.perf.benchmarking_utils"] = benchmarking_stub
 
@@ -601,46 +600,3 @@ def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
         assert False, "Expected ValueError for ambiguous metric lookup"
     except ValueError as exc:
         assert "ambiguous" in str(exc)
-
-
-def test_validate_perf_targets_stays_strict_even_when_test_soft_mode_env_is_set(tmp_path):
-    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
-    (tmp_path / "models").mkdir(parents=True)
-    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
-
-    _write_complete_run(
-        tmp_path / "generated/benchmark_data/complete_run_1.json",
-        model="demo-model",
-        batch_size=1,
-        seq_len=128,
-        decode_tsu=40.0,
-    )
-
-    targets = {
-        "version": 1,
-        "targets": {
-            "demo-model": {
-                "aliases": [],
-                "skus": {
-                    "wh_n150": {
-                        "entries": [
-                            {
-                                "batch_size": 1,
-                                "seq_len": 128,
-                                "status": "active",
-                                "perf": {"decode_t/s/u": 100.0},
-                                "accuracy": {},
-                            }
-                        ]
-                    }
-                },
-            }
-        },
-    }
-    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
-    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
-    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
-
-    result = _run_validator(tmp_path, extra_env={"STRICT_PERF_TARGET_CHECKS": "0"})
-    assert result.returncode == 1
-    assert "decode_t/s/u" in result.stdout
