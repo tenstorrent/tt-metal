@@ -28,6 +28,7 @@
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR 0xFFB98850
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR 0xFFB98854
 #define ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR 0xFFB9800C
+#define ETH_CORE_A_ETH_CTRL_A_ERR_STAT_REG_ADDR 0xFFB980D8
 #define ETH_CLOCK_CYCLE_1MS 1000000
 #define ETH_UPDATE_LINK_STATUS_INTERVAL_MS 1000
 
@@ -327,14 +328,14 @@ FORCE_INLINE bool is_port_up() {
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
 }
 
-static void service_eth_msg() {
+static __attribute__((unused)) void service_eth_msg() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
-static void update_boot_results_eth_link_status_check() {
+static __attribute__((unused)) void update_boot_results_eth_link_status_check() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
     uint64_t curr_timestamp = eth_read_wall_clock();
     uint64_t next_timestamp = get_next_link_status_check_timestamp();

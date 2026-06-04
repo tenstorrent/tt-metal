@@ -167,6 +167,13 @@ def run(
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
 
+    # Embedding indices must be an integer type. The traced input dtype can be
+    # bfloat16, which cannot represent indices > 256 exactly (num_embeddings is
+    # often large, e.g. 32128), so bf16 indices get rounded on device and the
+    # lookups disagree with the exact int64 golden (PCC ~0). Force uint32.
+    if input_a_dtype in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32):
+        input_a_dtype = ttnn.uint32
+
     # Create input tensor (indices)
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:

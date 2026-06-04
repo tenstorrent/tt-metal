@@ -315,6 +315,7 @@ struct SfpuConfig {
     CoreRangeSet cores;
     std::string sfpu_op;
     bool approx_mode = true;
+    bool en_32bit_dest = false;
 };
 
 /// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
@@ -464,6 +465,7 @@ bool run_sfpu_all_same_buffer(
             {{"per_core_block_cnt", static_cast<uint32_t>(test_config.num_tiles)}, {"per_core_block_size", 1u}},
         .hw_config =
             experimental::ComputeHardwareConfig{
+                .fp32_dest_acc_en = test_config.en_32bit_dest,
                 .math_approx_mode = test_config.approx_mode,
             },
     };
@@ -1118,6 +1120,119 @@ TEST_P(SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture, TensixSfpuCompu
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleMeshDeviceSfpuParameterizedApproxFixture,
+    ::testing::Values(
+        std::make_tuple(1, "relu"),
+        std::make_tuple(1, "exponential"),
+        std::make_tuple(1, "reciprocal"),
+        std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "sqrt"),
+        std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
+        std::make_tuple(1, "log"),
+        std::make_tuple(1, "tanh"),
+        std::make_tuple(1, "sign"),
+        std::make_tuple(1, "rsqrt"),
+        std::make_tuple(4, "relu"),
+        std::make_tuple(4, "exponential"),
+        std::make_tuple(4, "reciprocal"),
+        std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "sqrt"),
+        std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
+        std::make_tuple(4, "log"),
+        std::make_tuple(4, "tanh"),
+        std::make_tuple(4, "sign"),
+        std::make_tuple(4, "rsqrt")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+class SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
+TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture, TensixSfpuCompute) {
+    size_t num_tiles = std::get<0>(GetParam());
+    std::string sfpu_op = std::get<1>(GetParam());
+
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = false,
+        .en_32bit_dest = true};
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuParameterized32BitDestFixture,
+    ::testing::Values(
+        std::make_tuple(1, "relu"),
+        std::make_tuple(1, "exponential"),
+        std::make_tuple(1, "reciprocal"),
+        std::make_tuple(1, "gelu"),
+        std::make_tuple(1, "sqrt"),
+        std::make_tuple(1, "sigmoid"),
+        std::make_tuple(1, "silu"),
+        std::make_tuple(1, "log"),
+        std::make_tuple(1, "tanh"),
+        std::make_tuple(1, "sign"),
+        std::make_tuple(1, "rsqrt"),
+        std::make_tuple(4, "relu"),
+        std::make_tuple(4, "exponential"),
+        std::make_tuple(4, "reciprocal"),
+        std::make_tuple(4, "gelu"),
+        std::make_tuple(4, "sqrt"),
+        std::make_tuple(4, "sigmoid"),
+        std::make_tuple(4, "silu"),
+        std::make_tuple(4, "log"),
+        std::make_tuple(4, "tanh"),
+        std::make_tuple(4, "sign"),
+        std::make_tuple(4, "rsqrt")),
+    [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
+        return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
+    });
+
+class SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<size_t, std::string>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture, TensixSfpuCompute) {
+    size_t num_tiles = std::get<0>(GetParam());
+    std::string sfpu_op = std::get<1>(GetParam());
+
+    if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
+        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
+        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
+        GTEST_SKIP();
+    }
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+    unit_tests::compute::sfpu::SfpuConfig test_config = {
+        .num_tiles = num_tiles,
+        .tile_byte_size = 2 * 32 * 32,
+        .l1_input_data_format = tt::DataFormat::Float16_b,
+        .l1_output_data_format = tt::DataFormat::Float16_b,
+        .cores = core_range_set,
+        .sfpu_op = sfpu_op,
+        .approx_mode = true,
+        .en_32bit_dest = true};
+    log_info(tt::LogTest, "Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    }
+}
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuCompute,
+    SingleCoreSingleMeshDeviceSfpuParameterized32BitDestApproxFixture,
     ::testing::Values(
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),

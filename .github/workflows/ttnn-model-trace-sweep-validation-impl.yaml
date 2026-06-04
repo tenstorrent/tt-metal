@@ -46,12 +46,16 @@ permissions:
   contents: read
   packages: write
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: Ubuntu 22.04
@@ -392,7 +396,7 @@ jobs:
 
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
-    needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    needs: [check-harbor, build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
     strategy:
       fail-fast: false
       matrix:

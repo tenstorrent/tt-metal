@@ -5,7 +5,7 @@ from typing import Optional
 
 import torch
 
-from ..bfp_format_utils import bfp4b_to_float16b
+from ..bfp_format_utils import bfp2b_to_float16b, bfp4b_to_float16b
 from ..format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from ..llk_params import format_dict
 from ..tile_constants import (
@@ -170,6 +170,8 @@ def _generate_source_tensor(
         tensor = _run_face_loop(spec, stimuli_format, face_r_dim, num_elements, gen)
         if stimuli_format == DataFormat.Bfp4_b:
             tensor = bfp4b_to_float16b(tensor)
+        elif stimuli_format == DataFormat.Bfp2_b:
+            tensor = bfp2b_to_float16b(tensor)
         return tensor
 
     strategy = lookup_strategy(spec.distribution)
@@ -191,6 +193,8 @@ def _generate_source_tensor(
 
     if stimuli_format == DataFormat.Bfp4_b:
         tensor = bfp4b_to_float16b(tensor)
+    elif stimuli_format == DataFormat.Bfp2_b:
+        tensor = bfp2b_to_float16b(tensor)
 
     return tensor
 
@@ -216,6 +220,14 @@ def _default_bfp4b_face(
     return integer_part.to(torch.bfloat16) + fraction
 
 
+def _default_bfp2b_face(
+    size: int, dtype: torch.dtype, gen: Optional[torch.Generator] = None
+) -> torch.Tensor:
+    integer_part = torch.randint(0, 3, (size,), generator=gen)
+    fraction = torch.randint(0, 4, (size,), generator=gen).to(torch.bfloat16) / 4.0
+    return integer_part.to(torch.bfloat16) + fraction
+
+
 def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
     """Return the built-in default StimuliSpec for a given data format.
 
@@ -234,6 +246,8 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
         return StimuliSpec(distribution=_default_bfp8b_face)
     if stimuli_format == DataFormat.Bfp4_b:
         return StimuliSpec(distribution=_default_bfp4b_face)
+    if stimuli_format == DataFormat.Bfp2_b:
+        return StimuliSpec(distribution=_default_bfp2b_face)
     if stimuli_format.is_integer():
         if stimuli_format == DataFormat.UInt32:
             return StimuliSpec.uniform(low=0.0, high=float(2**32 - 2))

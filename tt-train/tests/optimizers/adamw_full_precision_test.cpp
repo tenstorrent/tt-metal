@@ -49,14 +49,17 @@ void PrintTo(const AdamWFullPrecisionCase& pc, std::ostream* os) {
 }
 
 class AdamWFullPrecisionComparisonTest : public ::testing::TestWithParam<AdamWFullPrecisionCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 

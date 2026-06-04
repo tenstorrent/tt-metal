@@ -1,5 +1,9 @@
 include(sources.cmake)
 
+if(TT_UMD_BUILD_SIMULATION)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/buffers/simulator_direct_write.cpp)
+endif()
+
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
@@ -123,6 +127,10 @@ target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experi
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+if(TT_UMD_BUILD_SIMULATION)
+    target_compile_definitions(impl PRIVATE TT_UMD_BUILD_SIMULATION)
+endif()
 
 if(TT_METAL_USE_EMULE)
     get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)

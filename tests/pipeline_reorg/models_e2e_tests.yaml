@@ -360,11 +360,11 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_p150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -381,13 +381,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 15
-    #   tier: 2
+    #   tier: 3
     bh_p300:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -402,10 +402,10 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 25
       tier: 2
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
@@ -429,10 +429,10 @@
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
@@ -530,7 +530,7 @@
       timeout: 30
       tier: 1
     bh_quietbox_2:
-      timeout: 25
+      timeout: 35
       tier: 1
     bh_galaxy:
       timeout: 30

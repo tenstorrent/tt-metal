@@ -15,7 +15,6 @@ parsing such as ``.mesh_*`` and ``.hw_*`` suffix semantics; this file maps those
 already-parsed routing hints to logical test groups and runner profiles.
 """
 
-
 # ── Run type detection (workflow inputs vs cron schedule) ────────────────────
 # ``compute_sweep_matrix.main`` sets batching and which matrix builder to call
 # from these maps. Workflow ``SWEEP_NAME`` wins; else ``GITHUB_EVENT_SCHEDULE``
@@ -169,9 +168,7 @@ LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
 LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
-LEAD_MODELS_BATCH_POLICY = {
-    "lead-models-galaxy": {"parallel_jobs": 6},
-}
+LEAD_MODELS_BATCH_POLICY = {}
 
 
 # ── Model-traced sweep: per-group batching policy ─────────────────────────────
