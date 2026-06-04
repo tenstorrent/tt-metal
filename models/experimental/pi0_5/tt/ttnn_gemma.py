@@ -510,9 +510,17 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # HiFi2 config for projections (faster, less precision needed)
+        # HiFi2 config for projections (faster, less precision needed).
+        # PI0_EXPERT_MM_LOFI=1 drops fidelity to LoFi for the expert matmul
+        # path (PERF_PLAYBOOKS/05 §6: BGE-M3 saw -6 ms FF1, -2 ms FF2 on
+        # bf8b weights from this walk). PCC must be verified end-to-end
+        # via LIBERO rollouts before promoting default. fp32_dest_acc_en
+        # stays False to keep the subblock cap at 8 (01 §3).
+        import os as _os
+
+        _expert_lofi = _os.environ.get("PI0_EXPERT_MM_LOFI", "").lower() in ("1", "true", "yes", "on")
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi if _expert_lofi else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -700,7 +708,7 @@ class GemmaAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=get_sdpa_exp_approx_mode(),
+            exp_approx_mode=get_sdpa_exp_approx_mode(kv_seq_len),
         )
 
         attn_output = ttnn.transformer.scaled_dot_product_attention(

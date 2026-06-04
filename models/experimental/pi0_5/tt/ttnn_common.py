@@ -65,17 +65,37 @@ def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
     return ttnn.MathFidelity.HiFi4 if hifi >= 4 else ttnn.MathFidelity.HiFi2
 
 
-def get_sdpa_exp_approx_mode() -> bool:
-    """Return SDPA softmax exp_approx_mode, env-controllable for A/B testing.
+def get_sdpa_exp_approx_mode(seq_len_kv: Optional[int] = None) -> bool:
+    """Return SDPA softmax exp_approx_mode.
 
-    Default: False ("more correct" per ViT-BH-hiRes; measured Pareto-positive
-    vs True on this branch).
+    Default: False (exact). Per PERF_PLAYBOOKS/04_ATTENTION_SDPA.md §3c the
+    short-ratio case should favour True, and the SigLIP isolated sweep
+    (Sq=Skv=256, k_chunk=256 single chunk) showed `exp=1` as the wall-clock
+    winner. BUT tracy-verified end-to-end (2026-06-04 v7 run): enabling
+    exp_approx=True for SigLIP regressed device kernel time by +0.18 µs/call
+    (12.90 → 13.08 µs). Same wall-clock-doesn't-translate pattern we saw
+    on the VLM band. Per-shape default reverted to False; opt-in via
+    `PI0_SDPA_EXP_APPROX_PER_SHAPE=1` if you want to A/B again.
+
+    Global override: `PI0_SDPA_EXP_APPROX={0|1}` forces a single value
+    everywhere (the prior global A/B knob).
     """
-    return _env_bool("PI0_SDPA_EXP_APPROX", False)
+    explicit = os.environ.get("PI0_SDPA_EXP_APPROX")
+    if explicit is not None:
+        return explicit.strip().lower() in ("1", "true", "yes", "on")
+    per_shape = _env_bool("PI0_SDPA_EXP_APPROX_PER_SHAPE", False)
+    if not per_shape or seq_len_kv is None:
+        return False
+    # Per-shape opt-in path (kept for future A/B): single-chunk K → True.
+    return seq_len_kv <= 256
 
 
-def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
-    """Return SDPA compute kernel config matching env knobs."""
+def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.WormholeComputeKernelConfig":
+    """Return SDPA compute kernel config matching env knobs.
+
+    Pass `seq_len_kv` to enable per-shape `exp_approx_mode` (04 §3c). When
+    omitted, falls back to the previous global default for backwards-compat.
+    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=get_sdpa_math_fidelity(),
         math_approx_mode=False,

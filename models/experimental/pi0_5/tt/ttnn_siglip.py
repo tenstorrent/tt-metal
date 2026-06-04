@@ -539,7 +539,7 @@ class SigLIPAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=get_sdpa_exp_approx_mode(),
+            exp_approx_mode=get_sdpa_exp_approx_mode(n_seq),
         )
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
@@ -662,12 +662,13 @@ class SigLIPAttentionTTNN:
         q_chunk, k_chunk = sdpa_prefill_chunk_sizes(seq_len, seq_len)
 
         # SDPA configuration - use full device grid for maximum parallelism.
-        # exp_approx_mode env-controllable for A/B (default True, ViT-BH-hiRes uses False).
+        # exp_approx_mode is per-shape (04 §3c): seq_len<=256 → True (single
+        # K-chunk, no accumulation depth); longer seqs → False (exact).
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=get_sdpa_exp_approx_mode(),
+            exp_approx_mode=get_sdpa_exp_approx_mode(seq_len),
         )
 
         # SDPA - stays entirely on device, L1 output feeds the o-proj matmul.
