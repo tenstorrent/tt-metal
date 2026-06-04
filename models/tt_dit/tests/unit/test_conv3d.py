@@ -275,7 +275,6 @@ def test_sharding(mesh_device, input_shape, out_channels, kernel_size, stride):
 
     logger.info(f"initial shape {torch_input.shape}")
     # Convert to NTHWC format for TT
-    tt_input_NTHWC = torch_input
     tt_input_NTHWC = torch_input.permute(0, 2, 3, 4, 1).contiguous()
 
     logger.info(f"initial reshape {tt_input_NTHWC.shape}")
