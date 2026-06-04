@@ -26,7 +26,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/streaming_reduce_helpers.hpp"
@@ -53,7 +53,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
-    constexpr auto bin_block_shape = ckl::BinaryInputBlockShape::of(Ht, BLOCK_SIZE);
+    constexpr auto bin_block_shape = ckl::EltwiseShape::of(Ht, BLOCK_SIZE);
 
     // For non-tile-aligned W: select the partial scaler tile (idx 1) on the
     // last W-tile of the last block — accumulate_reduce / accumulate_reduce_block
@@ -76,12 +76,23 @@ void kernel_main() {
     // cb_mean must persist across all blocks of pass 2 → B policy = WaitUpfrontNoPop.
     // cb_in is per-tile streamed by the reader → A policy = WaitAndPopPerTile.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
+        // sub<COL>: cb_in − cb_mean → cb_centered.
+        //   A (cb_in)   : WaitAndPopPerTile → Streaming, per-tile front-relative (Scalar idx).
+        //   B (cb_mean) : WaitUpfrontNoPop  → HeldBulk (no pop; popped manually after pass 2),
+        //                 COL broadcast → OperandKind::Col.
         ckl::sub<
-            ckl::BroadcastDim::COL,
-            ckl::BinaryInputPolicy::WaitAndPopPerTile,
-            ckl::BinaryInputPolicy::WaitUpfrontNoPop>(cb_in, cb_mean, cb_centered, bin_block_shape);
+            cb_in,
+            cb_mean,
+            cb_centered,
+            ckl::BroadcastDim::Col,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::OperandKind::Scalar,                 // A index (per-tile streaming)
+            ckl::InputLifecycle::Streaming,           // A lifecycle
+            ckl::InputLifecycle::HeldBulk,            // B lifecycle (held across all blocks)
+            ckl::OperandKind::Col>(bin_block_shape);  // B index (COL broadcast)
 
-        ckl::square_in_place(cb_centered, bin_block_shape);
+        // square_in_place: cb_centered² → cb_centered (in-place, per-tile streaming).
+        ckl::square<cb_centered, cb_centered>(bin_block_shape);
 
         if constexpr (COMPUTE_STD_DEV) {
             ckl::accumulate_reduce_block<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
