@@ -17,7 +17,7 @@ The next step will stack decoders together, so we should ensure that the decoder
 
 The typical advice is "get correctness before chasing speed" but do not let this mislead you: our only acceptable goal is an extremely high-performance implementation. Pursuing the correctness of a design that clearly introduces unnecessary communication patterns may not be a good use of time. To evaluate correctness we recommend comparing multi-chip TTNN output to the single-chip TTNN baseline with identical synthetic or real weights, inputs, page tables, and positions. This isolates sharding and collective bugs from HF-vs-TTNN numerical differences.
 
-Treat RMSNorm, KV-cache layout, head ownership, bias placement, padding/slicing, and collective axes as first-class correctness questions. Most multi-chip bugs live there.
+Treat RMSNorm, KV-cache layout, head ownership, bias placement, padding/slicing, and collective axes as first-class correctness questions. Most multi-chip bugs live there. If the failure involves subtle mesh layout, CCL, semaphore, cache, or routed-expert behavior and ordinary component comparisons are not enough, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix.
 
 Async CCLs and semaphores are subtle. Read the relevant docs and consider reusing the CCL/semaphore helper classes that `tt_transformers`, `gpt_oss`, and `deepseek_v3` use.
 
