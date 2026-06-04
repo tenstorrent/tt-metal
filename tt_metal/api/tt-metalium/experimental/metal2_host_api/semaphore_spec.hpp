@@ -36,6 +36,9 @@ namespace tt::tt_metal::experimental {
 // A name identifying a SemaphoreSpec within a ProgramSpec.
 using SemaphoreSpecName = std::string;
 
+// The value held in a semaphore's SRAM cell (e.g. its initial value).
+using SemaphoreValue = uint32_t;
+
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
     SemaphoreSpecName unique_id;

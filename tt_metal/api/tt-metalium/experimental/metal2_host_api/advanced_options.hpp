@@ -43,6 +43,11 @@ using DFBSpecName = std::string;
 // canonical declaration and documentation.
 using KernelArgValue = uint32_t;
 
+// Re-declared here so SemaphoreAdvancedOptions can use it without pulling in
+// semaphore_spec.hpp (which includes this header). See semaphore_spec.hpp for
+// the canonical declaration and documentation.
+using SemaphoreValue = uint32_t;
+
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Per-node thread count (Gen2)
@@ -187,10 +192,8 @@ struct SemaphoreAdvancedOptions {
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
     // NOTE: Runtime wants to deprecate this feature for ALL architectures.
     //       When remote DFB becomes available, non-zero initial values will be removed.
-    // The value a semaphore holds before any kernel updates it.
-    using SemaphoreInitialValue = uint32_t;
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
-    SemaphoreInitialValue initial_value = 0;
+    SemaphoreValue initial_value = 0;
 };
 
 struct TensorParameterAdvancedOptions {
