@@ -22,10 +22,10 @@ from models.tt_dit.utils.test import ring_params
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # BH Galaxy 4x8 Ring — sole supported config in the first AniSora PR.
-        [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
@@ -44,6 +44,8 @@ from models.tt_dit.utils.test import ring_params
 def test_pipeline_inference(
     mesh_device,
     mesh_shape,
+    sp_axis,
+    tp_axis,
     num_links,
     dynamic_load,
     topology,
@@ -68,6 +70,8 @@ def test_pipeline_inference(
 
     pipeline = AniSoraPipeline.create_pipeline(
         mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         num_links=num_links,
         dynamic_load=dynamic_load,
         topology=topology,
@@ -85,9 +89,12 @@ def test_pipeline_inference(
 
         with torch.no_grad():
             result = pipeline(
-                prompts=[prompt],
+                prompt=prompt,
                 image_prompt=image_prompt,
-                negative_prompts=[negative_prompt],
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 guidance_scale=guidance_scale,
@@ -144,9 +151,9 @@ def test_pipeline_inference(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
@@ -161,6 +168,8 @@ def test_pipeline_inference(
 def test_pipeline_inference_random_weights(
     mesh_device,
     mesh_shape,
+    sp_axis,
+    tp_axis,
     num_links,
     dynamic_load,
     topology,
@@ -181,6 +190,8 @@ def test_pipeline_inference_random_weights(
     try:
         pipeline = AniSoraPipeline.create_pipeline(
             mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
             num_links=num_links,
             dynamic_load=dynamic_load,
             topology=topology,
@@ -197,9 +208,12 @@ def test_pipeline_inference_random_weights(
 
     with torch.no_grad():
         result = pipeline(
-            prompts=[prompt],
+            prompt=prompt,
             image_prompt=image_prompt,
-            negative_prompts=[""],
+            negative_prompt="",
+            height=height,
+            width=width,
+            num_frames=num_frames,
             num_inference_steps=num_inference_steps,
             seed=42,
             guidance_scale=3.5,

@@ -12,8 +12,7 @@ from loguru import logger
 from PIL import Image
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
-from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 
@@ -84,28 +83,18 @@ def test_pipeline_inference(
     num_frames = 81
     num_inference_steps = 40
 
-    h_factor = tuple(mesh_device.shape)[tp_axis]
-    w_factor = tuple(mesh_device.shape)[sp_axis]
-    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
-    vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
-    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
-
-    pipeline = WanPipeline(
-        device=mesh_device,
-        config=WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=parallel_config,
-            vae_parallel_config=vae_parallel_config,
-            encoder_parallel_config=encoder_parallel_config,
-            num_links=num_links,
-            dynamic_load=dynamic_load,
-            topology=topology,
-            is_fsdp=is_fsdp,
-            checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-            height=height,
-            width=width,
-            num_frames=num_frames,
-        ),
+    pipeline = WanPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        checkpoint_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+        height=height,
+        width=width,
+        num_frames=num_frames,
     )
 
     if quant_config_name is not None:
@@ -119,14 +108,22 @@ def test_pipeline_inference(
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
         with torch.no_grad():
-            frames = pipeline(
-                prompts=[prompt],
+            result = pipeline(
+                prompt=prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
                 output_type="uint8",
             )
+
+        if hasattr(result, "frames"):
+            frames = result.frames
+        else:
+            frames = result[0] if isinstance(result, tuple) else result
 
         logger.info(f"Inference completed successfully")
         logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")

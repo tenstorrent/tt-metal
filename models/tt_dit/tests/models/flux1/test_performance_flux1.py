@@ -11,9 +11,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
-from ....pipelines.events import profiler_event_callback
-from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfig
+from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 
 
 # TODO: Factor out commonalities with sd35
@@ -88,19 +86,15 @@ def test_flux1_pipeline_performance(
     logger.info(f"  Guidance scale: {guidance_scale}")
     logger.info(f"  Inference steps: {num_inference_steps}")
 
-    pipeline = Flux1Pipeline(
-        device=mesh_device,
-        config=Flux1PipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
-            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
-            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
-            topology=topology,
-            num_links=num_links,
-            width=image_w,
-            height=image_h,
-            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
-        ),
+    pipeline = Flux1Pipeline.create_pipeline(
+        checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+        mesh_device=mesh_device,
+        dit_sp=sp,
+        dit_tp=tp,
+        encoder_tp=encoder_tp,
+        vae_tp=vae_tp,
+        topology=topology,
+        num_links=num_links,
     )
 
     # Test prompts - diverse set for comprehensive performance testing
@@ -112,16 +106,20 @@ def test_flux1_pipeline_performance(
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
 
-    # Warmup runs
-    for i in range(2):
-        logger.info("Running warmup iteration...")
-        with benchmark_profiler("run", iteration=0):
-            images = pipeline.run_single_prompt(
-                prompt=prompts[0],
-                num_inference_steps=num_inference_steps,
-            )
-        images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup_{i}.png")
-        logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+    # Warmup run
+    logger.info("Running warmup iteration...")
+    with benchmark_profiler("run", iteration=0):
+        images = pipeline.run_single_prompt(
+            width=image_w,
+            height=image_h,
+            prompt=prompts[0],
+            num_inference_steps=num_inference_steps,
+            seed=0,
+            traced=True,
+        )
+    images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup.png")
+
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
@@ -146,9 +144,14 @@ def test_flux1_pipeline_performance(
             prompt_idx = (i + 1) % len(prompts)
             with benchmark_profiler("run", iteration=i):
                 images = pipeline.run_single_prompt(
+                    width=image_w,
+                    height=image_h,
                     prompt=prompts[prompt_idx],
                     num_inference_steps=num_inference_steps,
-                    on_event=profiler_event_callback(benchmark_profiler, i),
+                    seed=0,
+                    traced=True,
+                    profiler=benchmark_profiler,
+                    profiler_iteration=i,
                 )
             images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
 

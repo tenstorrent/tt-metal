@@ -65,10 +65,10 @@ def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, num_links, dynamic_load, device_params, topology, is_fsdp",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 2, True, line_params, ttnn.Topology.Linear, False],
-        [(4, 8), (4, 8), 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
@@ -87,6 +87,8 @@ def _resolve_lora_args() -> Tuple[List[LoRASpec], List[LoRASpec], float]:
 def test_pipeline_inference(
     mesh_device,
     mesh_shape,
+    sp_axis,
+    tp_axis,
     num_links,
     dynamic_load,
     topology,
@@ -117,6 +119,8 @@ def test_pipeline_inference(
 
     pipeline = WanPipelineI2VLora.create_pipeline(
         mesh_device=mesh_device,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         num_links=num_links,
         dynamic_load=dynamic_load,
         topology=topology,
@@ -140,9 +144,12 @@ def test_pipeline_inference(
 
         with torch.no_grad():
             result = pipeline(
-                prompts=[prompt],
+                prompt=prompt,
                 image_prompt=image_prompt,
-                negative_prompts=[negative_prompt],
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 guidance_scale=guidance_scale,
