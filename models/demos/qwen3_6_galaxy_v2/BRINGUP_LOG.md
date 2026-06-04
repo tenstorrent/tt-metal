@@ -3,6 +3,41 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-04 (cont.) — server reaches the model prefill forward; blocked on V2 prefill-kernel bugs
+
+After clearing ALL vLLM-plugin drift (below), the server now loads + schedules +
+enters the **actual model prefill forward**. The remaining blockers are
+**model-kernel bugs in the Generator prefill path** (the BLOCKED V2-decode/V2-9
+area), NOT server integration. Two hit so far, in order:
+
+1. **DeltaNet GDN seq-prefill L1/CB clash** — `gdn_chunk_ops_seq.py:
+   chunk_gated_delta_rule_seq` throws "Statically allocated circular buffers …
+   clash with L1 buffers" at seq_len 128 (cores (0,0)-(0,5), 128-byte overlap),
+   in BOTH trace and eager prefill. **Worked around** by
+   `QWEN36_GDN_SEQ_PREFILL=0` (env, in catalog) → uses `chunk_gated_delta_rule_ttnn`
+   instead of the C++ seq parallel-scan kernel. The seq kernel's L1 clash is a
+   real bug to fix for the optimized path.
+2. **Full-attention partial-RoPE subtile broadcast** — `llama_rope.py:
+   partial_rope_apply` → `ttnn.multiply/addcmul(x_rot, cos_tt)` →
+   "Invalid subtile broadcast type" (binary_ng) at seq_len-128 prefill. cos/sin
+   table shape doesn't broadcast against the rotated activation in the Generator
+   prefill path. **OPEN** — needs model-side fix (cos_tt construction vs x_rot
+   shape for partial RoPE rope_dim=64).
+
+These were never exercised before because the demo/PCC tests use a different
+prefill harness; the server is the first to drive `Generator.prefill_forward_text`
+(warmup sweep + ttnn_prefill_forward) end-to-end. Prefill trace-capture is
+disabled (`override_tt_config.trace_mode=false` + generator
+`_disable_prefill_tracing=True`) and decode is eager.
+
+**Server-side fixes also committed today:** delta-attn `user_id` int-coercion
+(ttnn-tensor on the Generator path → batch-1 row 0); see commit log. Device
+runs use `tt-smi -r` between attempts (dirty engine death hangs the ethernet).
+
+**Status:** server integration COMPLETE; batch-1 generation blocked on the V2
+prefill-kernel bugs above (#2 open). Next: fix partial-RoPE broadcast (and the
+GDN seq-kernel L1 clash for the optimized path), then accuracy + ISL-256k bench.
+
 ## 2026-06-04 — local vLLM server: live on BH galaxy through prefill; vLLM-version drift fixes in tt-vllm-plugin
 
 Stood up the **local** vLLM server (`run.py --workflow server --local-server
