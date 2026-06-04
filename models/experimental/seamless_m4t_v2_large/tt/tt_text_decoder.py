@@ -94,52 +94,22 @@ def init_text_decoder_kv_cache(
     kv_cache: list[list[ttnn.Tensor]] = []
     cross_attn_cache: list[list[ttnn.Tensor]] = []
 
-    for _ in range(num_hidden_layers):
-        k_cache = torch.zeros((max_batch_size, num_local_heads, padded_max_seq_len, head_dim))
-        v_cache = torch.zeros((max_batch_size, num_local_heads, padded_max_seq_len, head_dim))
-        kv_cache.append(
-            [
-                ttnn.from_torch(
-                    k_cache,
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mm,
-                ),
-                ttnn.from_torch(
-                    v_cache,
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mm,
-                ),
-            ]
+    def _zero_cache(seq_len: int) -> ttnn.Tensor:
+        # Tilize bf16 zeros on HOST, then ``to_device`` (matches ``_from_torch_tile_host_first``).
+        # Uploading ``torch.zeros`` (float32) with ``device=`` + ``layout=TILE`` instead forces a
+        # per-tensor on-device ``TilizeDeviceOperation`` (fp32) + ``TypecastDeviceOperation``
+        # (fp32->cache_dtype) — 4 per layer (self K/V + cross K/V) = pure setup waste.
+        host = ttnn.from_torch(
+            torch.zeros((max_batch_size, num_local_heads, seq_len, head_dim), dtype=torch.bfloat16),
+            dtype=cache_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mm,
         )
+        return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        cross_k = torch.zeros((max_batch_size, num_local_heads, encoder_seq_len, head_dim))
-        cross_v = torch.zeros((max_batch_size, num_local_heads, encoder_seq_len, head_dim))
-        cross_attn_cache.append(
-            [
-                ttnn.from_torch(
-                    cross_k,
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mm,
-                ),
-                ttnn.from_torch(
-                    cross_v,
-                    dtype=cache_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=mm,
-                ),
-            ]
-        )
+    for _ in range(num_hidden_layers):
+        kv_cache.append([_zero_cache(padded_max_seq_len), _zero_cache(padded_max_seq_len)])
+        cross_attn_cache.append([_zero_cache(encoder_seq_len), _zero_cache(encoder_seq_len)])
 
     return kv_cache, cross_attn_cache
 
@@ -153,6 +123,36 @@ def make_current_decode_pos_tensor(device: ttnn.Device, position: int, batch_siz
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def _shard_for_slice_write(t: ttnn.Tensor) -> Optional[ttnn.Tensor]:
+    """Height-shard a ``[B, H, S, D]`` TILE tensor so ``slice_write`` takes the tiled-sharded
+    program factory instead of the row-major fallback.
+
+    The RM fallback (``slice_write.cpp``) untilizes the input *and* the whole destination cache,
+    writes row-major, then re-tilizes the cache — ~3 layout ops per K/V. When the source is
+    sharded+TILE, ``SliceWriteTiledShardedInputProgramFactory`` writes tiles straight into the
+    interleaved cache with no layout churn. Returns ``None`` (caller keeps the DRAM path) when the
+    tensor is not tile-aligned in height (e.g. tiny self-attn ``seq_len`` prefills).
+    """
+    shape = t.shape
+    bsz, nh, s, hd = (int(shape[0]), int(shape[1]), int(shape[2]), int(shape[3]))
+    total_rows = bsz * nh * s
+    if hd % 32 != 0 or total_rows % 32 != 0:
+        return None
+    n_tiles = total_rows // 32
+    grid = t.device().compute_with_storage_grid_size()
+    num_cores = min(n_tiles, grid.x * grid.y)
+    while num_cores > 1 and n_tiles % num_cores != 0:
+        num_cores -= 1
+    shard_rows = (n_tiles // num_cores) * 32
+    try:
+        core_ranges = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+        shard_spec = ttnn.ShardSpec(core_ranges, [shard_rows, hd], ttnn.ShardOrientation.ROW_MAJOR)
+        mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+        return ttnn.to_memory_config(t, mem)
+    except Exception:
+        return None
 
 
 def write_self_kv_prefill_to_cache(
@@ -175,6 +175,42 @@ def write_self_kv_prefill_to_cache(
     begins = [0, 0, 0, 0]
     ends = [bsz, nh, seq_len, head_dim]
     strides = [1, 1, 1, 1]
+    cache_dtype = k_cache.dtype
+    # Fast path: write the full tile-padded [0:padded_seq) range straight through the tiled
+    # sharded slice_write (no unpad-slice, no RM untilize/tilize). Rows >= seq_len hold padded-token
+    # garbage, but decode never attends them: SDPA-decode masks positions > cur_pos and
+    # paged_update_cache overwrites each new slot before it is read. Only taken when the padded
+    # tensor is height-tile-aligned (the seq_len==padded_seq case already writes exactly).
+    if padded_seq != seq_len and (bsz * nh * padded_seq) % 32 == 0 and head_dim % 32 == 0:
+        k_t = (
+            key_states
+            if key_states.dtype == cache_dtype
+            else ttnn.typecast(key_states, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        v_t = (
+            value_states
+            if value_states.dtype == cache_dtype
+            else ttnn.typecast(value_states, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        k_sh = _shard_for_slice_write(k_t)
+        v_sh = _shard_for_slice_write(v_t)
+        if k_sh is not None and v_sh is not None:
+            full_ends = [bsz, nh, padded_seq, head_dim]
+            ttnn.experimental.slice_write(k_sh, k_cache, begins, full_ends, strides)
+            ttnn.experimental.slice_write(v_sh, v_cache, begins, full_ends, strides)
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v_sh)
+            if k_t is not key_states:
+                ttnn.deallocate(k_t)
+                ttnn.deallocate(v_t)
+            return
+        if k_sh is not None:
+            ttnn.deallocate(k_sh)
+        if v_sh is not None:
+            ttnn.deallocate(v_sh)
+        if k_t is not key_states:
+            ttnn.deallocate(k_t)
+            ttnn.deallocate(v_t)
     if padded_seq != seq_len:
         k_src = ttnn.slice(
             key_states, [0, 0, 0, 0], [bsz, nh, seq_len, head_dim], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -196,8 +232,14 @@ def write_self_kv_prefill_to_cache(
     else:
         k_typed = k_src
         v_typed = v_src
-    k_dram = ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    v_dram = ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_sharded = _shard_for_slice_write(k_typed)
+    v_sharded = _shard_for_slice_write(v_typed)
+    k_dram = (
+        k_sharded if k_sharded is not None else ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
+    v_dram = (
+        v_sharded if v_sharded is not None else ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
     ttnn.experimental.slice_write(k_dram, k_cache, begins, ends, strides)
     ttnn.experimental.slice_write(v_dram, v_cache, begins, ends, strides)
     if k_dram is not k_typed:
@@ -250,8 +292,14 @@ def write_cross_kv_prefill_to_cache(
     else:
         k_typed = k_src
         v_typed = v_src
-    k_dram = ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    v_dram = ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    k_sharded = _shard_for_slice_write(k_typed)
+    v_sharded = _shard_for_slice_write(v_typed)
+    k_dram = (
+        k_sharded if k_sharded is not None else ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
+    v_dram = (
+        v_sharded if v_sharded is not None else ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
     ttnn.experimental.slice_write(k_dram, k_cache, begins, ends, strides)
     ttnn.experimental.slice_write(v_dram, v_cache, begins, ends, strides)
     if k_dram is not k_typed:
@@ -447,6 +495,17 @@ class TTSeamlessM4Tv2Decoder:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Default for the attention projections (QKV / q / kv / out_proj) routed through ``_linear``.
+        # Their weights are BFP8 (~3 mantissa bits), so HiFi4's 3rd/4th compute phases add no
+        # precision over HiFi2 — HiFi2 ~halves the matmul math cost. LayerNorm and the explicit
+        # HiFi4 call sites keep ``_linear_ln_compute_cfg``.
+        self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self._ffn_fc1_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -511,8 +570,16 @@ class TTSeamlessM4Tv2Decoder:
         return cached
 
     def _sdpa_program_config(self, seq_q: int, seq_k: int, *, large_chunks: bool = True) -> ttnn.SDPAProgramConfig:
-        """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys."""
-        return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
+        """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys.
+
+        Decoder-tuned bounds ``(chunk_floor=32, chunk_cap=512)``: the prefill seeds have tiny
+        ``seq_q`` (~32) where the default 64 floor over-tiles, and the 512 cross-attn keys run
+        fastest as a single k-chunk. Measured -9..18% SDPA kernel time, PCC unchanged (enc=512
+        prefill+decode PCC tests pass).
+        """
+        return sdpa_program_config(
+            self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks, chunk_floor=32, chunk_cap=512
+        )
 
     def _decode_matmul_pc(self, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
         """Decode matmul PC (effective ``M=32`` tile rows).
@@ -594,7 +661,7 @@ class TTSeamlessM4Tv2Decoder:
         activation: Optional[str] = None,
         is_decode: bool = False,
     ) -> ttnn.Tensor:
-        ck = compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg
+        ck = compute_cfg if compute_cfg is not None else self._linear_compute_cfg
         if program_config is None:
             program_config = self._matmul_pc(
                 self._matmul_token_rows(x, is_decode=is_decode),

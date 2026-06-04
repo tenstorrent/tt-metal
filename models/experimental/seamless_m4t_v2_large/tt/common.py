@@ -956,16 +956,27 @@ def sdpa_program_config(
     cache: dict[Any, ttnn.SDPAProgramConfig],
     *,
     large_chunks: bool = True,
+    chunk_floor: int = 64,
+    chunk_cap: int = 256,
 ) -> ttnn.SDPAProgramConfig:
-    """Chunk sizes for ``ttnn.transformer.scaled_dot_product_attention`` (cached per caller dict)."""
-    key: Any = (seq_q, seq_k) if large_chunks else (seq_q, seq_k, large_chunks)
+    """Chunk sizes for ``ttnn.transformer.scaled_dot_product_attention`` (cached per caller dict).
+
+    Chunk size is purely a tiling of the (exact) flash-attention online softmax — it changes only
+    the device schedule, never numerics. ``chunk_floor`` / ``chunk_cap`` bound ``nearest_32(seq)``;
+    they default to the historical ``(64, 256)`` so encoder / T2U callers are unchanged. The
+    decoder passes ``(32, 512)`` (see ``TTSeamlessM4Tv2Decoder._sdpa_program_config``): a microbench
+    (2026_06_04, BH, per-device TP=4 prefill) showed the 64 floor was suboptimal for the small
+    ``seq_q`` decoder-seed prefills — self-attn seq=32 (64,64)->(32,32) -18%, cross enc=512
+    (64,256)->(32,512) -9% on SDPA kernel time (512 lets a 512-key cross-attn run as one k-chunk).
+    """
+    key: Any = (seq_q, seq_k, large_chunks, chunk_floor, chunk_cap)
     cached = cache.get(key)
     if cached is not None:
         return cached
 
     if large_chunks:
-        q_chunk = max(64, min(256, nearest_32(seq_q)))
-        k_chunk = max(64, min(256, nearest_32(seq_k)))
+        q_chunk = max(chunk_floor, min(chunk_cap, nearest_32(seq_q)))
+        k_chunk = max(chunk_floor, min(chunk_cap, nearest_32(seq_k)))
     else:
         q_chunk = max(32, min(256, nearest_32(seq_q)))
         k_chunk = max(32, min(256, nearest_32(seq_k)))
