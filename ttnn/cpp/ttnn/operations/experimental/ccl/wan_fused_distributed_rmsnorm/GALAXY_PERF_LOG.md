@@ -133,3 +133,33 @@ combination on RoPE is the headline: N18944-RoPE 982 (pre-opt) -> 843 (-14%).
 | N9472 no-rope  | 321.8 | 323 | ~1.0x |
 | N2368 no-rope  | 142.9 | 142 | ~1.0x |
 | L512 no-rope   | 64.3  | 65  | ~1.0x |
+
+## Idea E — reduce cos/sin cost (NOT pursued this round)
+
+(i) **bf16 cos/sin** (halve the ~19 MB cos/sin read on N18944, the single
+biggest lever left for RoPE): this is a **precision trade** — it lowers RoPE
+rotation fidelity and would fail the fused-vs-baseline guard by construction
+(needs a torch-reference check instead). It violates the standing "no loss of
+compute fidelity/precision" constraint, so NOT done autonomously. Flagged for a
+fidelity decision — highest remaining upside if precision can be relaxed.
+
+(ii) **batch cos/sin reads** across the chunk: precision-neutral, but only cuts
+the per-row cos/sin barrier count (3->1 per chunk), NOT the dominant cos/sin
+*byte* cost; cos/sin already overlap compute via Idea A. Low expected upside vs
+a moderate reader restructure that risks the committed A+D wins. Deferred.
+
+## Idea F — reshard input / cross-op fusion (NOT pursued: large effort)
+
+Reshard input to block/width-sharded for contiguous large reads, or fuse with
+the producing op so input arrives L1-resident (eliminating the input read
+entirely, ~19% on N18944 no-rope). Both are cross-op architectural changes far
+beyond a kernel tweak — a separate workstream. Deferred.
+
+## Session summary
+
+Committed wins: Idea A (decouple cos/sin barrier) + Idea D (RoPE-gated finer
+input push). Combined: **N18944-RoPE 982 -> 843 us (-14%)**, N9472-RoPE -4%,
+N2368-RoPE -5% (A) net ~flat (D), no-rope shapes unchanged. Dead ends: B
+(dynamic dual-NoC blocked by program-wide noc_mode constraint + fabric MUX),
+C (deeper reads — L1-blocked / contention regression). Remaining levers need a
+fidelity decision (E-bf16) or a cross-op rewrite (F).
