@@ -117,11 +117,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
     cpp/ttnn/operations/data_movement/scatter/scatter_nanobind.cpp
     cpp/ttnn/operations/data_movement/scatter/tosa_scatter_nanobind.cpp
-    cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
-    cpp/ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.cpp
-    cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
-    cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.cpp
-    cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.cpp
     cpp/ttnn/operations/data_movement/slice/slice_nanobind.cpp
     cpp/ttnn/operations/data_movement/split/split_nanobind.cpp
     cpp/ttnn/operations/data_movement/squeeze/squeeze_nanobind.cpp

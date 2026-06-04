@@ -56,31 +56,6 @@ def _golden_function(
 ttnn.attach_golden_function(ttnn.experimental.create_qkv_heads_from_separate_tensors, _golden_function)
 
 
-def _golden_function(tensor, grid_size, shard_spec, num_slices, slice, *args, **kwargs):
-    tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
-    slice_size = tensor.shape[-2] // num_slices
-    start = slice * slice_size
-    stop = start + slice_size
-    tensor = tensor[:, :, start:stop, :]
-    return tensor
-
-
-ttnn.attach_golden_function(ttnn.interleaved_to_sharded_partial, _golden_function)
-
-
-def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
-    original_shape = tensor.shape
-    tensor = tensor.reshape(1, 1, -1, tensor.shape[-1])
-    slice_size = tensor.shape[-2] // num_slices
-    start = slice_id * slice_size
-    stop = start + slice_size
-    tensor[:, :, start:stop, :] = slice
-    return tensor.reshape(original_shape)
-
-
-ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_function)
-
-
 def _golden_function(in0, in1, math_op, dim, *args, **kwargs):
     import torch
 
@@ -122,7 +97,4 @@ def _nop_golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
-ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _nop_golden_function)
-ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)

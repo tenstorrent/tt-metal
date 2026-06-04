@@ -5,8 +5,7 @@
 #include <functional>
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
@@ -150,7 +149,7 @@ ttnn::Tensor repeat(
     // Sharded -> interleaved
     if (input_tensor.memory_config().is_sharded()) {
         MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        working_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
+        working_tensor = ttnn::to_memory_config(input_tensor, working_memory_config);
     }
     if (working_output_mem_config.is_sharded()) {
         working_output_mem_config =
@@ -188,7 +187,7 @@ ttnn::Tensor repeat(
 
     // Interleaved to OG mem layout
     if (output_mem_config.is_sharded()) {
-        working_tensor = ttnn::interleaved_to_sharded(working_tensor, output_mem_config, std::nullopt);
+        working_tensor = ttnn::to_memory_config(working_tensor, output_mem_config);
     }
 
     return working_tensor;
