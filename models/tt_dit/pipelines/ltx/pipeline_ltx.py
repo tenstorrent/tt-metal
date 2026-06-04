@@ -534,6 +534,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
+            is_fsdp=self.is_fsdp,
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
