@@ -7,7 +7,10 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "cmath_common.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
+
 using namespace ckernel;
 
 /**
@@ -21,17 +24,18 @@ using namespace ckernel;
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  * stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: number of tiles to unpack at a time for a single operand
- * @param num_faces: number of faces in the tiles to unpack
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_tiny_tile_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TileShape& tile_shape)
+inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
+    const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
         "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
-    const std::uint32_t MOP_INNER_LOOP = tile_shape.num_faces;
+    const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
 
     // For UNP_A/UNP_B: Dst Tile Idx Inc = 0 so each face overwrites the same SrcA/B tile slot.
     // Dvalid is set per face so math can consume each face before the next one arrives.
@@ -41,7 +45,9 @@ inline void _llk_unpack_unary_operand_tiny_tile_mop_config_(const std::uint32_t 
     std::uint32_t reset_dest_tile_cnt_instrn =
         TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
 
-    std::uint32_t dest_tile_idx_inc = (tile_shape.face_r_dim < (FACE_R_DIM >> 1)) ? (FACE_R_DIM >> (rows_log2(tile_shape.face_r_dim) + 1)) : 1;
+    std::uint32_t dest_tile_idx_inc = (static_cast<std::uint32_t>(tensor_shape.face_r_dim) < (FACE_R_DIM >> 1))
+                                          ? (FACE_R_DIM >> (ckernel::math::math_rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
+                                          : 1;
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
     {
@@ -196,22 +202,19 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
 }
 
 /**
- * @brief Builds the MOP for unpack when reuse_dest is active for eltwise binary operations.
- *
- * Uses UNPACR_FACE_INC with a per-face NOP dvalid for the MOVD-filled source register. For
- * DEST_TO_SRCA, SrcA is filled by MOVD2A (gets the dummy dvalid NOP) and SrcB is unpacked from the CB;
- * for DEST_TO_SRCB the roles swap. The MOP inner loop iterates over NUM_FACES and END_OP advances the
- * tile counter.
- *
- * @tparam UNP_SEL: The original unpack selector (not used directly for reuse_dest dispatch), values = <p_unpacr::UNP_A/UNP_B/UNP_DEST>
- * @tparam reuse_dest: Which source register is reused from dest, values = <DEST_TO_SRCA/DEST_TO_SRCB>
- * @param buf_desc_id: The buffer descriptor ID for the CB source.
- * @param num_tiles: Number of tiles to unpack.
- * @param num_faces: Number of faces per tile (MOP inner loop length).
- * @param num_faces: number of faces in the tiles to unpack
+ * @brief MOP configuration for unpack when reuse_dest is active for eltwise binary operations.
+ * @details Uses UNPACR_FACE_INC with per-face NOP dvalid for the MOVD-filled source register.
+ * For DEST_TO_SRCA: SrcA is filled by MOVD2A (gets dummy dvalid NOP), SrcB is unpacked from CB.
+ * For DEST_TO_SRCB: SrcB is filled by MOVD2B (gets dummy dvalid NOP), SrcA is unpacked from CB.
+ * MOP inner loop iterates over NUM_FACES, END_OP advances the tile counter.
+ * @tparam UNP_SEL: The original unpack selector (not used directly for reuse_dest dispatch)
+ * @tparam reuse_dest: Which source register is reused from dest (DEST_TO_SRCA or DEST_TO_SRCB)
+ * @param buf_desc_id: The buffer descriptor ID for the CB source
+ * @param num_tiles: number of tiles to unpack
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest>
-inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TileShape& tile_shape)
+inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
     static_assert(reuse_dest != EltwiseBinaryReuseDestType::NONE, "reuse_dest must be DEST_TO_SRCA or DEST_TO_SRCB");
 
@@ -226,7 +229,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
     // Unpack one face from CB with auto-increment of src face index.
     // Dst_Face_Idx_Inc=0: always write to face 0 position (FPU reads from 0 after CLR_AB).
     // Src_Face_Idx_Inc=1: advance through L1 tile faces 0→1→2→3 (wraps back to 0).
-    if (tile_shape.num_faces == NUM_FACES) // Using regular tile dimensions
+    if (tensor_shape.total_num_faces() == NUM_FACES) // Using regular tile dimensions
     {
         const std::uint32_t face_inc_op = (CB_UNP == p_unpacr::UNP_A)
                                               ? TT_OP_UNPACR0_FACE_INC(0 /*Dst_Face_Inc*/, 1 /*Src_Face_Inc*/, 0, 0, buf_desc_id, 1 /*SetDatValid*/)
@@ -234,7 +237,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
         // MOP: outer=num_tiles, inner=num_faces
         // Each inner iteration: NOP (dvalid for dummy src) + FACE_INC (unpack face + inc src face)
         // END_OP: increment CB tile counter after all faces of a tile are processed
-        ckernel_template temp(num_tiles, tile_shape.num_faces, nop_op, face_inc_op);
+        ckernel_template temp(num_tiles, tensor_shape.total_num_faces(), nop_op, face_inc_op);
         temp.set_end_op(TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 1));
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
@@ -245,7 +248,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
                                               : TT_OP_UNPACR1_TILE_INC(0 /*Dst_Tile_Idx_Inc*/, 1 /*Src_Tile_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
         // MOP: outer=num_tiles, inner=num_faces
         // Each inner iteration: NOP (dvalid for dummy src) + FACE_INC (unpack face + inc src face)
-        ckernel_template temp(num_tiles, tile_shape.num_faces, nop_op, face_inc_op);
+        ckernel_template temp(num_tiles, tensor_shape.total_num_faces(), nop_op, face_inc_op);
         temp.program_bank0_sw_cntl(instrn_buffer);
     }
 }
@@ -269,7 +272,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @note @ref _llk_unpack_unary_operand_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, bool TRANSPOSE_EN, bool IS_32b_DEST_EN, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, TileShape& tile_shape, const std::uint32_t num_tiles = NUM_TILES)
+inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 
@@ -284,7 +287,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Til
 
     if constexpr (reuse_dest != EltwiseBinaryReuseDestType::NONE)
     {
-        _llk_unpack_unary_operand_reuse_dest_mop_config_<UNP_SEL, reuse_dest>(buf_desc_id, num_tiles, tile_shape);
+        _llk_unpack_unary_operand_reuse_dest_mop_config_<UNP_SEL, reuse_dest>(buf_desc_id, num_tiles, tensor_shape);
     }
     else if constexpr (TRANSPOSE_EN)
     {
@@ -292,13 +295,13 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Til
     }
     else
     {
-        if (tile_shape.num_faces == NUM_FACES || tile_shape.num_faces == 1) // Using regular tile dimensions
+        if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
         {
             _llk_unpack_unary_operand_full_tile_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
         }
         else // Using tiny-tiles
         {
-            _llk_unpack_unary_operand_tiny_tile_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tile_shape);
+            _llk_unpack_unary_operand_variable_tile_size_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles, tensor_shape);
         }
     }
 }
@@ -310,9 +313,10 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Til
  * @tparam reuse_dest: When not NONE, sets the source counter for the CB unpacker only, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
  * @note Call @ref _llk_unpack_unary_operand_init_ with matching template args before this function.
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
 template <std::uint32_t UNP_SEL, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TileShape& tile_shape)
+inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const TensorShape& tensor_shape)
 {
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
@@ -325,7 +329,8 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Ti
         // For tiny-tiles, each face is considered a separate tile in HW. We need to multiply the tile idx by num_faces to get the correct SW defined tile
         // offset.
         constexpr std::uint32_t CB_UNP = (reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) ? p_unpacr::UNP_B : p_unpacr::UNP_A;
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, (tile_shape.num_faces == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tile_shape.num_faces);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(
+            p_set_inc_sel::TILE_SEL, CB_UNP, (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CB_UNP, 0);
     }
     else
@@ -337,7 +342,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Ti
         TT_SET_SRC_TILE_FACE_ROW_IDX(
             p_set_inc_sel::TILE_SEL,
             UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL,
-            (tile_shape.num_faces == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tile_shape.num_faces);
+            (tensor_shape.total_num_faces() == NUM_FACES) ? l1_tile_idx : l1_tile_idx * tensor_shape.total_num_faces());
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
     }
 
