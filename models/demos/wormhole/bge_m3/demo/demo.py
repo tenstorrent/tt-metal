@@ -396,9 +396,20 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
         token_type_ids=token_type_ids,
     )
 
+    # attention_mask is the 4D additive (bfloat) encoder mask -- it must keep its
+    # float values + TILE layout, NOT be cast to int via _to_ttnn_ids (which is
+    # only for integer id tensors). Casting it to int collapses the mask and
+    # tanks PCC.
+    tt_attention_mask = ttnn.from_torch(
+        attention_mask.bfloat16(),
+        device=device,
+        dtype=model_args.attention_mask_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     tt_output = tt_model(
         input_ids=_to_ttnn_ids(input_ids, device=device),
-        attention_mask=_to_ttnn_ids(attention_mask, device=device),
+        attention_mask=tt_attention_mask,
         token_type_ids=_to_ttnn_ids(token_type_ids, device=device),
     )
     tt_hidden_states = to_torch_auto_compose(tt_output, device=device)
