@@ -40,7 +40,7 @@ def _index_tensor(value, mesh_device):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
     [
