@@ -199,7 +199,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
-    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl) {
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
@@ -227,12 +227,64 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         scale,
         compute_kernel_config,
         core_allocation_strategy,
-        cache_batch_idx,
+        kv_cache_batch_idx,
         kv_actual_isl);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_kv,
+    ttnn::Tensor& persistent_output_buffer_kv,
+    const uint32_t head_dim_v,
+    std::size_t logical_n,
+    ttnn::operations::transformer::SDPAProgramConfig program_config,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const CoreCoord ccl_core_grid_offset,
+    bool is_balanced,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> kv_cache_batch_idx,
+    std::optional<uint32_t> kv_actual_isl) {
+    auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_kv,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        persistent_output_buffer_kv,
+        std::nullopt,
+        "rear",
+        logical_n,
+        std::move(program_config),
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        ccl_core_grid_offset,
+        subdevice_id,
+        /*is_causal=*/true,
+        is_balanced,
+        scale,
+        compute_kernel_config,
+        core_allocation_strategy,
+        kv_cache_batch_idx,
+        kv_actual_isl,
+        head_dim_v);
+    return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttention::invoke(

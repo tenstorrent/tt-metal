@@ -195,7 +195,7 @@ void bind_disaggregation_api(nb::module_& mod) {
     mod.def(
         "tensor_from_bfp8_bytes",
         [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
-            return ttnn::experimental::disaggregation::tensor_from_bfp8_bytes(
+            return ttnn::experimental_disaggregation::tensor_from_bfp8_bytes(
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
         },
         nb::arg("raw_bytes"),

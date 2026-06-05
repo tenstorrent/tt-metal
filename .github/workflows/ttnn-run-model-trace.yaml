@@ -195,21 +195,26 @@ jobs:
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
           echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     name: Build
-    needs: [validate-inputs]
+    needs: [check-harbor, validate-inputs]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
-    needs: [validate-inputs, build-artifact]
+    needs: [check-harbor, validate-inputs, build-artifact]
     strategy:
       fail-fast: false
       matrix:

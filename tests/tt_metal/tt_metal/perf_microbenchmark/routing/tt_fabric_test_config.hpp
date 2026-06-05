@@ -129,6 +129,12 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 
+static const StringEnumMapper<MeshTrafficScope> mesh_scope_mapper({
+    {"all", MeshTrafficScope::ALL},
+    {"intra_mesh", MeshTrafficScope::INTRA_MESH},
+    {"inter_mesh", MeshTrafficScope::INTER_MESH},
+});
+
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
 void append_with_separator(std::string& target, std::string_view separator, const Args&... args) {
@@ -487,7 +493,15 @@ private:
         ParsedTestConfig& test, const std::vector<HighLevelPatternConfig>& patterns, uint32_t iteration_idx);
 
     void expand_one_or_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        HighLevelTrafficPattern pattern_type,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
+
+    // Filters device pairs to intra/inter-mesh subsets based on the requested scope.
+    // On single-mesh systems all pairs are intra-mesh; INTER_MESH yields an empty set.
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> filter_pairs_by_mesh_scope(
+        const std::vector<std::pair<FabricNodeId, FabricNodeId>>& all_pairs, MeshTrafficScope mesh_scope) const;
 
     void expand_all_to_one_unicast(
         ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
@@ -497,7 +511,10 @@ private:
     void expand_full_device_random_pairing(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 
     void expand_sequential_all_to_all_unicast(
-        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx);
+        ParsedTestConfig& test,
+        const ParsedTrafficPatternConfig& base_pattern,
+        uint32_t iteration_idx,
+        MeshTrafficScope mesh_scope = MeshTrafficScope::ALL);
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern);
 

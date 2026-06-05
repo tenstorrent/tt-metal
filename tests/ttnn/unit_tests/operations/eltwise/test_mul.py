@@ -180,3 +180,32 @@ def test_multiply_modes(device, fast_and_approximate_mode, ulp_threshold, high, 
     output = ttnn.to_torch(output)
 
     assert_with_ulp(torch_output_tensor, output, ulp_threshold)
+
+
+def test_binary_mul_bf16_scalar(device):
+    torch_dtype = torch.bfloat16
+    ttnn_dtype = ttnn.bfloat16
+
+    x_torch = torch.tensor(
+        [
+            [
+                10,
+                10.0625,
+                10.125,
+                100,
+                1000,
+            ]
+        ],
+        dtype=torch_dtype,
+    ).repeat(32, 8)
+    y_torch = 0.1
+
+    z_torch_mul = torch.mul(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = y_torch
+    z_tt_mul = ttnn.mul(x_tt, y_tt)
+
+    tt_out_mul = ttnn.to_torch(z_tt_mul)
+
+    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
