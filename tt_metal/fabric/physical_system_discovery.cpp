@@ -31,10 +31,8 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Maps scaleout's board-cabling PortType onto Metal's public PortType. The two enums
-// are intentionally duplicated to keep ScaleoutTools and Metalium free of a circular
-// dependency; this is the single conversion point. The switch has no default case so
-// adding a value to either enum surfaces as a compile-time warning here.
+// Single conversion point for scaleout's duplicated PortType. No default case so
+// enum drift is caught at compile time.
 PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
     switch (pt) {
         case tt::scaleout_tools::PortType::TRACE: return PortType::TRACE;

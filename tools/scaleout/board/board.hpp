@@ -30,12 +30,8 @@ namespace tt::scaleout_tools {
 using PortId = ttsl::StrongType<uint32_t, struct PortIdTag>;
 using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
-// Physical port / cable type for a board's ethernet ports.
-// NOTE: kept in sync with tt::tt_metal::PortType in
-// tt-metalium/experimental/fabric/fabric_types.hpp. The two enums are deliberately
-// duplicated (rather than aliased) to avoid a circular dependency between
-// ScaleoutTools and Metalium. Conversion happens at the discovery boundary in
-// tt_metal/fabric/physical_system_discovery.cpp.
+// Keep in sync with tt::tt_metal::PortType (fabric_types.hpp); duplicated rather than
+// aliased to avoid a ScaleoutTools<->Metalium cycle. Converted in physical_system_discovery.cpp.
 enum class PortType {
     UNKNOWN,
     TRACE,
