@@ -34,17 +34,9 @@
 #include "device/mock_device_util.hpp"
 #include "impl/context/metal_context.hpp"
 
-#include <ttnn/graph/graph_query_op_constraints.hpp>
-#include <ttnn/operations/ccl/all_gather/all_gather.hpp>
-#include <ttnn/tensor/layout/page_config.hpp>
-#include <ttnn/tensor/layout/tensor_layout.hpp>
-#include <ttnn/tensor/tensor_ops.hpp>
-#include <ttnn/tensor/tensor_spec.hpp>
-#include <ttnn/tensor/types.hpp>
-#include <ttnn/types.hpp>
+#include "metal_env_mock_ccl_test_helper.hpp"
 
 #include <limits>
-#include <optional>
 
 namespace tt::tt_metal {
 
@@ -156,29 +148,6 @@ void PerformDeviceWork(
     }
 
     _exit(0);
-}
-
-ttnn::TensorSpec MakeAllGatherInputSpec() {
-    return ttnn::TensorSpec(
-        ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
-        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-}
-
-ttnn::graph::ConstraintQueryResponse RunAllGatherConstraintQuery(distributed::MeshDevice* device) {
-    auto sharded_topology = TensorTopology::create_sharded_tensor_topology(device->shape(), /*shard_dim=*/0);
-    ttnn::graph::DistributedTensorSpec dist_input{MakeAllGatherInputSpec(), sharded_topology};
-
-    return ttnn::graph::query_op_constraints(
-        [](auto&&... args) { return ttnn::all_gather(std::forward<decltype(args)>(args)...); },
-        device,
-        dist_input,
-        /*dim=*/3,
-        /*cluster_axis=*/std::optional<uint32_t>(1),
-        /*subdevice_id=*/std::optional<SubDeviceId>{},
-        /*memory_config=*/std::optional<MemoryConfig>{},
-        /*optional_output_tensor=*/std::optional<::ttnn::Tensor>{},
-        /*num_links=*/std::optional<uint32_t>(1),
-        /*topology=*/std::optional<tt_fabric::Topology>(tt_fabric::Topology::Linear));
 }
 
 struct LegacyMockFabricCleanup {
@@ -590,9 +559,8 @@ TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
 
     auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(device, nullptr);
-    auto response = RunAllGatherConstraintQuery(device.get());
-    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
-        << "query failed: " << response.error_message.value_or("(no message)");
+    auto response = test_support::run_all_gather_constraint_query(device.get());
+    EXPECT_TRUE(response.success) << "query failed: " << response.error_message.value_or("(no message)");
 }
 
 TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
@@ -606,9 +574,8 @@ TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
     ASSERT_TRUE(MetalEnvAccessor{env}.impl().set_fabric_config(
         tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE));
 
-    auto response = RunAllGatherConstraintQuery(device.get());
-    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
-        << "query failed: " << response.error_message.value_or("(no message)");
+    auto response = test_support::run_all_gather_constraint_query(device.get());
+    EXPECT_TRUE(response.success) << "query failed: " << response.error_message.value_or("(no message)");
 }
 
 TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
@@ -622,15 +589,14 @@ TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
         tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     MetalContext::instance().initialize_fabric_config();
 
-    ttnn::graph::ConstraintQueryResponse response;
+    test_support::OpConstraintQueryResult response;
     {
         auto device = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
         ASSERT_NE(device, nullptr);
-        response = RunAllGatherConstraintQuery(device.get());
+        response = test_support::run_all_gather_constraint_query(device.get());
     }
 
-    EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
-        << "query failed: " << response.error_message.value_or("(no message)");
+    EXPECT_TRUE(response.success) << "query failed: " << response.error_message.value_or("(no message)");
 }
 
 }  // namespace tt::tt_metal
