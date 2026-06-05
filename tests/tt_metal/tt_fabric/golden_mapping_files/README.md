@@ -198,6 +198,7 @@ The comparison logic is implemented in:
 - `tests/tt_metal/tt_fabric/fabric_router/test_multi_host.cpp`: Multi-host version of `check_asic_mapping_against_golden()`
 
 The comparison is order-independent and validates:
+- Hostnames
 - ASIC IDs
 - Tray IDs and ASIC locations
 - Fabric node IDs (mesh_id and chip_id)
