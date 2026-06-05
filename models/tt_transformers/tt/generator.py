@@ -641,6 +641,27 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )  # batched path feeds full tokens; incompatible with cached prefixes
         )
 
+        # Batched prefill passes a per-user `last_token_idx` *list* (and a list
+        # `user_id`) into prefill_forward_single_user_text. That function's
+        # chunked-prefill branch only supports a single sequence with a scalar
+        # last_token_idx -- it compares/slices it arithmetically
+        # (`last_token_idx < seq_len`, `// chunk_size`, ...), pins user_id=0 and
+        # slices the page table to one row. A batch whose padded length exceeds
+        # max_prefill_chunk_size therefore reaches the chunked path with a list
+        # and dies on the first assert with
+        # `TypeError: '<' not supported between instances of 'list' and 'int'`.
+        # Such prompts already require multi-pass chunked prefill (so batching
+        # buys no single-pass win and would re-introduce the very DRAM pressure
+        # chunking exists to relieve); keep them on the sequential per-user path
+        # that chunks each prompt correctly. See tenstorrent/tt-metal#45234.
+        if use_batched_prefill and any(s > self.model_args[0].max_prefill_chunk_size for s in prefill_seq_lens):
+            logger.info(
+                f"Batched prefill disabled: padded prefill len {prefill_seq_lens[0]} exceeds "
+                f"max_prefill_chunk_size {self.model_args[0].max_prefill_chunk_size}; chunked "
+                f"prefill requires the sequential prefill path (#45234)"
+            )
+            use_batched_prefill = False
+
         if use_batched_prefill and sampling_on_device_requested:
             sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
             if sampling_module is not None and sampling_dp > 1:
