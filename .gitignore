@@ -163,3 +163,4 @@ models/experimental/petr/resources/*.pth
 # Local-only behavioral guidelines (intentionally not committed)
 CLAUDE.md
 CLAUDE_DOCUMENTATION_GUIDE.md
+CLAUDE_PRESENTATION_GUIDE.md
