@@ -5,9 +5,10 @@
 // Ported from bakeoff_mcast_sender.cpp — same program shape, but the mcast+handshake
 // block is now Pipe::send(). Style axes selected at compile time:
 //   STAGING_COUNTER (0/1) -> Staging::Flag | Staging::Counter
-//   LOOPBACK_INCLUDE(0/1) -> McastMode::EXCLUDE_SRC | INCLUDE_SRC
 //   LINKED          (0/1) -> LINK=false (unlinked+barrier) | true (linked pair + flush)
 // (F1 fence is BAKED IN to flush — the helper has no barrier knob, by design.)
+// EXCLUDE_SRC vs INCLUDE_SRC is NOT a knob: the Pipe infers it at runtime from whether this
+// sender's core lies in the rect. Here the sender is out-of-rect, so the Pipe infers EXCLUDE.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -21,16 +22,12 @@
 #ifndef STAGING_COUNTER
 #define STAGING_COUNTER 0
 #endif
-#ifndef LOOPBACK_INCLUDE
-#define LOOPBACK_INCLUDE 0
-#endif
 #ifndef LINKED
 #define LINKED 0
 #endif
 
 using namespace dataflow_kernel_lib;
 
-constexpr auto MCAST = LOOPBACK_INCLUDE ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 constexpr Staging STG = STAGING_COUNTER ? Staging::Counter : Staging::Flag;
 constexpr bool LINK = LINKED != 0;
 
@@ -39,7 +36,7 @@ void kernel_main() {
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
     constexpr uint32_t consumed_sem_id = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dests = get_compile_time_arg_val(4);
+    constexpr uint32_t num_active_cores = get_compile_time_arg_val(4);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(5);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t num_iters = get_compile_time_arg_val(7);
@@ -72,8 +69,8 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    Pipe<MCAST, STG, pre_handshake != 0, LINK> pipe(
-        noc, McastRect{x0, y0, x1, y1, num_dests}, Semaphore<>(data_ready_sem_id), Semaphore<>(consumed_sem_id));
+    Pipe<STG, pre_handshake != 0, LINK> pipe(
+        noc, McastRect{x0, y0, x1, y1}, num_active_cores, Semaphore<>(data_ready_sem_id), Semaphore<>(consumed_sem_id));
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);

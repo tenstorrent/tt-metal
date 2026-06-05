@@ -10,10 +10,15 @@
 #   * F1 fence is BAKED IN to flush — there is no barrier variant to test (the helper has no
 #     barrier knob, by design). The "f1_*"/"f4_unlinked" loser variants are gone.
 #   * Variants now exercise the helper's actual axes: STAGING (Flag default | Counter knob),
-#     LINK (linked default | unlinked fallback), MCAST (EXCLUDE default | INCLUDE loopback),
-#     PRE_HANDSHAKE.
+#     LINK (linked default | unlinked fallback), PRE_HANDSHAKE.
+#   * EXCLUDE_SRC vs INCLUDE_SRC is NO LONGER a knob (Round 2): the Pipe infers it at runtime
+#     from sender-in-rect. So these tests double as the inference gate —
+#       sender out-of-rect (test_coverage/test_smoke) -> Pipe must infer EXCLUDE,
+#       sender in-rect     (test_f3_loopback)         -> Pipe must infer INCLUDE_SRC loopback,
+#       num_active_cores==1 (test_f3_degenerate)      -> Pipe must collapse to a local copy.
 #
-# Green here == the helper reproduces the bake-off WINNERS' behavior bit-exact, with no hang.
+# Green here == the helper reproduces the bake-off WINNERS' behavior bit-exact, with no hang,
+# AND infers the right multicast mode purely from geometry + the active-core count.
 #
 # HARDCODED virtualization offset for THIS machine (Blackhole p150a, COORDINATE_VIRTUALIZATION):
 #   worker logical (lx, ly) -> virtual NoC (lx + 1, ly + 2)   [VIRTUAL_TENSIX_START_X/Y]
@@ -29,19 +34,18 @@ TILE_BYTES = 32 * 32 * 2  # bf16 tile
 KERNEL_DIR = "tests/ttnn/unit_tests/kernel_lib/kernels"
 
 
-def _defines(staging_counter, loopback_include, linked):
+def _defines(staging_counter, linked):
     return [
         ("STAGING_COUNTER", str(staging_counter)),
-        ("LOOPBACK_INCLUDE", str(loopback_include)),
         ("LINKED", str(linked)),
     ]
 
 
-# (name, staging_counter, loopback_include, linked)
+# (name, staging_counter, linked)
 VARIANTS = {
-    "flag_linked": (0, 0, 1),  # canonical clean-spine path: Flag + linked pair + flush
-    "flag_unlinked": (0, 0, 0),  # F4 unlinked fallback (barrier-between)
-    "counter": (1, 0, 0),  # Staging::Counter knob (atomic-barrier fence)
+    "flag_linked": (0, 1),  # canonical clean-spine path: Flag + linked pair + flush
+    "flag_unlinked": (0, 0),  # F4 unlinked fallback (barrier-between)
+    "counter": (1, 0),  # Staging::Counter knob (atomic-barrier fence)
 }
 
 
@@ -49,11 +53,12 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     """recv_rect = ((rx0,ry0),(rx1,ry1)) logical; sender_logical = (sx,sy) logical."""
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
-    stage_c, loop_i, linked = VARIANTS[variant]
+    stage_c, linked = VARIANTS[variant]
 
     nrx, nry = rx1 - rx0 + 1, ry1 - ry0 + 1
     num_recv = nrx * nry
-    num_dests = num_recv  # sender out-of-rect; receiver rect cores
+    # sender out-of-rect: every rect core is an active receiver, so active-cores == rect area.
+    num_active_cores = num_recv
 
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -116,7 +121,7 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
         cb_dst,
         DATA_READY,
         CONSUMED,
-        num_dests,
+        num_active_cores,
         payload_pages,
         page_bytes,
         n_iters,
@@ -130,7 +135,7 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=sender_crs,
         compile_time_args=sender_ct,
-        defines=_defines(stage_c, loop_i, linked),
+        defines=_defines(stage_c, linked),
         runtime_args=sender_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -149,7 +154,7 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=recv_crs,
         compile_time_args=recv_ct,
-        defines=_defines(stage_c, loop_i, linked),
+        defines=_defines(stage_c, linked),
         runtime_args=recv_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -232,7 +237,9 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
     R = rect_len
-    num_dests = R  # INCLUDE_SRC counts self
+    # sender is IN the rect; all R column cores (sender + R-1 receivers) are active. R==1 is the
+    # degenerate self-only case the Pipe must collapse to a local copy.
+    num_active_cores = R
 
     in_shape = [1, 1, 32, 32 * payload_tiles]
     payload = torch.arange(0, payload_tiles * 1024, dtype=torch.float32).reshape(in_shape).to(torch.bfloat16)
@@ -276,7 +283,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     ]
 
     # sender kernel (writes its own shard 0)
-    sender_ct = [cb_src, cb_dst, DATA_READY, num_dests, payload_pages, page_bytes, n_iters]
+    sender_ct = [cb_src, cb_dst, DATA_READY, num_active_cores, payload_pages, page_bytes, n_iters]
     sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     sender_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     sender_rt = ttnn.RuntimeArgs()
@@ -325,7 +332,7 @@ def test_f3_loopback(device, payload_tiles):
     _run_f3(device, rect_len=4, payload_tiles=payload_tiles, n_iters=1)
 
 
-# Degenerate guard: rect_len==1 => num_dests==1 self-only. The Pipe must collapse INCLUDE_SRC
+# Degenerate guard: rect_len==1 => num_active_cores==1 self-only. The Pipe must collapse INCLUDE_SRC
 # loopback to a local copy (else the raw loopback hangs). Only the sender core participates.
 def test_f3_degenerate(device):
     _run_f3(device, rect_len=1, payload_tiles=1, n_iters=1)

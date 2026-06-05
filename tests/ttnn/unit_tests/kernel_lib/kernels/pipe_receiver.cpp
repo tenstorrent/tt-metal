@@ -44,10 +44,15 @@ void kernel_main() {
     // reserve the landing region: write_ptr == base == the address the sender mcasts to
     cb_dst_obj.reserve_back(payload_pages);
 
-    // MCAST/LINK are irrelevant on the receiver path (only STAGING + PRE_HANDSHAKE matter);
-    // defaults are fine. The dest points back at the sender for the consumed ack.
-    Pipe<Noc::McastMode::EXCLUDE_SRC, STG, pre_handshake != 0, true> pipe(
-        noc, McastRect::single_core(sender_x, sender_y), Semaphore<>(data_ready_sem_id), Semaphore<>(consumed_sem_id));
+    // LINK is irrelevant on the receiver path (only STAGING + PRE_HANDSHAKE matter); defaults are
+    // fine. The dest points back at the sender for the consumed ack, and num_active_cores is unused
+    // on the receiver (it never multicasts) — pass 1 by convention.
+    Pipe<STG, pre_handshake != 0, true> pipe(
+        noc,
+        McastRect::single_core(sender_x, sender_y),
+        /*num_active_cores=*/1,
+        Semaphore<>(data_ready_sem_id),
+        Semaphore<>(consumed_sem_id));
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.receive();

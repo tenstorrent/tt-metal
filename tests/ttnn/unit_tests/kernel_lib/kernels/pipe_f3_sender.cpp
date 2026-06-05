@@ -5,7 +5,7 @@
 // (the bake-off winner for sender-in-rect loopback). The sender is one core of the mcast
 // rectangle and ends up with the payload in its OWN cb_dst via hardware loopback, then
 // writes that to its own output shard for verification. The other rect cores run
-// pipe_receiver.cpp. Also exercises the degenerate guard when rect_len==1 (num_dests==1).
+// pipe_receiver.cpp. Also exercises the degenerate guard when rect_len==1 (num_active_cores==1).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
-    constexpr uint32_t num_dests = get_compile_time_arg_val(3);
+    constexpr uint32_t num_active_cores = get_compile_time_arg_val(3);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(4);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_iters = get_compile_time_arg_val(6);
@@ -58,11 +58,13 @@ void kernel_main() {
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
 
-    // INCLUDE_SRC loopback: the hardware writes the payload to self too. No pre-handshake
-    // (fresh single-use dest here). The degenerate guard collapses num_dests==1 to a local copy.
-    Pipe<Noc::McastMode::INCLUDE_SRC, Staging::Flag, /*PRE_HANDSHAKE=*/false, /*LINK=*/true> pipe(
+    // Sender is IN the rect -> the Pipe infers INCLUDE_SRC loopback (hardware writes the payload
+    // to self too). No pre-handshake (fresh single-use dest here). When num_active_cores==1 the
+    // degenerate guard collapses the self-only loopback to a local copy.
+    Pipe<Staging::Flag, /*PRE_HANDSHAKE=*/false, /*LINK=*/true> pipe(
         noc,
-        McastRect{x0, y0, x1, y1, num_dests},
+        McastRect{x0, y0, x1, y1},
+        num_active_cores,
         Semaphore<>(data_ready_sem_id),
         Semaphore<>(/*consumed unused*/ data_ready_sem_id));
 
