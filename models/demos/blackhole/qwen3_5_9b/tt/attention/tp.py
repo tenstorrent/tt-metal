@@ -92,6 +92,18 @@ class TPAttention:
         self.compute_cfg = tpc.COMPUTE_HIFI2
         self.k_caches = None
         self.v_caches = None
+        # Paged KV cache (vLLM / model-contract path). Bound via set_paged_kv_cache;
+        # when use_paged, decode/prefill read+write this external paged cache through
+        # page_table instead of the internal concat caches above (which stay for the demo).
+        self.paged_k = None
+        self.paged_v = None
+        self.use_paged = False
+
+    def set_paged_kv_cache(self, k_cache, v_cache):
+        """Attach an externally-allocated paged KV cache (one call after allocate_kv_caches)."""
+        self.paged_k = k_cache
+        self.paged_v = v_cache
+        self.use_paged = True
 
     def reset_state(self):
         def z():
@@ -178,9 +190,10 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt):
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
-        if self.k_caches is None:
+        use_paged = self.use_paged and page_table is not None
+        if not use_paged and self.k_caches is None:
             self.reset_state()
 
         qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -204,46 +217,75 @@ class TPAttention:
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # Update per-head KV caches (pad NKV head dim to 32 for tile-aligned sharded update)
-        for h in range(NKV):
-            k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
-            v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
-            k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-            v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-            ttnn.deallocate(k_h)
-            ttnn.deallocate(v_h)
-            k_sh = ttnn.to_memory_config(k_hp, self.args.kv_update_shard_cfg)
-            v_sh = ttnn.to_memory_config(v_hp, self.args.kv_update_shard_cfg)
-            ttnn.deallocate(k_hp)
-            ttnn.deallocate(v_hp)
-            ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
-            ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
-            ttnn.deallocate(k_sh)
-            ttnn.deallocate(v_sh)
-        ttnn.deallocate(k)
-        ttnn.deallocate(v)
-
-        if NKV == 1:
-            k_full, v_full = self.k_caches[0], self.v_caches[0]
-        else:
-            k_full = ttnn.concat(self.k_caches, dim=1)
-            v_full = ttnn.concat(self.v_caches, dim=1)
-
         # Cap the SDPA-decode grid to 64 cores (tree-reduction limit); auto-grid
         # grabs all 110 P150 cores for a single user (B=1) and overflows.
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
         )
-        attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
-            q,
-            k_full,
-            v_full,
-            cur_pos_tensor=cur_pos_tt,
-            scale=self.scale,
-            program_config=sdpa_dec_cfg,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(q)
+        if use_paged:
+            # External paged KV cache (vLLM/contract path): update at cur_pos via the
+            # page_table, then paged SDPA-decode. Mirrors qwen35_27b attention.py:188-218.
+            keys, values = self.paged_k, self.paged_v
+            k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+            k_sh = ttnn.to_memory_config(k_p, self.args.kv_update_shard_cfg)
+            v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
+            ttnn.deallocate(k_p)
+            ttnn.deallocate(v_p)
+            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v_sh)
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                keys,
+                values,
+                page_table_tensor=page_table,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_dec_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
+        else:
+            # Internal per-head KV caches (demo/standalone). Pad NKV head dim to 32 for
+            # the tile-aligned sharded update.
+            for h in range(NKV):
+                k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
+                v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
+                k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
+                ttnn.deallocate(k_h)
+                ttnn.deallocate(v_h)
+                k_sh = ttnn.to_memory_config(k_hp, self.args.kv_update_shard_cfg)
+                v_sh = ttnn.to_memory_config(v_hp, self.args.kv_update_shard_cfg)
+                ttnn.deallocate(k_hp)
+                ttnn.deallocate(v_hp)
+                ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
+                ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
+                ttnn.deallocate(k_sh)
+                ttnn.deallocate(v_sh)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+
+            if NKV == 1:
+                k_full, v_full = self.k_caches[0], self.v_caches[0]
+            else:
+                k_full = ttnn.concat(self.k_caches, dim=1)
+                v_full = ttnn.concat(self.v_caches, dim=1)
+
+            attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                k_full,
+                v_full,
+                cur_pos_tensor=cur_pos_tt,
+                scale=self.scale,
+                program_config=sdpa_dec_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q)
 
         gated = ttnn.multiply(attn_out, ttnn.sigmoid(gate))
         ttnn.deallocate(attn_out)
@@ -258,6 +300,156 @@ class TPAttention:
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
         return tt_all_reduce(
             wo_partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def forward_prefill_paged(
+        self,
+        x,
+        cos_tt,
+        sin_tt,
+        page_table,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        chunk_start_idx_tensor=None,
+        user_id=0,
+    ):
+        """Paged-KV prefill for one chunk of a sequence (vLLM / model-contract path).
+
+        Fills the external paged KV cache (self.paged_k/v) for this chunk via
+        paged_fill_cache, then runs chunked SDPA over the paged cache so the chunk
+        attends to all prior chunks. x: [1,1,S,dim] replicated; cos/sin sliced to this
+        chunk; chunk_start_idx is the chunk's absolute token offset. Output fractured
+        along dim=3. Mirrors qwen35_27b/tt/attention.py forward_prefill_paged, adapted
+        to the integrated interleaved-matmul / reshape conventions used by forward_prefill.
+
+        chunk_start_idx_tensor: optional device tensor [1] int32. When supplied, the
+        chunked SDPA uses the FLEXIBLE path (runtime device offset + a fixed q/k_chunk=64
+        program config), so a single captured trace / compiled program serves every chunk
+        position — the masked-bucket + chunk-outer-trace path (mirrors the single-device
+        gated_attention_forward_ttnn flexible branch). chunk_start_idx (int) is still used
+        host-side to size the page table; the op consumes the tensor.
+        """
+        assert self.use_paged and self.paged_k is not None, "forward_prefill_paged requires a bound paged KV cache"
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        if chunk_start_idx is None:
+            chunk_start_idx = 0
+        S = x.shape[-2]
+
+        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
+        q = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, 0), (1, S, NH, HD)), 1, 2)
+        gate = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, HD), (1, S, NH, 2 * HD)), 1, 2)
+        ttnn.deallocate(qg)
+        k = ttnn.transpose(ttnn.reshape(kp, (1, S, NKV, HD)), 1, 2)
+        ttnn.deallocate(kp)
+        v = ttnn.transpose(ttnn.reshape(vp, (1, S, NKV, HD)), 1, 2)
+        ttnn.deallocate(vp)
+
+        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm"])
+        k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm"])
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+
+        # Fill only this chunk's positions into the paged cache.
+        k_paged, v_paged = self.paged_k, self.paged_v
+        block_size = k_paged.shape[2]
+        fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+        page_len = fill_page_table.shape[1] * block_size
+        if page_len < S:
+            k_fill = ttnn.slice(k, (0, 0, 0, 0), (1, NKV, page_len, HD))
+            v_fill = ttnn.slice(v, (0, 0, 0, 0), (1, NKV, page_len, HD))
+        else:
+            k_fill, v_fill = k, v
+        ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
+        ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
+        if page_len < S:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # Chunked SDPA over the paged cache (attends to prior chunks via page_table).
+        q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q)
+
+        # chunked SDPA requires chunk_start_idx % q_chunk_size == 0. The FLEXIBLE path
+        # (device-tensor offset) fixes q/k_chunk=64 so ONE program serves every chunk
+        # position (64 divides any 2048-multiple chunk_start) — required for a single
+        # captured trace / pre-warmed bucket program. The int path picks the largest
+        # power-of-two chunk dividing chunk_start_idx (any size divides 0).
+        if chunk_start_idx_tensor is not None:
+            qk_chunk = 64
+        else:
+            cap = 256 if S >= 2048 else 64
+            qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=qk_chunk, k_chunk_size=qk_chunk
+        )
+
+        # Pad the SDPA page table with zero blocks so (a) K covers a padded/short Q
+        # (K < Q + chunk_start_idx — padded slots are masked out / never filled), and
+        # (b) the stick size is a multiple of 32, which the (flexible) chunked SDPA kernel
+        # requires. The extra logical blocks map to physical block 0 but sit at K positions
+        # beyond the prompt, so causality masks them out of every real query.
+        sdpa_page_table = page_table
+        needed_blocks = (S + chunk_start_idx + block_size - 1) // block_size
+        target_blocks = max(needed_blocks, page_table.shape[-1])
+        target_blocks = ((target_blocks + 31) // 32) * 32
+        if page_table.shape[-1] < target_blocks:
+            zeros_pad = ttnn.zeros(
+                (page_table.shape[0], target_blocks - page_table.shape[-1]),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sdpa_page_table = ttnn.concat([page_table, zeros_pad], dim=-1)
+            ttnn.deallocate(zeros_pad)
+
+        if chunk_start_idx_tensor is not None:
+            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=q8,
+                input_tensor_k=k_paged,
+                input_tensor_v=v_paged,
+                page_table_tensor=sdpa_page_table,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                compute_kernel_config=self.compute_cfg,
+                program_config=sdpa_cfg,
+            )
+        else:
+            attn = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=q8,
+                input_tensor_k=k_paged,
+                input_tensor_v=v_paged,
+                page_table_tensor=sdpa_page_table,
+                chunk_start_idx=chunk_start_idx,
+                compute_kernel_config=self.compute_cfg,
+                program_config=sdpa_cfg,
+            )
+        if sdpa_page_table is not page_table:
+            ttnn.deallocate(sdpa_page_table)
+        ttnn.deallocate(q8)
+
+        gated = ttnn.multiply(attn, ttnn.sigmoid(gate))
+        ttnn.deallocate(attn)
+        ttnn.deallocate(gate)
+        gated = ttnn.transpose(gated, 1, 2)
+        gated = ttnn.reshape(gated, (1, 1, S, NH * HD))
+        partial = ttnn.linear(
+            gated, tw["wo"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(gated)
+        return tt_all_reduce(
+            partial,
             self.mesh,
             self.tt_ccl,
             cluster_axis=0,
