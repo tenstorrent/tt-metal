@@ -149,15 +149,11 @@ void kernel_main() {
                 cb_scalar_args,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::TileOffset::Set>{beta2_tile},
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
-            compute_kernel_lib::PackTile<
-                cb_tmp1,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 
         // cb_tmp1 = 1 / (1 - cb_tmp1)  — same-CB in/out on cb_tmp1.
         // Reconfig audit: `WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1))`
@@ -173,18 +169,9 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp1,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 
 #ifdef AMSGRAD
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq)
@@ -199,7 +186,6 @@ void kernel_main() {
             cb_max_exp_avg_sq_in,
             tmp_cb_exp_avg_sq,
             tmp_cb_max_exp_avg_sq,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::CallerManaged,
             compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
@@ -208,14 +194,9 @@ void kernel_main() {
         // tmp_cb_max_exp_avg_sq waited here, popped by the next chain that reuses
         // the same tile -> InputLifecycle::CallerManaged + Scalar (first_tile == 0 -> default TileBase).
         tmp_cb_max_exp_avg_sq_obj.wait_front(onetile);
-        compute_kernel_lib::copy<
-            tmp_cb_max_exp_avg_sq,
-            cb_max_exp_avg_sq_out,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>(onetile);
+        compute_kernel_lib::
+            copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::CallerManaged>(
+                onetile);
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
@@ -234,18 +215,9 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp1,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp1>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
 #else
         compute_kernel_lib::eltwise_chain(
@@ -255,18 +227,9 @@ void kernel_main() {
                 cb_tmp1,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp1,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 #endif
         tmp_cb_exp_avg_sq_obj.pop_front(onetile);
 
@@ -283,20 +246,16 @@ void kernel_main() {
                 cb_scalar_args,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::TileOffset::Unset,
                 compute_kernel_lib::TileOffset::Set>{0u, eps_tile},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp1,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);
@@ -308,15 +267,11 @@ void kernel_main() {
                 cb_scalar_args,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::TileOffset::Set>{beta1_tile},
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
-            compute_kernel_lib::PackTile<
-                cb_tmp2,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp2>{});
 
         // cb_tmp2 = 1 / (1 - cb_tmp2)  — same-CB in/out on cb_tmp2.
         // Reconfig: sub_tiles_init + WITH_FP32_DEST_ACC reconfig -> Input.
@@ -330,18 +285,9 @@ void kernel_main() {
                 cb_tmp2,
                 compute_kernel_lib::BinaryFpuOp::Sub,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp2,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_tmp2>{});
 
         // cb_tmp2 = lr * cb_tmp2;
         mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, 0, 1);

@@ -33,7 +33,7 @@
 //     tensor did NOT occupy. OptionalChainElement folds the inactive flavor to a no-op.
 //   - Where<WHERE_DATA_FORMAT, D0, D1, D2, D0>: the host passes WHERE_DATA_FORMAT mirroring
 //     get_sfpu_init_fn(WHERE, a_dtype) — the exact format the legacy BINARY_SFPU_OP baked in.
-//   - PackTile<cb_out, D0, OutputLifecycle::Chunked, OperandKind::Block>.
+//   - PackTile<cb_out, OutputLifecycle::Chunked, OperandKind::Block>.
 
 #ifdef FILL_WITH_VALUE_INT
 constexpr bool kIsInt = true;
@@ -73,15 +73,15 @@ void kernel_main() {
             cb_cond,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Block>{},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
         compute_kernel_lib::CopyTile<
             cb_tensor,
             kTensorSlot,
             compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Block>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
         compute_kernel_lib::OptionalChainElement<kIsInt, compute_kernel_lib::FillInt<kWhereDF, kFillSlot>>{
             scalar_value},
@@ -95,7 +95,6 @@ void kernel_main() {
             compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_out,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Chunked,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

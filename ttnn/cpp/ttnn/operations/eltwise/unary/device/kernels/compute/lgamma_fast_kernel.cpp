@@ -32,18 +32,8 @@ void kernel_main() {
     ckl::eltwise_chain(
         num_tiles,
         // x -> D0 (owns the wait), x -> D1.
-        ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D0,
-            ckl::InputLifecycle::HeldStream,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D1,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None>{},
         // D0 = stirling(x)
         ckl::LgammaStirling<ckl::Dst::D0>{},
         // D2 = M_PI ; D1 = sin(frac(x) * M_PI)
@@ -52,18 +42,8 @@ void kernel_main() {
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
         ckl::Sin<ckl::Dst::D1>{},
         // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
-        ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D2,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D3,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D2, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D3, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None>{},
         ckl::Floor<ckl::Dst::D3>{},
         ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
         // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
@@ -73,12 +53,7 @@ void kernel_main() {
         ckl::Abs<ckl::Dst::D1>{},
         ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
         // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
-        ckl::CopyTile<
-            cb_input,
-            ckl::Dst::D2,
-            ckl::InputLifecycle::NoWaitPop,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D2, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
         ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
-        ckl::PackTile<cb_output, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

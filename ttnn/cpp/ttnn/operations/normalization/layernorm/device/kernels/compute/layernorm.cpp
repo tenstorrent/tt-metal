@@ -169,12 +169,12 @@ void kernel_main() {
             cb_inb,
             cb_x,
             compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::OutputLifecycle::Chunked,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OutputLifecycle::Chunked>(
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block>(
             compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -225,13 +225,13 @@ void kernel_main() {
             cb_ex,
             cb_xmm,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::Chunked,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::PackTileReconfig::None>(
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>(
             compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
         cb_ex_obj.pop_front(1);
 
@@ -267,11 +267,11 @@ void kernel_main() {
         compute_kernel_lib::square<
             cb_xmm,
             cb_xmm2,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,  // operand index
             compute_kernel_lib::InputLifecycle::HeldBulk,
             compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::None>(
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(
             compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -294,21 +294,13 @@ void kernel_main() {
                 cb_eps,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_ex2pe>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);

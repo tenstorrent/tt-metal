@@ -45,18 +45,18 @@ template <
     uint32_t CbB,
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    OperandKind AIdx = OperandKind::Scalar,
     InputLifecycle ALife = InputLifecycle::Streaming,
     InputLifecycle BLife = InputLifecycle::Streaming,
-    OperandKind BIdx = AIdx,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind AIdx = OperandKind::Scalar,
+    OperandKind BIdx = AIdx>
 ALWI void add(EltwiseShape shape) {
     eltwise_chain(
         shape,
-        BinaryFpu<CbA, CbB, BinaryFpuOp::Add, Bcast, Reconfig, ALife, BLife, AIdx, Dst::D0, BIdx>{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Add, Bcast, ALife, BLife, Reconfig, Dst::D0, AIdx, BIdx>{},
+        PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 template <
@@ -64,18 +64,18 @@ template <
     uint32_t CbB,
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    OperandKind AIdx = OperandKind::Scalar,
     InputLifecycle ALife = InputLifecycle::Streaming,
     InputLifecycle BLife = InputLifecycle::Streaming,
-    OperandKind BIdx = AIdx,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind AIdx = OperandKind::Scalar,
+    OperandKind BIdx = AIdx>
 ALWI void sub(EltwiseShape shape) {
     eltwise_chain(
         shape,
-        BinaryFpu<CbA, CbB, BinaryFpuOp::Sub, Bcast, Reconfig, ALife, BLife, AIdx, Dst::D0, BIdx>{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Sub, Bcast, ALife, BLife, Reconfig, Dst::D0, AIdx, BIdx>{},
+        PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 template <
@@ -83,18 +83,18 @@ template <
     uint32_t CbB,
     uint32_t CbOut,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    OperandKind AIdx = OperandKind::Scalar,
     InputLifecycle ALife = InputLifecycle::Streaming,
     InputLifecycle BLife = InputLifecycle::Streaming,
-    OperandKind BIdx = AIdx,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind AIdx = OperandKind::Scalar,
+    OperandKind BIdx = AIdx>
 ALWI void mul(EltwiseShape shape) {
     eltwise_chain(
         shape,
-        BinaryFpu<CbA, CbB, BinaryFpuOp::Mul, Bcast, Reconfig, ALife, BLife, AIdx, Dst::D0, BIdx>{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        BinaryFpu<CbA, CbB, BinaryFpuOp::Mul, Bcast, ALife, BLife, Reconfig, Dst::D0, AIdx, BIdx>{},
+        PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 // ---------------------------------------------------------------------------
@@ -107,16 +107,16 @@ ALWI void mul(EltwiseShape shape) {
 template <
     uint32_t CbIn,
     uint32_t CbOut,
-    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
-    OperandKind Idx = OperandKind::Scalar,
     InputLifecycle Life = InputLifecycle::Streaming,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void square(EltwiseShape shape) {
     eltwise_chain(
         shape,
-        BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Reconfig, Life, Life, Idx, Dst::D0, Idx>{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        BinaryFpu<CbIn, CbIn, BinaryFpuOp::Mul, BroadcastDim::None, Life, Life, Reconfig, Dst::D0, Idx, Idx>{},
+        PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 // ---------------------------------------------------------------------------
@@ -127,18 +127,15 @@ template <
     class SfpuOp,
     uint32_t CbIn,
     uint32_t CbOut,
-    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    OperandKind Idx = OperandKind::Scalar,
     InputLifecycle Life = InputLifecycle::Streaming,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void unary(EltwiseShape shape) {
     static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp, ...>: SfpuOp must be a DEST-only SFPU element");
     eltwise_chain(
-        shape,
-        CopyTile<CbIn, Dst::D0, Life, Idx, Reconfig>{},
-        SfpuOp{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        shape, CopyTile<CbIn, Dst::D0, Life, Reconfig, Idx>{}, SfpuOp{}, PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 // ---------------------------------------------------------------------------
@@ -151,20 +148,20 @@ template <
     uint32_t CbA,
     uint32_t CbB,
     uint32_t CbOut,
-    OperandKind AIdx = OperandKind::Scalar,
     InputLifecycle ALife = InputLifecycle::Streaming,
     InputLifecycle BLife = InputLifecycle::Streaming,
-    OperandKind BIdx = AIdx,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind AIdx = OperandKind::Scalar,
+    OperandKind BIdx = AIdx>
 ALWI void binary_sfpu(EltwiseShape shape) {
     static_assert(is_dest_only_op_v<SfpuBinOp>, "binary_sfpu<Op, ...>: Op must be a DEST-only SFPU binary element");
     eltwise_chain(
         shape,
-        CopyTile<CbA, Dst::D0, ALife, AIdx>{},
-        CopyTile<CbB, Dst::D1, BLife, BIdx>{},
+        CopyTile<CbA, Dst::D0, ALife, CopyTileReconfig::Input, AIdx>{},
+        CopyTile<CbB, Dst::D1, BLife, CopyTileReconfig::Input, BIdx>{},
         SfpuBinOp{},
-        PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+        PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 // ---------------------------------------------------------------------------
@@ -174,14 +171,13 @@ ALWI void binary_sfpu(EltwiseShape shape) {
 template <
     uint32_t CbIn,
     uint32_t CbOut,
-    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    OperandKind Idx = OperandKind::Scalar,
     InputLifecycle Life = InputLifecycle::Streaming,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
-    PackTileReconfig OutReconfig = PackTileReconfig::Output>
+    CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    PackTileReconfig OutReconfig = PackTileReconfig::Output,
+    OperandKind Idx = OperandKind::Scalar>
 ALWI void copy(EltwiseShape shape) {
-    eltwise_chain(
-        shape, CopyTile<CbIn, Dst::D0, Life, Idx, Reconfig>{}, PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+    eltwise_chain(shape, CopyTile<CbIn, Dst::D0, Life, Reconfig, Idx>{}, PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 // ---------------------------------------------------------------------------
@@ -192,13 +188,12 @@ template <
     BroadcastDim Dim,
     uint32_t CbIn,
     uint32_t CbOut,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input,
     InputLifecycle Life = InputLifecycle::Streaming,
     OutputLifecycle OutLife = OutputLifecycle::Streaming,
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input,
     PackTileReconfig OutReconfig = PackTileReconfig::Output>
 ALWI void unary_bcast(EltwiseShape shape) {
-    eltwise_chain(
-        shape, UnaryBcast<Dim, CbIn, Dst::D0, Life, Reconfig>{}, PackTile<CbOut, Dst::D0, OutLife, OutReconfig>{});
+    eltwise_chain(shape, UnaryBcast<Dim, CbIn, Life, Reconfig>{}, PackTile<CbOut, OutLife, OutReconfig>{});
 }
 
 }  // namespace compute_kernel_lib

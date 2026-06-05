@@ -29,13 +29,11 @@ void kernel_main() {
             cb_input,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D1,
             compute_kernel_lib::InputLifecycle::NoWaitPop,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Negative<compute_kernel_lib::Dst::D1>{},
         compute_kernel_lib::
@@ -44,7 +42,6 @@ void kernel_main() {
             Logsigmoid<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

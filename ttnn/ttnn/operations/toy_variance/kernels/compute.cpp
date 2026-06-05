@@ -84,10 +84,12 @@ void kernel_main() {
             cb_mean,
             cb_centered,
             ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::HeldBulk,
+            compute_kernel_lib::OutputLifecycle::Streaming,
             ckl::BinaryDataFormatReconfig::Input,
-            ckl::OperandKind::Scalar,                 // A index (per-tile streaming)
-            ckl::InputLifecycle::Streaming,           // A lifecycle
-            ckl::InputLifecycle::HeldBulk,            // B lifecycle (held across all blocks)
+            compute_kernel_lib::PackTileReconfig::Output,
+            ckl::OperandKind::Scalar,
             ckl::OperandKind::Col>(bin_block_shape);  // B index (COL broadcast)
 
         // square_in_place: cb_centered² → cb_centered (in-place, per-tile streaming).

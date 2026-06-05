@@ -20,9 +20,8 @@ void kernel_main() {
     compute_kernel_lib::copy<
         cb_in,
         cb_out,
-        compute_kernel_lib::CopyTileReconfig::None,
-        compute_kernel_lib::OperandKind::Scalar,
         compute_kernel_lib::InputLifecycle::Streaming,
         compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::CopyTileReconfig::None,
         compute_kernel_lib::PackTileReconfig::None>(per_core_tile_cnt);
 }

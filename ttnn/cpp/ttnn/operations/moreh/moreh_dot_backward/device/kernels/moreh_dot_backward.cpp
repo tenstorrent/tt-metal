@@ -21,12 +21,10 @@ void kernel_main() {
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_16,
                 compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
                 compute_kernel_lib::PackTileReconfig::None>(onetile);
         }
 
@@ -37,12 +35,10 @@ void kernel_main() {
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_17,
                 compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::None,
                 compute_kernel_lib::PackTileReconfig::None>(onetile);
         }
     }

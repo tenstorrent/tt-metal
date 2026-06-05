@@ -233,21 +233,13 @@ void kernel_main() {
                 cb_eps,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::DeferredReserve,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_ex2pe, compute_kernel_lib::OutputLifecycle::DeferredReserve>{});
 
         // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
         // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).

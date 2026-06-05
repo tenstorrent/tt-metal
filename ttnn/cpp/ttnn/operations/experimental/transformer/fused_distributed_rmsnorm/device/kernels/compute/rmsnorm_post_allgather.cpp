@@ -101,21 +101,13 @@ void kernel_main() {
                 epsilon_cb,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 use_legacy_rsqrt ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                reduce_result_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<reduce_result_cb>{});
 
         /*
          * norm x

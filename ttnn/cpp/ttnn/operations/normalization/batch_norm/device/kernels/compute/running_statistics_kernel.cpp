@@ -46,37 +46,22 @@ ALWI void update_running_stat() {
             cb_momentum,
             BinaryFpuOp::Sub,
             ckl::BroadcastDim::None,
-            ckl::BinaryDataFormatReconfig::Input,
             ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::OperandKind::Scalar,
-            D::D0,
-            ckl::OperandKind::Scalar>{},  // D0 = 1 - momentum
-        ckl::DestReuseBinary<
-            cb_old,
-            BinaryFpuOp::Mul,
-            ckl::DestReuseType::DEST_TO_SRCA,
-            D::D0,
-            D::D0,
-            ckl::DestReuseReconfig::Input,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar>{},  // D0 = (1 - momentum) * old_stat
+            ckl::InputLifecycle::CallerManaged>{},                                           // D0 = 1 - momentum
+        ckl::DestReuseBinary<cb_old, BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},  // D0 = (1 - momentum) *
+                                                                                             // old_stat
         ckl::BinaryFpu<
             cb_momentum,
             cb_batch,
             BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
-            ckl::BinaryDataFormatReconfig::Input,
             ckl::InputLifecycle::CallerManaged,
             ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            D::D1,
-            ckl::OperandKind::Scalar>{},        // D1 = momentum * batch_stat
+            ckl::BinaryDataFormatReconfig::Input,
+            D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<cb_updated, D::D0, ckl::OutputLifecycle::CallerManaged, ckl::PackTileReconfig::Output>{},
-        ckl::OptionalChainElement<
-            AlsoOut0,
-            ckl::PackTile<cb_out0, D::D0, ckl::OutputLifecycle::CallerManaged, ckl::PackTileReconfig::Output>>{});
+        ckl::PackTile<cb_updated, ckl::OutputLifecycle::CallerManaged>{},
+        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::OutputLifecycle::CallerManaged>>{});
     cb_push_back(cb_updated, 1);
 }
 

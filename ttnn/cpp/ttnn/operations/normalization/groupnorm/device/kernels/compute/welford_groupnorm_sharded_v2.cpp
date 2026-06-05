@@ -251,21 +251,19 @@ void kernel_main() {
                     cb_eps_id,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::InputLifecycle::HeldBulk,
                     compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileOffset::Set,
-                    compute_kernel_lib::TileOffset::Unset>{1u + (g << 1), 0u},
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::TileOffset::Set>{1u + (g << 1), 0u},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Legacy::On,
                     compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_ex2pe_id,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
@@ -352,10 +350,9 @@ void kernel_main() {
                         compute_kernel_lib::copy<
                             cb_xmm_id,
                             cb_x_id,
-                            compute_kernel_lib::CopyTileReconfig::None,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::CopyTileReconfig::None,
                             compute_kernel_lib::PackTileReconfig::None>(1u);
                     } else {
                         compute_kernel_lib::add<
@@ -363,12 +360,10 @@ void kernel_main() {
                             cb_xmm_id,
                             cb_x_id,
                             compute_kernel_lib::BroadcastDim::None,
-                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::InputLifecycle::Streaming,
-                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
                             compute_kernel_lib::PackTileReconfig::None>(1u);
                     }
 
@@ -413,17 +408,16 @@ void kernel_main() {
                             cb_gamma_id,
                             compute_kernel_lib::BinaryFpuOp::Mul,
                             compute_kernel_lib::BroadcastDim::Row,
-                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
                             compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::InputLifecycle::CallerManaged,
-                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
                             compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::TileOffset::Unset,
                             compute_kernel_lib::TileOffset::Set>{0u, nt},
                         compute_kernel_lib::PackTile<
                             cb_x_id,
-                            compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::None>{});
                 }
@@ -440,17 +434,16 @@ void kernel_main() {
                             cb_beta_id,
                             compute_kernel_lib::BinaryFpuOp::Add,
                             compute_kernel_lib::BroadcastDim::Row,
-                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
                             compute_kernel_lib::InputLifecycle::Streaming,
                             compute_kernel_lib::InputLifecycle::CallerManaged,
-                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
                             compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::TileOffset::Unset,
                             compute_kernel_lib::TileOffset::Set>{0u, nt},
                         compute_kernel_lib::PackTile<
                             cb_x_id,
-                            compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::None>{});
                 }
@@ -466,10 +459,9 @@ void kernel_main() {
                 compute_kernel_lib::copy<
                     cb_x_id,
                     write_cb_id,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::CopyTileReconfig::Input,
                     compute_kernel_lib::PackTileReconfig::None>(1u);
             }
         }

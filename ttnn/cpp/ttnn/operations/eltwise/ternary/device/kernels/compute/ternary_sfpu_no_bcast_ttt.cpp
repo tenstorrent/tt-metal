@@ -35,24 +35,9 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         num_tiles,
-        ckl::CopyTile<
-            cb_pre_in1,
-            ckl::Dst::D0,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_pre_in2,
-            ckl::Dst::D1,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_pre_in3,
-            ckl::Dst::D2,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_pre_in1, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_pre_in2, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_pre_in3, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
         ckl::OptionalChainElement < kSel == 0,
         ckl::Where < TERNARY_DF,
         ckl::Dst::D0,
@@ -71,5 +56,5 @@ void kernel_main() {
         ckl::Dst::D1,
         ckl::Dst::D2,
         ckl::Dst::D0 >> {},
-        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

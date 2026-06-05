@@ -363,19 +363,14 @@ void kernel_main() {
                 cb_eps,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 

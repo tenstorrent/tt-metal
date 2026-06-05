@@ -101,17 +101,16 @@ void kernel_main() {
                         sin_cb,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::TileOffset::Unset,
                         compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
                     compute_kernel_lib::PackTile<
                         sin_interm_cb,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
@@ -120,13 +119,12 @@ void kernel_main() {
                     sin_cb,
                     sin_interm_cb,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::InputLifecycle::Bulk,
                     compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block>(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
@@ -139,17 +137,16 @@ void kernel_main() {
                         cos_cb,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::TileOffset::Unset,
                         compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
                     compute_kernel_lib::PackTile<
                         cos_interm_cb,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
@@ -158,13 +155,12 @@ void kernel_main() {
                     cos_cb,
                     cos_interm_cb,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::InputLifecycle::Bulk,
                     compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block>(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
@@ -176,13 +172,12 @@ void kernel_main() {
                     sin_interm_cb,
                     out_cb,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::InputLifecycle::Bulk,
                     compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block>(
                     compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0

@@ -43,7 +43,6 @@ void kernel_main() {
             cb_input,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::Tanh<compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::OptionalChainElement<
@@ -52,7 +51,6 @@ void kernel_main() {
                 cb_input,
                 compute_kernel_lib::Dst::D1,
                 compute_kernel_lib::InputLifecycle::NoWaitPop,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::None>>{},
         compute_kernel_lib::OptionalChainElement<
             kIsFloat32,
@@ -63,15 +61,9 @@ void kernel_main() {
             compute_kernel_lib::DestReuseBinary<
                 cb_input,
                 compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::DestReuseReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar>>{},
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCB>>{},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

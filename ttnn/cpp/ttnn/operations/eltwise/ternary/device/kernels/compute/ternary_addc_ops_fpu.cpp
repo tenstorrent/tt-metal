@@ -38,23 +38,12 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
             cb_in2,
             ckl::BinaryFpuOp::Mul,
             ckl::BroadcastDim::None,
-            ckl::BinaryDataFormatReconfig::None,
             ckl::InputLifecycle::Streaming,
             ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar>{},
+            ckl::BinaryDataFormatReconfig::None>{},
         ckl::OptionalChainElement<ScalarIsNot1, ckl::MulUnary<ckl::Dst::D0>>{scalar_arg},
-        ckl::DestReuseBinary<
-            cb_in0,
-            ckl::BinaryFpuOp::Add,
-            ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::Dst::D0,
-            ckl::Dst::D0,
-            ckl::DestReuseReconfig::Input,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar>{},
-        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::DestReuseBinary<cb_in0, ckl::BinaryFpuOp::Add, ckl::DestReuseType::DEST_TO_SRCA>{},
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }
 
 void kernel_main() {

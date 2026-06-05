@@ -39,8 +39,6 @@ void kernel_main() {
                 cb_in1,
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
         } else {
@@ -50,8 +48,6 @@ void kernel_main() {
                 cb_in1,
                 cb_intermed0,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
             // Middle: cb_in0 * cb_intermed0 -> cb_intermed0 (n_input - 2 iters).

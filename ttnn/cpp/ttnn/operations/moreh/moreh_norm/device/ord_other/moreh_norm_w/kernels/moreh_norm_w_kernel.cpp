@@ -50,18 +50,11 @@ void kernel_main() {
             if (mask_this) {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_x,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<cb_x>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
 #ifdef MINUS_INF
                     compute_kernel_lib::MaskPosInf<compute_kernel_lib::Dst::D0>{},
 #else
@@ -75,20 +68,11 @@ void kernel_main() {
 #ifdef MINUS_INF
                     compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-                    compute_kernel_lib::PackTile<
-                        cb_val,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_val>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_x,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<cb_x>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
@@ -97,23 +81,12 @@ void kernel_main() {
 #ifdef MINUS_INF
                     compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-                    compute_kernel_lib::PackTile<
-                        cb_val,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_val>{});
             }
 
             // Accumulator: col_idx==0 -> seed copy; else -> add (IS_ZERO) or max.
             if (col_idx == 0) {
-                compute_kernel_lib::copy<
-                    cb_val,
-                    cb_cal,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
+                compute_kernel_lib::copy<cb_val, cb_cal>(onetile);
             } else {
 #ifdef IS_ZERO
                 compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(onetile);
@@ -130,20 +103,11 @@ void kernel_main() {
         // Final: copy reduce result -> [negate if MINUS_INF] -> cb_y.
         compute_kernel_lib::eltwise_chain(
             onetile,
-            compute_kernel_lib::CopyTile<
-                cb_reduce,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::CopyTile<cb_reduce>{},
 #ifdef MINUS_INF
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-            compute_kernel_lib::PackTile<
-                cb_y,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_y>{});
     }
 
     cb_one_obj.pop_front(onetile);

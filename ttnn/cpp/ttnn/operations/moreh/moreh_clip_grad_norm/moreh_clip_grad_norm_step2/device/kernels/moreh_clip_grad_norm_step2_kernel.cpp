@@ -44,10 +44,9 @@ void kernel_main() {
             compute_kernel_lib::copy<
                 cb_input,
                 cb_x,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::CopyTileReconfig::Input,
                 compute_kernel_lib::PackTileReconfig::None>(onetile);
         } else {
             // cb_x = cb_input + cb_x (in-place accumulator).
@@ -57,12 +56,10 @@ void kernel_main() {
                 cb_x,
                 cb_x,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::PackTileReconfig::None>(onetile);
         }
     }
@@ -81,34 +78,18 @@ void kernel_main() {
     if (p_is_negative) {
         compute_kernel_lib::eltwise_chain(
             onetile,
-            compute_kernel_lib::CopyTile<
-                cb_x,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::
+                CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
             compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_xpow,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_xpow>{});
     } else {
         compute_kernel_lib::eltwise_chain(
             onetile,
-            compute_kernel_lib::CopyTile<
-                cb_x,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::HeldStream,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::
+                CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
             compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
-            compute_kernel_lib::PackTile<
-                cb_xpow,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_xpow>{});
     }
 
     // Stage B: log(x). cb_x already waited (Stage A's InputLifecycle::HeldStream did wait but no pop);
@@ -117,11 +98,7 @@ void kernel_main() {
         compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
         cb_x,
         cb_logx,
-        compute_kernel_lib::CopyTileReconfig::Input,
-        compute_kernel_lib::OperandKind::Scalar,
-        compute_kernel_lib::InputLifecycle::NoWaitPop,
-        compute_kernel_lib::OutputLifecycle::Streaming,
-        compute_kernel_lib::PackTileReconfig::Output>(onetile);
+        compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
 
     // Stage C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel.
     compute_kernel_lib::eltwise_chain(
@@ -131,19 +108,11 @@ void kernel_main() {
             cb_decimal,
             compute_kernel_lib::BinaryFpuOp::Mul,
             compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::InputLifecycle::CallerManaged>{},
         compute_kernel_lib::
             Exp<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_exp_lxmd,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::PackTile<cb_exp_lxmd>{});
 
     // Stage D: x^p * exp(log(x) * decimal) = (x + decimal)^p -> cb_y.
     compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_y>(onetile);

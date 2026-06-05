@@ -88,12 +88,12 @@ void kernel_main() {
         cb_in1,
         cb_in,
         compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::OutputLifecycle::Bulk,
         compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::OperandKind::Block,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
-        compute_kernel_lib::OperandKind::Block,
-        compute_kernel_lib::OutputLifecycle::Bulk>(
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block>(
         compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
     cb_wait_front(cb_in, num_tiles_per_block);
@@ -210,26 +210,12 @@ void kernel_main() {
             //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
             compute_kernel_lib::eltwise_chain(
                 1,
-                compute_kernel_lib::BinaryFpu<
-                    cb_var,
-                    cb_eps,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::BinaryFpu<cb_var, cb_eps>{},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Legacy::On,
                     compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_stats_reduced,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::PackTile<cb_stats_reduced>{});
         }
     }
     // (x - Ex) * 1/[sqrt(Var + eps)] — Col-bcast over the block, single chain.
@@ -248,12 +234,13 @@ void kernel_main() {
         cb_ex_global,
         cb_im,
         compute_kernel_lib::BroadcastDim::Col,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::OperandKind::Block,
         compute_kernel_lib::InputLifecycle::CallerManaged,
         compute_kernel_lib::InputLifecycle::Bulk,
-        compute_kernel_lib::OperandKind::Scalar,
-        compute_kernel_lib::OutputLifecycle::Bulk>(
+        compute_kernel_lib::OutputLifecycle::Bulk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::OperandKind::Scalar>(
         compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     cb_pop_front(cb_xmm, num_tiles_per_block);
 
@@ -269,11 +256,11 @@ void kernel_main() {
         cb_gamma,
         cb_outgamma,
         compute_kernel_lib::BroadcastDim::Row,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::OperandKind::Block,
         compute_kernel_lib::InputLifecycle::Bulk,
         compute_kernel_lib::InputLifecycle::HeldBulk,
-        compute_kernel_lib::OperandKind::Block,
-        compute_kernel_lib::OutputLifecycle::BulkReservePerChunk>(
+        compute_kernel_lib::OutputLifecycle::BulkReservePerChunk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block>(
         compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

@@ -74,7 +74,7 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                // CopyTile<cb_input(=c_0), D0> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
+                // CopyTile<cb_input(=c_0)> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
                 // cb_input here is always c_0 (the runtime variable cb_input was reset to c_0
                 // at line 51 before this conditional). cb_input InputLifecycle::Streaming; cb_mask_w
                 // InputLifecycle::CallerManaged (held outside the NC×Ht loop); cb_masked_input
@@ -82,24 +82,13 @@ void kernel_main() {
                 // Output.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::CopyTile<
-                        tt::CBIndex::c_0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<
-                        cb_masked_input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_masked_input>{});
                 cb_input = cb_masked_input;
             }
 

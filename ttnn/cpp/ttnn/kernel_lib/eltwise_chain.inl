@@ -423,8 +423,8 @@ constexpr uint32_t dfb_for_side() {
 template <uint32_t Cb,
           Dst DstSlot,
           InputLifecycle Policy,
-          OperandKind IndexMode,
           CopyTileReconfig Reconfig,
+          OperandKind IndexMode,
           TileOffset Offset>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
@@ -541,9 +541,9 @@ struct CopyTile : CopyTileTag {
 // =============================================================================
 
 template <uint32_t Cb,
-          Dst DstSlot,
           OutputLifecycle Policy,
           PackTileReconfig Reconfig,
+          Dst DstSlot,
           TileOffset Offset>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -669,11 +669,11 @@ template <uint32_t CbA,
           uint32_t CbB,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
-          BinaryDataFormatReconfig DfReconfig,
           InputLifecycle APolicy,
           InputLifecycle BPolicy,
-          OperandKind AIndex,
+          BinaryDataFormatReconfig Reconfig,
           Dst DstSlot,
+          OperandKind AIndex,
           OperandKind BIndex,
           TileOffset OffsetA,
           TileOffset OffsetB>
@@ -740,11 +740,11 @@ struct BinaryFpu : BinaryFpuTag {
     // fold when the other side is already programmed (by a previous chain element on
     // the same side, or by external init).
     static constexpr uint32_t      reconfig_srca_dfb =
-        (DfReconfig == BinaryDataFormatReconfig::Input ||
-         DfReconfig == BinaryDataFormatReconfig::SrcA) ? CbA : NO_PREV_DFB;
+        (Reconfig == BinaryDataFormatReconfig::Input ||
+         Reconfig == BinaryDataFormatReconfig::SrcA) ? CbA : NO_PREV_DFB;
     static constexpr uint32_t      reconfig_srcb_dfb =
-        (DfReconfig == BinaryDataFormatReconfig::Input ||
-         DfReconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_DFB;
+        (Reconfig == BinaryDataFormatReconfig::Input ||
+         Reconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
 
     uint32_t tile_base_a = 0;
@@ -930,10 +930,10 @@ struct BinaryFpu : BinaryFpuTag {
 template <uint32_t Cb,
           BinaryFpuOp Op,
           DestReuseType ReuseType,
+          InputLifecycle Policy,
+          DestReuseReconfig Reconfig,
           Dst DstIn,
           Dst DstOut,
-          DestReuseReconfig Reconfig,
-          InputLifecycle Policy,
           OperandKind IndexMode,
           TileOffset Offset>
 struct DestReuseBinary : DestReuseBinaryTag {
@@ -1050,9 +1050,9 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
 template <BroadcastDim Dim,
           uint32_t Cb,
-          Dst DstSlot,
           InputLifecycle Policy,
-          UnaryBcastReconfig Reconfig>
+          UnaryBcastReconfig Reconfig,
+          Dst DstSlot>
 struct UnaryBcast : UnaryBcastTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");

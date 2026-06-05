@@ -39,15 +39,15 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             in1_cb,
             BinaryFpuOp::Mul,
             BroadcastDim::Row,
+            InputLifecycle::CallerManaged,
+            InputLifecycle::CallerManaged,
             BinaryDataFormatReconfig::None,
-            InputLifecycle::CallerManaged,
-            InputLifecycle::CallerManaged,
-            OperandKind::Scalar,
             Dst::D0,
+            OperandKind::Scalar,
             OperandKind::Scalar,
             compute_kernel_lib::TileOffset::Unset,
             compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
-        PackTile<out_cb, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
+        PackTile<out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
     cb_pop_front(in0_cb, 1);
     cb_push_back(out_cb, 1);
     // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
@@ -58,12 +58,10 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
         in1_cb,
         out_cb,
         compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::BinaryDataFormatReconfig::None,
-        compute_kernel_lib::OperandKind::Scalar,
         compute_kernel_lib::InputLifecycle::Streaming,
         compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::OperandKind::Scalar,
         compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::BinaryDataFormatReconfig::None,
         compute_kernel_lib::PackTileReconfig::None>(1u);
 #endif
 }
@@ -151,8 +149,6 @@ void kernel_main() {
                     scalar_cb,
                     rotated_in_interm_cb,
                     compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);

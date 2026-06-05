@@ -45,14 +45,44 @@ template <
     ckl::OutputLifecycle OutLife>
 ALWI void binary_dispatch(ckl::EltwiseShape shape) {
     if constexpr (op_code == 0) {
-        ckl::add<CbA, CbB, CbOut, Bcast, ckl::BinaryDataFormatReconfig::Input, AIdx, ALife, BLife, BIdx, OutLife>(
-            shape);
+        ckl::add<
+            CbA,
+            CbB,
+            CbOut,
+            Bcast,
+            ALife,
+            BLife,
+            OutLife,
+            ckl::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
     } else if constexpr (op_code == 1) {
-        ckl::sub<CbA, CbB, CbOut, Bcast, ckl::BinaryDataFormatReconfig::Input, AIdx, ALife, BLife, BIdx, OutLife>(
-            shape);
+        ckl::sub<
+            CbA,
+            CbB,
+            CbOut,
+            Bcast,
+            ALife,
+            BLife,
+            OutLife,
+            ckl::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
     } else {
-        ckl::mul<CbA, CbB, CbOut, Bcast, ckl::BinaryDataFormatReconfig::Input, AIdx, ALife, BLife, BIdx, OutLife>(
-            shape);
+        ckl::mul<
+            CbA,
+            CbB,
+            CbOut,
+            Bcast,
+            ALife,
+            BLife,
+            OutLife,
+            ckl::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
     }
 }
 
@@ -199,10 +229,9 @@ void kernel_main() {
         ckl::copy<
             cb_input,
             cb_work,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Scalar,
             ckl::InputLifecycle::Streaming,
             ckl::OutputLifecycle::Streaming,
+            ckl::CopyTileReconfig::None,
             ckl::PackTileReconfig::None>(total_a_tiles);
 
         // Phase 2: In-place op on cb_work (reconfig handles format transition)
@@ -212,10 +241,9 @@ void kernel_main() {
                 ckl::Square<>,
                 cb_work,
                 cb_work,
-                ckl::CopyTileReconfig::None,
-                ckl::OperandKind::Scalar,
                 ckl::InputLifecycle::Streaming,
                 ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::None,
                 ckl::PackTileReconfig::None>(shape);
         } else if constexpr (op_code == 3) {
             // FPU SQUARE: cb_work = cb_work * cb_work (binary MUL with same operand, in-place)
@@ -228,11 +256,9 @@ void kernel_main() {
         ckl::copy<
             cb_work,
             cb_out,
-            ckl::CopyTileReconfig::None,
-            ckl::OperandKind::Scalar,
             ckl::InputLifecycle::Streaming,
             ckl::OutputLifecycle::Streaming,
-            ckl::PackTileReconfig::Output>(total_a_tiles);
+            ckl::CopyTileReconfig::None>(total_a_tiles);
 
     } else {
         // === NORMAL (NON-IN-PLACE) MODE ===
@@ -244,10 +270,9 @@ void kernel_main() {
                 ckl::Square<>,
                 cb_input,
                 cb_out,
-                ckl::CopyTileReconfig::None,
-                ckl::OperandKind::Scalar,
                 ckl::InputLifecycle::Streaming,
                 ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::None,
                 ckl::PackTileReconfig::None>(total_a_tiles);
         } else if constexpr (op_code == 3) {
             // FPU SQUARE: cb_out = cb_input * cb_input

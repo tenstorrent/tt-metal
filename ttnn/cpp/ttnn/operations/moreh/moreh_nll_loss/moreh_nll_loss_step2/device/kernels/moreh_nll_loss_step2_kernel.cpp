@@ -60,34 +60,17 @@ void kernel_main() {
 
     if constexpr (has_divisor) {
         // recip(divisor) -> cb_divisor_recip (one tile, consumed Bulk by the loop chain).
-        ckl::unary<
-            ckl::Recip<D::D0>,
-            cb_divisor,
-            cb_divisor_recip,
-            ckl::CopyTileReconfig::Input,
-            ckl::OperandKind::Scalar,
-            ckl::InputLifecycle::Bulk,
-            ckl::OutputLifecycle::Streaming,
-            ckl::PackTileReconfig::Output>(1);
+        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::InputLifecycle::Bulk>(1);
     }
 
     // Full-tile weight multiply (DEST-reuse), gated on has_weight — collapses to a no-op tag when
     // the caller didn't pass a weight tensor.
     constexpr auto weight_mul = ckl::OptionalChainElement<
         has_weight,
-        ckl::DestReuseBinary<
-            cb_tmp_weight,
-            ckl::BinaryFpuOp::Mul,
-            ckl::DestReuseType::DEST_TO_SRCA,
-            D::D0,
-            D::D0,
-            ckl::DestReuseReconfig::Input,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar>>{};
+        ckl::DestReuseBinary<cb_tmp_weight, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{};
 
     constexpr auto negate = ckl::Negative<D::D0>{};
-    constexpr auto pack_out =
-        ckl::PackTile<cb_output, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{};
+    constexpr auto pack_out = ckl::PackTile<cb_output>{};
 
     if constexpr (has_divisor) {
         // D0 = input * recip (scalar-bcast); input streamed, recip held (Bulk scalar).
@@ -98,26 +81,12 @@ void kernel_main() {
                 cb_divisor_recip,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::BinaryDataFormatReconfig::Input,
                 ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::Bulk,
-                ckl::OperandKind::Scalar,
-                D::D0,
-                ckl::OperandKind::Scalar>{},
+                ckl::InputLifecycle::Bulk>{},
             negate,
             weight_mul,
             pack_out);
     } else {
-        ckl::eltwise_chain(
-            per_core_tile_cnt,
-            ckl::CopyTile<
-                cb_tmp_input,
-                D::D0,
-                ckl::InputLifecycle::Streaming,
-                ckl::OperandKind::Scalar,
-                ckl::CopyTileReconfig::Input>{},
-            negate,
-            weight_mul,
-            pack_out);
+        ckl::eltwise_chain(per_core_tile_cnt, ckl::CopyTile<cb_tmp_input>{}, negate, weight_mul, pack_out);
     }
 }

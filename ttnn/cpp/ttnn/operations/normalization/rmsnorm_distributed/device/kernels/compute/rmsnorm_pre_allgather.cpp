@@ -60,10 +60,11 @@ void kernel_main() {
         compute_kernel_lib::square<
             cb_inp,
             cb_x2,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::HeldCumulative,
-            compute_kernel_lib::OutputLifecycle::Bulk>(squaring_shape);
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block>(squaring_shape);
 
         // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
         compute_kernel_lib::

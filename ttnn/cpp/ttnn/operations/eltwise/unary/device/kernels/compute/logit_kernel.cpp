@@ -32,7 +32,7 @@ void kernel_main() {
     //   RsubUnary<D0>{1.0f bits} -> D0 = 1 - cb_tmp0
     //   DivBinary<D1, D0, D0>    -> D0 = cb_tmp0 / (1 - cb_tmp0)
     //   Log<D0>                  -> D0 = log(D0)
-    //   PackTile<cb_output, D0>
+    //   PackTile<cb_output>
     //
     // Reconfig matches original init_sfpu + copy_tile_init at boot —
     // CopyTileReconfig::None + PackTileReconfig::None.
@@ -42,14 +42,12 @@ void kernel_main() {
             cb_input,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
 #ifdef CLAMP
         compute_kernel_lib::Clamp<compute_kernel_lib::Dst::D0>{packed_scalar1, packed_scalar2},
 #endif
         compute_kernel_lib::PackTile<
             cb_tmp0,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -59,13 +57,11 @@ void kernel_main() {
             cb_tmp0,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::CopyTile<
             cb_tmp0,
             compute_kernel_lib::Dst::D1,
             compute_kernel_lib::InputLifecycle::NoWaitPop,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::RsubUnary<compute_kernel_lib::Dst::D0>{0x3F800000u},  // 1.0 - x
         compute_kernel_lib::
@@ -73,7 +69,6 @@ void kernel_main() {
         compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

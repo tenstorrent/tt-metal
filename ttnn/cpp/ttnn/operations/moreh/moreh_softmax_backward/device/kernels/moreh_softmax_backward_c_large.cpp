@@ -34,14 +34,7 @@ void kernel_main() {
         // both full tiles (no axis-mask either).
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                compute_kernel_lib::copy<
-                    cb_dy,
-                    cb_sum,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
+                compute_kernel_lib::copy<cb_dy, cb_sum>(onetile);
             } else {
                 compute_kernel_lib::add<cb_sum, cb_dy, cb_sum>(onetile);
             }
@@ -56,12 +49,7 @@ void kernel_main() {
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Dst::D0>,
                 cb_y,
-                cb_exp,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>(onetile);
+                cb_exp>(onetile);
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
@@ -70,8 +58,6 @@ void kernel_main() {
                 cb_exp,
                 cb_inter2,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 
             // dy - sum * exp(y).
@@ -84,14 +70,7 @@ void kernel_main() {
             compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(onetile);
 
             if (i == 0) {
-                compute_kernel_lib::copy<
-                    cb_ydy,
-                    cb_sum,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
+                compute_kernel_lib::copy<cb_ydy, cb_sum>(onetile);
             } else {
                 compute_kernel_lib::add<cb_sum, cb_ydy, cb_sum>(onetile);
             }
@@ -105,8 +84,6 @@ void kernel_main() {
                 cb_sum,
                 cb_dy_m_sum,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 #ifdef SOFTMAX
@@ -116,23 +93,9 @@ void kernel_main() {
             // -(dy - sum) * y.
             compute_kernel_lib::eltwise_chain(
                 onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_dy_m_sum,
-                    cb_y,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::BinaryFpu<cb_dy_m_sum, cb_y, compute_kernel_lib::BinaryFpuOp::Mul>{},
                 compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_dx,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::PackTile<cb_dx>{});
 #endif
         }
         cb_sum_obj.pop_front(onetile);

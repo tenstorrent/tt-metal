@@ -36,24 +36,9 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         num_tiles,
-        ckl::CopyTile<
-            cb_in0,
-            ckl::Dst::D0,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_in1,
-            ckl::Dst::D1,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_in2,
-            ckl::Dst::D2,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in0, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in1, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in2, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
         // exactly one active (the inactive folds to a no-op tag, swallowing scalar_arg).
         ckl::OptionalChainElement < kSel == 2,
         ckl::Addcmul < TERNARY_DF,
@@ -67,5 +52,5 @@ void kernel_main() {
         ckl::Dst::D1,
         ckl::Dst::D2,
         ckl::Dst::D0 >> {scalar_arg},
-        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

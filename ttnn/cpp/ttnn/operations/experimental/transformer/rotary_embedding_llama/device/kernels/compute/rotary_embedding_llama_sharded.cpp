@@ -76,13 +76,12 @@ void kernel_main() {
             sin_cb,
             sin_interm_cb,
             compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::Bulk,
             compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
         compute_kernel_lib::mul<
@@ -90,13 +89,12 @@ void kernel_main() {
             cos_cb,
             cos_interm_cb,
             compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::Bulk,
             compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
         compute_kernel_lib::add<
@@ -104,13 +102,12 @@ void kernel_main() {
             sin_interm_cb,
             out_cb,
             compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::Bulk,
             compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
     }
 
     // Done with the sin/cos matrices, so remove from CB

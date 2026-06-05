@@ -43,20 +43,19 @@ void kernel_main() {
             cb_grad_out,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>{},
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D1,
             compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::CopyTileReconfig::None>{},
+            compute_kernel_lib::CopyTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>{},
         compute_kernel_lib::TanhDerivative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
         compute_kernel_lib::
             MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_grad_in,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Chunked,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

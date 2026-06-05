@@ -181,19 +181,15 @@ void kernel_main() {
                 cb_stats_reduced,
                 compute_kernel_lib::BinaryFpuOp::Mul,
                 compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::TileOffset::Set,
                 compute_kernel_lib::TileOffset::Set>{1, 1},
-            compute_kernel_lib::PackTile<
-                cb_mean_squared,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_mean_squared, compute_kernel_lib::OutputLifecycle::Bulk>{});
 
         /*
          * E[x**2] - E[x]**2  — sub at index 0.
@@ -207,11 +203,8 @@ void kernel_main() {
             cb_mean_squared,
             cb_var,
             compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::HeldBulk,
             compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::OutputLifecycle::Bulk>(1);
 
         /*
@@ -227,21 +220,13 @@ void kernel_main() {
                 cb_eps,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_recip_sqrt_var,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_recip_sqrt_var>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

@@ -492,8 +492,8 @@ template <
     uint32_t Cb,
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = InputLifecycle::Streaming,
-    OperandKind IndexMode = OperandKind::Scalar,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
+    OperandKind IndexMode = OperandKind::Scalar,
     TileOffset Offset = TileOffset::Unset>
 struct CopyTile;
 
@@ -502,11 +502,11 @@ template <
     uint32_t CbB,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
-    BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
     InputLifecycle APolicy = InputLifecycle::Streaming,
     InputLifecycle BPolicy = InputLifecycle::Streaming,
-    OperandKind AIndex = OperandKind::Scalar,
+    BinaryDataFormatReconfig Reconfig = BinaryDataFormatReconfig::Input,
     Dst DstSlot = Dst::D0,
+    OperandKind AIndex = OperandKind::Scalar,
     OperandKind BIndex = AIndex,
     TileOffset OffsetA = TileOffset::Unset,
     TileOffset OffsetB = TileOffset::Unset>
@@ -516,10 +516,10 @@ template <
     uint32_t Cb,
     BinaryFpuOp Op,
     DestReuseType ReuseType,
+    InputLifecycle Policy = InputLifecycle::Streaming,
+    DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     Dst DstIn = Dst::D0,
     Dst DstOut = Dst::D0,
-    DestReuseReconfig Reconfig = DestReuseReconfig::Input,
-    InputLifecycle Policy = InputLifecycle::Streaming,
     OperandKind IndexMode = OperandKind::Scalar,
     TileOffset Offset = TileOffset::Unset>
 struct DestReuseBinary;
@@ -527,16 +527,16 @@ struct DestReuseBinary;
 template <
     BroadcastDim Dim,
     uint32_t Cb,
-    Dst DstSlot = Dst::D0,
     InputLifecycle Policy = InputLifecycle::Streaming,
-    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
+    UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input,
+    Dst DstSlot = Dst::D0>
 struct UnaryBcast;
 
 template <
     uint32_t Cb,
-    Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutputLifecycle::Streaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
+    Dst DstSlot = Dst::D0,
     TileOffset Offset = TileOffset::Unset>
 struct PackTile;
 

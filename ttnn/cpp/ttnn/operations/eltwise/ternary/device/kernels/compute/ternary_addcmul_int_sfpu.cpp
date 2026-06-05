@@ -32,27 +32,12 @@ void kernel_main() {
 
     ckl::eltwise_chain(
         num_tiles,
-        ckl::CopyTile<
-            cb_in0,
-            ckl::Dst::D0,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_in1,
-            ckl::Dst::D1,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
-        ckl::CopyTile<
-            cb_in2,
-            ckl::Dst::D2,
-            ckl::InputLifecycle::Streaming,
-            ckl::OperandKind::Scalar,
-            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in0, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in1, ckl::Dst::D1, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_in2, ckl::Dst::D2, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
         ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3>{},  // D3 = scalar*in1
         ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
         ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
-        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

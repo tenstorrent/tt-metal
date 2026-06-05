@@ -22,12 +22,10 @@ void kernel_main() {
             tt::CBIndex::c_1,
             tt::CBIndex::c_24,
             compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::None>(onetile);
 
         // reduce-w

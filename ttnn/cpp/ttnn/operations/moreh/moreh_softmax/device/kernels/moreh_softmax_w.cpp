@@ -113,12 +113,13 @@ void kernel_main() {
             cb_max,
             cb_x_m_max,
             compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,    // A index
-            compute_kernel_lib::InputLifecycle::Bulk,  // A lifecycle
-            compute_kernel_lib::InputLifecycle::Bulk,  // B lifecycle
-            compute_kernel_lib::OperandKind::Scalar,   // B index (cb_max broadcast)
-            compute_kernel_lib::OutputLifecycle::Bulk>(Wt);
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>(Wt);
 
         // compute exp(x - max(x)) — split into 2 chains, same pattern as
         // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
@@ -132,8 +133,8 @@ void kernel_main() {
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Block>{},
 #ifndef SOFTMAX
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
@@ -141,11 +142,7 @@ void kernel_main() {
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_exps,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_exps>{});
 
         compute_kernel_lib::eltwise_chain(
             1u,
@@ -153,8 +150,8 @@ void kernel_main() {
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::TileOffset::Set>{Wt - 1},
 #ifndef SOFTMAX
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
@@ -163,18 +160,10 @@ void kernel_main() {
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::CopyTile<
-                cb_mask,
-                compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::
+                CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_exps,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::PackTile<cb_exps>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -222,24 +211,26 @@ void kernel_main() {
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Block,
             compute_kernel_lib::InputLifecycle::CallerManaged,
             compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::OutputLifecycle::Bulk>(Wt);
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>(Wt);
 #else
         compute_kernel_lib::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::OutputLifecycle::Bulk>(Wt);
+            compute_kernel_lib::OperandKind::Scalar>(Wt);
 #endif
         cb_x_m_max_obj.pop_front(Wt);
     }

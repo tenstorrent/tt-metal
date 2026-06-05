@@ -39,15 +39,7 @@ void kernel_main() {
 
 #if defined(DIVISOR)
     // recip(divisor) -> cb_tmp1 (held scalar, one tile).
-    ckl::unary<
-        ckl::Recip<D::D0>,
-        cb_divisor,
-        cb_tmp1,
-        ckl::CopyTileReconfig::Input,
-        ckl::OperandKind::Scalar,
-        ckl::InputLifecycle::Bulk,
-        ckl::OutputLifecycle::Streaming,
-        ckl::PackTileReconfig::Output>(1);
+    ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_tmp1, ckl::InputLifecycle::Bulk>(1);
 
     cb_wait_front(cb_tmp1, 1);         // held recip
     cb_wait_front(cb_output_grad, 1);  // held output_grad
@@ -61,14 +53,10 @@ void kernel_main() {
                 cb_output_grad,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::BinaryDataFormatReconfig::Input,
                 ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OperandKind::Scalar,
-                D::D0,
-                ckl::OperandKind::Scalar>{},
+                ckl::InputLifecycle::CallerManaged>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<cb_tmp2, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+            ckl::PackTile<cb_tmp2>{});
 
         // stage 2: input_grad = cb_tmp2 * (1/divisor)
         compute_kernel_lib::mul<
@@ -76,8 +64,6 @@ void kernel_main() {
             cb_tmp1,
             cb_input_grad,
             compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(1);
     }
@@ -96,14 +82,10 @@ void kernel_main() {
                 cb_output_grad,
                 ckl::BinaryFpuOp::Mul,
                 ckl::BroadcastDim::Scalar,
-                ckl::BinaryDataFormatReconfig::Input,
                 ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OperandKind::Scalar,
-                D::D0,
-                ckl::OperandKind::Scalar>{},
+                ckl::InputLifecycle::CallerManaged>{},
             ckl::Negative<D::D0>{},
-            ckl::PackTile<cb_input_grad, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+            ckl::PackTile<cb_input_grad>{});
     }
 
     cb_pop_front(cb_output_grad, 1);

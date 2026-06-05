@@ -50,11 +50,11 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // cb_eps:        InputLifecycle::CallerManaged + Scalar — held by kernel_main for the whole kernel.
     eltwise_chain(
         1,
-        CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
-        CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk>{},
+        CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
         Rsqrt<>{},
-        PackTile<cb_den, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        PackTile<cb_den>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -77,21 +77,17 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // suppressed).
     eltwise_chain(
         inner_count,
-        CopyTile<cb_other, Dst::D0, InputLifecycle::Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
-        CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_other>{},
+        CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        CopyTile<cb_den, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_den, Dst::D1, InputLifecycle::Bulk>{},
         MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-        OptionalChainElement<
-            WeightHas,
-            CopyTile<cb_weight, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<WeightHas, CopyTile<cb_weight, Dst::D1, InputLifecycle::Bulk>>{},
         OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-        OptionalChainElement<
-            BiasHas,
-            CopyTile<cb_bias, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<BiasHas, CopyTile<cb_bias, Dst::D1, InputLifecycle::Bulk>>{},
         OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
         OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
-        PackTile<cb_final_out, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        PackTile<cb_final_out>{});
 }
 
 void kernel_main() {

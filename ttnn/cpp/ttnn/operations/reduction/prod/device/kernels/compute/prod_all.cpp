@@ -31,31 +31,10 @@ void kernel_main() {
     // sequence matches.
     if constexpr (num_tiles == 1) {
         // Single tile: copy direct to final.
-        compute_kernel_lib::copy<
-            input_cb,
-            final_output_cb,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>(1u);
+        compute_kernel_lib::copy<input_cb, final_output_cb>(1u);
     } else {
-        compute_kernel_lib::copy<
-            input_cb,
-            partial_prod_cb,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>(1u);
+        compute_kernel_lib::copy<input_cb, partial_prod_cb>(1u);
         compute_kernel_lib::mul<input_cb, partial_prod_cb, partial_prod_cb>(num_tiles - 1u);
-        compute_kernel_lib::copy<
-            partial_prod_cb,
-            final_output_cb,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>(1u);
+        compute_kernel_lib::copy<partial_prod_cb, final_output_cb>(1u);
     }
 }

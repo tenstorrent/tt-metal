@@ -51,17 +51,17 @@ ALWI void update_running_stat() {
     cb_reserve_back(cb_updated, 1);
     ckl::eltwise_chain(
         1,
-        ckl::CopyTile<cb_one, D::D0, CM, SCALAR, CP_IN>{},
-        ckl::CopyTile<cb_momentum, D::D1, CM, SCALAR, CP_IN>{},
+        ckl::CopyTile<cb_one, D::D0, CM, CP_IN, SCALAR>{},
+        ckl::CopyTile<cb_momentum, D::D1, CM, CP_IN, SCALAR>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
-        ckl::CopyTile<cb_old, D::D1, STREAM, SCALAR, CP_IN>{},
+        ckl::CopyTile<cb_old, D::D1, STREAM, CP_IN, SCALAR>{},
         MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<cb_momentum, D::D1, CM, SCALAR, CP_IN>{},
-        ckl::CopyTile<cb_batch, D::D2, STREAM, SCALAR, CP_IN>{},
+        ckl::CopyTile<cb_momentum, D::D1, CM, CP_IN, SCALAR>{},
+        ckl::CopyTile<cb_batch, D::D2, STREAM, CP_IN, SCALAR>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<cb_updated, D::D0, OUT_CM, PK_OUT>{},
-        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, D::D0, OUT_CM, PK_OUT>>{});
+        ckl::PackTile<cb_updated, OUT_CM, PK_OUT>{},
+        ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, OUT_CM, PK_OUT>>{});
     cb_push_back(cb_updated, 1);
 }
 
@@ -69,15 +69,7 @@ template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcC
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
         // src (the updated stat just written) -> typecast -> writer-facing CB.
-        ckl::unary<
-            ckl::Typecast<TcInFmt, TcOutFmt, D::D0>,
-            SrcCb,
-            DstCb,
-            ckl::CopyTileReconfig::Input,
-            ckl::OperandKind::Scalar,
-            ckl::InputLifecycle::Streaming,
-            ckl::OutputLifecycle::Streaming,
-            ckl::PackTileReconfig::Output>(1);
+        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, SrcCb, DstCb>(1);
     }
 }
 

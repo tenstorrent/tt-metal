@@ -117,12 +117,12 @@ void kernel_main() {
                     cb_inb,
                     cb_x,
                     compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OutputLifecycle::Bulk>(
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block>(
                     compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
@@ -210,13 +210,13 @@ void kernel_main() {
                 cb_ex,
                 cb_xmm,
                 compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::InputLifecycle::Bulk,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar>(
                 compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
         }
         cb_ex_obj.pop_front(1);
@@ -239,19 +239,14 @@ void kernel_main() {
                 cb_eps,
                 compute_kernel_lib::BinaryFpuOp::Add,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
             compute_kernel_lib::Rsqrt<
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Legacy::Off,
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -277,19 +272,14 @@ void kernel_main() {
                     cb_ex2pe,
                     compute_kernel_lib::BinaryFpuOp::Mul,
                     compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::InputLifecycle::HeldBulk,
                     compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileOffset::Set,
-                    compute_kernel_lib::TileOffset::Unset>{block.start(), 0u},
-                compute_kernel_lib::PackTile<
-                    cb_im_or_out,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::TileOffset::Set>{block.start(), 0u},
+                compute_kernel_lib::PackTile<cb_im_or_out, compute_kernel_lib::OutputLifecycle::Bulk>{});
 
             if constexpr (do_gamma) {
                 // Stage 2: cb_outg = cb_fusion * cb_gamma (row bcast).
@@ -304,19 +294,15 @@ void kernel_main() {
                         cb_gamma,
                         compute_kernel_lib::BinaryFpuOp::Mul,
                         compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::InputLifecycle::HeldBulk,
-                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::TileOffset::Unset,
                         compute_kernel_lib::TileOffset::Set>{0u, block.start()},
-                    compute_kernel_lib::PackTile<
-                        cb_outg,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_outg, compute_kernel_lib::OutputLifecycle::Bulk>{});
             }
             if constexpr (do_beta) {
                 // Stage 3: cb_out = cb_fusion + cb_beta (row bcast).
@@ -328,19 +314,15 @@ void kernel_main() {
                         cb_beta,
                         compute_kernel_lib::BinaryFpuOp::Add,
                         compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::InputLifecycle::Bulk,
                         compute_kernel_lib::InputLifecycle::HeldBulk,
-                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
                         compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::TileOffset::Unset,
                         compute_kernel_lib::TileOffset::Set>{0u, block.start()},
-                    compute_kernel_lib::PackTile<
-                        cb_out,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_out, compute_kernel_lib::OutputLifecycle::Bulk>{});
             }
         }
         cb_ex2pe_obj.pop_front(onetile);

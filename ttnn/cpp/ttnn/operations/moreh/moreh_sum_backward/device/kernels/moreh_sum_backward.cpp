@@ -50,23 +50,18 @@ void kernel_main() {
                     cb_in0,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     bcast_dim,
-                    compute_kernel_lib::BinaryDataFormatReconfig::None,
                     compute_kernel_lib::InputLifecycle::CallerManaged,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>>{},
+                    compute_kernel_lib::BinaryDataFormatReconfig::None>>{},
             compute_kernel_lib::OptionalChainElement<
                 !has_bcast,
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::None>>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
     }

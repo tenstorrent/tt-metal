@@ -410,12 +410,10 @@ void kernel_main() {
                     cb_ex_global_id,
                     cb_xmm_id,
                     compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::PackTileReconfig::None>(out_block_hw_actual);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -530,19 +528,14 @@ void kernel_main() {
                     cb_eps_id,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Legacy::On,
                     compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_ex2pe_id,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             // End Variance Calc
@@ -586,12 +579,10 @@ void kernel_main() {
                     cb_ex_global_id,
                     cb_xmm_id,
                     compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::PackTileReconfig::None>(out_block_hw_actual);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);

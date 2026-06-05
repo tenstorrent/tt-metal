@@ -54,7 +54,7 @@ void kernel_main() {
 
             // Optional masking of last H tile.
             if constexpr (do_mask_h) {
-                // CopyTile<cb_input, D0> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
+                // CopyTile<cb_input> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
                 // Reconfig: original uses `copy_tile_to_dst_init_short` (no _with_dt)
                 // and plain pack_tile, with a single FP32_DEST_ACC_EN-guarded
                 // reconfig_data_format_srca(cb_input) on entry. The chain's
@@ -67,24 +67,13 @@ void kernel_main() {
                 // cb_masked_input OutputLifecycle::Streaming.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<cb_input>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<
-                        cb_masked_input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_masked_input>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(

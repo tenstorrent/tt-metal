@@ -28,20 +28,7 @@ void kernel_main() {
 
     compute_kernel_lib::eltwise_chain(
         total_tiles,
-        compute_kernel_lib::CopyTile<
-            cb_a,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::Input>{},
-        compute_kernel_lib::PackTile<
-            cb_out1,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>{},
-        compute_kernel_lib::PackTile<
-            cb_out2,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::CopyTile<cb_a>{},
+        compute_kernel_lib::PackTile<cb_out1>{},
+        compute_kernel_lib::PackTile<cb_out2>{});
 }

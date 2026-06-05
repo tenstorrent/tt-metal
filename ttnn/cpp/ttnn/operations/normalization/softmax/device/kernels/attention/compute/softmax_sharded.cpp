@@ -212,18 +212,14 @@ void kernel_main() {
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::TileOffset::Set>{index_subblock_w_offset},
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_exps,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::PackTile<cb_exps, compute_kernel_lib::OutputLifecycle::Bulk>{});
             index_subblock_w_offset += subblock_w;
         }
         cb_in0_obj.pop_front(block_w);
@@ -260,8 +256,6 @@ void kernel_main() {
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(block_w);
         cb_recipsumexps_obj.pop_front(1);

@@ -71,30 +71,19 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                // CopyTile<cb_input=c_0, D0> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
+                // CopyTile<cb_input=c_0> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
                 // cb_input is always c_0 here (reset at line 46 before this conditional).
                 // Reconfig: chain Input+Output (fold elides no-op transitions); matches
                 // the FP32_DEST_ACC_EN-guarded reconfigs in the original.
                 compute_kernel_lib::eltwise_chain(
                     onetile,
-                    compute_kernel_lib::CopyTile<
-                        tt::CBIndex::c_0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
                         compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<
-                        cb_masked_input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::PackTile<cb_masked_input>{});
                 cb_input = cb_masked_input;
             }
 

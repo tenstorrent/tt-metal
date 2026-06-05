@@ -52,8 +52,6 @@ void kernel_main() {
                     cb_in1,
                     cb_intermed0,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
             }
@@ -70,8 +68,6 @@ void kernel_main() {
             cb_scalar,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
     }

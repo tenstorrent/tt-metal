@@ -23,9 +23,8 @@ void kernel_main() {
         compute_kernel_lib::Typecast<CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0>,
         input_cb,
         output_cb,
-        compute_kernel_lib::CopyTileReconfig::None,
-        compute_kernel_lib::OperandKind::Scalar,
         compute_kernel_lib::InputLifecycle::Streaming,
         compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::CopyTileReconfig::None,
         compute_kernel_lib::PackTileReconfig::None>(total_tiles);
 }

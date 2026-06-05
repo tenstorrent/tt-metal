@@ -132,8 +132,6 @@ void kernel_main() {
             cb_fused_scale,
             cb_scale_mask,
             compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
@@ -223,12 +221,7 @@ void kernel_main() {
             cb_mask_padded_obj.wait_front(1);
             compute_kernel_lib::eltwise_chain(
                 Wt - 1,
-                compute_kernel_lib::CopyTile<
-                    cb_in0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<cb_in0>{},
 #ifndef NUMERIC_STABLE
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
@@ -237,7 +230,6 @@ void kernel_main() {
 #endif
                 compute_kernel_lib::PackTile<
                     cb_x,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -248,12 +240,8 @@ void kernel_main() {
                     cb_mask_padded,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
 #ifndef NUMERIC_STABLE
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
@@ -262,7 +250,6 @@ void kernel_main() {
 #endif
                 compute_kernel_lib::PackTile<
                     cb_x,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -294,10 +281,9 @@ void kernel_main() {
                     compute_kernel_lib::Dst::D0>,
                 cb_in0,
                 cb_exps,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::CopyTileReconfig::Input,
                 compute_kernel_lib::PackTileReconfig::None>(Wt);
 #endif
         }
@@ -334,8 +320,6 @@ void kernel_main() {
             cb_recipsumexps,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
         cb_recipsumexps_obj.pop_front(1);

@@ -317,12 +317,10 @@ void kernel_main() {
                 cb_ex_global_id,
                 cb_x_id,
                 compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex_global.pop_front(1);
 
@@ -342,13 +340,13 @@ void kernel_main() {
                 cb_input_mask_id,
                 cb_x_id,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::DeferredPop,
-                compute_kernel_lib::OperandKind::Row,
                 compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::grid(block_h, block_w));
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(block_h, block_w));
             reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
@@ -416,19 +414,14 @@ void kernel_main() {
                     cb_eps_id,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Legacy::On,
                     compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_ex2pe_id,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             //  (x - Ex) * 1/[sqrt(Var + eps)] — same-CB mul_bcast_scalar over block_hw tiles.
@@ -447,12 +440,10 @@ void kernel_main() {
                 cb_ex2pe_id,
                 cb_x_id,
                 compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
@@ -627,14 +618,13 @@ void kernel_main() {
                 cb_gamma_id,
                 cb_outgamma_id,
                 compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::InputLifecycle::DeferredPop,
                 compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Row,
                 compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::None>(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outgamma.wait_front(per_core_MN);
         } else {
             // cb_in holds the data required for gamma — in-place bcast-rows rotation.
@@ -653,14 +643,13 @@ void kernel_main() {
                 cb_gamma_id,
                 cb_in_id,
                 compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::BulkDrain,
                 compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Row,
                 compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::None>(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
@@ -693,14 +682,13 @@ void kernel_main() {
                 cb_beta_id,
                 cb_outbeta_id,
                 compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::InputLifecycle::DeferredPop,
                 compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Row,
                 compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::None>(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in holds the data required for beta — in-place bcast-rows rotation.
@@ -713,14 +701,13 @@ void kernel_main() {
                 cb_beta_id,
                 cb_in_id,
                 compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::InputLifecycle::BulkDrain,
                 compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OperandKind::Row,
                 compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::None>(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

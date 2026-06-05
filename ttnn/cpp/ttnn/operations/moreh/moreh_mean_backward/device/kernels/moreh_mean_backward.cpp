@@ -61,25 +61,9 @@ void kernel_main() {
                     cb_in0,
                     compute_kernel_lib::BinaryFpuOp::Add,
                     bcast_dim,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>>{},
-            compute_kernel_lib::OptionalChainElement<
-                !has_bcast,
-                compute_kernel_lib::CopyTile<
-                    cb_in0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>>{},
-            compute_kernel_lib::PackTile<
-                cb_intermed0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::InputLifecycle::CallerManaged>>{},
+            compute_kernel_lib::OptionalChainElement<!has_bcast, compute_kernel_lib::CopyTile<cb_in0>>{},
+            compute_kernel_lib::PackTile<cb_intermed0>{});
 
         // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
         compute_kernel_lib::mul<
@@ -87,8 +71,6 @@ void kernel_main() {
             cb_scalar,
             cb_out0,
             compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::OperandKind::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
     }
