@@ -107,6 +107,24 @@ Tests:
       - type: neighbor_exchange
         mesh_scope: intra_mesh
 
+  - name: "2DTorusXYNeighborExchange"
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
   - name: "MultiMeshSequentialAllToAll"
     sync: true
     fabric_setup:

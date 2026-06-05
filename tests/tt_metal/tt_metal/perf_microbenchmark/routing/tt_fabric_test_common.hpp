@@ -929,7 +929,8 @@ public:
 
         // Only the Wormhole Galaxy uses coordinate-based neighbors for Ring/Torus; all others
         // (including Blackhole Galaxy) use the control plane. The coordinate-based wraparound
-        // produces incorrect neighbors on Blackhole Galaxy.
+        // produces incorrect neighbors on Blackhole Galaxy. Only happens when no MGD pinnings
+        // Refer to issue #44446
         const bool is_wormhole_galaxy =
             is_galaxy && tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
                              tt::tt_metal::ClusterType::GALAXY;
