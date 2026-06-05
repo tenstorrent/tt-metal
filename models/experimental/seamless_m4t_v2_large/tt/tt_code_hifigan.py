@@ -24,43 +24,18 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     MATMUL_1D_SEQ_THRESHOLD,
     to_torch_replicated_first_shard,
 )
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Both matmul dims must stay small on BH; ``t_audio`` alone can be thousands of frames.
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
-# HiFi-GAN conv_pre input length per chunk (upsample L1 grows quickly on BH).
-_HIFIGAN_MEL_CHUNK = 384
 # Max upsampled time for a single ``ttnn.conv1d`` on BH (above this, use fixed-window chunks).
 _HIFIGAN_MAX_CONV1D_TLEN = 4096
-# Interior time rows per conv chunk; halo uses same-padding overlap for correct stitching.
-# Sized so the padded conv input (interior + 2*halo) stays just under the single-conv1d L1
-# budget ``_HIFIGAN_MAX_CONV1D_TLEN`` (4096). HiFi-GAN resblock padding maxes at 25 (kernel 11,
-# dilation 5), so fixed_in <= 3968 + 50 = 4018 < 4096. A wide interior is critical for perf:
-# the chunk loop slices the full (up to ~0.5 M-row) timeline once per chunk, so its cost grows
-# ~O(n^2) in the chunk count. Going 512 -> 3968 cut the 1546-unit (≈31 s audio) vocoder from
-# ~20 min to ~30 s at unchanged PCC (0.9994 vs 0.9995).
+# Conv1d chunk interior (halo + interior must fit ``_HIFIGAN_MAX_CONV1D_TLEN``).
 _VOCODER_CONV1D_INTERIOR = 3968
-# Channel-aware chunking. HiFi-GAN halves channels at each upsample, so the late stages (16-64 ch)
-# fit far more time rows in the same L1 as the widest conv — yet a fixed-row ``interior`` chunks them
-# just as finely (the late, low-channel, long-timeline stages dominate the chunk count and thus the
-# ~37k vocoder ops + the O(n²) per-chunk timeline slicing). Size the chunk interior to a constant
-# *element* budget (``interior * in_channels``) so low-channel stages chunk much wider. Budget =
-# baseline interior × widest HiFi-GAN channel (proven safe at 3968). The result is clamped to
-# ``[_VOCODER_CONV1D_INTERIOR, _VOCODER_CONV1D_MAX_INTERIOR]`` (the floor keeps the widest convs
-# unchanged; the cap is the conv1d single-shot row ceiling) and tile-aligned. See ``_chunk_interior``.
+# Scale interior by channel count so low-channel stages use wider chunks.
 _VOCODER_CONV1D_ELEM_BUDGET = 3968 * 512
-# 32768 is the ceiling that fits the conv1d in the speech-path ``l1_small`` (65536 OOMs L1_SMALL);
-# it already collapses the late-stage chunk counts ~6-7× (e.g. 16-channel stage 82 → 11 chunks).
 _VOCODER_CONV1D_MAX_INTERIOR = 32768
 
-# Bucket the upsampled unit length ``t_audio`` to this multiple. The whole vocoder timeline
-# (frame index, duration-expansion mask, HiFi-GAN conv chunking) is shape-specialized by
-# ``t_audio``, so a jitter of even 1 frame recompiles ~all ~5k device programs (measured). Since
-# ``t_audio`` (a duration sum) jitters run-to-run, rounding it to a grid collapses the jitter onto a
-# fixed program set → reused instead of recompiled (kills the 5-9s run-to-run variance). The extra
-# frames are zero-expanded (no unit maps past the real length) — equivalent to the conv's own
-# end-of-sequence zero padding — and the output is cropped to the real length via ``lengths``, so
-# the valid waveform is unchanged. Cost: a few % extra conv work on the padding.
+# Round ``t_audio`` up to stabilize shape-specialized vocoder programs; padded tail is masked/cropped.
 _VOCODER_TAUDIO_BUCKET = 256
 
 
@@ -142,28 +117,11 @@ def _fused_activation_token(activation: Optional[ttnn.UnaryWithParam]) -> str:
     return str(op)
 
 
-# Conv2d shard layout, chosen per op group from the sweep in tests/perf/test_conv2d_shard_sweep.py.
-# Forcing the layout beats the device auto-pick (``shard_layout=None``) on the heavy vocoder convs:
-# HEIGHT_SHARDED is ~1.4-2x on the resblock convs, BLOCK_SHARDED is ~7x on conv_pre (large-K, small-M).
-# HEIGHT needs the full implicit-GEMM K (in_channels*kernel) resident per core, so above
-# ``_HEIGHT_SHARD_K_MAX`` it is rejected — those convs fall back to auto. ``_resolve_conv_shard_layout``
-# is a pure function of (prefer, in_channels, kernel) so prewarm and forward always pick the same
-# layout (the prepared-weights cache requires both to agree). Validated PCC ≥ 0.9987 at unit_seq=128.
+# HEIGHT sharding when K fits; None lets the device auto-pick.
 _HEIGHT_SHARD_K_MAX = 4096
-
-# Preferred conv2d shard layout per vocoder op group (None == device auto-pick, the prior default).
-# Tunable knobs so the sweep recommendation can be toggled per op group without touching call sites.
-# conv_pre (BLOCK) and resblock (HEIGHT) are reverted to auto: forcing a conv1d layout passed the
-# unit_seq=128 PCC test but CLASHES L1 ("statically allocated circular buffers clash with L1 buffers")
-# on the longer resblock timelines produced by real demo audio (S2ST). Their win was small (~3 ms /
-# ~5% of conv2d); the big lever is the upsample transpose below, which is robust via its slice gate.
 _CONV_PRE_SHARD = None
 _RESBLOCK_SHARD = None
-# Upsample conv_transpose: HEIGHT_SHARDED per DRAM slice is ~20x faster than auto on the early stages
-# (stage-1 36 ms -> ~2 ms), but errors above ~64 slices. ``_conv_transpose1d_nlc`` applies it only
-# when ``_vocoder_dram_slice_count(input_length) <= _UPSAMPLE_HEIGHT_MAX_SLICES`` (and K <= the cap),
-# so the long-timeline late stages and wide-K stage-0 stay on auto. See
-# tests/perf/test_conv_transpose_dram_slice_sweep.py.
+# Upsample transpose: HEIGHT per DRAM slice when slice count is small enough.
 _UPSAMPLE_SHARD = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 _UPSAMPLE_HEIGHT_MAX_SLICES = 48
 
@@ -211,9 +169,7 @@ def _vocoder_conv2d_config(
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
     )
-    # A forced (HEIGHT) layout on the DRAM-sliced transpose places its config/index tensors in
-    # L1_SMALL, which is already full mid-pipeline (the standalone benchmark had an empty L1_SMALL and
-    # did not hit this). Spill them to DRAM so the forced-layout transpose fits in the full model.
+    # Forced shard layouts may need config tensors in DRAM when L1_SMALL is tight.
     if shard_layout is not None:
         conv_kwargs["config_tensors_in_dram"] = True
     il = int(input_length)
@@ -268,7 +224,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self.leaky_slope = float(config.leaky_relu_slope)
         self.num_kernels = len(config.resblock_kernel_sizes)
 
-        # HiFi4 required for >0.99 waveform PCC (LoFi ~0.59; HiFi2 ~0.987 vs 0.99 gate in test_code_hifigan).
+        # HiFi4 math fidelity for waveform PCC.
         self._compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -280,12 +236,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self._matmul_pc_cache: dict = {}
         # Populated only by ``prewarm_conv1d_weights`` (trace/E2E). Forward without prewarm uses raw weights (PCC path).
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
-        # TP: vocoder weights are replicated on every device; ``tp`` is mesh width for shape/readback helpers.
-        self._tp = get_tp(device)
-        self._cluster_axis = mesh_cluster_axis(device)
         self._forward_trace_rt: Optional[VocoderForwardTraceRuntime] = None
         self._last_t_audio: Optional[int] = None
-        self._last_gather_idx: Optional[int] = None
 
     def _expand_unit_embeddings_matmul(
         self,
@@ -955,11 +907,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
 
-        # HEIGHT_SHARDED per DRAM slice is ~20x faster than the auto layout on the narrow-K early
-        # upsample stages (benchmark test_conv_transpose_dram_slice_sweep: stage-1 36 ms -> ~2 ms),
-        # BUT only at small slice counts — it errors at >= ~64 slices, i.e. the long-timeline late
-        # stages. So gate HEIGHT on both the K cap (``_resolve_conv_shard_layout``) and the slice
-        # count; wide-K (stage-0) and high-slice (late) transposes fall back to auto.
+        # HEIGHT per DRAM slice when slice count and K are within caps; else auto layout.
         sliced = int(input_length) > 64
         num_slices = _vocoder_dram_slice_count(input_length) if sliced else 0
         prefer = _UPSAMPLE_SHARD if (not sliced or num_slices <= _UPSAMPLE_HEIGHT_MAX_SLICES) else None
@@ -1287,7 +1235,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
             if t_audio < 1:
                 raise RuntimeError(f"Computed t_audio={t_audio}; expected positive duration sum.")
             self._last_t_audio = t_audio
-            self._last_gather_idx = idx
 
         # Bucket the upsampled length so run-to-run jitter reuses the shape-specialized vocoder
         # programs instead of recompiling. ``t_audio_real`` drives the (cropped) output length;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """TTNN [`SeamlessM4Tv2TextToUnitForConditionalGeneration`]: encoder + decoder + ``lm_head``.
@@ -46,36 +46,17 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
-# Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
-# 16 × TILE (512 rows): the prior 128-row cap was a ``matmul_program_config`` limitation (it switches
-# to 2D multicast above 128 rows → L1 overflow). The 1D multicast PC with a pinned K-block stays 1D at
-# any width, so we match the speech-encoder/T2U-linear chunk (512) — 4× fewer dispatches than 128.
+# 512-row matmul chunks with pinned K-block (matches speech-encoder long-seq recipe).
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 16 * TILE
-
-# Long-seq T2U linears (encoder/decoder FFN + projections) were chunked 1 tile (32 rows) at a time
-# via ``matmul_program_config`` — ~seq/32 slice+matmul+concat ops per linear (128 at seq=4096), the
-# bulk of the T2U device ops. Mirror the speech-encoder fix: chunk 16 tiles (512 rows) with a 1D
-# multicast PC whose K-block is pinned to the 32-row baseline (``in0_block_w=8``, the hard cap at
-# per_core_M=1 for K=1024/4096/8192) so the K-reduction — hence the output — is bit-for-bit unchanged
-# while emitting ~16× fewer ops. 512 is the L1 ceiling (the in0 activation CB = per_core_M*in0_block_w
-# scales with the row count; wider clashes, as on the speech encoder).
 _T2U_LINEAR_CHUNK_ROWS = 16 * TILE
 _T2U_LINEAR_IN0_BLOCK_W = 8
-
-# TP long-seq self-attn: fused SDPA L1 scratch scales with full ``S`` on 1×4 meshes (decoder @ 4096).
-# Use DRAM chunked Q@K^T like speech-encoder relative scores (``scores_mc = DRAM`` when ``tp>1, S>=128``).
 _T2U_LONG_SDPA_TP_THRESHOLD = 128
 _T2U_SDPA_Q_CHUNK_ROWS = 512
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
 
-# Bucket the (tile-aligned) decoder unit length to this multiple. The T2U decoder (the dominant T2U
-# cost: ``decoder_layers`` × SDPA at ``padded_unit_seq``) is shape-specialized by its sequence
-# length, so a unit-length jitter recompiles it. ``unit_seq`` (a duration sum) jitters run-to-run
-# (EOS/text variation), so rounding to a coarse grid collapses the jitter onto a fixed program set →
-# reused instead of recompiled. The decoder already pads ``unit_seq`` → ``padded_unit_seq`` and
-# masks the padded queries/keys, so coarsening the alignment is PCC-neutral (just more masked pad).
+# Round unit length up to stabilize decoder program shapes (padded tail is masked).
 _T2U_UNIT_SEQ_BUCKET = 256
 
 
@@ -84,10 +65,7 @@ def _t2u_padded_unit_seq(unit_seq: int) -> int:
     return ((int(unit_seq) + _T2U_UNIT_SEQ_BUCKET - 1) // _T2U_UNIT_SEQ_BUCKET) * _T2U_UNIT_SEQ_BUCKET
 
 
-# The duration predictor (2 conv1d over the char domain) is shape-specialized by ``char_len`` (a sum of
-# per-token char counts), which jitters run-to-run with S2ST text → cold conv recompiles. Bucket the
-# char length the predictor runs at (same idea as the unit/enc buckets); padded rows are masked + the
-# durations are sliced back to ``char_len``, so the predicted durations are unchanged.
+# Round char length for duration-predictor conv shapes; slice back to real length after.
 _T2U_CHAR_LEN_BUCKET = 256
 
 

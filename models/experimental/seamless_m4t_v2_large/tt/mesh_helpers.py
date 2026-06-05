@@ -69,7 +69,7 @@ def mesh_mapper(device: ttnn.Device):
 
 @contextmanager
 def mesh_default_device(mesh: ttnn.Device):
-    """Set ``ttnn`` default device for mask builders / mesh readback (replaces tests/conftest)."""
+    """Set ``ttnn`` default device for mask builders and mesh readback."""
     original = None
     try:
         original = ttnn.GetDefaultDevice()

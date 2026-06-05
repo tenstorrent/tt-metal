@@ -137,20 +137,7 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_text_to_unit_max_seq_perf(mesh_device, device_params, reset_seeds):
-    """Device-perf capture of the T2U forward at the MAX encoder seq (4096).
-
-    Warms the program cache (compiles every kernel on the warmup passes), then drops a tracy
-    ``signpost`` so the MEASURED forward is captured WITHOUT the cold JIT-compile op-to-op gaps that
-    dominate a single cold pass. No PCC check here — correctness is ``test_..._max_seq_pcc``; this
-    exists only to profile a warm forward. Run:
-
-        python -m tracy -r -v -m pytest \\
-            models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_to_unit.py::test_seamless_m4t_v2_text_to_unit_max_seq_perf
-        tt-perf-report <generated/.../ops_perf_results_*.csv> --start-signpost t2u_max_seq
-
-    ``--start-signpost t2u_max_seq`` restricts the report to the warm measured forward (steady-state
-    kernel + dispatch), so the op-count/dispatch numbers reflect real perf, not compilation.
-    """
+    """Warm T2U forward at encoder seq 4096; Tracy signpost ``t2u_max_seq`` for device-perf capture."""
     _ = reset_seeds
     _ = device_params
 
@@ -176,8 +163,6 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_perf(mesh_device, device_params, r
         dev = next(t2u.parameters()).device
         char_count_per_id = char_count_per_id.to(dev)
         mask_4d = _prepare_4d_attention_mask(attention_mask, inputs_embeds.dtype)
-        # HF discrete durations drive the upsampled unit length → deterministic shapes across passes,
-        # so the warmup compiles exactly what the measured pass replays.
         ref_durs = hf_discrete_duration_counts_batch1(
             t2u, inputs_embeds.to(dev), attention_mask.to(dev), char_input_ids.to(dev), char_count_per_id
         )
@@ -206,14 +191,12 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_perf(mesh_device, device_params, r
             logits_tt, pad_tt = tt_full.forward(ie, am, ci, durations, reference_discrete_durations=ref_durs)
             return logits_tt, pad_tt
 
-        # Warm the program cache so the measured pass has no cold-compile op-to-op gaps.
         for _ in range(2):
             logits_tt, pad_tt = _one_forward()
             ttnn.deallocate(logits_tt)
             ttnn.deallocate(pad_tt)
         ttnn.synchronize_device(mesh_device)
 
-        # Measured forward — everything after this signpost is the warm steady-state region.
         _tracy_signpost("t2u_max_seq")
         logits_tt, pad_tt = _one_forward()
         ttnn.synchronize_device(mesh_device)
