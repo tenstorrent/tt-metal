@@ -180,22 +180,23 @@ Three things this makes concrete:
   one-line host edit with zero kernel changes (property *a*).
 - **Real compile-time args.** CTAs are genuine `constexpr` template params — usable for
   `if constexpr` specialization, array sizes, and further template arguments.
-- **Some mistakes caught by the type system.** A runtime arg placed in a template slot fails
-  to compile (a non-`constexpr` value can't be a template argument). Names are
-  self-documenting and order-independent within a list.
+- **Mistakes are caught by the compiler, at the user's source.** A runtime arg placed in a
+  template slot fails to compile (a non-`constexpr` value can't be a template argument). A
+  CTA misused as a *function* param still errors the moment the body uses its
+  compile-time-ness (`if constexpr (z)`, `int buf[z]`, `foo<z>()`) — pointed at the user's
+  own line. Names are self-documenting and order-independent within a list.
 - **Purely additive.** Gated on the `TT_KERNEL` marker; Metal 1.0, Metal 2.0, and
   hand-written `kernel_main()` kernels are untouched.
 
 **Cons / costs**
 
-- **New JIT parse step.** We must extract the entry signature. A lightweight tokenizer has a
-  limited surface (rejects type template params, defaulted params, macros in the signature);
-  libclang lifts that but adds a host-side dependency.
+- **New JIT parse step.** We must extract the entry signature. A lightweight tokenizer
+  suffices while args are `uint32_t`-only, but has a limited surface (rejects type template
+  params, defaulted params, macros in the signature); richer types (Phase 2) force a real
+  parser, which adds either a clang dependency or a GCC plugin (§5).
 - **Compile-time-vs-runtime is a source decision.** Moving an arg across that line (CTA ↔
   runtime) *is* a kernel edit — unavoidable, since it changes what the compiler can
   specialize, but it breaks the "host-only" promotion story for that one axis.
-- **One crossing not caught by the compiler.** A CTA name used as a *function* param compiles
-  silently (the constant is just passed at runtime); only a host-side check flags it.
 - **`uint32_t`-only initially**, inherited from the `sizeof(T)==4` assert in `kernel_args.h`
   (template params likewise non-type `uint32_t`/`bool`).
 - **More indirection to debug.** Compile errors can point at the generated shim /
@@ -216,8 +217,10 @@ Exactly one per TU — zero falls back to a hand-written `kernel_main()`, two is
 fn_params}`. The marker sits between the optional `template <…>` clause and the return type,
 so the parser scans backward for the template clause and forward for `ret-type name
 ( params )` up to the matching `{`, splitting each list on top-level commas. Ship a
-tokenizer (option A); keep it behind one function so a libclang implementation (option B)
-can replace it later without touching the emitter.
+**tokenizer** for Phase 1 (no new dependency; the `uint32_t`-only surface keeps it
+tractable), kept behind this one function so a real-parser implementation can replace it in
+Phase 2 — see §5 for the GCC-driven options (`clang -ast-dump=json`/libclang as a separate
+parse, or a GCC plugin in the existing compile) once richer types break the tokenizer.
 
 **Shim emitter** — `write_kernel_main_shim()` emits `kernel_main()` calling
 `my_kernel<get_arg(args::ct)…>(get_arg(args::rt)…)`, one `get_arg(args::<name>)` per param
@@ -249,28 +252,34 @@ These reorder the map into the registered name order and funnel into the **exist
 positional `set_runtime_args` path — L1 layout, offsets (`dispatch.cpp`), and
 `WriteRuntimeArgsToDevice` are unchanged. Pure host-side name→index resolution.
 
-**Validation.** At set-time / finalize: every registered name has a value; no unknown names;
-and (strongest) every entry parameter name is a registered name *of the matching kind*
-(template ↔ `named_compile_args`, function ↔ runtime-arg names) — this catches the CTA-as-
-function-param crossing the compiler misses. The kind check needs the parsed parameter lists
-threaded back to the kernel object; without it, v1 relies on the JIT compile errors instead.
+**Validation.** At set-time / finalize: every registered name has a value, and no unknown
+names are supplied. Beyond that, the compiler already does the heavy lifting — a missing
+`args::<name>` or a runtime arg in a template slot both fail the JIT compile at the user's
+source — so v1 needs no parameter-kind cross-check on the host. (An optional lint flagging a
+CTA name used as a function param could be added later, but it only catches a benign,
+correct-valued case and needs the parsed parameter lists threaded back; low priority.)
 
 ## 5. Phased rollout
 
 - **Phase 0 — done.** Metal 2.0 named accessors (`kernel_args.h`), `args::` codegen, host
   named-arg schema. Kernels still hand-write `kernel_main()` + `get_arg`.
-- **Phase 1 — runtime args only.** `TT_KERNEL` marker + tokenizer for the *function*
-  parameter list; shim generation for RTA/CRTA (no template params yet); host name→value
-  `SetRuntimeArgs` / `SetCommonRuntimeArgs` overloads; `uint32_t`-only. Proves the
-  shim mechanism end-to-end on silicon. Deliverable: a reader/writer kernel with named
-  function params, plus an RTA→CRTA host-only promotion test.
-- **Phase 2 — compile-time args.** Parse the `template <…>` clause; emit template-arg
-  instantiation in the shim; add name↔kind validation. Deliverable: the §2 example
-  (CTAs + RTAs + CRTAs), plus a negative test that a runtime arg in a template slot fails to
-  compile.
-- **Phase 3 — hardening & reach.** Swap the tokenizer for a libclang parse; widen beyond
-  `uint32_t` (multi-word POD reads in `get_arg`/accessors); improve diagnostics so errors
-  point back at the user file; promote this design to a user-facing how-to.
+- **Phase 1 — all three kinds, `uint32_t`.** `TT_KERNEL` marker + tokenizer for *both* the
+  `template <…>` clause (CTAs) and the function parameter list (RTA/CRTA); shim generation
+  that instantiates the template and calls with the runtime args; host name→value
+  `SetRuntimeArgs` / `SetCommonRuntimeArgs` overloads. `uint32_t`-only, which keeps the
+  tokenizer viable (the parameter surface is just `uint32_t name`). Proves the whole
+  mechanism end-to-end on silicon. Deliverable: the §2 example (CTAs + RTAs + CRTAs), an
+  RTA→CRTA host-only promotion test, and a negative test that a runtime arg in a template
+  slot fails to compile.
+- **Phase 2 — types beyond `uint32_t`.** Lift the `sizeof(T)==4` restriction in
+  `kernel_args.h` (multi-word POD reads in `get_arg`/accessors) and allow richer parameter
+  types in the signature. This is what forces a **real parser**: arbitrary type spellings
+  (`float`, structs, qualified/templated types) are past what the tokenizer can safely
+  handle. Given the kernels build with sfpi **GCC** (not clang), the realistic options are a
+  separate `clang -ast-dump=json` / libclang parse (a new clang dependency; expand the marker
+  to `[[clang::annotate("tt_kernel_main")]]` so it survives into the AST) or a GCC plugin
+  that emits the signature during the existing compile. Also: improve diagnostics so errors
+  point back at the user file, and promote this design to a user-facing how-to.
 
 ## Appendix: source anchors
 
