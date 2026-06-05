@@ -25,6 +25,7 @@ def _mesh_device_for_readback(t: ttnn.Tensor):
     try:
         return ttnn.GetDefaultDevice()
     except Exception:
+        # Default device may be unset during early host-side readback.
         return None
 
 
@@ -46,6 +47,7 @@ def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
         if shards:
             return ttnn.to_torch(shards[0])
     except Exception:
+        # get_device_tensors is unavailable for some tensor types; use mesh readback below.
         pass
 
     dev = _mesh_device_for_readback(t)
@@ -54,6 +56,7 @@ def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
         try:
             num_devices = int(dev.get_num_devices())
         except Exception:
+            # Treat malformed device metadata as a single-device readback path.
             num_devices = 1
 
     if num_devices > 1 and dev is not None:
@@ -608,7 +611,7 @@ def ensure_interleaved_bsh(
     elif rank == 3:
         if int(x.shape[0]) != batch or int(x.shape[1]) != seq or int(x.shape[2]) != channels:
             x = ttnn.slice(x, [0, 0, 0], [batch, seq, channels], [1, 1, 1])
-    elif rank != 3:
+    else:
         raise ValueError(f"Expected rank 2/3/4 for [B,S,C] normalize, got rank {rank} shape {x.shape}")
     return x
 
@@ -947,6 +950,7 @@ def all_reduce_sum_replicate(
         try:
             num_devices = int(mesh_device.get_num_devices())
         except Exception:
+            # Fall back to single-device all-reduce when mesh metadata is unavailable.
             num_devices = 1
     if num_devices <= 1:
         return x
@@ -1007,6 +1011,7 @@ def encoder_all_reduce_sum_replicate(
         try:
             num_devices = int(mesh_device.get_num_devices())
         except Exception:
+            # Fall back to single-device all-reduce when mesh metadata is unavailable.
             num_devices = 1
     if num_devices <= 1:
         return x

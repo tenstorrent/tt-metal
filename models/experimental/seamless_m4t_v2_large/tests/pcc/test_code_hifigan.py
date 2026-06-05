@@ -89,4 +89,5 @@ def test_seamless_m4t_v2_code_hifigan_max_unit_seq_pcc(mesh_device, device_param
         try:
             mesh_device.clear_program_cache()
         except Exception:
+            # Program-cache clear is optional post-test cleanup.
             pass

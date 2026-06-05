@@ -284,7 +284,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         input_sharded: bool = False,
         output_sharded: bool = False,
     ) -> ttnn.Tensor:
-        orig_seq = seq_len
         x, seq_len, slice_seq = self._maybe_pad_for_block_ln(
             x,
             batch=batch,

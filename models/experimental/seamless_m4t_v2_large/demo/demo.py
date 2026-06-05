@@ -393,8 +393,8 @@ def _isolated_task_session(
     finally:
         try:
             tt_model.release_generation_runtime()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Warning: release_generation_runtime failed during teardown: {exc}", file=sys.stderr)
         if original_default is not None:
             ttnn.SetDefaultDevice(original_default)
         ttnn.close_mesh_device(device)
@@ -473,6 +473,7 @@ def main() -> None:
     try:
         original_default = ttnn.GetDefaultDevice()
     except Exception:
+        # Default device may be unset before the first demo task opens a mesh.
         original_default = None
 
     trace_info = "trace+2CQ" if (use_decode_trace and use_2cq) else ("trace" if use_decode_trace else "eager")

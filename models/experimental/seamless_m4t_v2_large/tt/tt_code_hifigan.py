@@ -1546,6 +1546,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         try:
             ttnn.release_trace(self.device, rt.trace_id)
         except Exception:
+            # Best-effort trace release during teardown; local runtime state is cleared below.
             pass
         self._forward_trace_rt = None
 

@@ -24,6 +24,7 @@ def _replicate_mapper(device: ttnn.Device):
         if hasattr(device, "get_num_devices") and int(device.get_num_devices()) > 1:
             return ttnn.ReplicateTensorToMesh(device)
     except Exception:
+        # Single-device hosts have no mesh mapper; replication is a no-op.
         pass
     return None
 
@@ -41,6 +42,7 @@ def _resolve_tp(device: ttnn.Device, tp: Optional[int]) -> int:
         if hasattr(device, "get_num_devices"):
             return max(1, int(device.get_num_devices()))
     except Exception:
+        # Hosts without mesh metadata behave as TP=1.
         pass
     return 1
 
@@ -1958,6 +1960,7 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
         if hasattr(device, "get_num_devices"):
             tp = max(1, int(device.get_num_devices()))
     except Exception:
+        # Hosts without mesh metadata behave as TP=1.
         tp = 1
 
     mm = _replicate_mapper(device)
