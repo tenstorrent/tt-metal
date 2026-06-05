@@ -464,3 +464,44 @@ Two distinct optimization targets:
 - **N2368-RoPE** -> cut RoPE compute (binding constraint, 182 of 206us).
 - **N18944 / N9472-RoPE** -> tighten compute<->I/O overlap (97-141us exposed
   serialization despite balanced costs).
+
+---
+
+## RoPE compute optimization: fuse cos/sin/add via FPU dst-accumulate
+
+Targeted the RoPE eltwise tail (P_COS+P_SIN+P_ADD), which the sub-phase
+profiling showed was 78% of the RoPE cost (the matmul P_MM is only 22%).
+Per-row, shape-invariant: P_MM 5.5us, P_COS 6.5, P_SIN 6.1, P_ADD 6.6.
+
+**Method (what worked):** collapse the three eltwise passes into ONE FPU pass
+using dst accumulation:
+  binary_tiles_init<true, ELWMUL>(intermediate, cos, /*acc_to_dest=*/false);
+  mul_tiles(...)  -> dst[i] = x*cos
+  binary_tiles_init<true, ELWMUL>(rotated, sin, /*acc_to_dest=*/true);
+  mul_tiles(...)  -> dst[i] = rotate(x)*sin + dst[i]   (FPU adds for free)
+  pack dst[i] -> output
+The add is free (done by the FPU during the second multiply), runs in fp32
+dest, so there is a SINGLE final rounding at pack -> precision-preserving
+(same as the old fp32-intermediate add_tiles). 1 dst reg/output tile
+(block_size tiles/acquire), 1 pack/tile, FPU-only.
+
+**Dead-end first tried (recorded so we don't repeat):** SFPU add_binary_tile
+(mul->dst0, mul->dst1, sfpu add->dst0). Correct but perf-NEUTRAL: P_ROPE 19.7us
+vs old 19.2us. The SFPU add is quasi-serial per-datum and costs as much as the
+packs it saves. There is no FPU dst+dst add (FPU binary ops only read CBs), so
+the dst-ACCUMULATE-on-mul (acc_to_dest) is the right primitive, not SFPU.
+NOTE: the 3-arg mul_tiles_init(cb,cb,acc) overload is ambiguous with the
+call_line variant -> call binary_tiles_init<true,ELWMUL>(cb,cb,acc) directly.
+
+**Result.** P_ROPE 19.2us/row -> 11.5us/row (-40%); POST/row 41.7 -> 32.6us.
+Wall (traced, WAN_GALAXY_LINKS=4), RoPE shapes (no-RoPE unchanged):
+
+| shape | fused before | fused after | speedup before | speedup after |
+|---|---:|---:|---:|---:|
+| N18944-RoPE | 738 | 692.6 | 1.67x | 1.79x |
+| N9472-RoPE  | 431 | 403.5 | 1.39x | 1.51x |
+| N2368-RoPE  | 206 | 180.8 | 0.96x | **1.09x** |
+
+N2368-RoPE (the compute-bound shape) now BEATS composite. Correctness:
+fused-vs-recorded-baseline PCC 0.999991-0.999996 on all RoPE shapes (no-RoPE
+1.000000), i.e. ~bit-identical, no fidelity loss.
