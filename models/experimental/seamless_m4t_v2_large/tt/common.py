@@ -342,6 +342,89 @@ def encoder_tp_block_sharded_matmul(
     return program_config, in0_mem, out_mem
 
 
+# T2U tuned 2D matmul layouts from ``test_t2u_matmul_perf_report_sweep`` (BH 11×10, M=512 chunks).
+# ``in0`` / ``out``: ``l1`` (interleaved), ``dram``, or ``bs`` (L1 block-sharded).
+_T2U_TUNED_MATMUL = {
+    (1024, 768): ("bs", "bs", 8, 8, 4),  # enc QKV
+    (256, 1024): ("dram", "bs", 8, 8, 8),  # dec out_proj
+    (1024, 2048): ("bs", "bs", 8, 8, 4),  # dec ffn fc1
+    (2048, 1024): ("dram", "bs", 8, 8, 8),  # dec ffn fc2
+    (4096, 1024): ("l1", "l1", 8, 8, 8),  # hard upsample H @ enc (enc_seq=4096)
+}
+
+
+def t2u_tuned_matmul(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    fused_activation=None,
+) -> Optional[Tuple[ttnn.ProgramConfig, ttnn.MemoryConfig, ttnn.MemoryConfig]]:
+    """Tuned 2D multicast matmul for hot T2U ``(k, n)`` at fixed ``m`` (typically 512-row chunks).
+
+    Returns ``(program_config, in0_mem, out_mem)`` or ``None`` when the shape is not tuned or
+    does not tile-fit the configured grid.
+    """
+    spec = _T2U_TUNED_MATMUL.get((k, n))
+    if spec is None:
+        return None
+    in0_kind, out_kind, gx, gy, ibw_cap = spec
+    cg = device.compute_with_storage_grid_size()
+    if gx > cg.x or gy > cg.y:
+        return None
+    if m % TILE or k % TILE or n % TILE:
+        return None
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    if mt % gy or nt % gx:
+        return None
+    if in0_kind == "bs" and kt % gx:
+        return None
+    kt_per_core = kt // gx if in0_kind == "bs" else kt
+    ibw = _largest_divisor_at_most(kt_per_core, ibw_cap)
+    if kt_per_core % ibw:
+        return None
+    per_core_m = mt // gy
+    per_core_n = nt // gx
+    out_subblock_w = _largest_divisor_at_most(per_core_n, 4 if out_kind == "bs" else 4)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+    )
+    grid = ttnn.CoreGrid(y=gy, x=gx)
+    if in0_kind == "l1":
+        in0_mem = ttnn.L1_MEMORY_CONFIG
+    elif in0_kind == "dram":
+        in0_mem = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        in0_mem = ttnn.create_sharded_memory_config(
+            (1, 1, m, k),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    if out_kind == "l1":
+        out_mem = ttnn.L1_MEMORY_CONFIG
+    elif out_kind == "dram":
+        out_mem = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        out_mem = ttnn.create_sharded_memory_config(
+            (1, 1, m, n),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    return program_config, in0_mem, out_mem
+
+
 def speech_encoder_matmul_program_config(
     device: ttnn.Device,
     *,
