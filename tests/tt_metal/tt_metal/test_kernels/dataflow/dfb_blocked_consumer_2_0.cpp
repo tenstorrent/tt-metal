@@ -25,6 +25,7 @@
 void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     constexpr uint32_t block_size = get_arg(args::block_size);
+    constexpr uint32_t implicit_sync = get_arg(args::implicit_sync);
 
     const uint32_t chunk_offset = get_arg(args::chunk_offset);
     const uint32_t entries_per_core = get_arg(args::entries_per_core);
@@ -45,12 +46,23 @@ void kernel_main() {
         if (block_base_page >= chunk_offset + entries_per_core) {
             break;
         }
-        dfb.wait_front(block_size);
-        // Single NoC burst: write the block's contiguous L1 region out to block_size
-        // contiguous DRAM pages (dfb read pointer is the block base).
-        noc.async_write(dfb, tensor_accessor, block_size * entry_size, {}, {.page_id = block_base_page});
-        noc.async_write_barrier();
-        dfb.pop_front(block_size);
+        if constexpr (implicit_sync) {
+#ifdef ARCH_QUASAR
+            // Implicit sync is single-entry (txn-id per tile), so drain the block one tile at a
+            // time. The block-ness lives in the page sequence and the per-thread contiguous
+            // sub-ring; the ISR batches credits.
+            for (uint32_t j = 0; j < block_size; ++j) {
+                noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = block_base_page + j});
+            }
+#endif
+        } else {
+            dfb.wait_front(block_size);
+            // Single NoC burst: write the block's contiguous L1 region out to block_size
+            // contiguous DRAM pages (dfb read pointer is the block base).
+            noc.async_write(dfb, tensor_accessor, block_size * entry_size, {}, {.page_id = block_base_page});
+            noc.async_write_barrier();
+            dfb.pop_front(block_size);
+        }
     }
     dfb.finish();
     dfb.write_barrier(noc);
