@@ -320,7 +320,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "not test_ring_joint_mla or (2x2 and pcc_check)" || exit_code=$?
     exit $exit_code
   skus:
-    bh_llmbox:
+    bh_quietbox_2:
       timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
