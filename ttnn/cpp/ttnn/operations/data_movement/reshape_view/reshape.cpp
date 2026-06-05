@@ -44,7 +44,7 @@ static uint32_t collapse_second_dim(const ttnn::Shape& shape) {
     return second_dim;
 }
 
-static ttnn::Tensor materialize_row_major_without_padding_if_needed(const ttnn::Tensor& tensor) {
+static ttnn::Tensor drop_rm_padding(const ttnn::Tensor& tensor) {
     if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || tensor.logical_shape() == tensor.padded_shape()) {
         return tensor;
     }
@@ -303,7 +303,7 @@ ttnn::Tensor reshape_rm(
     TT_FATAL((tensor.logical_shape().rank() != 0), "Can't do reshape from rank 0 tensor");
     TT_FATAL(tensor.layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
 
-    auto rm_tensor = materialize_row_major_without_padding_if_needed(tensor);
+    auto rm_tensor = drop_rm_padding(tensor);
     const auto& rm_tensor_logical_shape = rm_tensor.logical_shape();
     const auto& rm_tensor_padded_shape = rm_tensor.padded_shape();
     const uint32_t logical_second_dim = collapse_second_dim(rm_tensor_logical_shape);
