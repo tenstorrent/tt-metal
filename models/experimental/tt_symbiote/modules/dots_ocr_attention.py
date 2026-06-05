@@ -18,6 +18,10 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _ccl_num_links,
+    _decode_linear_output_memory_config,
+    _dp_matmul_program_config,
+    _linear_mesh_num_devices,
     _tp_mesh_mapper,
     _tp_requires_ccl,
 )
@@ -173,6 +177,77 @@ class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
         return super().forward(input_tensor)
 
 
+class _TTNNDotsOCRQKVColParallel(TTNNLinearLLamaIReplicatedWColSharded):
+    """N-dim (column-parallel) fused-QKV projection.
+
+    Alternative to the default ``qkv_proj`` (K-parallel
+    ``TTNNLinearLLamaIColShardedWAllReduced``, which runs an ``[M, hidden/TP, N]``
+    partial-sum matmul + ``reduce_scatter`` + ``all_gather``). Here:
+
+    * the activation arrives **replicated** full-hidden on every device,
+    * the fused-QKV weight is **N-sharded** (``dim=-1``, ``N/TP`` cols/device), so
+      the per-device matmul is ``[M, hidden, N/TP]`` with **no** partial-sum
+      reduction (each device's columns are already complete),
+    * a single ``all_gather(dim=-1)`` re-assembles the full fused-QKV (replicated)
+      in the original interleaved column order, so the downstream
+      ``nlp_create_qkv_heads`` / SDPA / ``o_proj`` path is byte-for-byte unchanged.
+
+    Same per-device matmul FLOPs as the K-parallel path (both are ``1/TP`` of the
+    full QKV); this trades the ``reduce_scatter`` for an ``all_gather`` and requires
+    a replicated full-hidden input. Head-local SDPA is intentionally NOT done: at
+    TP=4 dots.ocr has only 2 KV heads (does not divide 4), so the full QKV is
+    reassembled before create_heads rather than kept head-sharded.
+    """
+
+    @classmethod
+    def from_torch(cls, linear):
+        new_linear = super().from_torch(linear)
+        # Match the K-parallel QKV weight precision (BF16 activations x BFP8
+        # weights); the parent's column-sharded default is BFP4.
+        new_linear.set_weight_dtype(ttnn.bfloat8_b)
+        return new_linear
+
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        # Column-parallel matmul: replicated full-hidden in, N-sharded weight ->
+        # [M, hidden, N/TP] N-sharded out, NO reduction. Emit BF16 (NOT the parent
+        # o_proj's BFP8): the gathered QKV feeds rotary + SDPA and is written to a
+        # BF16 paged KV cache (paged_update_cache rejects BFP8 input), and the
+        # K-parallel path it is A/B'd against keeps BF16 through the QKV matmul.
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(
+            input_tensor,
+            self.tt_weight,
+            bias=self.tt_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=_decode_linear_output_memory_config(self.device, input_shape),
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+        )
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+        # Re-assemble the full fused-QKV on every device. The all_gather
+        # concatenates the per-device N-shards in device order, which is exactly
+        # the original [Q_g0|K_0|V_0|Q_g1|K_1|V_1] interleave the weight was
+        # sharded from, so create_heads sees an identical tensor to the K-parallel
+        # path.
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+            tt_output = ttnn.all_gather(
+                tt_output,
+                dim=len(tt_output.shape) - 1,
+                num_links=_ccl_num_links(self.device),
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
+        return tt_output
+
+
 @trace_enabled
 class TTNNDotsOCRAttention(TTNNModule):
     _shared_rotary_setups = {}
@@ -200,9 +275,14 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._kv_size = None
 
     @classmethod
-    def from_torch(cls, hf_attn):
+    def from_torch(cls, hf_attn, qkv_n_parallel: bool = False):
         new_attn = cls()
         new_attn._fallback_torch_layer = hf_attn
+        # When True, the (decode) fused-QKV projection runs N-dim/column-parallel
+        # (replicated full-hidden in -> N-sharded weight -> all_gather) instead of
+        # the default K-dim/row-parallel (hidden-K-sharded in -> reduce_scatter +
+        # all_gather). Decode-only: prefill still uses qkv_proj_prefill.
+        new_attn._qkv_n_parallel = bool(qkv_n_parallel)
 
         config = hf_attn.config
         new_attn.num_attention_heads = config.num_attention_heads
@@ -273,7 +353,14 @@ class TTNNDotsOCRAttention(TTNNModule):
         fused_linear.weight.data = fused_weight
         if has_any_bias:
             fused_linear.bias.data = new_attn._qkv_bias_torch
-        new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
+        if new_attn._qkv_n_parallel:
+            # N-dim/column-parallel QKV: replicated full-hidden in, weight
+            # N-sharded, all_gather back to full QKV (decode). The fused weight
+            # is the same KV-group-interleaved layout; sharding it on N and
+            # all-gathering reconstructs the identical column order.
+            new_attn.qkv_proj = _TTNNDotsOCRQKVColParallel.from_torch(fused_linear)
+        else:
+            new_attn.qkv_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(fused_linear)
 
         # Conventional-order QKV weight ([Q_all | K_all | V_all]) for prefill.
         # Prefill's nlp_create_qkv_heads runs the Interleaved factory which
