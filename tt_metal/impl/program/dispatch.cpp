@@ -10,7 +10,7 @@
 #include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -2644,7 +2644,7 @@ void update_traced_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update) {
     uint32_t i = 0;
-    ZoneScopedN("program_loaded_on_device");
+    TTZoneScopedDN(DISPATCH, "program_loaded_on_device");
     const auto& hal = MetalContext::instance().hal();
     const ProgramImpl& program = *trace_node.program;
     const TraceDispatchMetadata& dispatch_md = trace_node.dispatch_metadata;

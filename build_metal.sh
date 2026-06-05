@@ -16,6 +16,10 @@ fi
 
 # Function to display help
 show_help() {
+    local valid_perf_categories
+    valid_perf_categories=$(grep -vE '^[[:space:]]*(#|$)' \
+        "$(dirname "$0")/tt_metal/tools/profiler/tracy_debug_categories.txt" 2>/dev/null \
+        | awk '{print $1}' | paste -sd, - | sed 's/,/, /g' || true)
     echo "Usage: $0 [options]..."
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
@@ -23,7 +27,7 @@ show_help() {
     echo "  -b, --build-type build_type      Set the build type. Default is Release."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
-    echo "  --build-perf-debug               Enable debug-verbosity Tracy profiling zones (disabled by default)."
+    echo "  --build-perf-debug <categories>  Tracy debug-verbosity categories to compile in: off (default), all, or a comma-separated list of ${valid_perf_categories}."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
@@ -71,7 +75,7 @@ enable_ccache="OFF"
 enable_time_trace="OFF"
 build_type="Release"
 disable_profiler="OFF"
-build_perf_debug="OFF"
+perf_debug_categories=""
 build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
@@ -110,7 +114,7 @@ enable-ccache
 enable-time-trace
 build-type:
 disable-profiler
-build-perf-debug
+build-perf-debug:
 install-prefix:
 build-dir:
 build-tests
@@ -174,7 +178,7 @@ while true; do
         --disable-profiler)
             disable_profiler="ON";;
         --build-perf-debug)
-            build_perf_debug="ON";;
+            perf_debug_categories="$2";shift;;
         --install-prefix)
             install_prefix="$2";shift;;
         --build-tests)
@@ -246,9 +250,9 @@ fi
 tracy_enabled="ON"
 if [ "$disable_profiler" = "ON" ]; then
     tracy_enabled="OFF"
-    if [ "$build_perf_debug" = "ON" ]; then
+    if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
         echo "WARNING: --build-perf-debug has no effect with --disable-profiler; debug zones stay compiled out."
-        build_perf_debug="OFF"
+        perf_debug_categories="off"
     fi
 fi
 
@@ -283,6 +287,18 @@ if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
 fi
 
+# ENABLE_TRACY is sticky in the cache, so a prior --disable-profiler carries over.
+if [ "$disable_profiler" != "ON" ] && [ -f "$build_dir/CMakeCache.txt" ]; then
+    cached_enable_tracy=$(sed -n 's/^ENABLE_TRACY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    if [ "$cached_enable_tracy" = "OFF" ]; then
+        tracy_enabled="OFF"
+        if [ -n "$perf_debug_categories" ] && [ "$perf_debug_categories" != "off" ]; then
+            echo "WARNING: ENABLE_TRACY=OFF is cached from a prior --disable-profiler; --build-perf-debug has no effect until reconfigured."
+            perf_debug_categories="off"
+        fi
+    fi
+fi
+
 # Debug output to verify parsed options
 echo "INFO: Export compile commands: $export_compile_commands"
 echo "INFO: Enable ccache: $enable_ccache"
@@ -298,7 +314,17 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
-echo "INFO: Tracy debug zones: $build_perf_debug"
+if [ "$tracy_enabled" != "ON" ]; then
+    perf_debug_categories_effective="off (Tracy disabled)"
+elif [ -n "$perf_debug_categories" ]; then
+    perf_debug_categories_effective="$perf_debug_categories"
+elif [ -f "$build_dir/CMakeCache.txt" ]; then
+    perf_debug_categories_effective=$(sed -n 's/^TRACY_DEBUG_CATEGORY:[^=]*=//p' "$build_dir/CMakeCache.txt")
+    perf_debug_categories_effective="${perf_debug_categories_effective:-off} (cached)"
+else
+    perf_debug_categories_effective="off"
+fi
+echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
@@ -334,10 +360,8 @@ if [ "$disable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=OFF")
 fi
 
-if [ "$build_perf_debug" = "ON" ]; then
-    cmake_args+=("-DENABLE_TRACY_DEBUG=ON")
-else
-    cmake_args+=("-DENABLE_TRACY_DEBUG=OFF")
+if [ -n "$perf_debug_categories" ]; then
+    cmake_args+=("-DTRACY_DEBUG_CATEGORY=$perf_debug_categories")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
