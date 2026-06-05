@@ -61,22 +61,22 @@ constexpr bool output_bulk(BinaryOutputPolicy p) { return p == BinaryOutputPolic
 template <BinaryInputPolicy input_policy>
 ALWI void assert_binary_input_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
     if constexpr (waits_per_tile(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= 1);
+        ASSERT(get_dfb_num_pages(cb) >= 1);
     } else if constexpr (waits_per_chunk(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+        ASSERT(get_dfb_num_pages(cb) >= chunk_size);
     } else if constexpr (waits_upfront(input_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+        ASSERT(get_dfb_num_pages(cb) >= total_tiles);
     }
 }
 
 template <BinaryOutputPolicy output_policy>
 ALWI void assert_binary_output_cb_size(uint32_t cb, uint32_t chunk_size, uint32_t total_tiles) {
     if constexpr (output_per_tile(output_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= 1);
+        ASSERT(get_dfb_num_pages(cb) >= 1);
     } else if constexpr (output_per_chunk(output_policy)) {
-        ASSERT(get_cb_num_pages(cb) >= chunk_size);
+        ASSERT(get_dfb_num_pages(cb) >= chunk_size);
     } else {  // Bulk
-        ASSERT(get_cb_num_pages(cb) >= total_tiles);
+        ASSERT(get_dfb_num_pages(cb) >= total_tiles);
     }
 }
 
@@ -602,7 +602,7 @@ ALWI void binary_op_in_place(
     const uint32_t b_tile_count = get_b_tile_count<bcast_dim>(Ht, Wt);
 
     // CB size validation — in-place requires all A tiles present
-    UNPACK(ASSERT(get_cb_num_pages(cb_a) >= Ht * Wt));
+    UNPACK(ASSERT(get_dfb_num_pages(cb_a) >= Ht * Wt));
     if constexpr (!is_square) {
         UNPACK((assert_binary_input_cb_size<input_b_policy>(icb_b, 1, b_tile_count)));
     }
