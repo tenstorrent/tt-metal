@@ -377,7 +377,19 @@ void run_h2d_stream_service_case(
     }
 }
 
-using H2DStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
+// Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
+// clusters; skip the whole suite on any other configuration so unsupported runners skip
+// cleanly instead of hitting the claim TT_FATAL.
+class H2DStreamServiceTest : public ::tt::tt_metal::GenericMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (!(cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE)) {
+            GTEST_SKIP() << "H2DStreamService service cores require Blackhole or UBB Galaxy";
+        }
+        ::tt::tt_metal::GenericMeshDeviceFixture::SetUp();
+    }
+};
 
 // Fully-replicated placements sized to this mesh's dimensionality.
 ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(
