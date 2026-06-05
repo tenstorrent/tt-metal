@@ -450,10 +450,14 @@ class TtTransformer(LightweightModule):
         self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
     ):
         """
-        Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
+        Inputs are torch tensors or python types. Outputs are ttnn tensors on host
+        (built with device=None); the sharded flags only affect the host tensor's
+        dtype/layout and its mesh_mapper, not its host/device residency.
         NOTE: Tokens and current_pos are padded to batch
-        NOTE: if is_cur_pos_sharded is True, current_pos_tt is returned as a device tensor
-        NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
+        NOTE: if is_cur_pos_sharded is True, current_pos_tt is laid out for sharded
+              placement (repeated across cores) but is still returned on host
+        NOTE: if is_page_table_sharded is True, page_table is laid out for sharded
+              placement (uint16, repeated across cores) but is still returned on host
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
