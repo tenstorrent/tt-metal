@@ -102,13 +102,12 @@ Result conv2d_L1(
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 
-    // conv_bench (TT_CONV_BENCH_MODE set; pure test scaffolding): force ROW_MAJOR output for ALL bench modes
-    // so main / helper_sbm / helper_trm are a fair 3-way comparison, the user never has to set output_layout,
-    // and the TILE-output path is never taken. packer_l1_acc is separately forced OFF (get_cb_info + factory)
-    // so the row-major l1_acc CB-format/spill pitfalls cannot occur.
-    if (ttnn::operations::conv::conv2d_bench_active()) {
-        conv_config.output_layout = Layout::ROW_MAJOR;
-    }
+    // conv_bench (TT_CONV_BENCH_MODE set; pure test scaffolding): the harness passes each conv's REAL
+    // output_layout / packer_l1_acc / weights_dtype so main-vs-helper_sbm baselines match how the model runs
+    // the conv. (Previously output_layout was force-set to ROW_MAJOR + l1_acc forced OFF to make the
+    // helper_trm row-major relaxation runnable; reproduce that regime by setting output_layout=ROW_MAJOR +
+    // packer_l1_acc=false in the harness CONFIG. helper_trm only diverges from helper_sbm on the
+    // row-major-output path, so it is a no-op / guard-fatal on tile-output convs.)
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 

@@ -53,6 +53,7 @@ def _e(name, default, cast):
 _SHARD = {"HS": HS, "BS": BS}
 _DTYPE = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b, "float32": ttnn.float32}
 _FID = {"LoFi": ttnn.MathFidelity.LoFi, "HiFi2": ttnn.MathFidelity.HiFi2, "HiFi4": ttnn.MathFidelity.HiFi4}
+_LAYOUT = {"tile": ttnn.TILE_LAYOUT, "row_major": ttnn.ROW_MAJOR_LAYOUT}
 
 
 def _bool(v):
@@ -91,6 +92,15 @@ CONFIG = dict(
     ),  # True => DST capacity 4 (helps force out_subblock_w < per_core_N => real helper_trm diff)
     math_fidelity=_e("CB_FIDELITY", ttnn.MathFidelity.HiFi4, lambda v: _FID[v]),
     has_bias=_e("CB_BIAS", True, _bool),
+    # Real per-conv settings (NO LONGER harness-forced — the bench wiring now passes these through so
+    # main/helper_sbm baselines match how the model actually runs the conv):
+    weights_dtype=_e(
+        "CB_WEIGHTS_DTYPE", None, lambda v: None if str(v).lower() == "none" else _DTYPE[v]
+    ),  # bf8/bf16/fp32/none
+    output_layout=_e(
+        "CB_OUT_LAYOUT", ttnn.TILE_LAYOUT, lambda v: _LAYOUT[v]
+    ),  # tile (real default) | row_major (relaxation regime)
+    packer_l1_acc=_e("CB_L1_ACC", True, _bool),  # real default ON; set false for the row-major relaxation regime
 )
 # ══════════════════════════════════════════════════════════════════════════════════
 
@@ -104,7 +114,7 @@ def test_conv_bench(device, torch_tensor_map):
         torch_tensor_map,
         c["math_fidelity"],
         c["output_dtype"],
-        None,  # weights_dtype (defaults from config)
+        c["weights_dtype"],  # real per-conv weights dtype (None -> fp32)
         c["batch_size"],
         c["output_channels"],
         c["input_channels"],
@@ -119,10 +129,10 @@ def test_conv_bench(device, torch_tensor_map):
         shard_layout=c["shard_layout"],
         has_bias=c["has_bias"],
         fp32_accum=c["fp32_accum"],
-        # DO NOT change these two — the C++ harness forces them anyway; set here so run_conv's PCC
-        # comparison matches what the op actually produces (ROW_MAJOR) and the modes stay a fair pair.
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        packer_l1_acc=False,
+        # Real per-conv settings (no longer harness-forced): main/helper_sbm baselines now match how the
+        # model runs the conv. For the row-major relaxation study set CB_OUT_LAYOUT=row_major + CB_L1_ACC=false.
+        output_layout=c["output_layout"],
+        packer_l1_acc=c["packer_l1_acc"],
         run_twice=True,
         input_dtype=c["input_dtype"],
     )
