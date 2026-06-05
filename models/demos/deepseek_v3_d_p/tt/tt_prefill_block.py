@@ -321,8 +321,7 @@ class TtPrefillBlock(LightweightModule):
             gate_fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
-            # 45701 workaround: disable shared-expert/dispatch sub-device overlap.
-            overlap_shared_expert_with_dispatch=False,
+            overlap_shared_expert_with_dispatch=True,
         )
 
     def forward(
