@@ -411,6 +411,12 @@ std::vector<ttnn::Tensor> moe_compute(
         "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
         ring_n);
 
+    TT_FATAL(
+        !(compute_only && cluster_axis.has_value()),
+        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
+        "compute_only skips the combine path, so cluster_axis has no meaning.",
+        cluster_axis.value_or(0));
+
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
         // see #27196 for potential limitations
