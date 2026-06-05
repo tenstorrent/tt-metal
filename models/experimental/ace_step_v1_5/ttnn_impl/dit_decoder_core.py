@@ -100,7 +100,7 @@ def _ace_step_log_ttnn_tensor(tag: str, t, *, ttnn) -> None:
         print(f"[ace_step_v1_5][attn_trace][ttnn] {tag} log_failed={ex!r}", flush=True)
 
 
-from models.experimental.ace_step_v1_5.tt_device import (
+from models.experimental.ace_step_v1_5.utils.tt_device import (
     ace_step_device_num_chips,
     ace_step_dit_weight_mesh_mapper,
     ace_step_synchronize_device,

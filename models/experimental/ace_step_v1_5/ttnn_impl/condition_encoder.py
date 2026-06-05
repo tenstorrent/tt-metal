@@ -45,7 +45,7 @@ from .text_projector import TtAceStepTextProjector, load_text_projector_weight_n
 
 
 def load_condition_weights_np(safetensors_path: str) -> Dict[str, np.ndarray]:
-    from models.experimental.ace_step_v1_5.weight_cache import load_prefix_weights_np
+    from models.experimental.ace_step_v1_5.utils.weight_cache import load_prefix_weights_np
 
     return load_prefix_weights_np(
         safetensors_path,

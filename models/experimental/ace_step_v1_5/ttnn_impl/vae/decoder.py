@@ -73,7 +73,10 @@ class TtOobleckDecoder:
         self.activation_dtype = activation_dtype or ace_step_vae_activation_storage_dtype(ttnn)
         self.weights_dtype = weights_dtype or ace_step_vae_host_weight_staging_dtype(ttnn)
 
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+        from models.experimental.ace_step_v1_5.utils.tt_device import (
+            ace_step_device_num_chips,
+            ace_step_synchronize_device,
+        )
 
         weights = fused_oobleck_decoder_weights(
             state_dict, upsampling_ratios=self.upsampling_ratios, decoder_prefix=decoder_prefix

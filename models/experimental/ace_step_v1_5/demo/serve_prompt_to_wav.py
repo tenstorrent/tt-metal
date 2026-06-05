@@ -49,10 +49,10 @@ import numpy as np
 # ─────────────────────────────────────────────────────────────────
 from loguru import logger as log
 
-from models.experimental.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
-from models.experimental.ace_step_v1_5.weight_cache import log_weight_load as _log_load
-from models.experimental.ace_step_v1_5.weight_cache import log_weight_reuse as _log_weight_reuse
-from models.experimental.ace_step_v1_5.weight_cache import log_weights_ready as _log_ready
+from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
+from models.experimental.ace_step_v1_5.utils.weight_cache import log_weight_load as _log_load
+from models.experimental.ace_step_v1_5.utils.weight_cache import log_weight_reuse as _log_weight_reuse
+from models.experimental.ace_step_v1_5.utils.weight_cache import log_weights_ready as _log_ready
 
 
 def _log_reuse(component: str) -> None:
@@ -208,7 +208,7 @@ class AceStepModelRegistry:
         # 6. Permanently patch dit_handler to use TTNN encoders ────
         #    We call attach but keep the patch live (don't call restore).
         log.info("  Attaching TTNN preprocessing patch to dit_handler (permanent)")
-        from models.experimental.ace_step_v1_5.official_lm_preprocess import attach_payload_preprocess_ttnn
+        from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import attach_payload_preprocess_ttnn
 
         attach_payload_preprocess_ttnn(
             self.dit_handler,
@@ -315,8 +315,8 @@ class AceStepModelRegistry:
         """Inner generate — called with self._lock held."""
         import torch
 
-        from models.experimental.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
-        from models.experimental.ace_step_v1_5.official_lm_preprocess import (
+        from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import GenerationConfig, GenerationParams
+        from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
             build_filtered_dit_kwargs_for_handler,
             handler_prepare_condition_payload,
         )

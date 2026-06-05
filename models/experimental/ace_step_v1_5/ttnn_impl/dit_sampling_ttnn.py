@@ -55,7 +55,7 @@ def to_tile_fp32(t: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
 
 
 def tile_fp32_from_numpy_bc(arr: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
 
     tt = ttnn.as_tensor(
         np.asarray(arr, dtype=np.float32),
@@ -102,7 +102,7 @@ def dit_init_latents_fp32_tile(
     On multi-device meshes use :func:`dit_init_latents_host_f32` with the host latent sampler
     (``ace_step_mesh_use_host_latent_sampler``); device-side latent init is not supported there.
     """
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
 
     shape = (int(batch), int(frames), int(channels))
     if ace_step_device_num_chips(device) > 1:
@@ -278,7 +278,7 @@ def precompute_dit_temb_steps(
     timesteps_host: np.ndarray | None = None,
 ) -> tuple[list[Any], list[Any], bool]:
     """Precompute per-Euler-step ``(temb, timestep_proj)``; returns ``(temb, tp, on_host)``."""
-    from models.experimental.ace_step_v1_5.tt_device import (
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
         ace_step_device_num_chips,
         ace_step_mesh_use_host_temb_precompute,
         ace_step_synchronize_device,
@@ -311,7 +311,7 @@ def precompute_dit_temb_steps(
 
 def bf16_tile_l1_from_numpy_bc(arr_f32_np: np.ndarray, *, device: Any, dram: Any) -> ttnn.Tensor:
     """Upload ``[B,T,C]`` (or ``[B,S,D]``) host array as TILE BF16 in L1 for DiT activations."""
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
 
     l1_mc = ace_step_linear_l1_memory_config(ttnn) or dram
     tt = ace_step_from_torch_activation(
@@ -358,7 +358,7 @@ def fp32_tile_to_row_bf16(x_f32_tile: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
 
 def prepare_latents_for_ttnn_vae(latents_tt: ttnn.Tensor, *, dram: Any) -> ttnn.Tensor:
     """Convert DiT denoise output to ROW_MAJOR FP32 ``[B,T,C]`` for ``decode_tiled``."""
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
 
     tt = latents_tt
     if tt.layout != ttnn.ROW_MAJOR_LAYOUT:

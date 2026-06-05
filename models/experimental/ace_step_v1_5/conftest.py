@@ -100,7 +100,7 @@ def mesh_device():
     ttnn = require_ttnn()
     # Prefer a mesh device when supported.
     if hasattr(ttnn, "open_mesh_device") and hasattr(ttnn, "MeshShape") and os.environ.get("MESH_DEVICE"):
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_mesh_shape, resolve_ace_step_mesh_sku
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_mesh_shape, resolve_ace_step_mesh_sku
 
         mesh_sku = resolve_ace_step_mesh_sku()
         rows, cols = ace_step_mesh_shape(mesh_sku)

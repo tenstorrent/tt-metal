@@ -36,7 +36,7 @@ import torch
 import ttnn
 from models.common.utility_functions import Profiler
 from models.experimental.ace_step_v1_5.tests._dit_decoder_pcc_common import tiny_dit_decoder_fixture
-from models.experimental.ace_step_v1_5.tt_device import ace_step_dit_weight_mesh_mapper
+from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_dit_weight_mesh_mapper
 from models.experimental.ace_step_v1_5.ttnn_impl.dit_decoder_core import _maybe_get
 from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_dit_attn_linear_program_config,

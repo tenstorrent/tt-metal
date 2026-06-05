@@ -425,7 +425,7 @@ def main() -> None:
 
     # --- Optional: full official path (LLM), no TTNN ---
     if args.use_official_lm:
-        from models.experimental.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
+        from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
         from models.experimental.ace_step_v1_5.torch_ref.transformers_cache_compat import (
             apply_transformers_cache_compat,
         )
@@ -518,7 +518,7 @@ def main() -> None:
     # --- 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
     ref_root = _ensure_acestep_on_path()
 
-    from models.experimental.ace_step_v1_5.official_lm_preprocess import (
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
         attach_infer_text_embeddings_ttnn,
         build_filtered_dit_kwargs_for_handler,
         configure_acestep_logging,
@@ -547,7 +547,7 @@ def main() -> None:
             "build from pytorch.org; required for handler preprocessing)."
         ) from e
 
-    from models.experimental.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
+    from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import GenerationConfig, GenerationParams
 
     # Weights are pre-downloaded by ``_ensure_variant`` earlier in main(); the historical
     # ``import acestep.model_downloader as _mdl; _mdl.MAIN_MODEL_COMPONENTS = [...]``
