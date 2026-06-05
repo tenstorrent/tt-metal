@@ -170,7 +170,7 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt update && apt install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-20-dev \
@@ -187,7 +187,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
 # CI Test image
@@ -252,22 +252,15 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     if [ "$UBUNTU_VERSION" != "24.04" ]; then \
         cp -a /gdb-staging/* /usr/local/; \
     else \
-        apt-get update && apt-get install -y --no-install-recommends gdb && \
-        apt-get clean && rm -rf /var/lib/apt/lists/*; \
+        apt update && apt install -y --no-install-recommends gdb && \
+        apt clean && rm -rf /var/lib/apt/lists/*; \
     fi
-
-# Configure SSH for MPI multihost jobs readiness
-RUN adduser --uid 1001 --shell /bin/bash user && \
-    usermod -aG sudo user && \
-    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
-    mkdir -p /run/sshd && \
-    echo "StrictModes no" >> /etc/ssh/sshd_config
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
 # switching to libgl1
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt update && apt install -y --no-install-recommends \
     acl \
     emacs \
     gh \
@@ -278,7 +271,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     libgl1 \
     ipmitool \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt clean && rm -rf /var/lib/apt/lists/*
+
+
+# Configure SSH for MPI multihost jobs readiness
+# **Must come after apt install openssh-server**
+RUN adduser --uid 1001 --shell /bin/bash user && \
+    usermod -aG sudo user && \
+    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
+    mkdir -p /run/sshd && \
+    echo "StrictModes no" >> /etc/ssh/sshd_config
 
 # IWYU (Include What You Use) could be useful to developers.
 # Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh
@@ -363,7 +365,7 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
     echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
-RUN apt-get update && apt-get install -y \
+RUN apt update && apt install -y \
     # required
     gosu \
     libgl1 \
