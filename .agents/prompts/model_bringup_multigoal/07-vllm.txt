@@ -2,7 +2,7 @@
 
 This goal creates the vLLM state for the repo-local TTNN autoport pipeline. Start from the completed optimized full model and work on models/autoports/<model>/tt/generator_vllm.py plus vLLM TT plugin registration.
 
-Transition completion requirements:
+Goal completion requirements:
 - models/autoports/<model>/tt/generator_vllm.py exists and delegates to tt/generator.py low-level methods whenever possible.
 - The model is registered in vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models().
 - vLLM serving mode preserves correct KV-cache ownership: vLLM allocates the serving cache and the adapter passes that cache through the generator/model path without hidden standalone-cache assumptions.
@@ -12,5 +12,6 @@ Transition completion requirements:
 - The report records the exact successful server invocation, TT config, max model length, max-num-seqs, sampling profile, workload config, TTFT P50/P99, ITL P50/P99, aggregate throughput, and mean per-user decode t/s/u.
 - Runtime fallback and process cleanup are audited; leftover vLLM/EngineCore processes are not left holding devices.
 - models/autoports/<model>/doc/vllm_integration/README.md and work_log.md summarize commands, serving status, qualitative verdict, benchmark metrics, limitations, and exact artifacts.
+- model serves through the shared vLLM path with evidence.
 
-Mark this goal complete only when the model serves through the shared vLLM path with evidence. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.
+Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
