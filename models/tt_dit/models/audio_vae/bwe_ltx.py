@@ -26,9 +26,9 @@ import torch
 
 import ttnn
 
-from ...layers.audio_ops import depthwise_tap_filter
+from ...layers.audio_ops import _replicate_pad_t, _zero_pad_t, _zero_stuff_t, depthwise_tap_filter
 from ...layers.module import Module, Parameter
-from .vocoder_ltx import LTXVocoder, _replicate_pad_t, _zero_pad_t, _zero_stuff_t
+from .vocoder_ltx import LTXVocoder
 
 
 class LTX_STFTFn(Module):

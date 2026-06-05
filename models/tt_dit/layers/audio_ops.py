@@ -10,6 +10,7 @@ convs on the small spectrogram/waveform tensors the mel-VAE and vocoder use.
 
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
@@ -270,6 +271,177 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             ttnn.deallocate(scaled)
             y = y_new
     return y
+
+
+def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
+    """All-gather the T-sharded tensor to full T on every chip."""
+    if isinstance(parallel_config, AudioTParallelConfig):
+        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis)
+        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis)
+    else:
+        x = ccl_manager.all_gather_persistent_buffer(x, dim=1, mesh_axis=parallel_config.mesh_axis)
+    return x
+
+
+def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
+    """Partition T across the mesh (inverse of _all_gather_t)."""
+    if isinstance(parallel_config, AudioTParallelConfig):
+        x = ttnn.mesh_partition(x, dim=1, cluster_axis=parallel_config.axis0.mesh_axis)
+        x = ttnn.mesh_partition(x, dim=1, cluster_axis=parallel_config.axis1.mesh_axis)
+    else:
+        x = ttnn.mesh_partition(x, dim=1, cluster_axis=parallel_config.mesh_axis)
+    return x
+
+
+def _make_kaiser_sinc_kernel_1d(cutoff: float, half_width: float, kernel_size: int) -> torch.Tensor:
+    """Return a shape-``(kernel_size,)`` kaiser-windowed sinc filter."""
+    even = kernel_size % 2 == 0
+    half_size = kernel_size // 2
+    delta_f = 4 * half_width
+    amplitude = 2.285 * (half_size - 1) * math.pi * delta_f + 7.95
+    if amplitude > 50.0:
+        beta = 0.1102 * (amplitude - 8.7)
+    elif amplitude >= 21.0:
+        beta = 0.5842 * (amplitude - 21) ** 0.4 + 0.07886 * (amplitude - 21.0)
+    else:
+        beta = 0.0
+    window = torch.kaiser_window(kernel_size, beta=beta, periodic=False)
+    if even:
+        time = torch.arange(-half_size, half_size) + 0.5
+    else:
+        time = torch.arange(kernel_size) - half_size
+    if cutoff == 0:
+        filter_ = torch.zeros_like(time)
+    else:
+        filter_ = (
+            2
+            * cutoff
+            * window
+            * torch.where(
+                time == 0,
+                torch.tensor(1.0, dtype=time.dtype),
+                torch.sin(math.pi * 2 * cutoff * time) / (math.pi * 2 * cutoff * time),
+            )
+        )
+        filter_ = filter_ / filter_.sum()
+    return filter_.float().reshape(kernel_size)
+
+
+def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Replicate-pad along the T axis for a ``(B, T, C)`` ROW_MAJOR tensor."""
+    if pad_left == 0 and pad_right == 0:
+        return x_BTC
+    B, T, C = x_BTC.shape
+    pieces = []
+    if pad_left > 0:
+        first = ttnn.slice(x_BTC, [0, 0, 0], [B, 1, C])
+        pieces.extend([first] * pad_left)
+    pieces.append(x_BTC)
+    if pad_right > 0:
+        last = ttnn.slice(x_BTC, [0, T - 1, 0], [B, T, C])
+        pieces.extend([last] * pad_right)
+    return ttnn.concat(pieces, dim=1)
+
+
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
+    """Cached sharded validity mask ``(1, T, 1)``: 1.0 for real rows, 0.0 for the trailing
+    ``tpad_image`` rows. Sharded across T so each chip masks its own rows; the zeros land
+    on the last shard, where the tile-align pad image lives."""
+    key = (global_T, tpad_image, dtype)
+    M = cache.get(key)
+    if M is None:
+        m = torch.ones(1, global_T, 1, dtype=torch.float32)
+        m[:, global_T - tpad_image :, :] = 0.0
+        M = ttnn.from_torch(m, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        M = _partition_t(M, parallel_config)
+        M = ttnn.to_layout(M, ttnn.ROW_MAJOR_LAYOUT)
+        cache[key] = M
+    return M
+
+
+def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+    """Materialize the tile-align pad image — the trailing ``tpad_image`` rows at the global
+    sequence tail — to what the *next* op's own padding produces on the unsharded path, so the
+    sharded global tail bit-matches unsharded:
+
+    - ``mode="zeros"``: zero the rows. For zeros-pad convs, and the upsamplers (which gather
+      T to full and zero-pad internally, so they must see zeros there).
+    - ``mode="replicate"``: fill with the last real row, for the replicate-pad activations.
+
+    CCL-free: a cached validity mask zeros the pad image (body rows multiply by exactly 1.0,
+    so they stay bit-identical); replicate adds the real-last row, sliced at a uniform local
+    index real only on the last shard. Called ~100x per forward, so a gather here would
+    dominate runtime.
+    """
+    if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
+        return x_BTC
+    local_T = x_BTC.shape[1]
+    M = _tpad_mask(mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache)
+    xm = ttnn.multiply(x_BTC, M)
+    if mode == "zeros":
+        return xm
+    if mode != "replicate":
+        raise ValueError(f"unknown mode {mode!r}")
+    idx = local_T - tpad_image - 1  # real-last row, uniform local index (real only on the last shard)
+    assert idx >= 0, (
+        f"replicate tail fill needs the pad image ({tpad_image}) to fit the last shard "
+        f"(local T {local_T}); only pathological mel lengths (t_pad ≈ T_frames) violate this"
+    )
+    last = ttnn.slice(x_BTC, [0, idx, 0], [x_BTC.shape[0], idx + 1, x_BTC.shape[2]])
+    inv = ttnn.add(ttnn.multiply(M, -1.0), 1.0)
+    fill = ttnn.multiply(last, inv)
+    ttnn.deallocate(last)
+    out = ttnn.add(xm, fill)
+    ttnn.deallocate(xm)
+    ttnn.deallocate(fill)
+    return out
+
+
+def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Zero-pad along the T axis."""
+    if pad_left == 0 and pad_right == 0:
+        return x_BTC
+    B, T, C = x_BTC.shape
+    pieces = []
+    dtype = x_BTC.get_dtype()
+    if pad_left > 0:
+        zeros = ttnn.zeros((B, pad_left, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        pieces.append(zeros)
+    pieces.append(x_BTC)
+    if pad_right > 0:
+        zeros = ttnn.zeros((B, pad_right, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+        pieces.append(zeros)
+    return ttnn.concat(pieces, dim=1)
+
+
+def _pad_channels_to_aligned(x_BTC: ttnn.Tensor, mesh_device: ttnn.MeshDevice, channel_align: int = 32) -> ttnn.Tensor:
+    """Pad C up to ``aligned_channels(C, channel_align)`` with zeros. No-op if aligned."""
+    B, T, C = x_BTC.shape
+    aligned = aligned_channels(C, channel_align)
+    if aligned == C:
+        return x_BTC
+    pad_c = aligned - C
+    dtype = x_BTC.get_dtype()
+    zeros = ttnn.zeros((B, T, pad_c), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    return ttnn.concat([x_BTC, zeros], dim=2)
+
+
+def _zero_stuff_t(x_BTC: ttnn.Tensor, *, stride: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Insert ``stride - 1`` zeros between input samples along T, output length
+    ``T*s - (s-1)``. Expresses ``ConvTranspose1d`` as a regular ``Conv1d``.
+
+    Implemented as concat + reshape (O(1) ttnn ops) rather than O(T).
+    """
+    if stride == 1:
+        return x_BTC
+    B, T, C = x_BTC.shape
+    dtype = x_BTC.get_dtype()
+    x_btoc = ttnn.reshape(x_BTC, (B, T, 1, C))
+    zero_block = ttnn.zeros((B, T, stride - 1, C), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    stacked = ttnn.concat([x_btoc, zero_block], dim=2)
+    interleaved = ttnn.reshape(stacked, (B, T * stride, C))
+    out_len = T * stride - (stride - 1)
+    return ttnn.slice(interleaved, [0, 0, 0], [B, out_len, C])
 
 
 class Conv2dViaConv3d(Module):
