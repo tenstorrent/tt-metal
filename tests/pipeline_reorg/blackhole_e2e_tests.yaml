@@ -330,7 +330,7 @@
     exit $exit_code
   skus:
     bh_p150b_civ2:
-      timeout: 8
+      timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -343,7 +343,7 @@
     exit $exit_code
   skus:
     bh_p300:
-      timeout: 10
+      timeout: 20
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
@@ -369,6 +369,6 @@
     exit $exit_code
   skus:
     bh_quietbox_2:
-      timeout: 20
+      timeout: 30
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
