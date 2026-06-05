@@ -378,3 +378,33 @@ gap vs composite is NOT the POST loop structure (block-major makes the fused
 worse, not better); it is the fused's fixed in-kernel PRE+AG-wait + MUX-AG setup
 overhead (documented above), which block-major does nothing to address.
 Reverted; phase-major POST retained.
+
+## Device-zone profile of the 4 sections (per worker, mean, non-traced)
+
+Added W_SETUP (MUX fabric handshake: endpoint-ready wait + client connect) and
+W_FABRIC (per-chunk fabric mcast send + semaphore wait + barriers) zones in the
+MUX writer. PRE=RMS_PRE, POST=RMS_POST already existed. Profiled each shape with
+TT_METAL_DEVICE_PROFILER=1 (non-traced; spans run larger than the traced wall,
+breakdown is the signal). Per-worker us, mean across cores, summed over chunks:
+
+| shape | RoPE | MUX setup | PRE | POST | fabric send+sem | AG-wait | W_AG | out-drain |
+|---|:--:|---:|---:|---:|---:|---:|---:|---:|
+| N18944 | Y | 0.95 | 162 | 391 | 38 | 21 | 176 | 385 |
+| N9472  | Y | 0.95 | 84  | 193 | 14 | 9  | 88  | 198 |
+| N2368  | Y | 0.94 | 31  | 118 | 8  | 5  | 32  | 113 |
+| N18944 | N | 1.09 | 149 | 203 | 45 | 28 | 192 | 202 |
+| N9472  | N | 1.09 | 79  | 84  | 14 | 12 | 89  | 113 |
+| N2368  | N | 0.93 | 38  | 47  | 9  | 5  | 46  | 39 |
+| L512   | N | 0.96 | 11  | 20  | 7  | 4  | 14  | 15 |
+
+Findings:
+1. **MUX setup is ~1 us and constant** for all shapes — a one-time handshake.
+   This REFUTES the earlier hypothesis that MUX-AG setup was the small-shape
+   fixed-cost tax; it is not.
+2. **POST compute dominates** (TRISC), esp. RoPE. PRE ~half of POST.
+3. **W_FABRIC (fabric send + sem wait) is small** (7-45 us); most of W_AG is the
+   gather read-back + scatter, not the fabric. Output drain (BRISC) overlaps POST.
+4. AG-wait mostly hidden (median ~0) with a straggler tail.
+5. N2368 is compute(POST)+drain bound with balanced TRISC/BRISC lanes, not
+   fabric/setup bound. The composite's edge at that size is its lighter per-row
+   POST + separate tuned AG, not MUX setup cost.

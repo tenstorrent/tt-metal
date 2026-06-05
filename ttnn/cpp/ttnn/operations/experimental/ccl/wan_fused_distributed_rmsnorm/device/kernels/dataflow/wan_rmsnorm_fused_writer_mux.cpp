@@ -281,25 +281,28 @@ void kernel_main() {
         }
     }
 
-    if (fwd_mux_args.connection_valid) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fwd_mux_args.mux_x,
-            fwd_mux_args.mux_y,
-            fabric_mux_status_address,
-            fwd_mux_args.local_fabric_mux_status_addr);
-    }
-    if (bwd_mux_args.connection_valid) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            bwd_mux_args.mux_x,
-            bwd_mux_args.mux_y,
-            fabric_mux_status_address,
-            bwd_mux_args.local_fabric_mux_status_addr);
-    }
-    if (fwd_mux_args.connection_valid) {
-        tt::tt_fabric::fabric_client_connect(fwd_mux_conn);
-    }
-    if (bwd_mux_args.connection_valid) {
-        tt::tt_fabric::fabric_client_connect(bwd_mux_conn);
+    {
+        DeviceZoneScopedN("W_SETUP");  // MUX fabric handshake: endpoint-ready wait + client connect
+        if (fwd_mux_args.connection_valid) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                fwd_mux_args.mux_x,
+                fwd_mux_args.mux_y,
+                fabric_mux_status_address,
+                fwd_mux_args.local_fabric_mux_status_addr);
+        }
+        if (bwd_mux_args.connection_valid) {
+            tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                bwd_mux_args.mux_x,
+                bwd_mux_args.mux_y,
+                fabric_mux_status_address,
+                bwd_mux_args.local_fabric_mux_status_addr);
+        }
+        if (fwd_mux_args.connection_valid) {
+            tt::tt_fabric::fabric_client_connect(fwd_mux_conn);
+        }
+        if (bwd_mux_args.connection_valid) {
+            tt::tt_fabric::fabric_client_connect(bwd_mux_conn);
+        }
     }
 
     // ---------- Allocate packet headers ----------
@@ -410,8 +413,10 @@ void kernel_main() {
             // only bit the Wormhole Galaxy). Mirrors all_gather_async's writers.
             const uint64_t dram_dest_noc_addr =
                 tt::tt_fabric::linear::addrgen_detail::get_noc_address(stats_dram_accessor, my_dram_page_idx, 0);
-            if constexpr (num_targets_forward > 0) {
-                if (fwd_mux_args.connection_valid) {
+            {
+                DeviceZoneScopedN("W_FABRIC");  // fabric mcast send + semaphore wait (per chunk)
+                if constexpr (num_targets_forward > 0) {
+                    if (fwd_mux_args.connection_valid) {
 #ifndef WAN_ABL_SKIP_FABRIC
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
                         &fwd_mux_conn,
@@ -423,8 +428,8 @@ void kernel_main() {
                         /*start_distance=*/1,
                         static_cast<uint8_t>(num_targets_forward));
 #endif
+                    }
                 }
-            }
             if constexpr (num_targets_backward > 0) {
                 if (bwd_mux_args.connection_valid) {
 #ifndef WAN_ABL_SKIP_FABRIC
@@ -464,6 +469,7 @@ void kernel_main() {
             // the time we issue the next-chunk reads.
             noc_async_write_barrier();
             noc_async_atomic_barrier();
+            }  // W_FABRIC
 
             // ---- Phase A.5: Read remote-device pages (skip own — already L1-copied) ----
 #ifndef WAN_ABL_SKIP_GATHER_SCATTER
