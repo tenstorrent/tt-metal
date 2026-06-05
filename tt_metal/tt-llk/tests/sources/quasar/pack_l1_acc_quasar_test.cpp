@@ -188,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(params.RELU_CONFIG);
-    _llk_pack_init_<is_fp32_dest_acc_en>(buf_desc_id, 1 /*num_tiles_per_pack*/, relu_config);
+    _llk_pack_init_<is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/, relu_config);
 
     const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -200,7 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t tile = 0; tile < output_tiles_in_block; tile++)
         {
             // Accumulate each block on top of the previous one
-            _llk_pack_(tile, tile);
+            _llk_pack_(tile, tile, ckernel::DEFAULT_TENSOR_SHAPE);
         }
         _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

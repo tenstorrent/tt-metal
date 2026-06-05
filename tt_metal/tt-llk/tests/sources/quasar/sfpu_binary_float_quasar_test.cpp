@@ -125,9 +125,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, 1);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
-    _llk_pack_(params.DST_TILE_IDX, 0 /* tile index */);
+    _llk_pack_(params.DST_TILE_IDX, 0 /* tile index */, ckernel::DEFAULT_TENSOR_SHAPE);
 
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
