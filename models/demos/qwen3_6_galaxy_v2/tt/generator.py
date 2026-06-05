@@ -355,6 +355,25 @@ class Generator(WarmupForwardMixin):
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
+        # qwen3.6: reset PER-SEQUENCE state at the start of every new request. The
+        # DeltaNet GDN recurrent/conv buffers (dn_state_buffer / conv_state_buffer)
+        # are INTERNAL persistent device buffers that accumulate across requests; the
+        # demo runs a single sequence so it never resets them, but the server reuses
+        # the model across requests -> request N+1 inherits request N's GDN state ->
+        # coherent first request, garbage on every subsequent request (confirmed:
+        # the same prompt that returned ' Paris' as request 1 returns garbage later).
+        # Also reset the CCL gather/buffer indices (mirrors text_demo_qwen36's
+        # reset_gather_and_buffer_idx between passes). The server has no prefix
+        # caching, so every prefill is a fresh sequence -> always safe to clear.
+        if getattr(self.model, "is_qwen36", False):
+            for _layer in self.model.layers:
+                _attn = getattr(_layer, "attention", None)
+                if _attn is not None and hasattr(_attn, "clear_state"):
+                    _attn.clear_state()
+            _ccl = getattr(self.model, "tt_ccl", None)
+            if _ccl is not None and hasattr(_ccl, "reset_gather_and_buffer_idx"):
+                _ccl.reset_gather_and_buffer_idx()
+
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
         output_toks = torch.zeros(batch)
