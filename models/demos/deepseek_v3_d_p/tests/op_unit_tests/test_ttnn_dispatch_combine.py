@@ -16,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -49,9 +50,17 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     [
-        (3200, 7168, 64, 2, 2),
+        # GLM 5.1 MoE shape (emb 6144, 256 routed experts, top-8); seq 3200 ≈ 25k tokens / 8-chip SP group.
+        # capacity factor 8 mirrors test_prefill_combine.py for the same dispatch load.
+        (
+            3200,
+            GLM51Config.EMB_SIZE,
+            GLM51Config.NUM_ROUTED_EXPERTS,
+            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+        ),
     ],
-    ids=["3200-avg"],
+    ids=["glm5.1-3200"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -765,7 +774,7 @@ def test_ttnn_dispatch_combine_top4(mesh_device, num_links, topology, dispatched
     test_ttnn_dispatch_combine(
         mesh_device=mesh_device,
         seq_len_per_chip=1600,
-        emb_dim=7168,
+        emb_dim=GLM51Config.EMB_SIZE,
         num_routed_experts=64,
         num_experts_per_tok=4,
         dispatch_buffer_capacity_factor=3,
