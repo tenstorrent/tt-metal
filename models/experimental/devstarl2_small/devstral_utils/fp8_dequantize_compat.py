@@ -20,15 +20,18 @@ def _unpack_fp4_safe(self: Any, quantized: torch.Tensor) -> torch.Tensor:
     return quantized.to(torch.float32)
 
 
-def _scalar_scale_dequantize(self: Any, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+def _scalar_scale_dequantize(
+    self: Any, quantized: torch.Tensor, scales: torch.Tensor, output_dtype: torch.dtype | None = None
+) -> torch.Tensor:
     fp4_dtype = getattr(torch, "float4_e2m1fn_x2", None)
     if quantized.dtype == torch.int8 or (fp4_dtype is not None and quantized.dtype == fp4_dtype):
         quantized_fp32 = _unpack_fp4_safe(self, quantized)
     else:
         quantized_fp32 = quantized.to(torch.float32)
-    out_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
+    if output_dtype is None:
+        output_dtype = scales.dtype if scales.dtype.is_floating_point and scales.element_size() >= 2 else torch.bfloat16
     scale = scales.to(torch.float32)
-    return (quantized_fp32 * scale).to(out_dtype)
+    return (quantized_fp32 * scale).to(output_dtype)
 
 
 def _apply_legacy_dequantize_one_patch() -> None:
@@ -37,10 +40,18 @@ def _apply_legacy_dequantize_one_patch() -> None:
 
     _ORIGINAL_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
 
-    def _dequantize_one_compat(self: Any, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
+    def _dequantize_one_compat(
+        self: Any, quantized: torch.Tensor, scales: torch.Tensor, *args: Any, **kwargs: Any
+    ) -> torch.Tensor:
+        # Newer transformers (>=5.7) call ``_dequantize_one`` with an ``output_dtype`` kwarg from
+        # ``Fp8Dequantize.convert``; older releases call it positionally. Forward both unchanged to
+        # the original implementation, and honor ``output_dtype`` on the scalar-scale fast path.
         if scales.ndim == 0:
-            return _scalar_scale_dequantize(self, quantized, scales)
-        return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales)
+            output_dtype = kwargs.get("output_dtype")
+            if output_dtype is None and args:
+                output_dtype = args[0]
+            return _scalar_scale_dequantize(self, quantized, scales, output_dtype)
+        return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales, *args, **kwargs)
 
     Fp8Dequantize._dequantize_one = _dequantize_one_compat  # type: ignore[method-assign]
 
