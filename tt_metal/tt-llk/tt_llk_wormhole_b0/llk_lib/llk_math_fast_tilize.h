@@ -124,9 +124,9 @@ inline void _llk_math_fast_tilize_mop_config_()
  *
  * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); TF32 keeps FP32 dest mode.
  * @param unit_dim: Number of tiles processed per iteration; must match the unpacker.
- * @pre On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ which feeds the top/bottom faces into SrcA/SrcB.
- * @post On the pack thread, pair with @ref _llk_pack_fast_tilize_init_ (same unit_dim) which drains the split dest halves.
- * @post Call @ref _llk_math_fast_tilize_uninit_ to restore the FP32 dest-mode/state changes; run with @ref _llk_math_fast_tilize_block_.
+ * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ which feeds the top/bottom faces into SrcA/SrcB.
+ * @note On the pack thread, pair with @ref _llk_pack_fast_tilize_init_ (same unit_dim) which drains the split dest halves.
+ * @note Call @ref _llk_math_fast_tilize_uninit_ to restore the FP32 dest-mode/state changes; run with @ref _llk_math_fast_tilize_block_.
  */
 inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t unit_dim)
 {
@@ -157,7 +157,7 @@ inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, c
  *
  * @tparam is_fp32_dest_acc_en: FP32 dest-accumulation mode to restore (must match the surrounding context).
  * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); only non-TF32 needs restoring.
- * @post Reverses @ref _llk_math_fast_tilize_init_.
+ * @note Reverses @ref _llk_math_fast_tilize_init_.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
@@ -187,9 +187,9 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
  * @param unit_dim: Number of tiles processed per iteration; must match the unpacker.
  * @param num_units: Number of units processed in this call.
  * @param num_faces: Number of faces per tile (must be 2 or 4).
- * @pre @ref _llk_math_fast_tilize_init_ must be called first with matching unpack_dst_format and unit_dim.
- * @pre On the unpack thread, @ref _llk_unpack_fast_tilize_block_ must feed the tiles into SrcA/SrcB.
- * @post On the pack thread, @ref _llk_pack_fast_tilize_block_ drains the split dest halves into tilized L1 output.
+ * @note Call @ref _llk_math_fast_tilize_init_ with matching unpack_dst_format and unit_dim before this function.
+ * @note On the unpack thread, @ref _llk_unpack_fast_tilize_block_ must feed the tiles into SrcA/SrcB.
+ * @note On the pack thread, @ref _llk_pack_fast_tilize_block_ drains the split dest halves into tilized L1 output.
  */
 inline void _llk_math_fast_tilize_block_(
     const std::uint32_t dst_index,

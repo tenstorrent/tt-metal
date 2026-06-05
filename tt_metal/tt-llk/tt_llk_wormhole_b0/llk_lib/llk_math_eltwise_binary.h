@@ -188,7 +188,7 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
- * @post @ref _llk_math_eltwise_binary_standard_ runs the configured op with matching template args.
+ * @note @ref _llk_math_eltwise_binary_standard_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
@@ -213,7 +213,7 @@ inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
- * @pre @ref _llk_math_eltwise_binary_standard_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_eltwise_binary_standard_init_ with matching template args before this function.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -431,7 +431,7 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register
- * @post @ref _llk_math_eltwise_binary_with_dest_reuse_ runs the configured op with matching template args.
+ * @note @ref _llk_math_eltwise_binary_with_dest_reuse_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -502,7 +502,7 @@ inline void eltwise_binary_run_with_dest_reuse(
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
- * @pre @ref _llk_math_eltwise_binary_with_dest_reuse_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_eltwise_binary_with_dest_reuse_init_ with matching template args before this function.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -603,8 +603,8 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
  * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
- * @pre On the unpack thread, pair with @ref _llk_unpack_AB_init_ which feeds SrcA/SrcB.
- * @post @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_init_ which feeds SrcA/SrcB.
+ * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -637,9 +637,9 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape &tensor_sh
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
- * @pre @ref _llk_math_eltwise_binary_init_ must be called with matching template args.
- * @pre On the unpack thread, @ref _llk_unpack_AB_ must feed the operand tiles into SrcA/SrcB.
- * @post Call @ref _llk_math_eltwise_binary_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function, and
+ *       @ref _llk_math_eltwise_binary_uninit_ after it to restore modified state.
+ * @note On the unpack thread, @ref _llk_unpack_AB_ must feed the operand tiles into SrcA/SrcB.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -664,7 +664,7 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape &tensor_shape, 
 /**
  * @brief Uninitialize/cleanup after elementwise binary operations, restoring any modified state to defaults.
  *
- * @post Reverses @ref _llk_math_eltwise_binary_init_; currently a no-op since all state is transient.
+ * @note Reverses @ref _llk_math_eltwise_binary_init_; currently a no-op since all state is transient.
  */
 inline void _llk_math_eltwise_binary_uninit_()
 {
@@ -735,8 +735,8 @@ inline void eltwise_binary_configure_addrmod()
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param srca_reuse_count: Number of SrcB tiles the broadcasted SrcA tile is reused across.
- * @pre On the unpack thread, pair with @ref _llk_unpack_bcastA_B_ which broadcasts a row of SrcA.
- * @post @ref _llk_math_eltwise_binary_ (single-arg, dst_index) runs the configured op.
+ * @note On the unpack thread, pair with @ref _llk_unpack_bcastA_B_ which broadcasts a row of SrcA.
+ * @note @ref _llk_math_eltwise_binary_ (single-arg, dst_index) runs the configured op.
  */
 template <EltwiseBinaryType eltwise_binary_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
@@ -805,7 +805,7 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
  * @brief Run the SrcA-broadcast-row eltwise binary MOP for one destination tile (SDPA).
  *
  * @param dst_index: Tile index into the destination register.
- * @pre @ref _llk_math_eltwise_binary_init_ (single-arg, srca_reuse_count) must be called first.
+ * @note Call @ref _llk_math_eltwise_binary_init_ (single-arg, srca_reuse_count) before this function.
  */
 inline void _llk_math_eltwise_binary_(std::uint32_t dst_index)
 {

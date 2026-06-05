@@ -186,7 +186,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @param unpB_num_faces: Number of faces for operand B, valid values = <1, 2, 4>.
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
- * @post Call @ref _llk_unpack_AB_matmul_uninit_ to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_AB_matmul_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
@@ -253,7 +253,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
  * datums.
  *
  * @param face_r_dim: Rows per face, used to compute the restored datum count.
- * @pre @ref _llk_unpack_AB_matmul_init_ must have been called first.
+ * @note Call @ref _llk_unpack_AB_matmul_init_ before this function.
  */
 inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t face_r_dim)
 {
@@ -280,8 +280,8 @@ inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t face_r_dim)
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
  * @param kt_dim: Number of tiles along the contraction (K) dimension.
- * @pre @ref _llk_unpack_AB_matmul_init_ must be called first with matching template args.
- * @post Call @ref _llk_unpack_AB_matmul_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_AB_matmul_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_AB_matmul_uninit_ after it to restore modified state.
  * @ref _llk_math_matmul_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>

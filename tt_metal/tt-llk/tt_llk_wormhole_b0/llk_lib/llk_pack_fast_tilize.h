@@ -78,7 +78,7 @@ inline void _llk_pack_fast_tilize_addrmod_config_(const std::uint32_t unit_dim)
  * Programs an unpack-style MOP whose loop body issues the common-packer PACR instructions (using
  * ADDR_MOD_0 and ADDR_MOD_2) that pack rows of the interleaved face layout into tilized L1 output.
  *
- * @pre @ref _llk_pack_fast_tilize_addrmod_config_ must have programmed the ADDR_MOD slots.
+ * @note @ref _llk_pack_fast_tilize_addrmod_config_ must have programmed the ADDR_MOD slots.
  */
 inline void _llk_pack_fast_tilize_mop_config_()
 {
@@ -110,8 +110,8 @@ inline void _llk_pack_fast_tilize_mop_config_()
  * @param unit_dim: Number of tiles processed per iteration, valid values = <1, 2, 3>
  * @param num_faces: Faces per tile, valid values = <2, 4>
  * @param l1_tile_elements: Number of datums per output tile, used to size the per-tile L1 offset.
- * @pre On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ and on the math thread with @ref _llk_math_fast_tilize_init_ (same unit_dim).
- * @post Pair with @ref _llk_pack_fast_tilize_uninit_ after the matching @ref _llk_pack_fast_tilize_block_ execute calls.
+ * @note On the unpack thread, pair with @ref _llk_unpack_fast_tilize_init_ and on the math thread with @ref _llk_math_fast_tilize_init_ (same unit_dim).
+ * @note Pair with @ref _llk_pack_fast_tilize_uninit_ after the matching @ref _llk_pack_fast_tilize_block_ execute calls.
  */
 template <DstSync Dst>
 inline void _llk_pack_fast_tilize_init_(
@@ -221,7 +221,7 @@ inline void _llk_pack_fast_tilize_init_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
- * @pre Pairs with @ref _llk_pack_fast_tilize_init_.
+ * @note Call @ref _llk_pack_fast_tilize_init_ before this function.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_fast_tilize_uninit_(
@@ -263,9 +263,9 @@ inline void _llk_pack_fast_tilize_uninit_(
  * @param unit_dim: Number of tiles processed per unit, valid values = <1, 2, 3>
  * @param num_units: Number of units to pack in this call.
  * @param num_faces: Faces per tile, valid values = <2, 4>
- * @pre @ref _llk_pack_fast_tilize_init_ must have been called with matching template/runtime args.
- * @pre On the math thread, @ref _llk_math_fast_tilize_block_ must have written the split top/bottom-half faces into dest.
- * @post Call @ref _llk_pack_fast_tilize_uninit_ once all fast-tilize-pack calls are complete.
+ * @note Call @ref _llk_pack_fast_tilize_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_fast_tilize_uninit_ once all fast-tilize-pack calls are complete.
+ * @note On the math thread, @ref _llk_math_fast_tilize_block_ must have written the split top/bottom-half faces into dest.
  */
 inline void _llk_pack_fast_tilize_block_(
     const std::uint32_t tile_index, const std::uint32_t address, const std::uint32_t unit_dim, const std::uint32_t num_units, const std::uint32_t num_faces = 4)

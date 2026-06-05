@@ -179,8 +179,8 @@ inline void reduce_pool_op()
  * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
- * @pre @ref _llk_math_reduce_init_ must be called with matching template args.
- * @post Call @ref _llk_math_reduce_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function, and
+ *       @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
 template <
     PoolType type,
@@ -367,7 +367,7 @@ inline void reduce_configure_mop()
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
- * @post @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
@@ -390,11 +390,15 @@ inline void _llk_math_reduce_init_()
 }
 
 /**
- * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
+ * @brief Uninitialize after a reduce operation.
+ *
+ * Currently a no-op: the FP32 transpose path in @ref reduce_row_perform_transpose saves and restores
+ * every register it touches (SrcA format override, zero-flag), so there is no init/execute-time state
+ * left to undo here.
  *
  * @tparam enforce_fp32_accumulation: Must match the value used at init.
- * @param srca_data_format: Source A data format to restore (DataFormat enum underlying value); init forces it to Float32 for the MOVB2D/D2B Hi/Lo16 workaround.
- * @post Reverses @ref _llk_math_reduce_init_; when FP32 accumulation was enforced, re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) and restores the SrcA format.
+ * @param srca_data_format: Unused; retained for API symmetry with the matching init/uninit signature.
+ * @note Reverses @ref _llk_math_reduce_init_.
  */
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_([[maybe_unused]] const std::uint32_t srca_data_format)

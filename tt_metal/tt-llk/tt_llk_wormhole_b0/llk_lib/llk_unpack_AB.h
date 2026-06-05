@@ -141,7 +141,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
- * @post Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
@@ -166,7 +166,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @post Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -184,7 +184,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckern
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Nonzero to enable both inter-face and within-face transpose, zero for none.
- * @post Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_AB_uninit_ after this function to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -201,7 +201,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  *
  * @param unpA_tensor_shape: Tensor shape for source A operand
  * @param unpB_tensor_shape: Tensor shape for source B operand
- * @pre @ref _llk_unpack_AB_init_ must have been called first.
+ * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
 inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape, const ckernel::TensorShape unpB_tensor_shape)
 {
@@ -221,8 +221,8 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @param address_b: L1 memory address of source B tile
  * @param bcast_row_idx: Row index within source B tile for ROW broadcast
  * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
- * @pre @ref _llk_unpack_AB_init_ must be called first with matching template args.
- * @post Call @ref _llk_unpack_AB_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_AB_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_AB_uninit_ after it to restore modified state.
  * @ref _llk_math_eltwise_binary_ on the math thread consumes the SrcA/SrcB tiles unpacked here.
  */
 template <BroadcastType BType = BroadcastType::NONE>
@@ -336,7 +336,7 @@ inline void _llk_unpack_bcastA_B_mop_config_()
  * Sets the SrcA Y stride and per-unpacker datum counts (A unpacks one row, B unpacks a whole tile),
  * fills the replay buffer with the contiguous face-unpack instructions, and programs the MOP.
  *
- * @post Call @ref _llk_unpack_bcastA_B_uninit_ to restore the modified stride and datum-count state.
+ * @note Call @ref _llk_unpack_bcastA_B_uninit_ after this function to restore the modified stride and datum-count state.
  * @ref _llk_unpack_bcastA_B_ is the matching execute call.
  */
 inline void _llk_unpack_bcastA_B_init_()
@@ -404,7 +404,7 @@ inline void _llk_unpack_bcastA_B_init_()
  *
  * @param y_stride: SrcA Y stride to restore.
  * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
- * @pre @ref _llk_unpack_bcastA_B_init_ must have been called first.
+ * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
  */
 inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
@@ -422,8 +422,8 @@ inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_D
  * @param address_a: L1 memory address of source A tile.
  * @param address_b: L1 memory address of source B tile.
  * @param srca_reuse_count: Number of B tiles the unpacked A row is reused against.
- * @pre @ref _llk_unpack_bcastA_B_init_ must be called first.
- * @post Call @ref _llk_unpack_bcastA_B_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_bcastA_B_init_ before this function, and
+ *       @ref _llk_unpack_bcastA_B_uninit_ after it to restore modified state.
  */
 inline void _llk_unpack_bcastA_B_(const std::uint32_t address_a, const std::uint32_t address_b, std::uint32_t srca_reuse_count = 4)
 {

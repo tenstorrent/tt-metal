@@ -33,9 +33,9 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @pre @ref _llk_math_eltwise_unary_datacopy_init_ must be called with matching template args.
- * @pre On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
- * @post Call @ref _llk_math_eltwise_unary_datacopy_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function, and
+ *       @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
+ * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
  */
 template <DataCopyType type, DstSync Dst, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format)
@@ -430,8 +430,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
  * @tparam is_int_fpu_en: Enable integer FPU datapath.
  * @param num_faces: Number of faces in the tile (must be 1, 2, or 4).
  * @param dst_format: Destination data format (DataFormat enum underlying value); 255 means unset.
- * @pre On the unpack thread, pair with @ref _llk_unpack_A_init_ which feeds the tile.
- * @post @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_A_init_ which feeds the tile.
+ * @note @ref _llk_math_eltwise_unary_datacopy_ runs the configured op with matching template args.
  */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_int_fpu_en = false>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255)
@@ -458,7 +458,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
  *
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @tparam unpack_to_dest: Whether unpack wrote directly to dest.
- * @post Reverses @ref _llk_math_eltwise_unary_datacopy_init_; currently a no-op since all state is transient.
+ * @note Reverses @ref _llk_math_eltwise_unary_datacopy_init_; currently a no-op since all state is transient.
  */
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_uninit_()

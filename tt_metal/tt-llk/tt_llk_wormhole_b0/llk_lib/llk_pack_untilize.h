@@ -76,7 +76,7 @@ inline void _llk_pack_untilize_configure_addrmod_()
  * @tparam row_num_datums: Number of datums per output row.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @pre @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
+ * @note @ref _llk_pack_untilize_configure_addrmod_ must have programmed the ADDR_MOD slots.
  */
 template <
     std::uint32_t block_ct_dim,
@@ -166,8 +166,8 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @pre On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
- * @post Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
+ * @note On the math thread, @ref _llk_math_eltwise_unary_datacopy_ (A2D) populates the dest register this packer reads.
+ * @note Pair with @ref _llk_pack_untilize_uninit_ after the matching @ref _llk_pack_untilize_ execute calls.
  */
 template <
     std::uint32_t block_ct_dim,
@@ -210,7 +210,7 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
  * counter set in @ref _llk_pack_untilize_init_.
  *
  * @param face_r_dim: Number of rows per face used to size the restored X counter.
- * @pre Pairs with @ref _llk_pack_untilize_init_.
+ * @note Call @ref _llk_pack_untilize_init_ before this function.
  */
 inline void _llk_pack_untilize_uninit_(const std::uint32_t face_r_dim)
 {
@@ -233,8 +233,8 @@ inline void _llk_pack_untilize_uninit_(const std::uint32_t face_r_dim)
  * @param pack_dst_format: Destination (L1) data format.
  * @param face_r_dim: Number of rows per face.
  * @param tile_dst_rt_offset: Runtime row-tile offset into the destination register.
- * @pre @ref _llk_pack_untilize_init_ must have been called with matching template/runtime args.
- * @post Call @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
+ * @note Call @ref _llk_pack_untilize_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_untilize_uninit_ once all untilize-pack calls are complete.
  */
 template <
     std::uint32_t block_ct_dim,

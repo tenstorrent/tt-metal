@@ -112,6 +112,7 @@ inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_f
 
     return packed_tile_size_bytes;
 }
+
 /**
  * @brief Compute the per-tile L1 address offset, in 16-byte words, for multi-tile packing.
  *
@@ -189,7 +190,7 @@ inline void _llk_pack_configure_addrmod_()
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
- * @pre @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
+ * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
@@ -374,7 +375,7 @@ inline void _llk_pack_hw_configure_(
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param narrow_tile: True if the tile occupies fewer than the full set of packer interfaces.
  * @param num_tiles: Number of tiles processed per MOP run.
- * @post Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
@@ -410,7 +411,7 @@ inline void _llk_pack_init_(
  * counter set in @ref _llk_pack_init_.
  *
  * @param face_r_dim: Number of rows per face used to size the restored X counter.
- * @pre Pairs with @ref _llk_pack_init_.
+ * @note Call @ref _llk_pack_init_ before this function.
  */
 inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
 {
@@ -428,8 +429,8 @@ inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
  * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
  * @param tile_index: Index of the source tile in the destination register.
  * @param address: L1 destination address for the packed tile.
- * @pre @ref _llk_pack_init_ must have been called with matching template/runtime args.
- * @post Call @ref _llk_pack_uninit_ once all pack calls are complete.
+ * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_uninit_ once all pack calls are complete.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)

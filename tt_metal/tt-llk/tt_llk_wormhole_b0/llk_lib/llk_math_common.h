@@ -14,14 +14,14 @@
 using namespace ckernel::math;
 
 // DO NOT call this unless absolutely necessary
-// Bit 11 enables 32 bit mode for dest as a workaround for budabackend#1372.
+// Bit 11 enables 32 bit mode for dest as a workaround for tt-metal#46219.
 // We need to wait for both math and pack to be fully idle before writing this bit
 // because it affects dest bank access which is shared by both pipelines.
 // Changing it while either pipeline is active can cause a race condition.
 /**
  * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
  *
- * @note Workaround for bug tenstorrent/budabackend#1372. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
+ * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
  */
 inline void _llk_math_dbg_feature_disable_()
 {
@@ -43,7 +43,7 @@ inline void _llk_math_dbg_feature_disable_()
 /**
  * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
  *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tenstorrent/budabackend#1372). Issues a tensix_sync() first.
+ * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219). Issues a tensix_sync() first.
  */
 inline void _llk_math_dbg_feature_enable_()
 {
@@ -287,7 +287,7 @@ inline std::uint32_t _llk_math_get_compute_special_value_flags_()
 /**
  * @brief Clear the FPU sticky special-value flags register.
  *
- * @post Read with @ref _llk_math_get_compute_special_value_flags_ to observe flags accumulated after this clear.
+ * @note Read with @ref _llk_math_get_compute_special_value_flags_ to observe flags accumulated after this clear.
  */
 inline void _llk_math_clear_compute_special_value_flags_()
 {
