@@ -151,7 +151,9 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
     ],
     ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
 )
-@pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
+# iter2000 is the long-running stability soak (program-cache growth, semaphore
+# desync, leaks). Kept opt-in via -k iter2000; CI selectors normally pick iter1.
+@pytest.mark.parametrize("num_iterations", [1, 5, 25, 2000], ids=["iter1", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -514,7 +516,7 @@ def test_prefill_transformer(
             tt_kvpe_cache,
             number_of_non_padded_tokens=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
-            read_profiler=True,
+            read_profiler=False,
             temperature=temperature,
         )
         logger.info(f"Starting completion sync on iteration: {i}")
