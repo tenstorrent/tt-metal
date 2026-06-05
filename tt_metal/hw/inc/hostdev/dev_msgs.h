@@ -398,7 +398,7 @@ struct mailboxes_t {
     struct subordinate_sync_msg_t subordinate_sync;
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
-    struct launch_msg_t launch[launch_msg_buffer_num_entries];
+    alignas(16) struct launch_msg_t launch[launch_msg_buffer_num_entries];
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
