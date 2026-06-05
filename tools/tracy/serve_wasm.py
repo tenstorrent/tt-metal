@@ -315,17 +315,17 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             # Remove query string if present
             filename = filename.split("?", 1)[0]
             filename = urllib.parse.unquote(filename)
-            print(f"[DEBUG] DELETE /traces/ raw filename: {repr(filename)}")
+            logger.debug(f"DELETE /traces/ raw filename: {repr(filename)}")
             file_path = _safe_trace_file_path(Path(traces_dir), filename)
-            print(f"[DEBUG] DELETE /traces/ resolved file_path: '{file_path}'")
+            logger.debug(f"DELETE /traces/ resolved file_path: '{file_path}'")
             if file_path is None:
-                print(f"[DEBUG] DELETE /traces/ rejected filename: '{filename}'")
+                logger.debug(f"DELETE /traces/ rejected filename: '{filename}'")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
             if not file_path.is_file():
-                print(f"[DEBUG] DELETE /traces/ file not found: '{file_path}'")
+                logger.debug(f"DELETE /traces/ file not found: '{file_path}'")
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"File not found")
@@ -334,7 +334,7 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                 traces_root = _resolve_under_root(Path(traces_dir), strict=False)
                 to_remove = _ensure_resolved_path_under(traces_root, file_path)
                 to_remove.unlink()
-                print(f"[DEBUG] DELETE /traces/ deleted file: '{to_remove}'")
+                logger.debug(f"DELETE /traces/ deleted file: '{to_remove}'")
                 # Check if embed.tracy is a symlink to the deleted file
                 embed_path = _embed_trace_dest_path()
                 abs_deleted = _resolve_under_root(to_remove, strict=False)
@@ -359,14 +359,14 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
                                 if safe_pick is not None:
                                     new_target = os.path.relpath(str(safe_pick), embed_path.parent)
                                     os.symlink(new_target, embed_path)
-                                    print(f"[DEBUG] embed.tracy now points to: {new_target}")
+                                    logger.debug(f"embed.tracy now points to: {new_target}")
                             else:
-                                print("[DEBUG] No .tracy files left to point embed.tracy to.")
+                                logger.debug("No .tracy files left to point embed.tracy to.")
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b"Deleted")
             except Exception as e:
-                print(f"[DEBUG] DELETE /traces/ error deleting file: {e}")
+                logger.debug(f"DELETE /traces/ error deleting file: {e}")
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(str(e).encode("utf-8"))
@@ -382,7 +382,7 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, format, *args):
-        print(f"[{self.client_address[0]}] {format % args}")
+        logger.debug(f"[{self.client_address[0]}] {format % args}")
 
     def do_GET(self):
         # Serve /traces as a JSON list of available trace files (from PROFILER_WASM_DIR/traces)
@@ -390,19 +390,19 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
         if self.path == "/traces":
             try:
                 files = []
-                print(f"[DEBUG] traces_dir: {traces_dir}")
+                logger.debug(f"traces_dir: {traces_dir}")
                 if os.path.isdir(traces_dir):
                     files = [f for f in os.listdir(traces_dir) if f.endswith(".tracy")]
-                    print(f"[DEBUG] Found trace files: {files}")
+                    logger.debug(f"Found trace files: {files}")
                     files.sort(reverse=True)
                 else:
-                    print(f"[DEBUG] traces_dir does not exist: {traces_dir}")
+                    logger.debug(f"traces_dir does not exist: {traces_dir}")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps(files).encode("utf-8"))
             except Exception as e:
-                print(f"[DEBUG] Exception in /traces: {e}")
+                logger.debug(f"Exception in /traces: {e}")
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(b"[]")
@@ -415,30 +415,30 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
             # Remove query string if present
             filename = filename.split("?", 1)[0]
             filename = urllib.parse.unquote(filename)
-            print(f"[DEBUG] /traces/ raw filename: {repr(filename)}")
+            logger.debug(f"/traces/ raw filename: {repr(filename)}")
             file_path = _safe_trace_file_path(Path(traces_dir), filename)
-            print(f"[DEBUG] /traces/ resolved file_path: '{file_path}'")
+            logger.debug(f"/traces/ resolved file_path: '{file_path}'")
             # List directory contents for debugging
             try:
                 dir_listing = os.listdir(traces_dir)
-                print(f"[DEBUG] /traces/ directory listing: {dir_listing}")
+                logger.debug(f"/traces/ directory listing: {dir_listing}")
             except Exception as e:
-                print(f"[DEBUG] /traces/ could not list directory: {e}")
+                logger.debug(f"/traces/ could not list directory: {e}")
             if file_path is None:
-                print(f"[DEBUG] /traces/ rejected filename: '{filename}'")
+                logger.debug(f"/traces/ rejected filename: '{filename}'")
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Invalid filename")
                 return
             if not file_path.is_file():
-                print(f"[DEBUG] /traces/ file not found: '{file_path}'")
+                logger.debug(f"/traces/ file not found: '{file_path}'")
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"File not found")
                 return
             traces_root = _resolve_under_root(Path(traces_dir), strict=False)
             safe_file = _ensure_resolved_path_under(traces_root, file_path)
-            print(f"[DEBUG] /traces/ serving file: '{safe_file}'")
+            logger.debug(f"/traces/ serving file: '{safe_file}'")
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Disposition", f"attachment; filename={safe_file.name}")
@@ -476,10 +476,11 @@ class CORSRequestHandler(SimpleHTTPRequestHandler):
 
 
 async def notify_clients():
-    print("Embed file changed, notifying clients...")
+    logger.debug("Embed file changed, notifying clients...")
     if clients:
-        print(f"Notifying {clients} clients")
-        await asyncio.wait([client.send("reload") for client in clients])
+        logger.debug(f"Notifying {len(clients)} clients")
+        # gather() accepts coroutines directly; asyncio.wait() rejects raw coroutines on Python 3.11+.
+        await asyncio.gather(*(client.send("reload") for client in clients))
 
 
 async def watch_embed_file():
@@ -509,8 +510,9 @@ async def ws_handler(websocket):
 
 
 async def websocket_main(ws_port):
-    async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
-        print(f"WebSocket server running on ws://0.0.0.0:{ws_port}")
+    # Bind to loopback by default; remote viewing is via SSH port-forwarding (see docs).
+    async with websockets.serve(ws_handler, "127.0.0.1", ws_port):
+        logger.info(f"WebSocket server running on ws://127.0.0.1:{ws_port}")
         await watch_embed_file()
 
 
@@ -520,31 +522,33 @@ def start_websocket_server(ws_port):
 
 def run_server(directory, port):
     if not (1 <= port <= 65534):
-        print(f"HTTP port must be in [1, 65534] (WebSocket uses port+1), got {port}", file=sys.stderr)
+        logger.error(f"HTTP port must be in [1, 65534] (WebSocket uses port+1), got {port}")
         sys.exit(1)
     ws_port = port + 1
     if is_server_running(port):
-        print(f"Server is already running on HTTP port {port}. Exiting.")
+        logger.info(f"Server is already running on HTTP port {port}. Exiting.")
         return
     if is_server_running(ws_port):
-        print(f"Server is already running on WebSocket port {ws_port}. Exiting.")
+        logger.info(f"Server is already running on WebSocket port {ws_port}. Exiting.")
         return
 
     try:
         serve_root = _validated_wasm_serve_directory(directory)
     except ValueError as e:
-        print(str(e), file=sys.stderr)
+        logger.error(str(e))
         sys.exit(1)
     wasm_root = _resolve_under_root(Path(PROFILER_WASM_DIR), strict=False)
     serve_root = _ensure_resolved_path_under(wasm_root, serve_root)
-    print(f"Serving WASM from {serve_root} on http://0.0.0.0:{port} ...")
+    # Bind to loopback by default; the UI and the trace download/delete endpoints
+    # are local-use oriented and remote access is via SSH port-forwarding (see docs).
+    logger.info(f"Serving WASM from {serve_root} on http://127.0.0.1:{port} ...")
     # Start WebSocket server in a separate thread
     ws_thread = threading.Thread(target=start_websocket_server, args=(ws_port,), daemon=True)
     ws_thread.start()
 
     # Start HTTP server (set serve root via handler; avoids os.chdir on argv-derived paths).
     handler_factory = functools.partial(CORSRequestHandler, directory=str(serve_root))
-    HTTPServer(("0.0.0.0", port), handler_factory).serve_forever()
+    HTTPServer(("127.0.0.1", port), handler_factory).serve_forever()
 
 
 if __name__ == "__main__":
