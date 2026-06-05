@@ -83,7 +83,10 @@ def run_model(
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False:
         pytest.skip("Skip non-PCC test in CI to save time")
-    if (is_ci_env or is_ci_v2_env) and not is_balanced:
+    # Kimi's parametrize has no `balanced` entry today (only non_balanced).
+    # Applying this skip would zero out Kimi's CI coverage for this test.
+    # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
+    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     profiler.clear()
