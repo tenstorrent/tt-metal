@@ -104,6 +104,56 @@ def normalized_goal_text(prompt: str) -> str:
     return " ".join(text[len("/goal") :].split())
 
 
+def normalize_for_match(text: str) -> str:
+    return " ".join(re.sub(r"[-_/]+", " ", text.lower()).split())
+
+
+def goal_match_terms(prompt: str) -> list[str]:
+    """Return flexible terms that should survive Codex goal summarization."""
+
+    first_line = prompt.lstrip().splitlines()[0]
+    if not first_line.startswith("/goal"):
+        raise SystemExit("prompt must start with /goal")
+    objective_line = first_line[len("/goal") :].strip()
+    normalized = normalize_for_match(objective_line)
+    terms: list[str] = []
+
+    # Skill names are the strongest signal that a later stage really got a new
+    # goal instead of reusing the previous thread goal.
+    terms.extend(match.group(1) for match in re.finditer(r"\$([A-Za-z0-9_-]+)", objective_line))
+
+    # Keep the target model as a second signal, but avoid requiring the whole
+    # first prompt line because Codex stores a concise objective, not verbatim
+    # prompt text, in goals_1.sqlite.
+    model_match = re.search(r"\bfor\s+(.+?)\s+in\s+the\s+current\b", objective_line)
+    if model_match:
+        target = model_match.group(1).strip()
+        if target.lower().startswith("the "):
+            target = target[4:].strip()
+        for suffix in [
+            " optimized multichip decoder",
+            " optimized decoder",
+            " optimized full model",
+            " multichip decoder",
+            " functional decoder",
+            " full model",
+        ]:
+            if target.lower().endswith(suffix):
+                target = target[: -len(suffix)].strip()
+                break
+        terms.append(target)
+
+    return [normalize_for_match(term) for term in terms if normalize_for_match(term) in normalized]
+
+
+def goal_matches_prompt(prompt: str, objective: str) -> bool:
+    actual = normalize_for_match(objective)
+    terms = goal_match_terms(prompt)
+    if not terms:
+        return False
+    return all(term in actual for term in terms)
+
+
 def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
     if explicit is not None:
         env["CODEX_HOME"] = str(explicit)
@@ -226,7 +276,7 @@ def main() -> int:
     session_id: str | None = None
     for index, prompt_path in enumerate(args.prompt_files, start=1):
         prompt = load_prompt(prompt_path, replacements)
-        expected_objective = normalized_goal_text(prompt)
+        expected_terms = goal_match_terms(prompt)
         name = stage_name(index, prompt_path)
         prompt_copy = log_dir / f"{name}.prompt.txt"
         prompt_copy.write_text(prompt)
@@ -264,16 +314,14 @@ def main() -> int:
             f"goal_status={status.status} tokens={status.tokens_used} seconds={status.time_used_seconds}",
             file=sys.stderr,
         )
-        actual_objective = " ".join(status.objective.split())
-        expected_prefix = expected_objective[:120]
-        if expected_prefix not in actual_objective:
+        if not goal_matches_prompt(prompt, status.objective):
             print(
                 "Stopping after stage "
                 f"{index}: latest goal objective does not match this prompt. "
                 "This usually means the /goal command was not accepted as a new goal.",
                 file=sys.stderr,
             )
-            print(f"Expected prefix: {expected_prefix}", file=sys.stderr)
+            print(f"Expected normalized terms: {expected_terms}", file=sys.stderr)
             print(f"Actual objective: {status.objective}", file=sys.stderr)
             return 4
         if status.status != "complete":
