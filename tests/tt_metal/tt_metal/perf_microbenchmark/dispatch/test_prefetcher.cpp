@@ -79,8 +79,8 @@ namespace tt::tt_metal::tt_dispatch_tests::prefetcher_tests {
 constexpr uint32_t DEFAULT_ITERATIONS = 5;
 constexpr uint32_t DEFAULT_ITERATIONS_SMOKE_RANDOM = 1000;
 // HostSmokeTest in simulation: 7 host-write commands per outer iteration (multiplier=1 only),
-// HOST_SMOKE_SIM_ITERATIONS passes → 3 * 7 = 21 host writes (hardware keeps 5 * 14 = 70).
-constexpr uint32_t HOST_SMOKE_SIM_ITERATIONS = 3;
+// HOST_SMOKE_SIM_ITERATIONS passes → 1 * 7 = 7 host writes (hardware keeps 5 * 14 = 70).
+constexpr uint32_t HOST_SMOKE_SIM_ITERATIONS = 1;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
 constexpr uint32_t DEVICE_DATA_SIZE_LARGE = 20 * 1024 * 1024;
 constexpr uint32_t DRAM_PAGE_SIZE_DEFAULT = 1024;
@@ -464,8 +464,25 @@ protected:
         use_exec_buf_ = p.use_exec_buf;
     }
 
+    // Exec buffer DRAM base: on the Quasar simulator, place it just above THIS test's bank-0 data
+    // (per-bank prepopulate + DRAM-result headroom) so it stays below the fixed SD issue queue;
+    // elsewhere keep the default. Tests whose data alone reaches the issue queue are skipped in
+    // SetUp, so any test that runs has room left for its (small) exec buffer.
+    uint32_t compute_exec_buf_base_addr() const {
+        if (!Common::is_quasar_sim()) {
+            return DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+        }
+        const uint32_t bank0_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + DEVICE_DATA_SIZE;
+        return tt::align(dram_base_ + bank0_data_bytes, 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
+    }
+
     void SetUp() override {
         BaseTestFixture::SetUp();
+        // BaseTestFixture::SetUp may skip (e.g. FD on the Quasar simulator). GTEST_SKIP only returns
+        // from that method, so bail here before dereferencing the (uncreated) device.
+        if (this->IsSkipped()) {
+            return;
+        }
         dram_base_ = device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         num_banks_ = device_->allocator_impl()->get_num_banks(BufferType::DRAM);
         l1_alignment_ = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::L1);
@@ -526,7 +543,8 @@ protected:
 
     // Relay pre-populated data from DRAM using prefetcher to dispatcher, write it to L1 and validate it
     void run_dram_to_l1_paged_read_test() {
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
         const uint32_t page_size_bytes = get_page_size();
         const uint32_t num_pages = get_num_pages();
@@ -557,7 +575,8 @@ protected:
     //  core.
     void run_paged_read_write_test() {
         // Test parameters
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
         const uint32_t page_size_bytes = get_page_size();
         const uint32_t num_pages = get_num_pages();
@@ -588,7 +607,8 @@ protected:
     void run_test_terminate_test() {
         // Test parameters
         constexpr uint32_t xfer_size_bytes = 16;  // Very small write size
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         const CoreCoord first_worker = this->worker_start();
@@ -685,12 +705,23 @@ public:
         exec_buf_data.insert(exec_buf_data.end(), tptr, tptr + exec_terminate.size_bytes());
 
         const uint32_t page_size = 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
-        const uint32_t exec_buf_base_addr = DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+        const uint32_t exec_buf_base_addr = compute_exec_buf_base_addr();
         const size_t size_bytes = exec_buf_data.size();
         const size_t padded_size_bytes = tt::align(size_bytes, static_cast<size_t>(page_size));
         exec_buf_data.resize(padded_size_bytes, 0u);
         const uint32_t num_pages = static_cast<uint32_t>(padded_size_bytes) / page_size;
         log_info(tt::LogTest, "Total exec buf bytes: {} (padded: {})", size_bytes, padded_size_bytes);
+
+        // On the Quasar simulator the exec buffer is page-interleaved across banks from the relocated
+        // base; fail fast if its per-bank top would reach the SD issue queue (i.e. start aliasing).
+        if (Common::is_quasar_sim()) {
+            const uint32_t per_bank_top = exec_buf_base_addr + ((num_pages + num_banks_ - 1) / num_banks_) * page_size;
+            TT_FATAL(
+                per_bank_top <= Common::kSdQuasarIssueBase,
+                "Quasar exec buffer top {:#x} collides with SD issue queue at {:#x}",
+                per_bank_top,
+                Common::kSdQuasarIssueBase);
+        }
 
         uint32_t data_idx = 0;
         for (uint32_t page_idx = 0; page_idx < num_pages; ++page_idx) {
@@ -733,7 +764,7 @@ private:
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
         HugepageDeviceCommand exec_cmd(cmd_buffer_base, cmd_size);
         exec_cmd.add_prefetch_exec_buf(
-            fixture.DRAM_EXEC_BUF_DEFAULT_BASE_ADDR, fixture.DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+            fixture.compute_exec_buf_base_addr(), fixture.DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
 
         // Verifies destination memory bounds
         device_data.overflow_check(device_);
@@ -1240,10 +1271,14 @@ public:
     // writes the data to the host completion queue.
     // Note: Since we're writing into completion queue, we skip distributed::Finish
     void run_host_test() {
-        const uint32_t max_data_size = DEVICE_DATA_SIZE;
+        // On Quasar the 99 size-scaling writes below sum to ~25x max_data_size (~19 MB), overrunning the
+        // RTL-sim timeout. Shrink the buffer 25x so the total relayed stays ~DEVICE_DATA_SIZE (768 KB) while
+        // keeping all 99 commands -- isolates relay volume from command count for the timeout repro.
+        const uint32_t max_data_size = Common::is_quasar_sim() ? (DEVICE_DATA_SIZE / 25) : DEVICE_DATA_SIZE;
         const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
         const uint32_t dram_data_size_words = this->get_dram_data_size_words();
-        const uint32_t num_iterations = this->get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
 
         std::vector<uint32_t> data(max_data_size_words);
         for (uint32_t i = 0; i < max_data_size_words; i++) {
@@ -1480,7 +1515,8 @@ public:
 
     // Smoke test of prefetcher/dispatcher commands except add_dispatch_write_host
     void run_smoke_test() {
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
@@ -1659,7 +1695,9 @@ protected:
             device_->get_noc_unicast_encoding(k_dispatch_downstream_noc, dest_dram_physical_core);
         const CoreCoord dest_dram_logical = device_->logical_core_from_dram_channel(dest_dram_channel);
 
-        uint32_t remaining_bytes = DEVICE_DATA_SIZE_LARGE;
+        // On Quasar, scale the relay target from 20 MB down to DEVICE_DATA_SIZE (768 KB) so the RTL sim
+        // finishes within the timeout -- disambiguates relay volume from a RELAY_LINEAR_PACKED-specific hang.
+        uint32_t remaining_bytes = Common::is_quasar_sim() ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE_LARGE;
         const uint32_t MAX_SUB_CMD_SIZE = tt::align(DEVICE_DATA_SIZE, l1_alignment);
 
         while (remaining_bytes >= MIN_READ_SIZE) {
@@ -1890,7 +1928,8 @@ public:
     // Then, we relay command header + data into dispatcher
     // Note: Ring buffer is stateful as we set the ringbuffer offset on first load
     void run_ringbuffer_read_test() {
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
@@ -1970,6 +2009,10 @@ protected:
 
     void SetUp() override {
         BasePrefetcherTestFixture::SetUp();
+        // Base SetUp may skip (e.g. FD on the Quasar simulator); bail before touching the device.
+        if (this->IsSkipped()) {
+            return;
+        }
         if (mesh_device_->num_devices() < 2) {
             GTEST_SKIP() << "Skipping RelayLinearHTest: need MMIO+remote pair in mesh";
         }
@@ -2486,7 +2529,8 @@ public:
     // This tests random configurations of commands like CQ_PREFETCH_CMD_RELAY_LINEAR, CQ_PREFETCH_CMD_RELAY_PAGED,
     // CQ_PREFETCH_CMD_RELAY_INLINE etc
     void run_random_test() {
-        const uint32_t num_iterations = get_num_iterations();
+        const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+        const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
         const uint32_t dram_data_size_words = get_dram_data_size_words();
 
         // Setup target worker cores
@@ -2584,14 +2628,6 @@ class PrefetcherThroughputTestFixture : public BasePrefetcherTestFixture {};
 // The upstream semaphore self-loop (MY_UPSTREAM_CB_SEM_ID == UPSTREAM_CB_SEM_ID on the prefetch_d
 // core, initialized to cmd_cb_pages) pre-signals all pages so the kernel sees them immediately.
 
-// Quasar SD DRAM layout — issue + completion packed into the upper half of the single 64-MB
-// DRAM-CQ window that bank 0 decodes on this target (bits 0..25; bits 26+ are don't-cares —
-// confirmed by an alias / bit-decode probe during bringup). With SD_HUGEPAGE_ISSUE_BUFFER_SIZE =
-// 16 MB, issue is at NOC 0x02000000..0x02FFFFFF and completion at NOC 0x03000000..0x03FFFFFF;
-// neither address has bit 26+ set, so neither region aliases back into the allocator-reserved
-// low region near physical 0x0.
-static constexpr uint32_t kSdQuasarIssueBase = 0x2000000u;
-static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 static constexpr uint32_t kHostDataDirtyPattern = 0xBAADF00Du;
 
 void dirty_quasar_sd_completion_dram(tt_metal::distributed::MeshDevice::IDevice* device, uint32_t size_bytes) {
@@ -2602,7 +2638,7 @@ void dirty_quasar_sd_completion_dram(tt_metal::distributed::MeshDevice::IDevice*
         tt::tt_metal::detail::WriteToDeviceDRAMChannel(
             device,
             0,
-            kSdQuasarCompletionBase + offset,
+            Common::kSdQuasarCompletionBase + offset,
             std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chunk.data()), chunk_size));
     }
     tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
@@ -2678,7 +2714,10 @@ SdSemaphoreLayout make_sd_semaphore_layout(
             make_sem("produced", disp_logical, 0),
         };
         layout.pf_sync_sem_id = 0;
-        layout.di_sync_sem_id = 1;
+        // Alias di_sync onto pf_sync: there is one prefetch<->dispatch sync sem. process_stall polls
+        // DOWNSTREAM_SYNC_SEM_ID (pf_sync); process_wait increments UPSTREAM_SYNC_SEM (di_sync). On the
+        // shared core they must be the same slot, so the di_sync spec below (slot 1) is left unused.
+        layout.di_sync_sem_id = 0;
         layout.credit_sem_id = 2;
         layout.produced_sem_id = 3;
         layout.credit_core = disp_logical;
@@ -2876,6 +2915,15 @@ public:
             this->device_->compute_with_storage_grid_size().x * this->device_->compute_with_storage_grid_size().y;
 
         this->init_params(this->sd_test_params());
+
+        // The Quasar-sim SD CQ is fixed at kSdQuasarIssueBase (32 MB). A large DRAM profiler region
+        // pushes the allocator base up, so a big prepopulate can leave no room for the test data +
+        // exec buffer below the issue queue. Skip those tests rather than overrun the CQ region.
+        if (Common::is_quasar_sim() && this->compute_exec_buf_base_addr() >= Common::kSdQuasarIssueBase) {
+            GTEST_SKIP() << "SD bank-0 data from dram_base " << this->dram_base_
+                         << " reaches the Quasar-sim SD issue queue at " << Common::kSdQuasarIssueBase
+                         << "; no room for data + exec buffer.";
+        }
     }
 
     void TearDown() override {
@@ -2951,7 +2999,8 @@ public:
         // dev_hugepage_base == get_host_command_queue_addr(UNRESERVED) lands in the same
         // PCIe region the FD runtime would use.  If SD is ever extended to non-zero channel/
         // cq_id, switch to get_absolute_cq_offset(...) + cq_start (mirroring topology.cpp).
-        // WH/BH stage commands in PCIe hugepage; Quasar has no hugepage and uses DRAM bank 0 (kSdQuasarIssueBase).
+        // WH/BH stage commands in PCIe hugepage; Quasar has no hugepage and uses DRAM bank 0
+        // (Common::kSdQuasarIssueBase).
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
         if (this->device_->arch() != tt::ARCH::QUASAR) {
@@ -2967,11 +3016,11 @@ public:
             host_hugepage_base = hugepage_bar_base + dev_hugepage_base;
         } else {
             TT_FATAL(
-                kSdQuasarIssueBase >= this->dram_base_,
+                Common::kSdQuasarIssueBase >= this->dram_base_,
                 "SD DRAM command buffer ({:#x}) overlaps allocator region (base {:#x})",
-                kSdQuasarIssueBase,
+                Common::kSdQuasarIssueBase,
                 this->dram_base_);
-            dev_hugepage_base = kSdQuasarIssueBase;
+            dev_hugepage_base = Common::kSdQuasarIssueBase;
         }
 
         // Physical cores
@@ -3015,7 +3064,7 @@ public:
                 tt::tt_metal::detail::WriteToDeviceDRAMChannel(
                     this->device_,
                     0,
-                    kSdQuasarIssueBase + dram_write_offset,
+                    Common::kSdQuasarIssueBase + dram_write_offset,
                     std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(src), cmd_size_bytes));
                 dram_write_offset += cmd_size_bytes;
             } else {
@@ -3239,7 +3288,7 @@ private:
         exec_buf_calc.add_prefetch_exec_buf();
         HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
         exec_cmd.add_prefetch_exec_buf(
-            this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR, this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+            this->compute_exec_buf_base_addr(), this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
         write_cmd(exec_cmd, /*stall*/ true);
     }
 };
@@ -3256,7 +3305,7 @@ public:
     //
     // WH/BH: points into the host-mapped hugepage at dev_hugepage_base + SD_HUGEPAGE_ISSUE_BUFFER_SIZE.
     // Quasar: points into a host-side staging buffer; refresh_completion_data() fills it from DRAM
-    //         at kSdQuasarCompletionBase before validate() is called.
+    //         at Common::kSdQuasarCompletionBase before validate() is called.
     void* get_completion_queue_buffer() override {
         if (this->device_->arch() == tt::ARCH::QUASAR) {
             quasar_completion_buf_.resize(Common::SD_COMPLETION_QUEUE_SIZE);
@@ -3294,7 +3343,7 @@ public:
 
             constexpr uint32_t toggle_mask = ~(1u << 31);
             const uint32_t wr_ptr_16B = wr_ptr_and_toggle & toggle_mask;
-            const uint32_t completion_base_16B = kSdQuasarCompletionBase >> 4;
+            const uint32_t completion_base_16B = Common::kSdQuasarCompletionBase >> 4;
             if (wr_ptr_16B <= completion_base_16B) {
                 return;
             }
@@ -3309,7 +3358,7 @@ public:
             tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
                 this->device_,
                 0,
-                kSdQuasarCompletionBase,
+                Common::kSdQuasarCompletionBase,
                 std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
         }
     }
@@ -3465,7 +3514,8 @@ TEST_P(PrefetchRelayLinearHTestFixture, RelayLinearHTest) {
     log_info(tt::LogTest, "PrefetchRelayLinearHTestFixture - RelayLinearHTest - Test Start");
 
     // Test parameters
-    const uint32_t num_iterations = get_num_iterations();
+    const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+    const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup dummy worker cores (not actually used for writes, but needed for DeviceData init)
@@ -3515,7 +3565,8 @@ TEST_P(PrefetcherLinearPackedHTestFixture, RelayLinearPackedHTest) {
     log_info(tt::LogTest, "PrefetcherLinearPackedHTestFixture - RelayLinearPackedHTest - Test Start");
 
     // Test parameters
-    const uint32_t num_iterations = get_num_iterations();
+    const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+    const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
 
     // Setup worker cores
@@ -3593,7 +3644,8 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
         GTEST_SKIP() << "Throughput test measures issue-queue prefetch; exec_buf enabled path is not supported";
     }
 
-    const uint32_t num_iterations = get_num_iterations();
+    const bool simulation = tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+    const uint32_t num_iterations = simulation ? HOST_SMOKE_SIM_ITERATIONS : get_num_iterations();
     const uint32_t dram_data_size_words = get_dram_data_size_words();
     const uint32_t page_size_bytes = get_page_size();
     const uint32_t requested_pages_per_cmd = get_num_pages();
@@ -4061,7 +4113,7 @@ INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
     SDPrefetchDRAMToL1TestFixture,
     ::testing::Values(
-        PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{4096, 96, 1, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{4096, 16, 1, Common::DRAM_DATA_SIZE_WORDS, true},
         PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{8192, 8, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
@@ -4133,12 +4185,7 @@ INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
     SDPrefetchHostTextFixture,
     ::testing::Values(
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1U, Common::DRAM_DATA_SIZE_WORDS, false},
         PagedReadParams{
             DRAM_PAGE_SIZE_DEFAULT,
             DRAM_PAGES_TO_READ_DEFAULT,

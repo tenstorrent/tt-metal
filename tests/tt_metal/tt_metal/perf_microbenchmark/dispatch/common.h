@@ -933,18 +933,37 @@ static constexpr uint32_t SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE = DispatchSettings::P
 static constexpr uint32_t SD_PREFETCH_CMDDAT_PAGE_SIZE = 1u << SD_PREFETCH_CMDDAT_LOG_PAGE_SIZE;
 static constexpr uint32_t SD_PREFETCH_CMDDAT_BLOCKS = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 // Issue + completion must fit in one device's hugepage slot (MAX_DEV_CHANNEL_SIZE = 256 MB) on
-// WH/BH. On Quasar the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in DRAM bank 0,
-// which on this target only decodes the low 26 address bits (bits 26+ are don't-cares — see the
-// BIT-DECODE probe in test_prefetcher.cpp). With 16 MB each, both regions sit in the upper half
-// (bytes 32..64 MB) of the 64-MB decoded window and never set bit 26+, so neither aliases back
-// into the allocator-reserved low region near physical 0x0. Per-test working set is bounded by
-// DEVICE_DATA_SIZE = 768 KB, so 16 MB has ~20× headroom; if a future bench needs more it'll
-// have to use a different bank (see DRAM_BACKED_CQ_BANK_ID plumbing).
-static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 16;  // 16 MB
-static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 16;       // 16 MB
+// WH/BH. On the Quasar simulator the kSdQuasarIssueBase / kSdQuasarCompletionBase pair lives in
+// DRAM bank 0, which decodes only the low 26 address bits (bits 26+ are don't-cares — observed on
+// the Quasar simulator during bringup; real hardware has the full range). With 8 MB each, both
+// regions sit at bytes 48..64 MB, flush against the top of the 64-MB decoded window, and never set
+// bit 26+, so neither aliases back into the allocator-reserved low region near physical 0x0. Placing
+// them at the top frees the whole [dram_base_, 48 MB) span below for test data + the exec buffer.
+// Per-test working set is bounded by DEVICE_DATA_SIZE = 768 KB, so 8 MB has ~10× headroom; if a
+// future bench needs more it'll have to use a different bank (see DRAM_BACKED_CQ_BANK_ID plumbing).
+static constexpr uint32_t SD_HUGEPAGE_ISSUE_BUFFER_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 32;  // 8 MB
+static constexpr uint32_t SD_COMPLETION_QUEUE_SIZE = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 32;       // 8 MB
 static_assert(
     SD_HUGEPAGE_ISSUE_BUFFER_SIZE + SD_COMPLETION_QUEUE_SIZE <= DispatchSettings::MAX_DEV_CHANNEL_SIZE,
     "SD issue + completion exceed per-device hugepage slot");
+
+// DRAM bank-0 bases for the SD (spoof) issue/completion queues on the Quasar simulator. Kept here
+// (not in test_prefetcher.cpp) so the exec-buffer budget check below can reference them.
+static constexpr uint32_t kSdQuasarIssueBase = 0x3000000u;                                               // 48 MB
+static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + SD_HUGEPAGE_ISSUE_BUFFER_SIZE;  // 56 MB
+static_assert(
+    kSdQuasarCompletionBase + SD_COMPLETION_QUEUE_SIZE <= 0x4000000u,
+    "SD issue + completion overflow the Quasar simulator's 64 MB decoded DRAM window");
+
+// The Quasar simulator decodes only the low 26 DRAM address bits, so any DRAM address >= 64 MB
+// aliases back into the low window; real Quasar hardware has the full range. Gates the
+// simulator-only DRAM-CQ-safety relocations and FD skip below.
+inline bool is_quasar_sim() {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return rtoptions.get_simulator_enabled() &&
+           tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+}
+
 inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
 
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
@@ -981,6 +1000,14 @@ protected:
     void SetUp() override {
         if (!validate_dispatch_mode()) {
             GTEST_SKIP();
+        }
+        // FD dispatch can't run on the Quasar simulator: the HAL reserves a 256 MB DRAM-backed CQ
+        // region that overflows the 64 MB the simulator decodes, so the FD path aliases and corrupts
+        // low DRAM. Skip before the device (and its CQ region) is created. SD/spoof fixtures override
+        // SetUp and never reach here; real Quasar hardware is unaffected.
+        if (is_quasar_sim()) {
+            GTEST_SKIP() << "FD dispatch unsupported on the Quasar simulator: 256 MB DRAM-backed CQ "
+                            "region overflows the 64 MB simulator-decoded window (external blocker).";
         }
         tt_metal::GenericMeshDeviceFixture::SetUp();
 
