@@ -4,6 +4,7 @@
 
 from collections import defaultdict
 from dataclasses import fields, replace
+import os
 from typing import List
 
 import torch
@@ -1282,6 +1283,20 @@ class Generator(WarmupForwardMixin):
                 shard_specs=shard_specs,
             )
 
+        _dbg = os.environ.get("QWEN36_TRACE_DBG", "0") == "1"
+        if _dbg:
+            _ti = self.trace_inputs_decode[return_logits]
+            try:
+                _cp = ttnn.to_torch(ttnn.get_device_tensors(_ti[1])[0]).flatten()[:4].tolist()
+                _tok = ttnn.to_torch(ttnn.get_device_tensors(_ti[0])[0]).flatten()[:4].tolist()
+                _hp = int(current_pos.reshape(-1)[0]) if torch.is_tensor(current_pos) else int(current_pos)
+                print(
+                    f"[TRACE_DBG] PRE  reset={reset_inputs} host_pos={_hp} dev_pos={_cp} in_tok={_tok}",
+                    flush=True,
+                )
+            except Exception as _e:
+                print(f"[TRACE_DBG] PRE dump failed: {_e}", flush=True)
+
         if getattr(self.model, "is_qwen36", False):
             # qwen3.6-specific (the llama70b base has no host-written decode mask —
             # its causal mask is in-kernel from current_pos). qwen3.6's V2-9 decode
@@ -1302,10 +1317,19 @@ class Generator(WarmupForwardMixin):
         )
 
         if self.enable_split_sampling and not return_logits:
-            return self.model.sampling.sample(
+            _out = self.model.sampling.sample(
                 logits=trace_tok_rm[0],
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
             )
+            if _dbg:
+                _ti = self.trace_inputs_decode[return_logits]
+                try:
+                    _cp2 = ttnn.to_torch(ttnn.get_device_tensors(_ti[1])[0]).flatten()[:4].tolist()
+                    _tok2 = ttnn.to_torch(ttnn.get_device_tensors(_ti[0])[0]).flatten()[:4].tolist()
+                    print(f"[TRACE_DBG] POST dev_pos={_cp2} sampled_tok(into in_tok)={_tok2}", flush=True)
+                except Exception as _e:
+                    print(f"[TRACE_DBG] POST dump failed: {_e}", flush=True)
+            return _out
 
         return trace_tok_rm
 
