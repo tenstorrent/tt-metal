@@ -72,7 +72,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
 
                 * - dtype
                   - layout
-                * - UINT32
+                * - UINT32, INT32
                   - ROW_MAJOR
 
             .. list-table:: p, temp
@@ -82,6 +82,11 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                   - layout
                 * - BFLOAT16
                   - ROW_MAJOR
+
+            .. note::
+                On Quasar, only INT32 is supported for :attr:`input_indices_tensor`, :attr:`k`, and the
+                output tensor (UINT32/UINT16 tile formats are unavailable). On Wormhole and Blackhole,
+                both UINT32 and INT32 are supported.
 
             If no :attr:`output_tensor` is provided, the return tensor will be as follows:
 
@@ -113,6 +118,11 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
                 - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
                 - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
+                - The number of tiles along the last dimension, ``Wt = W / 32``, must be a power of 2
+                  (i.e. ``W`` must be a power-of-2 multiple of 32: 32, 64, 128, 256, ...). The internal
+                  top-k stage uses a bitonic merge tree that assumes a power-of-2 tile count; a
+                  non-power-of-2 ``Wt`` is rejected. Pad ``W`` up to the next power-of-2 multiple of 32
+                  (e.g. with ``-inf`` values and dummy indices) if needed.
                 - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.
                 - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
                 - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.

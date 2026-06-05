@@ -32,12 +32,27 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
 
     uint32_t random_seed = 0;
 
+    auto* device = &input_values_tensor.mutable_device();
+
+    // The bitonic top-k LLK carries sort indices through the dest register, and the index
+    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). Quasar
+    // additionally does not support UInt16/UInt32 tile (DFB) metadata. So on Quasar we use 32-bit
+    // (Int32) index intermediates with fp32 dest accumulation enabled; on WH/BH we keep the
+    // cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged behavior)
+    // so that WH/BH does not suffer any restrictions on the dest register
+    const bool use_32bit_index = (device->arch() == tt::ARCH::QUASAR);
+
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
-    tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
+    tt::DataFormat index_cb_data_format = use_32bit_index ? tt::DataFormat::Int32 : tt::DataFormat::UInt16;
     tt::DataFormat k_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(k.dtype());
+    // Quasar rejects UInt32 DFB metadata; k values are non-negative and fit in signed 32-bit, so
+    // stage k as Int32 there. WH/BH keep the dtype-derived format unchanged.
+    if (use_32bit_index && k_cb_data_format == tt::DataFormat::UInt32) {
+        k_cb_data_format = tt::DataFormat::Int32;
+    }
     tt::DataFormat p_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(p.dtype());
     tt::DataFormat temp_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(temp.dtype());
 
@@ -45,8 +60,6 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
     const auto& output_mesh = output_tensor.mesh_tensor();
-
-    auto* device = &input_values_tensor.mutable_device();
 
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
@@ -320,7 +333,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         Ht,
         Wt,
         aligned_final_indices_rm_unit_size,
-        tile_height};
+        tile_height,
+        static_cast<uint32_t>(use_32bit_index)};
     tt::tt_metal::TensorAccessorArgs(input_values_tensor).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_compile_time_args);
 
@@ -370,6 +384,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 i,
                 tile_width,
                 num_cores,
+                static_cast<uint32_t>(use_32bit_index),
             });
 
         KernelDescriptor writer_desc;
@@ -408,7 +423,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = single_core;
         compute_desc.compile_time_args = compute_args;
-        compute_desc.config = ComputeConfigDescriptor{};
+        // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
+        // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off.
+        compute_desc.config = ComputeConfigDescriptor{
+            .fp32_dest_acc_en = use_32bit_index,
+        };
         desc.kernels.push_back(std::move(compute_desc));
     }
 
