@@ -182,12 +182,6 @@ _IRREGULAR_CASE_IDS = {
     "irreg_4d",
     "irreg_4d_swap",
 }
-_ODD_BATCH_CASE_IDS = {
-    "odd_batch_3",
-    "odd_batch_7",
-    "odd_batch_2x3",
-    "odd_batch_swap_hw",
-}
 _GRID_REDUCTION_CASE_ID = "grid_reduction"
 
 LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
