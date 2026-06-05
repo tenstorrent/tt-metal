@@ -634,6 +634,7 @@ class Conv1dViaConv3d(Module):
 
         self.kernel_size = (kernel_size, 1, 1)
         self.stride = (stride, 1, 1)
+        self.dilation = dilation
         self.padding_mode = padding_mode
         self.bias_enabled = bias
         self.mesh_device = mesh_device
@@ -805,6 +806,7 @@ class Conv1dViaConv3d(Module):
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.internal_padding,
+            dilation=(self.dilation, 1, 1),
             padding_mode="zeros",
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,

@@ -28,7 +28,6 @@ from ...layers.audio_ops import (
     _pad_channels_to_aligned,
     _partition_t,
     _set_tpad_tail,
-    _t_neighbor_pad,
     _zero_pad_t,
     _zero_stuff_t,
     channel_align_unit,
@@ -207,12 +206,9 @@ class LTXConvTranspose1d(Module):
 
 
 class LTXDilatedConv1d(_AlignedOutConv1d):
-    """Dilated 1D conv that passes ``dilation`` straight to ``ttnn.experimental.conv3d``.
-
-    ``Conv1dViaConv3d.forward`` drops the ``dilation`` argument, so we keep the
-    parent's weight allocation (sized for the original kernel) and override
-    forward to issue the conv3d call with ``dilation=(d, 1, 1)`` ourselves.
-    """
+    """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
+    ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
+    even) the base's ``eff_k // 2`` halo equals the symmetric ``same_pad``."""
 
     def __init__(
         self,
@@ -232,59 +228,14 @@ class LTXDilatedConv1d(_AlignedOutConv1d):
             out_channels=out_channels,
             kernel_size=kernel_size,
             stride=1,
-            dilation=1,
-            padding_mode="causal",
+            dilation=dilation,
+            padding_mode="zeros",
             bias=bias,
             mesh_device=mesh_device,
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        # We add symmetric pad in forward instead of the parent's front pad.
-        self.external_pad_front = 0
-        self.true_dilation = dilation
-        self.same_pad = (kernel_size - 1) * dilation // 2
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
-        x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device, channel_align=self.channel_align)
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        if sharded:
-            x_padded = _t_neighbor_pad(
-                x_BTC,
-                pad_left=self.same_pad,
-                pad_right=self.same_pad,
-                parallel_config=self.parallel_config,
-                ccl_manager=self.ccl_manager,
-                padding_mode="zeros",
-            )
-        else:
-            x_padded = _zero_pad_t(x_BTC, self.same_pad, self.same_pad, self.mesh_device)
-
-        weight, bias, conv_config, out_channels = self._conv_args()
-        B, T_pad, C = x_padded.shape
-        x_5d = ttnn.reshape(x_padded, (B, T_pad, 1, 1, C))
-        out_5d = ttnn.experimental.conv3d(
-            input_tensor=x_5d,
-            weight_tensor=weight,
-            bias_tensor=bias,
-            config=conv_config,
-            output_channels=out_channels,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=(0, 0, 0),
-            dilation=(self.true_dilation, 1, 1),
-            padding_mode="zeros",
-            dtype=self.dtype,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        y = ttnn.reshape(out_5d, (out_5d.shape[0], out_5d.shape[1], out_5d.shape[4]))
-        # Column-parallel output is already the C-shard; trim only when not sharded.
-        if not self._is_col_parallel() and self.unpadded_out_channels < self.out_channels:
-            B, T, _ = y.shape
-            y = ttnn.slice(y, [0, 0, 0], [B, T, self.unpadded_out_channels])
-        return y
 
 
 class LTXAMPBlock1(Module):
