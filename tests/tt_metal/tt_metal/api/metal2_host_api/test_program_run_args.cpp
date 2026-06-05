@@ -1115,7 +1115,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1134,7 +1134,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
@@ -1145,7 +1145,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{tensor2}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor2.address()))
@@ -1260,7 +1260,7 @@ TEST_F(ProgramRunArgsTestGen1, UnknownTensorParameterInRunArgsFails) {
     // tensor_parameter_name doesn't match any TensorParameter in the spec.
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
 
     EXPECT_THAT(
@@ -1289,7 +1289,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorSpecMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
 
     EXPECT_THAT(
@@ -1337,7 +1337,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_BeforeSetProgramRunArgsFails) {
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
 
     // No SetProgramRunArgs call before the partial update.
@@ -1360,7 +1360,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_MissingTensorArgFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1384,12 +1384,12 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_UnknownTensorParameterFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     SetProgramRunArgs(program, params);
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_THAT(
         [&] { UpdateTensorArgs(program, tensor_args); },
@@ -1409,7 +1409,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1422,7 +1422,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
     MeshTensor wrong_tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(wrong_tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{wrong_tensor}},
     };
     EXPECT_THAT(
         [&] { UpdateTensorArgs(program, tensor_args); },
@@ -1443,7 +1443,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(
@@ -1455,7 +1455,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor2}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
@@ -1483,7 +1483,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1495,7 +1495,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     // Partial update.
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor2}},
     };
     UpdateTensorArgs(program, tensor_args);
 
@@ -1520,13 +1520,13 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTens
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
+        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
 
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
+        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{tensor2}},
     };
     UpdateTensorArgs(program, tensor_args);
 
@@ -1566,7 +1566,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentSha
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -1592,7 +1592,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1617,7 +1617,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1680,7 +1680,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1707,7 +1707,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor1}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(
@@ -1717,7 +1717,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     auto smaller_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, binding.spec.tensor_layout());
     MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, smaller_spec, TensorTopology{});
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor2}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
@@ -1765,7 +1765,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -1797,7 +1797,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1826,7 +1826,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1857,7 +1857,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelMissingFromRunArgsFails) {
     ProgramRunArgs params;
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
 
     EXPECT_THAT(
@@ -1888,7 +1888,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{tensor}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
