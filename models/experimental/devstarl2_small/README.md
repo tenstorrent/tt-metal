@@ -1,4 +1,4 @@
-# Devstral Small 2 (experimental)
+# Devstral Small 2
 
 ## Platforms
 
@@ -8,7 +8,7 @@ P150 and Blackhole QuietBox.
 
 This folder contains an experimental Tenstorrent (`ttnn`) port of **Mistral [Devstral Small 2](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512)** (Mistral3 multimodal): Pixtral-class vision tower, multimodal projector, and Ministral3 text stack. PCC tests compare subgraphs and full vision+projector paths against Hugging Face references.
 
-**Maximum context length:** 4K tokens (prompt + generation combined) for the TT demos and on-device stack.
+**Maximum context length: **256K** on BH-QB, **52K** on P150 (prompt + generation combined) for the TT demos and on-device stack.
 
 **Traced decode** is enabled for TT generation; **1540×1540** multimodal images are supported via `--vision-square-pixels 1540`.
 
@@ -59,12 +59,12 @@ Run from repo root on Blackhole QuietBox or P150.
 
 ### Performance
 
-| Demo | System | Mesh | New tokens | t/s/u | t/s (e2e) | TTFT (ms) |
+| Demo | System | Mesh | New tokens | Steady-state throughput| End-to-end throughput| TTFT (ms) |
 |:-----|:-------|:-----|----------:|------:|----------:|----------:|
-| Image + text | BH-QB | 1x4 | 100 | 15.8 | 14.9 | 875 |
-| Image + text | P150 | 1x1 | 100 | 2.4 | 2.3 | 6585 |
-| Text LM | BH-QB | 1x4 | 200 | 17.5 | 17.1 | 198 |
-| Text LM | P150 | 1x1 | 200 | 2.8 | 2.8 | 533 |
+| Image + text | BH-QB | 1x4 | 100 | 29.4 | 21.2 | 1250 |
+| Image + text | P150 | 1x1 | 100 | 5.5 | 4.7 | 3101 |
+| Text LM | BH-QB | 1x4 | 200 | 30.3 | 28.5 | 273 |
+| Text LM | P150 | 1x1 | 200 | 5.6 | 5.5 | 528 |
 
 ## Resources
 
@@ -101,7 +101,8 @@ Run from repo root on Blackhole QuietBox or P150.
 **Model and limits**
 
 - Default HF weights: `mistralai/Devstral-Small-2-24B-Instruct-2512` (`DEFAULT_MODEL_ID` in `devstral_utils`; override with `HF_MODEL` or `--model-id`).
-- **Maximum context length: 4K tokens** (prompt + generation). TT demos size `ModelArgs.max_seq_len` to at least **4096** (rounded to a 512 multiple for SDPA decode). Longer sessions need a smaller `--max-new-tokens` budget or a higher `max_seq_len` in code.
+
+- **Maximum context length:** **BH-QB: 256K tokens**, **P150: 52K tokens** (prompt + generation). TT demos size `ModelArgs.max_seq_len` to at least the platform cap (BH-QB **256000**, P150 **52000**), rounded to a 512 multiple for SDPA decode. Longer sessions need a smaller `--max-new-tokens` budget or a higher `max_seq_len` in code.
 
 **PCC tests**
 
@@ -113,6 +114,8 @@ Run from repo root on Blackhole QuietBox or P150.
 The following optimizations were applied across the vision tower, projector, and text stack to improve throughput and memory use on Tenstorrent devices:
 
 - **L1 placement** — Moved tensors that previously lived in DRAM into L1, including an L1 interleaved memory configuration where it improves bandwidth and locality.
+- **L1 width sharding (matmul)** — Applied width-sharded L1 memory layouts to matmuls across the vision tower and text stack.
+- **L1 block sharding (matmul and binary ops)** — Applied block-sharded L1 memory layouts to matmuls and binary operators across the vision tower and text stack, keeping the same sharding across ops to avoid `sharded_to_interleaved` and `interleaved_to_sharded` copies.
 - **Kernel precision** — Converted HiFi2 kernels to LoFi where accuracy allows, reducing compute cost.
 - **Reduced-precision weights** — Converted bfloat16 tensors to bfloat8 where supported to cut memory footprint and data movement.
 - **Fused QKV projection** — Combined query, key, and value projections into a single fused matmul instead of three separate passes.
