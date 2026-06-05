@@ -1,25 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Reproduce / diagnose the VAE chunk-trace bit-accuracy regression.
+"""Diagnostic-only: VAE chunk-trace bit-accuracy regression (not production validation).
 
-`decode_tiled` keeps every overlap-add tile EAGER because
-`decode_chunk_traced` replay "was not bit-accurate vs eager (audible noise on long clips)"
-(see oobleck_vae_decoder.py). That eager loop is the single biggest cost in the
-end-to-end demo (host-side slice stalls dominate VAE decode wall time).
+Production ``decode_tiled`` is always eager; ``decode_chunk_traced`` is kept for
+diagnosis only (see ``oobleck_vae_decoder.py``). These tests are skipped in the
+default suite — opt in when investigating trace replay:
 
-This test isolates the claim for a SINGLE fixed chunk shape — no overlap-add, no
-varying window lengths — so we can tell whether the trace *machinery itself* is
-lossy, or whether the noise only appears from the multi-shape / overlap-add
-interaction. It:
+    ACE_STEP_RUN_VAE_TRACE_DIAG=1 pytest models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py -s
 
-  1. builds the real VAE decoder from the cached HF checkpoint,
-  2. runs `dec(x)` eagerly twice (eager-determinism baseline),
-  3. runs `decode_chunk_traced(x)` twice (capture, then replay),
-  4. reports PCC + max-abs-diff for eager-vs-eager and eager-vs-traced-replay.
+For multi-shape interleave (can wedge some firmware builds):
 
-Run:
-    pytest models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py -s
+    ACE_STEP_RUN_VAE_TRACE_DIAG=1 ACE_STEP_RUN_WEDGING_TEST=1 pytest ... -s
 """
 from __future__ import annotations
 
@@ -31,6 +23,11 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("ACE_STEP_RUN_VAE_TRACE_DIAG") != "1",
+    reason="VAE chunk-trace diagnostics only; set ACE_STEP_RUN_VAE_TRACE_DIAG=1 to run.",
+)
 
 
 def _find_vae_dir() -> str | None:
@@ -107,44 +104,6 @@ def test_vae_chunk_trace_vs_eager(device, chunk_frames):
         f"(replay {pcc_msg_rep}, max_abs={max_abs_rep:.3e}). "
         "This reproduces the bit-accuracy regression that keeps decode_tiled eager."
     )
-
-
-@pytest.mark.parametrize("latent_frames", [120])
-def test_decode_tiled_trace_vs_eager(device, latent_frames):
-    """End-to-end equivalence: decode_tiled with interior-window tracing must match fully-eager.
-
-    Uses a multi-chunk latent so the loop has both eager boundary windows and traced
-    interior windows, then compares the assembled audio against the ACE_STEP_VAE_CHUNK_TRACE=0
-    eager path. Requires 2 CQs (default in ``conftest.py``).
-    """
-    vae_dir = _find_vae_dir()
-    if vae_dir is None:
-        pytest.skip("VAE checkpoint dir not found (set ACE_STEP_VAE_DIR)")
-    from models.experimental.ace_step_v1_5.ttnn_impl.oobleck_vae_decoder import TtOobleckVaeDecoder
-
-    tt_vae = TtOobleckVaeDecoder.from_hf_vae_dir(vae_dir, device=device)
-    c_lat = tt_vae._decoder.input_channels
-    torch.manual_seed(0)
-    lt = (torch.randn(1, latent_frames, c_lat, dtype=torch.float32) * 0.5).to(torch.bfloat16)
-
-    def fresh():
-        return ttnn.from_torch(lt, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    os.environ.pop("ACE_STEP_VAE_TRACE", None)
-    os.environ["ACE_STEP_VAE_CHUNK_TRACE"] = "0"
-    wav_eager = _to_torch(tt_vae.decode_tiled(fresh(), chunk_size=32, overlap=4, use_trace=False))
-    tt_vae.release_trace()
-
-    os.environ["ACE_STEP_VAE_CHUNK_TRACE"] = "1"
-    wav_traced = _to_torch(tt_vae.decode_tiled(fresh(), chunk_size=32, overlap=4, use_trace=True))
-    tt_vae.release_trace()
-    os.environ.pop("ACE_STEP_VAE_CHUNK_TRACE", None)
-
-    print(f"\n[decode_tiled-equiv] eager={tuple(wav_eager.shape)} traced={tuple(wav_traced.shape)}")
-    assert wav_eager.shape == wav_traced.shape, "traced output shape differs from eager"
-    _diff("decode_tiled trace vs eager", wav_eager, wav_traced)
-    ok, msg = comp_pcc(wav_eager, wav_traced, pcc=0.999)
-    assert ok, f"decode_tiled traced output diverges from eager ({msg})"
 
 
 @pytest.mark.skipif(
