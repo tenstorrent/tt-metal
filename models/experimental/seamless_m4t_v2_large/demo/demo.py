@@ -7,15 +7,20 @@ Tasks demonstrated (every one runs through ``TTSeamlessM4Tv2Model.generate``):
 
   1. **T2TT** Text-to-Text Translation        (English text → Hindi text)
   2. **T2ST** Text-to-Speech Translation      (English text → Hindi speech)
-  3. **S2TT** Speech-to-Text Translation      (Hindi speech → English text)
-  4. **S2ST** Speech-to-Speech Translation    (Hindi speech → Spanish speech)
-  5. **ASR**  Automatic Speech Recognition    (Hindi speech → Hindi text)
+  3. **S2TT** Speech-to-Text Translation      (English speech → Hindi text)
+  4. **S2ST** Speech-to-Speech Translation    (English speech → Spanish speech)
+  5. **ASR**  Automatic Speech Recognition    (English speech → English text)
 
-The Hindi speech used as the input to tasks 3–5 is produced by task 2, so the demo is fully
-self-contained — no external audio files needed. Output audio is written next to this file:
+Each task opens its own mesh device, runs untimed warmup ``generate()`` calls, then times a
+steady-state iteration — so reported runtimes are not affected by prior tasks' program-cache
+clears or L1 pressure. Speech-input tasks (3–5) use a fixed English preamble WAV; task 2 still
+writes its Hindi speech output locally.
 
-  * ``outputs/t2st_hindi_speech.wav``  — task 2 output (re-used as input for tasks 3-5)
+Output audio is written next to this file:
+
+  * ``outputs/t2st_hindi_speech.wav``   — task 2 output
   * ``outputs/s2st_spanish_speech.wav`` — task 4 output
+  * ``outputs/preamble10.wav``          — downloaded input for tasks 3–5
 
 Run from repo root:
 
@@ -29,9 +34,12 @@ from __future__ import annotations
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 import wave
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator
 
 import numpy as np
 import torch
@@ -59,12 +67,13 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
-# None = use full T2ST WAV for chained speech tasks (S2TT/S2ST/ASR).
-MAX_CHAIN_AUDIO_SEC: Optional[float] = None
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
+PREAMBLE_WAV_URL = "https://www.cs.kzoo.edu/cs107/MediaSources/preamble10.wav"
+PREAMBLE_WAV = OUTPUT_DIR / "preamble10.wav"
 
 # Untimed warmups before timed runs; min() over measure_iters drops host jitter.
-_DEMO_WARMUP_ITERS = 0
+_DEMO_WARMUP_ITERS = 1
+_DEMO_SPEECH_WARMUP_ITERS = 2
 _DEMO_MEASURE_ITERS = 1
 
 # ---------------------------------------------------------------------------
@@ -182,6 +191,57 @@ def _load_mono_wav(path: Path) -> np.ndarray:
     return pcm.astype(np.float32)
 
 
+def _load_mono_wav_resampled(path: Path, target_rate: int) -> tuple[np.ndarray, int]:
+    """Load mono fp32 audio from ``path``, resampling to ``target_rate`` Hz if needed."""
+    with wave.open(str(path), "rb") as wf:
+        src_rate = int(wf.getframerate())
+        nch = wf.getnchannels()
+        sw = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+    if sw == 2:
+        pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sw == 4:
+        pcm = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"Unsupported WAV sample width {sw} in {path}")
+    if nch > 1:
+        pcm = pcm.reshape(-1, nch).mean(axis=1)
+    pcm = pcm.astype(np.float32)
+    if src_rate != int(target_rate):
+        n_out = int(round(pcm.size * float(target_rate) / float(src_rate)))
+        x_old = np.linspace(0.0, 1.0, pcm.size, endpoint=False)
+        x_new = np.linspace(0.0, 1.0, n_out, endpoint=False)
+        pcm = np.interp(x_new, x_old, pcm).astype(np.float32)
+    return pcm, int(target_rate)
+
+
+def ensure_demo_audio(
+    url: str = PREAMBLE_WAV_URL,
+    dest: Path = PREAMBLE_WAV,
+) -> Path:
+    """Download demo input audio to ``dest`` if missing; raise on failure."""
+    dest = dest.expanduser().resolve()
+    if dest.is_file() and dest.stat().st_size > 0:
+        return dest
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    try:
+        with urllib.request.urlopen(url, timeout=60) as resp:
+            data = resp.read()
+        if not data:
+            raise RuntimeError("response body was empty")
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+    except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Failed to download demo audio from {url}: {exc}") from exc
+
+    if not dest.is_file() or dest.stat().st_size == 0:
+        raise RuntimeError(f"Failed to download demo audio from {url}: file missing or empty")
+    return dest
+
+
 _TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq"})
 
 
@@ -294,7 +354,80 @@ def _record_speech_perf(perf: list, task: str, lengths_tt: ttnn.Tensor, elapsed_
     n_samples = _samples_generated(lengths_tt)
     sps = n_samples / elapsed_s if elapsed_s > 0 else 0.0
     perf.append((task, "samples/s", sps, n_samples, elapsed_s))
-    print(f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {sps:.2f} samples/s ({n_samples} audio samples)")
+    us_per = (elapsed_s * 1e6 / n_samples) if n_samples else 0.0
+    print(
+        f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {sps:.2f} samples/s "
+        f"({n_samples} audio samples, {us_per:.2f} μs/sample)"
+    )
+
+
+def _release_speech_out(o: TTSeamlessM4Tv2GenerationOutput) -> None:
+    ttnn.deallocate(o.waveform)
+    ttnn.deallocate(o.waveform_lengths)
+    if getattr(o, "sequences", None) is not None:
+        ttnn.deallocate(o.sequences)
+    if getattr(o, "unit_sequences", None) is not None:
+        ttnn.deallocate(o.unit_sequences)
+
+
+@contextmanager
+def _isolated_task_session(
+    *,
+    hf_model: torch.nn.Module,
+    cfg,
+    t2u_cfg,
+    gen_common: dict,
+    original_default: Any,
+) -> Iterator[tuple[Any, TTSeamlessM4Tv2Model]]:
+    """Open mesh device + TT model for one task; tear down on exit."""
+    from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
+
+    device, _mesh_shape = open_seamless_mesh_device(
+        enable_decode_trace=bool(gen_common.get("use_decode_trace")),
+        enable_2cq=bool(gen_common.get("use_2cq")),
+    )
+    ttnn.SetDefaultDevice(device)
+    tt_model = make_tt_model(device, hf_model, cfg, t2u_cfg)
+    try:
+        yield device, tt_model
+    finally:
+        try:
+            tt_model.release_generation_runtime()
+        except Exception:
+            pass
+        if original_default is not None:
+            ttnn.SetDefaultDevice(original_default)
+        ttnn.close_mesh_device(device)
+
+
+def _prewarm_speech_encoder(tt_model: TTSeamlessM4Tv2Model, mel_seq_len: int) -> None:
+    """JIT-warm speech encoder for ``mel_seq_len`` (no program-cache clear afterwards)."""
+    tt_model.prewarm_speech_encoder([int(mel_seq_len)])
+    ttnn.synchronize_device(tt_model.device)
+
+
+def _process_jit_preflight(
+    *,
+    session_kw: dict,
+    input_ids: torch.Tensor,
+    input_text_attn: torch.Tensor,
+    gen_common: dict,
+) -> None:
+    """One untimed T2TT generate on a throwaway device to warm the global JIT cache."""
+    print("  Cold-start preflight: one untimed T2TT warmup on a throwaway device …")
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        ids_tt = torch_ids_to_ttnn(device, input_ids)
+        attn_tt = torch_ids_to_ttnn(device, input_text_attn)
+        out = tt_model.generate(
+            input_ids=ids_tt,
+            attention_mask=attn_tt,
+            generate_speech=False,
+            tgt_lang="hin",
+            **gen_common,
+        )
+        ttnn.synchronize_device(device)
+        ttnn.deallocate(out.sequences)
+    print("  Cold-start preflight: done.")
 
 
 # ---------------------------------------------------------------------------
@@ -311,17 +444,18 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
 
     torch.manual_seed(0)
-    model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
-    t2u_cfg = model.t2u_model.config
+    hf_model, cfg = load_pretrained_seamless_m4t_v2_model(weights_dir, dtype=torch.bfloat16)
+    t2u_cfg = hf_model.t2u_model.config
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
     # ---- Single English prompt drives the entire demo chain ----
-    src_text = """Hello, my dog is cute"""
+    src_text = """going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards"""
     src_lang = "eng"
     tgt_translate = "hin"  # task 1, 2: translate eng → hin
-    tgt_back_text = "eng"  # task 3: speech in hin → text in eng (back-translation)
-    tgt_speech_other = "spa"  # task 4: speech in hin → speech in spa
-    tgt_asr = "hin"  # task 5: transcribe the hin audio in hin
+    speech_src_lang = "eng"  # tasks 3–5: preamble WAV is English
+    tgt_s2tt = "hin"  # task 3: English speech → Hindi text
+    tgt_speech_other = "spa"  # task 4: English speech → Spanish speech
+    tgt_asr = "eng"  # task 5: transcribe English speech → English text
 
     text_inputs = processor(text=src_text, src_lang=src_lang, return_tensors="pt")
     input_ids = text_inputs["input_ids"]
@@ -330,7 +464,7 @@ def main() -> None:
     use_decode_trace = True
     use_2cq = True
     gen_common = hf_aligned_generation_kwargs(
-        model.generation_config,
+        hf_model.generation_config,
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
         use_2cq=use_2cq,
@@ -340,17 +474,13 @@ def main() -> None:
         original_default = ttnn.GetDefaultDevice()
     except Exception:
         original_default = None
-    from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
 
-    device, mesh_shape = open_seamless_mesh_device(
-        enable_decode_trace=bool(gen_common.get("use_decode_trace")),
-        enable_2cq=bool(gen_common.get("use_2cq")),
-    )
-    ttnn.SetDefaultDevice(device)
-    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
-    tp = rows * cols
     trace_info = "trace+2CQ" if (use_decode_trace and use_2cq) else ("trace" if use_decode_trace else "eager")
-    print(f"  Demo device: MeshShape({rows}, {cols}) — TP={tp} — decode: {trace_info}")
+    print(f"  Demo mode: one mesh device open/close per task — decode: {trace_info}")
+    print(
+        f"  Warmup: text={_DEMO_WARMUP_ITERS}, speech={_DEMO_SPEECH_WARMUP_ITERS} untimed iter(s), "
+        f"then {_DEMO_MEASURE_ITERS} timed (report min elapsed)"
+    )
     print(
         f"  HF-aligned greedy: max_new_tokens={gen_common['max_new_tokens']} "
         f"(cap), eos_token_id={gen_common['eos_token_id']}, "
@@ -358,24 +488,47 @@ def main() -> None:
         f"decode=trace+2CQ+ttnn_argmax"
     )
 
-    tt_model = None
-    try:
-        tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-        perf_log: list = []
+    perf_log: list = []
+    session_kw = dict(
+        hf_model=hf_model,
+        cfg=cfg,
+        t2u_cfg=t2u_cfg,
+        gen_common=gen_common,
+        original_default=original_default,
+    )
 
-        # =========================================================================
-        # 1. T2TT — Text-to-Text Translation (English → Hindi)
-        # =========================================================================
-        _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
-        print(f"  Input text  ({src_lang}): {src_text}")
-        # Pre-upload inputs (preprocessing, not timed).
-        t2tt_ids_tt = torch_ids_to_ttnn(device, input_ids)
-        t2tt_attn_tt = torch_ids_to_ttnn(device, input_text_attn)
+    _process_jit_preflight(
+        session_kw=session_kw,
+        input_ids=input_ids,
+        input_text_attn=input_text_attn,
+        gen_common=gen_common,
+    )
+
+    preamble_path = ensure_demo_audio()
+    preamble_wav, _ = _load_mono_wav_resampled(preamble_path, sample_rate)
+    audio_inputs = processor(audios=preamble_wav, sampling_rate=sample_rate, return_tensors="pt")
+    input_features = audio_inputs["input_features"]
+    input_speech_attn = audio_inputs["attention_mask"]
+    mel_frames = int(input_speech_attn.sum().item())
+    print(
+        f"  Speech-input tasks use: {preamble_path} "
+        f"({preamble_wav.size} samples @ {sample_rate} Hz, "
+        f"{preamble_wav.size / sample_rate:.2f}s, mel_frames={mel_frames})"
+    )
+
+    # =========================================================================
+    # 1. T2TT — Text-to-Text Translation (English → Hindi)
+    # =========================================================================
+    _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
+    print(f"  Input text  ({src_lang}): {src_text}")
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        ids_tt = torch_ids_to_ttnn(device, input_ids)
+        attn_tt = torch_ids_to_ttnn(device, input_text_attn)
         t2tt_out, t2tt_elapsed = _warmup_and_time(
             device,
             lambda: tt_model.generate(
-                input_ids=t2tt_ids_tt,
-                attention_mask=t2tt_attn_tt,
+                input_ids=ids_tt,
+                attention_mask=attn_tt,
                 generate_speech=False,
                 tgt_lang=tgt_translate,
                 **gen_common,
@@ -392,34 +545,23 @@ def main() -> None:
             eos_token_id=gen_common["eos_token_id"],
             max_new_tokens=gen_common["max_new_tokens"],
         )
-        print(f"  Output text ({tgt_translate}): {_decode(tokenizer, t2tt_out.sequences)}")
+        t2tt_text = _decode(tokenizer, t2tt_out.sequences)
         ttnn.deallocate(t2tt_out.sequences)
+    print(f"  Output text ({tgt_translate}): {t2tt_text}")
 
-        # T2TT compiles many text-decoder programs; clear before T2ST so vocoder conv1d fits in L1.
-        tt_model.clear_runtime_program_cache()
-        ttnn.synchronize_device(device)
-
-        # =========================================================================
-        # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
-        # =========================================================================
-        _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
-        print(f"  Input text  ({src_lang}): {src_text}")
-        t2st_ids_tt = torch_ids_to_ttnn(device, input_ids)
-        t2st_attn_tt = torch_ids_to_ttnn(device, input_text_attn)
-
-        def _release_speech_out(o):
-            ttnn.deallocate(o.waveform)
-            ttnn.deallocate(o.waveform_lengths)
-            if getattr(o, "sequences", None) is not None:
-                ttnn.deallocate(o.sequences)
-            if getattr(o, "unit_sequences", None) is not None:
-                ttnn.deallocate(o.unit_sequences)
-
+    # =========================================================================
+    # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
+    # =========================================================================
+    _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
+    print(f"  Input text  ({src_lang}): {src_text}")
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        ids_tt = torch_ids_to_ttnn(device, input_ids)
+        attn_tt = torch_ids_to_ttnn(device, input_text_attn)
         t2st_out, t2st_elapsed = _warmup_and_time(
             device,
             lambda: tt_model.generate(
-                input_ids=t2st_ids_tt,
-                attention_mask=t2st_attn_tt,
+                input_ids=ids_tt,
+                attention_mask=attn_tt,
                 generate_speech=True,
                 return_intermediate_token_ids=True,
                 tgt_lang=tgt_translate,
@@ -427,67 +569,46 @@ def main() -> None:
                 **gen_common,
             ),
             release_fn=_release_speech_out,
+            warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
         _record_speech_perf(perf_log, "T2ST", t2st_out.waveform_lengths, t2st_elapsed)
-        print(f"  Intermediate text ({tgt_translate}): {_decode(tokenizer, t2st_out.sequences)}")
+        t2st_text = _decode(tokenizer, t2st_out.sequences)
         hindi_wav_np = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
-        _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
         t2u_pad = int(t2u_cfg.pad_token_id)
-        n_units = _valid_unit_frames(t2st_out.unit_sequences, pad_id=t2u_pad)
-        print(
-            f"  T2ST stats: text_tokens={_tt_row_length(t2st_out.sequences)}, "
-            f"unit_frames={n_units}, "
-            f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
-        )
-        print(f"  Saved to: {T2ST_WAV}")
+        t2st_text_tokens = _tt_row_length(t2st_out.sequences)
+        t2st_n_units = _valid_unit_frames(t2st_out.unit_sequences, pad_id=t2u_pad)
+        _release_speech_out(t2st_out)
+    print(f"  Intermediate text ({tgt_translate}): {t2st_text}")
+    _save_wav(T2ST_WAV, hindi_wav_np, sample_rate=sample_rate)
+    print(
+        f"  T2ST stats: text_tokens={t2st_text_tokens}, "
+        f"unit_frames={t2st_n_units}, "
+        f"audio={hindi_wav_np.size} samples ({hindi_wav_np.size / sample_rate:.2f}s)"
+    )
+    print(f"  Saved to: {T2ST_WAV}")
 
-        tt_model.clear_runtime_program_cache()
-        ttnn.synchronize_device(device)
-
-        hindi_wav_chain = _load_mono_wav(T2ST_WAV)
-        if MAX_CHAIN_AUDIO_SEC is not None:
-            max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
-            if hindi_wav_chain.size > max_chain_samples:
-                hindi_wav_chain = hindi_wav_chain[:max_chain_samples]
-                print(
-                    f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
-                    f"({max_chain_samples} samples)."
-                )
-
-        audio_inputs = processor(audios=hindi_wav_chain, sampling_rate=sample_rate, return_tensors="pt")
-        input_features = audio_inputs["input_features"]
-        input_speech_attn = audio_inputs["attention_mask"]
-        mel_frames = int(input_speech_attn.sum().item())
-        print(
-            f"  Chain audio: {hindi_wav_chain.size} samples "
-            f"({hindi_wav_chain.size / sample_rate:.2f}s), mel_frames={mel_frames}"
-        )
-
-        def _warm_speech_enc(feats_torch: torch.Tensor) -> None:
-            tt_model.prewarm_speech_encoder([int(feats_torch.shape[1])])
-            tt_model.clear_runtime_program_cache()
-            ttnn.synchronize_device(device)
-
-        # =========================================================================
-        # 3. S2TT — Speech-to-Text Translation (Hindi speech → English text)
-        # =========================================================================
-        _warm_speech_enc(input_features)
-        _print_header(3, "Speech-to-Text Translation", "S2TT", tgt_translate, tgt_back_text)
-        print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2tt_feats_tt = torch_feats_to_ttnn(device, input_features)
-        s2tt_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+    # =========================================================================
+    # 3. S2TT — Speech-to-Text Translation (English speech → Hindi text)
+    # =========================================================================
+    _print_header(3, "Speech-to-Text Translation", "S2TT", speech_src_lang, tgt_s2tt)
+    print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        _prewarm_speech_encoder(tt_model, mel_frames)
+        feats_tt = torch_feats_to_ttnn(device, input_features)
+        attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
         s2tt_out, s2tt_elapsed = _warmup_and_time(
             device,
             lambda: tt_model.generate(
-                input_features=s2tt_feats_tt,
-                attention_mask=s2tt_attn_tt,
+                input_features=feats_tt,
+                attention_mask=attn_tt,
                 generate_speech=False,
-                tgt_lang=tgt_back_text,
+                tgt_lang=tgt_s2tt,
                 **gen_common,
             ),
             release_fn=lambda o: ttnn.deallocate(o.sequences),
+            warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
         )
         if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
@@ -499,25 +620,24 @@ def main() -> None:
             eos_token_id=gen_common["eos_token_id"],
             max_new_tokens=gen_common["max_new_tokens"],
         )
-        print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
+        s2tt_text = _decode(tokenizer, s2tt_out.sequences)
         ttnn.deallocate(s2tt_out.sequences)
+    print(f"  Output text ({tgt_s2tt}): {s2tt_text}")
 
-        tt_model.clear_runtime_program_cache()
-        ttnn.synchronize_device(device)
-
-        # =========================================================================
-        # 4. S2ST — Speech-to-Speech Translation (Hindi speech → Spanish speech)
-        # =========================================================================
-        _warm_speech_enc(input_features)
-        _print_header(4, "Speech-to-Speech Translation", "S2ST", tgt_translate, tgt_speech_other)
-        print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        s2st_feats_tt = torch_feats_to_ttnn(device, input_features)
-        s2st_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+    # =========================================================================
+    # 4. S2ST — Speech-to-Speech Translation (English speech → Spanish speech)
+    # =========================================================================
+    _print_header(4, "Speech-to-Speech Translation", "S2ST", speech_src_lang, tgt_speech_other)
+    print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        _prewarm_speech_encoder(tt_model, mel_frames)
+        feats_tt = torch_feats_to_ttnn(device, input_features)
+        attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
         s2st_out, s2st_elapsed = _warmup_and_time(
             device,
             lambda: tt_model.generate(
-                input_features=s2st_feats_tt,
-                attention_mask=s2st_attn_tt,
+                input_features=feats_tt,
+                attention_mask=attn_tt,
                 generate_speech=True,
                 return_intermediate_token_ids=True,
                 tgt_lang=tgt_speech_other,
@@ -525,53 +645,56 @@ def main() -> None:
                 **gen_common,
             ),
             release_fn=_release_speech_out,
+            warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
         )
         if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
         _record_speech_perf(perf_log, "S2ST", s2st_out.waveform_lengths, s2st_elapsed)
-        print(f"  Intermediate text ({tgt_speech_other}): {_decode(tokenizer, s2st_out.sequences)}")
+        s2st_text = _decode(tokenizer, s2st_out.sequences)
         spanish_wav_np = _waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths)
-        _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
-        print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {spanish_wav_np.size} samples)")
-        print(f"  Saved to: {S2ST_WAV}")
+        s2st_n_samples = spanish_wav_np.size
+        _release_speech_out(s2st_out)
+    print(f"  Intermediate text ({tgt_speech_other}): {s2st_text}")
+    _save_wav(S2ST_WAV, spanish_wav_np, sample_rate=sample_rate)
+    print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {s2st_n_samples} samples)")
+    print(f"  Saved to: {S2ST_WAV}")
 
-        tt_model.clear_runtime_program_cache()
-        ttnn.synchronize_device(device)
-
-        # =========================================================================
-        # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
-        # =========================================================================
-        tt_model.release_generation_runtime()
-        _warm_speech_enc(input_features)
-        _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
-        print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
-        print("  Note: ASR transcribes the WAV (speech→text), not the T2ST intermediate text string.")
-        with torch.no_grad():
-            hf_asr_out = model.generate(
-                input_features=input_features.float(),
-                attention_mask=input_speech_attn,
-                generate_speech=False,
-                tgt_lang=tgt_asr,
-                **_hf_gen_kwargs(gen_common),
-            )
-        hf_asr_ids = (
-            hf_asr_out.sequences[0].cpu().tolist() if hasattr(hf_asr_out, "sequences") else hf_asr_out[0].cpu().tolist()
+    # =========================================================================
+    # 5. ASR — Automatic Speech Recognition (English speech → English text)
+    # =========================================================================
+    _print_header(5, "Automatic Speech Recognition", "ASR", speech_src_lang, tgt_asr)
+    print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
+    print("  Note: ASR transcribes the WAV (speech→text), not any intermediate text string.")
+    with torch.no_grad():
+        hf_asr_out = hf_model.generate(
+            input_features=input_features.float(),
+            attention_mask=input_speech_attn,
+            generate_speech=False,
+            tgt_lang=tgt_asr,
+            **_hf_gen_kwargs(gen_common),
         )
-        print(
-            f"  HF reference ({tgt_asr}, {len(hf_asr_ids)} tokens): {tokenizer.batch_decode([hf_asr_ids], skip_special_tokens=True)[0]}"
-        )
-        asr_feats_tt = torch_feats_to_ttnn(device, input_features)
-        asr_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
+    hf_asr_ids = (
+        hf_asr_out.sequences[0].cpu().tolist() if hasattr(hf_asr_out, "sequences") else hf_asr_out[0].cpu().tolist()
+    )
+    print(
+        f"  HF reference ({tgt_asr}, {len(hf_asr_ids)} tokens): "
+        f"{tokenizer.batch_decode([hf_asr_ids], skip_special_tokens=True)[0]}"
+    )
+    with _isolated_task_session(**session_kw) as (device, tt_model):
+        _prewarm_speech_encoder(tt_model, mel_frames)
+        feats_tt = torch_feats_to_ttnn(device, input_features)
+        attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
         asr_out, asr_elapsed = _warmup_and_time(
             device,
             lambda: tt_model.generate(
-                input_features=asr_feats_tt,
-                attention_mask=asr_attn_tt,
+                input_features=feats_tt,
+                attention_mask=attn_tt,
                 generate_speech=False,
                 tgt_lang=tgt_asr,
                 **gen_common,
             ),
             release_fn=lambda o: ttnn.deallocate(o.sequences),
+            warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
@@ -590,44 +713,33 @@ def main() -> None:
             eos_token_id=gen_common["eos_token_id"],
             max_new_tokens=gen_common["max_new_tokens"],
         )
-        print(f"  TT output ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
+        asr_text = _decode(tokenizer, asr_out.sequences)
+        ttnn.deallocate(asr_out.sequences)
+    print(f"  TT output ({tgt_asr}): {asr_text}")
 
-        # Free trace + pinned host readback buffers before mesh teardown (avoids abort on exit).
-        tt_model.release_generation_runtime()
-
+    print()
+    print("=" * 78)
+    print("  ok — all five tasks completed")
+    print("=" * 78)
+    print(f"  Audio outputs saved under: {OUTPUT_DIR}")
+    if perf_log:
         print()
-        print("=" * 78)
-        print("  ok — all five tasks completed")
-        print("=" * 78)
-        print(f"  Audio outputs saved under: {OUTPUT_DIR}")
-        if perf_log:
-            print()
-            print("-" * 78)
-            print("  TT model runtime summary (excludes pre/post-processing)")
-            print("-" * 78)
-            print(f"  {'Task':<6} {'Runtime':>11} {'Throughput':>22} {'Workload':>20} {'Per-unit':>14}")
-            for task_name, unit, value, count, elapsed_s in perf_log:
-                workload = f"{count} {'samples' if unit == 'samples/s' else 'tokens'}"
-                if unit == "samples/s":
-                    per_unit = f"{(elapsed_s * 1e6 / count) if count else 0.0:.2f} μs/smp"
-                else:
-                    per_unit = f"{(elapsed_s * 1e3 / count) if count else 0.0:.1f} ms/tok"
-                print(
-                    f"  {task_name:<6} {elapsed_s * 1000:>9.1f} ms  "
-                    f"{value:>15.2f} {unit:<6} {workload:>20} {per_unit:>14}"
-                )
-            print("-" * 78)
-            print("  Note: per-unit latency is more stable than throughput when output length varies.")
-
-    finally:
-        if tt_model is not None:
-            try:
-                tt_model.release_generation_runtime()
-            except Exception:
-                pass
-        if original_default is not None:
-            ttnn.SetDefaultDevice(original_default)
-        ttnn.close_mesh_device(device)
+        print("-" * 78)
+        print("  TT model runtime summary (excludes pre/post-processing; per-task device)")
+        print("-" * 78)
+        print(f"  {'Task':<6} {'Runtime':>11} {'Throughput':>22} {'Workload':>20} {'Per-unit':>14}")
+        for task_name, unit, value, count, elapsed_s in perf_log:
+            workload = f"{count} {'samples' if unit == 'samples/s' else 'tokens'}"
+            if unit == "samples/s":
+                per_unit = f"{(elapsed_s * 1e6 / count) if count else 0.0:.2f} μs/smp"
+            else:
+                per_unit = f"{(elapsed_s * 1e3 / count) if count else 0.0:.1f} ms/tok"
+            print(
+                f"  {task_name:<6} {elapsed_s * 1000:>9.1f} ms  "
+                f"{value:>15.2f} {unit:<6} {workload:>20} {per_unit:>14}"
+            )
+        print("-" * 78)
+        print("  Note: per-unit latency is more stable than throughput when output length varies.")
 
 
 if __name__ == "__main__":
