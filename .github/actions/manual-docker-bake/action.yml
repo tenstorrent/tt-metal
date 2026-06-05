@@ -37,6 +37,10 @@ inputs:
     description: "Validate that built images can be inspected after build"
     required: false
     default: "true"
+  harbor-prefix:
+    description: "Harbor pull-through cache prefix (e.g. 'harbor.example.com/'). If non-empty and the first bake attempt fails, a second attempt is made with the prefix stripped from all docker-image:// context URIs (GHCR direct fallback)."
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -53,6 +57,7 @@ runs:
         INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
         INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
+        INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
       run: |
         set -euo pipefail
 
@@ -106,8 +111,27 @@ runs:
         done
 
         if [ "$bake_success" != "true" ]; then
-          echo "ERROR: Bake failed after ${retries} attempts (last exit code: ${last_bake_exit})."
-          exit 1
+          if [ -n "${INPUT_HARBOR_PREFIX}" ]; then
+            echo "WARNING: Bake failed after ${retries} attempt(s) with Harbor prefix. Retrying without Harbor prefix (GHCR direct fallback)..."
+            FALLBACK_SETS=()
+            for s in "${SET_LINES[@]}"; do
+              if [ -n "$s" ]; then
+                # Strip harbor prefix from docker-image:// context URIs so bake pulls from GHCR directly
+                stripped=$(printf '%s' "$s" | sed "s|docker-image://${INPUT_HARBOR_PREFIX}|docker-image://|g")
+                FALLBACK_SETS+=(--set "$stripped")
+              fi
+            done
+            docker buildx bake -f "${INPUT_BAKE_FILE}" "${FALLBACK_SETS[@]}" "${CLEAN_TARGETS[@]}" && bake_success=true || last_bake_exit=$?
+            if [ "$bake_success" = "true" ]; then
+              echo "Bake succeeded after GHCR direct fallback."
+            else
+              echo "ERROR: Bake failed even without Harbor prefix (exit code: ${last_bake_exit})."
+              exit 1
+            fi
+          else
+            echo "ERROR: Bake failed after ${retries} attempts (last exit code: ${last_bake_exit})."
+            exit 1
+          fi
         fi
 
         # Validate that images were actually built and are inspectable
