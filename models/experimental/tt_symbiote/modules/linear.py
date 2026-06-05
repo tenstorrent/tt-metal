@@ -193,48 +193,6 @@ def _dp_matmul_program_config(device, input_shape, weight_shape):
     return _dp_prefill_matmul_program_config(device, input_shape, weight_shape)
 
 
-def _dp_decode_mcast2d_program_config(device, input_shape, weight_shape):
-    """2D-mcast decode config for the CCL path (DRAM-interleaved in0/out).
-
-    The 1D ``mcast_in0`` decode config needs L1 width-sharded in0/out, which is
-    incompatible with the TP path (DRAM-interleaved activations, DRAM-width-
-    sharded weight) and also spikes per-core L1. This builds the same 2D-mcast
-    kernel the prefill matmul already runs against the DRAM-width-sharded weight,
-    sized for a single M-tile so the grid collapses to one row (DRAM in/out,
-    only transient circular buffers).
-    """
-    grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    tile = ttnn.TILE_SIZE
-    m_tiles = max(1, math.ceil((int(input_shape[0]) * int(input_shape[1]) * int(input_shape[-2])) / tile))
-    k_tiles = math.ceil(int(weight_shape[-2]) / tile)
-    n_tiles = math.ceil(int(weight_shape[-1]) / tile)
-
-    # Pick grid dims that divide the tile counts exactly so the 2D-mcast output
-    # is not padded past the per-device N (padding would shift/garble the result).
-    gy = _largest_divisor_at_most(m_tiles, grid_y)
-    gx = _largest_divisor_at_most(n_tiles, grid_x)
-    per_core_m = m_tiles // gy
-    per_core_n = n_tiles // gx
-    if k_tiles % gy == 0:
-        in0_block_w = _largest_divisor_at_most(k_tiles // gy, 8)
-    else:
-        in0_block_w = 2 if k_tiles % 2 == 0 else 1
-
-    out_subblock_h = 1
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(gx, gy),
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=_out_subblock_w(per_core_n, out_subblock_h),
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=False,
-    )
-
-
 def _decode_linear_output_memory_config(device, input_shape):
     if _tp_requires_ccl(device):
         return ttnn.DRAM_MEMORY_CONFIG
@@ -1163,18 +1121,34 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
 
     def move_weights_to_device_impl(self):
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # The DRAM-width-sharded weight layout is only a valid operand-B for the
+        # ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` decode kernel
+        # (engaged in ``forward`` only when ``not _tp_requires_ccl``). On the
+        # multi-device / CCL path that kernel never runs, so the weight is fed
+        # to a generic 2D-mcast (or auto-selected) matmul, which requires a
+        # DRAM_INTERLEAVED operand B. Pairing DRAM_WIDTH_SHARDED with the generic
+        # kernel is undefined and arch-dependent (it happens to read correctly on
+        # Wormhole's 12-bank DRAM grid but produces garbage on Blackhole's 8-bank
+        # grid, collapsing PCC to ~0). So only width-shard the weight on the
+        # single-device path; otherwise keep it DRAM_INTERLEAVED.
+        use_dram_sharded = not _tp_requires_ccl(self.device)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             weight_n_per_device = math.ceil(int(weight.shape[-1]) / num_tp)
+            weight_mem_cfg = (
+                _dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device)
+                if use_dram_sharded
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             self.tt_weight = ttnn.as_tensor(
                 weight,
                 device=self.device,
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device),
+                memory_config=weight_mem_cfg,
             )
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
@@ -1183,13 +1157,18 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             bias_n_per_device = math.ceil(int(bias.shape[-1]) / num_tp)
+            bias_mem_cfg = (
+                _dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device)
+                if use_dram_sharded
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             self.tt_bias = ttnn.as_tensor(
                 bias,
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device),
+                memory_config=bias_mem_cfg,
             )
         else:
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
@@ -1223,13 +1202,6 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
         else:
             program_config = _dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape)
             memory_config = _decode_linear_output_memory_config(self.device, input_shape)
-            # TP decode: the 1D mcast_in0 config needs L1 width-sharded in0/out, which
-            # the CCL path (DRAM activations, DRAM-width-sharded weight) cannot back.
-            # Use the 2D-mcast interleaved kernel prefill already runs on this weight.
-            if _tp_requires_ccl(self.device) and isinstance(
-                program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
-            ):
-                program_config = _dp_decode_mcast2d_program_config(self.device, input_shape, self.tt_weight.shape)
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,

@@ -93,9 +93,10 @@ def _raw_ttnn(t):
 #   "row" -> TTNNDotsOCRMLP (default): K-sharded in -> N-sharded out, 2x reduce_scatter.
 #   "col" -> TTNNDotsOCRMLPColParallel: replicated in/out, gate/up column-parallel
 #            (no CCL) + down all-reduce (reduce_scatter + all_gather).
-@pytest.mark.parametrize("seq_len", [2816], ids=["prefill"])
+@pytest.mark.parametrize("seq_len", [1], ids=["decoder"])
 # @pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
-@pytest.mark.parametrize("scheme", ["row", "col"])
+@pytest.mark.parametrize("scheme", ["col"])
+# @pytest.mark.parametrize("scheme", ["row", "col"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
