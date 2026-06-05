@@ -115,9 +115,7 @@ set_target_properties(
 # (the lower-level multiproc_loopback test only needs tt_metal because it
 # tests sockets directly). Launched with `mpirun -np 2`.
 add_executable(cross_process_h2d_stream_service_test)
-target_sources(
-    cross_process_h2d_stream_service_test PRIVATE test_cross_process_h2d_stream_service.cpp
-)
+target_sources(cross_process_h2d_stream_service_test PRIVATE test_cross_process_h2d_stream_service.cpp)
 target_link_libraries(
     cross_process_h2d_stream_service_test
     PRIVATE
