@@ -28,10 +28,9 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
     const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop, const std::uint32_t num_rows_per_move_instrn)
 {
     // Divide number of rows by how many rows are output per fpu instruction
+    // Each FPU instruction moves 8 rows at a time
     const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
-    const std::uint32_t mov_rows_instn = (num_rows_per_move_instrn == 8)
-                                             ? p_mov_src_to_dest::MOV_8_ROWS
-                                             : ((num_rows_per_move_instrn == 4) ? p_mov_src_to_dest::MOV_4_ROWS : p_mov_src_to_dest::MOV_1_ROW);
+    const std::uint32_t mov_rows_instn = p_mov_src_to_dest::MOV_8_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
 
@@ -114,30 +113,21 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices = NUM_TILES)
 {
-    // MOVA2D/MOVB2D can move 1, 4 or 8 rows, need to check which
-    // For Float32 or Integer dest, ELWADD will be used for rebiasing, can only move MATH_ROWS
     const std::uint32_t num_rows_per_move_instrn = [num_rows_per_matrix]() -> const std::uint32_t
     {
         if constexpr (IS_32b_DEST_EN)
         {
-            return ELTWISE_MATH_ROWS;
+            return ELTWISE_MATH_ROWS; // always 8 for quasar
         }
         else
         {
-            for (std::uint32_t mr : MOVE_MATH_ROWS)
-            {
-                if (_divisible_by_pow_two_(std::max(num_rows_per_matrix, NUM_ROWS_PER_TILE_FRD_8), mr))
-                {
-                    return mr;
-                }
-            }
-            return 1;
+            return 8;
         }
     }();
 
     _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>(num_rows_per_move_instrn);
     _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(
-        std::max(num_rows_per_matrix, NUM_ROWS_PER_TILE_FRD_8), num_matrices, num_rows_per_move_instrn);
+        NUM_ROWS_PER_TILE_FRD_8 << (num_rows_per_matrix >> 5), num_matrices, num_rows_per_move_instrn);
 
     // Reset all counters
     _reset_counters_<p_setrwc::SET_ABD_F>();
@@ -154,8 +144,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)
 {
     // For face_r_dim => 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
-    // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
-    _set_dst_write_addr_by_rows_(std::max(num_rows_per_tile, NUM_ROWS_PER_TILE_FRD_8), tile_idx);
+    // We must offset tiles by NUM_ROWS_PER_TILE_FRD_8=16 in all cases other than 32x16/16x32 and 32x32 tiles.
+    _set_dst_write_addr_by_rows_(NUM_ROWS_PER_TILE_FRD_8 << (num_rows_per_tile >> 5), tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
