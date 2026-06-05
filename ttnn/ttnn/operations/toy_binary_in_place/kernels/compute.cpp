@@ -1,131 +1,210 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for toy_binary_in_place — migrated to the eltwise helper
-// surface (eltwise_chain + eltwise_convenience + eltwise_misc::Square).
+// Compute kernel for toy_binary_in_place.
 //
-// One compute_kernel_hw_startup at MAIN entry; each chain call emits its own
-// per-element reconfigs via the prev-CB fold.
+// Single full init (compute_kernel_hw_startup) at kernel start.
+// Phase transitions use reconfig (inside the helpers) instead of
+// a second full init.
 //
-// Supports: add(0), sub(1), mul(2), square(3 — FPU mul same-CB), sfpu_square(4)
-// Supports: in_place(1) and normal(0) modes, with NONE / ROW / COL / SCALAR broadcast.
+// Supports: add(0), sub(1), mul(2), square(3), sfpu_square(4)
+// Supports: in_place(1) and normal(0) modes
+//
+// All compute is expressed through compute_kernel_lib's eltwise convenience layer:
+// add/sub/mul/square (FPU) -> eltwise_chain, the SFPU-square branch (op_code==4) ->
+// unary<Square>, and the input/output copy phases -> copy<>. The op_code/bcast_code/
+// in_place dispatch behavior is preserved exactly.
+//
+// binary_op_helpers BinaryInputPolicy -> eltwise InputLifecycle mapping used here:
+//   WaitAndPopPerTile   -> Streaming      (A operand, per-tile front-relative; OperandKind::Scalar)
+//   WaitUpfrontNoPop    -> HeldBulk       (held B, popped never)
+//   WaitUpfrontPopAtEnd -> Bulk           (held B, popped at end)
+// Broadcast B index: NONE->Block/Scalar (per-tile), ROW->Row, COL->Col, SCALAR->Scalar.
 
 #include <cstdint>
 
+#include "api/compute/eltwise_binary.h"
 #include "api/compute/compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square (SFPU unary)
 
 namespace ckl = compute_kernel_lib;
+using namespace compute_kernel_lib;
 
-namespace {
-
-template <uint32_t Code>
-struct BcastFor;
-template <>
-struct BcastFor<0> {
-    static constexpr auto value = ckl::BroadcastDim::None;
-};
-template <>
-struct BcastFor<1> {
-    static constexpr auto value = ckl::BroadcastDim::Row;
-};
-template <>
-struct BcastFor<2> {
-    static constexpr auto value = ckl::BroadcastDim::Col;
-};
-template <>
-struct BcastFor<3> {
-    static constexpr auto value = ckl::BroadcastDim::Scalar;
-};
-
-// B-side operand kind + lifecycle per broadcast.
-//   NONE   — B is per-tile streamed (cb_b sized Ht*Wt+1, reader pushes Ht*Wt).
-//   ROW    — B is Wt tiles, read by `wt` each iter — wait upfront, pop at end.
-//   COL    — B is Ht tiles, read by `ht` each iter — wait upfront, pop at end.
-//   SCALAR — B is 1 tile, read at index 0 — wait upfront, pop at end.
-template <ckl::BroadcastDim D>
-struct BSide;
-template <>
-struct BSide<ckl::BroadcastDim::None> {
-    static constexpr auto kind = ckl::OperandKind::Scalar;  // FirstTile (per-tile pop chase)
-    static constexpr auto policy = ckl::Streaming;
-};
-template <>
-struct BSide<ckl::BroadcastDim::Row> {
-    static constexpr auto kind = ckl::OperandKind::Row;
-    static constexpr auto policy = ckl::Bulk;
-};
-template <>
-struct BSide<ckl::BroadcastDim::Col> {
-    static constexpr auto kind = ckl::OperandKind::Col;
-    static constexpr auto policy = ckl::Bulk;
-};
-template <>
-struct BSide<ckl::BroadcastDim::Scalar> {
-    static constexpr auto kind = ckl::OperandKind::Scalar;
-    static constexpr auto policy = ckl::Bulk;
-};
-
-template <uint32_t Code>
-struct FpuOpFor;
-template <>
-struct FpuOpFor<0> {
-    static constexpr auto value = ckl::BinaryFpuOp::Add;
-};
-template <>
-struct FpuOpFor<1> {
-    static constexpr auto value = ckl::BinaryFpuOp::Sub;
-};
-template <>
-struct FpuOpFor<2> {
-    static constexpr auto value = ckl::BinaryFpuOp::Mul;
-};
-
+// op_code: 0=add, 1=sub, 2=mul. Picks the eltwise convenience func at compile time.
 template <
+    uint32_t op_code,
     uint32_t CbA,
     uint32_t CbB,
     uint32_t CbOut,
-    ckl::BinaryFpuOp Op,
     ckl::BroadcastDim Bcast,
-    ckl::InputLifecycle BPolicy,
-    ckl::OperandKind BIndex>
-ALWI void run_binary(ckl::EltwiseShape shape) {
-    ckl::eltwise_chain(
-        shape,
-        ckl::BinaryFpu<
+    ckl::OperandKind AIdx,
+    ckl::InputLifecycle ALife,
+    ckl::InputLifecycle BLife,
+    ckl::OperandKind BIdx,
+    ckl::OutputLifecycle OutLife>
+ALWI void binary_dispatch(ckl::EltwiseShape shape) {
+    if constexpr (op_code == 0) {
+        ckl::add<
             CbA,
             CbB,
-            Op,
+            CbOut,
             Bcast,
+            ALife,
+            BLife,
+            OutLife,
             ckl::BinaryDataFormatReconfig::Input,
-            ckl::Streaming,            // A: per-tile pop chase (in-place safe)
-            BPolicy,                   // B: depends on broadcast
-            ckl::OperandKind::Scalar,  // AIndex = FirstTile (Streaming requires it)
-            ckl::Dst::D0,
-            BIndex>{},
-        ckl::PackTile<CbOut, ckl::Dst::D0, ckl::OutStreaming>{});
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
+    } else if constexpr (op_code == 1) {
+        ckl::sub<
+            CbA,
+            CbB,
+            CbOut,
+            Bcast,
+            ALife,
+            BLife,
+            OutLife,
+            ckl::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
+    } else {
+        ckl::mul<
+            CbA,
+            CbB,
+            CbOut,
+            Bcast,
+            ALife,
+            BLife,
+            OutLife,
+            ckl::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            AIdx,
+            BIdx>(shape);
+    }
 }
 
-// FPU square: x*x via same-CB BinaryFpu (chain dedups B-side wait/pop when CbA == CbB).
-template <uint32_t Cb, uint32_t CbOut>
-ALWI void run_fpu_square(ckl::EltwiseShape shape) {
-    ckl::eltwise_chain(
-        shape,
-        ckl::BinaryFpu<
-            Cb,
-            Cb,
-            ckl::BinaryFpuOp::Mul,
+// In-place: cb_work = cb_work op cb_b. A (cb_work) is per-tile streamed (Streaming/Scalar),
+// output writes back into cb_work (OutputLifecycle::Streaming, CbOut == CbA). The B lifecycle
+// / index follow the original DISPATCH_IN_PLACE broadcast-specific policies.
+template <uint32_t op_code, uint32_t bcast_code, uint32_t CbWork, uint32_t CbB>
+ALWI void op_in_place(ckl::EltwiseShape shape) {
+    if constexpr (bcast_code == 0) {
+        // NONE: B WaitUpfrontPopAtEnd -> Bulk, B index Block.
+        binary_dispatch<
+            op_code,
+            CbWork,
+            CbB,
+            CbWork,
             ckl::BroadcastDim::None,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::Streaming,
-            ckl::Streaming,
             ckl::OperandKind::Scalar,
-            ckl::Dst::D0,
-            ckl::OperandKind::Scalar>{},
-        ckl::PackTile<CbOut, ckl::Dst::D0, ckl::OutStreaming>{});
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Bulk,
+            ckl::OperandKind::Block,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else if constexpr (bcast_code == 1) {
+        // ROW: B WaitUpfrontNoPop -> HeldBulk, B index Row.
+        binary_dispatch<
+            op_code,
+            CbWork,
+            CbB,
+            CbWork,
+            ckl::BroadcastDim::Row,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OperandKind::Row,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else if constexpr (bcast_code == 2) {
+        // COL: B WaitUpfrontPopAtEnd -> Bulk, B index Col.
+        binary_dispatch<
+            op_code,
+            CbWork,
+            CbB,
+            CbWork,
+            ckl::BroadcastDim::Col,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Bulk,
+            ckl::OperandKind::Col,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else {
+        // SCALAR: B WaitUpfrontNoPop -> HeldBulk, B index Scalar.
+        binary_dispatch<
+            op_code,
+            CbWork,
+            CbB,
+            CbWork,
+            ckl::BroadcastDim::Scalar,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OperandKind::Scalar,
+            ckl::OutputLifecycle::Streaming>(shape);
+    }
 }
 
-}  // namespace
+// Normal: cb_out = cb_input op cb_b. A (cb_input) always WaitAndPopPerTile -> Streaming/Scalar.
+// B lifecycle / index follow the original DISPATCH_NORMAL broadcast-specific policies.
+template <uint32_t op_code, uint32_t bcast_code, uint32_t CbIn, uint32_t CbB, uint32_t CbOut>
+ALWI void op_normal(ckl::EltwiseShape shape) {
+    if constexpr (bcast_code == 0) {
+        // NONE: B WaitAndPopPerTile -> Streaming, B index Scalar (per-tile, tile_b=0).
+        binary_dispatch<
+            op_code,
+            CbIn,
+            CbB,
+            CbOut,
+            ckl::BroadcastDim::None,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else if constexpr (bcast_code == 1) {
+        // ROW: B WaitUpfrontNoPop -> HeldBulk, B index Row.
+        binary_dispatch<
+            op_code,
+            CbIn,
+            CbB,
+            CbOut,
+            ckl::BroadcastDim::Row,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OperandKind::Row,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else if constexpr (bcast_code == 2) {
+        // COL: B WaitAndPopPerTile (waits 1/tile, pops 1/row) -> consumes Ht tiles like
+        //   WaitUpfrontPopAtEnd -> Bulk, B index Col. Same Ht tiles consumed, same numerics.
+        binary_dispatch<
+            op_code,
+            CbIn,
+            CbB,
+            CbOut,
+            ckl::BroadcastDim::Col,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Bulk,
+            ckl::OperandKind::Col,
+            ckl::OutputLifecycle::Streaming>(shape);
+    } else {
+        // SCALAR: B WaitUpfrontNoPop -> HeldBulk, B index Scalar.
+        binary_dispatch<
+            op_code,
+            CbIn,
+            CbB,
+            CbOut,
+            ckl::BroadcastDim::Scalar,
+            ckl::OperandKind::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OperandKind::Scalar,
+            ckl::OutputLifecycle::Streaming>(shape);
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
@@ -141,45 +220,65 @@ void kernel_main() {
 
     constexpr uint32_t total_a_tiles = Ht * Wt;
     constexpr auto shape = ckl::EltwiseShape::of(Ht, Wt);
-    constexpr auto Bcast = BcastFor<bcast_code>::value;
-    constexpr auto BKind = BSide<Bcast>::kind;
-    constexpr auto BPol = BSide<Bcast>::policy;
 
     if constexpr (in_place_flag == 1) {
         // === IN-PLACE MODE ===
-        // Boot once covering Phase 1 (cb_input → cb_work) — Phase 2/3 reconfigs
-        // are emitted by the chain's prev-CB fold at each chain call's entry.
-        compute_kernel_hw_startup(cb_input, cb_b, cb_work);
+        compute_kernel_hw_startup(cb_input, cb_work);
 
-        // Phase 1: stream A into the working CB.
-        ckl::copy<cb_input, cb_work>(total_a_tiles);
+        // Phase 1: Copy A tiles from cb_input → cb_work (per-tile streaming, no reconfig).
+        ckl::copy<
+            cb_input,
+            cb_work,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::CopyTileReconfig::None,
+            ckl::PackTileReconfig::None>(total_a_tiles);
 
-        // Phase 2: in-place transform on cb_work.
+        // Phase 2: In-place op on cb_work (reconfig handles format transition)
         if constexpr (op_code == 4) {
-            // SFPU SQUARE: copy → square → pack, all on cb_work (pop-chase in-place).
-            ckl::unary<ckl::Square<>, cb_work, cb_work>(total_a_tiles);
+            // SFPU SQUARE (in-place): copy to DEST, square_tile, pack back to cb_work.
+            ckl::unary<
+                ckl::Square<>,
+                cb_work,
+                cb_work,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::None,
+                ckl::PackTileReconfig::None>(shape);
         } else if constexpr (op_code == 3) {
-            // FPU SQUARE: same-CB BinaryFpu mul, packs back to cb_work.
-            run_fpu_square<cb_work, cb_work>(shape);
+            // FPU SQUARE: cb_work = cb_work * cb_work (binary MUL with same operand, in-place)
+            ckl::square<cb_work, cb_work>(shape);
         } else {
-            constexpr auto Op = FpuOpFor<op_code>::value;
-            run_binary<cb_work, cb_b, cb_work, Op, Bcast, BPol, BKind>(shape);
+            op_in_place<op_code, bcast_code, cb_work, cb_b>(shape);
         }
 
-        // Phase 3: drain cb_work → cb_out.
-        ckl::copy<cb_work, cb_out>(total_a_tiles);
+        // Phase 3: Copy modified tiles from cb_work → cb_out (per-tile streaming, output reconfig).
+        ckl::copy<
+            cb_work,
+            cb_out,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::CopyTileReconfig::None>(total_a_tiles);
 
     } else {
         // === NORMAL (NON-IN-PLACE) MODE ===
         compute_kernel_hw_startup(cb_input, cb_b, cb_out);
 
         if constexpr (op_code == 4) {
-            ckl::unary<ckl::Square<>, cb_input, cb_out>(total_a_tiles);
+            // SFPU SQUARE (non-in-place): copy to DEST, square_tile, pack to cb_out.
+            ckl::unary<
+                ckl::Square<>,
+                cb_input,
+                cb_out,
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::None,
+                ckl::PackTileReconfig::None>(total_a_tiles);
         } else if constexpr (op_code == 3) {
-            run_fpu_square<cb_input, cb_out>(shape);
+            // FPU SQUARE: cb_out = cb_input * cb_input
+            ckl::square<cb_input, cb_out>(shape);
         } else {
-            constexpr auto Op = FpuOpFor<op_code>::value;
-            run_binary<cb_input, cb_b, cb_out, Op, Bcast, BPol, BKind>(shape);
+            op_normal<op_code, bcast_code, cb_input, cb_b, cb_out>(shape);
         }
     }
 }

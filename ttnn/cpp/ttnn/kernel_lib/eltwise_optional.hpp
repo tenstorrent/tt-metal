@@ -7,39 +7,25 @@
  * @file eltwise_optional.hpp
  * @brief Conditional / optional chain element wrappers.
  *
- * Two patterns are supported:
+ * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` forwards to `Inner`
+ * when COND is true and is a no-op marker (dropped from the chain) when false. Its variadic
+ * ctor swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles
+ * for either COND.
  *
- *  1. **Compile-time conditional** — `OptionalChainElement<bool COND, Inner>`. When
- *     COND is true the wrapper inherits Inner's constructors AND its full type / tag,
- *     so the chain pipeline sees `Inner`. When COND is false the wrapper inherits
- *     Inner's tag (so chain traits classify it the same way) but every hook is a
- *     no-op. The wrapper's variadic constructor swallows any args the caller would
- *     pass to Inner — `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
- *     COND in {true, false}.
+ * Runtime conditional: template the chain-running function on a `bool` and dispatch from
+ * `kernel_main`:
  *
- *  2. **Runtime conditional** — kernels that need to pick a chain shape based on a
- *     runtime arg use the standard "template the inner function on a `bool`" pattern
- *     and dispatch from `kernel_main`:
+ *     template <bool DO_MASK> inline void run_op(uint32_t n) {
+ *         eltwise_chain(n, CopyTile<...>{},
+ *             OptionalChainElement<DO_MASK, MaskInject<...>>{}, SfpuOp<...>{}, PackTile<...>{});
+ *     }
+ *     void kernel_main() {
+ *         if (get_arg_val<uint32_t>(0) != 0) run_op<true>(n); else run_op<false>(n);
+ *     }
  *
- *         template <bool DO_MASK>
- *         inline void run_op(uint32_t n) {
- *             eltwise_chain(n,
- *                 CopyTile<...>{},
- *                 OptionalChainElement<DO_MASK, MaskInject<...>>{},
- *                 SfpuOp<...>{},
- *                 PackTile<...>{});
- *         }
- *         void kernel_main() {
- *             const bool do_mask = get_arg_val<uint32_t>(0) != 0;
- *             if (do_mask) run_op<true>(n); else run_op<false>(n);
- *         }
- *
- * @section optional_caveats Caveats
- *
- * Mid-loop per-iteration runtime conditions (`if (col_idx == Wt-1) mask_tile(...)`)
- * are NOT supported by these helpers — they require a per-iter runtime branch
- * inside the chain pipeline, which collides with the chain's compile-time dispatch.
- * Use a separate chain invocation for the conditional iteration if needed.
+ * Mid-loop per-iteration runtime conditions (`if (col == Wt-1) ...`) are NOT supported —
+ * they need a per-iter runtime branch inside the chain, which collides with its
+ * compile-time dispatch. Use a separate chain invocation for the conditional iteration.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -56,62 +42,22 @@ struct OptionalChainElement<true, Inner> : Inner {
     using Inner::Inner;
 };
 
-// COND == false: inherit Inner's tag (so chain traits classify it the same way) but
-// emit nothing in any hook. Tag-only type — no Inner construction, no Inner state.
+// COND == false: a trivial inert marker. `eltwise_chain` strips every element carrying
+// `is_disabled == true` from the pack before any stage runs, so the disabled element
+// never reaches a trait scan or a runtime hook — no tag
+// impersonation, no CB-id / pack-slot / lifecycle stubs, no no-op hooks are needed. This
+// is self-checking: if a future stage forgets to drop it, the missing member fails to
+// compile loudly rather than silently misbehaving.
 template <class Inner>
-struct OptionalChainElement<false, Inner>
-    : std::conditional_t<
-          is_pack_tile_op_v<Inner>,
-          PackTileTag,
-          std::conditional_t<
-              is_copy_tile_op_v<Inner>,
-              CopyTileTag,
-              std::conditional_t<
-                  is_binary_fpu_op_v<Inner>,
-                  BinaryFpuTag,
-                  std::conditional_t<
-                      is_dest_reuse_binary_op_v<Inner>,
-                      DestReuseBinaryTag,
-                      std::conditional_t<
-                          is_unary_bcast_op_v<Inner>,
-                          UnaryBcastTag,
-                          std::conditional_t<
-                              is_fill_tile_op_v<Inner>,
-                              FillTileTag,
-                              std::conditional_t<is_rand_tile_op_v<Inner>, RandTileTag, DestOnlyTag>>>>>>> {
-    static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = false;
-    static constexpr uint32_t cb_a_id() { return 0; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-    static constexpr uint32_t pack_cb_id() { return 0; }
-    static constexpr InputLifecycle a_policy() { return CallerManaged; }
-    static constexpr InputLifecycle b_policy() { return CallerManaged; }
+struct OptionalChainElement<false, Inner> {
+    static constexpr bool is_disabled = true;
 
-    // Variadic ctor swallows any args the caller would pass to the inner element
-    // so kernel-side construction `OptionalChainElement<false, Inner>{...}` doesn't
-    // need to gate the ctor args on COND. Provides a default ctor too.
+    // Variadic ctor swallows any args the caller would pass to the inner element so
+    // kernel-side construction `OptionalChainElement<false, Inner>{...}` compiles
+    // unchanged regardless of COND. Provides a default ctor too.
     constexpr OptionalChainElement() noexcept = default;
     template <class... Ignored>
     constexpr explicit OptionalChainElement(Ignored&&...) noexcept {}
-
-    static constexpr uint32_t lane_width = 1;
-    static ALWI void init() {}
-    ALWI void wait_per_tile(uint32_t) const {}
-    ALWI void wait_upfront(uint32_t) const {}
-    ALWI void exec(uint32_t, uint32_t) const {}
-    ALWI void pop_per_tile(uint32_t) const {}
-    ALWI void pop_upfront_end(uint32_t) const {}
-    ALWI void reserve_per_tile(uint32_t) const {}
-    ALWI void reserve_upfront(uint32_t) const {}
-    ALWI void push_per_tile(uint32_t) const {}
-    ALWI void push_at_end(uint32_t) const {}
-
-    // 2D no-op stubs (called by `eltwise_chain(EltwiseShape, ...)` overload).
-    ALWI void wait_upfront_2d(uint32_t, uint32_t) const {}
-    ALWI void exec_2d(uint32_t, uint32_t, uint32_t, uint32_t) const {}
-    ALWI void pop_upfront_end_2d(uint32_t, uint32_t) const {}
-    ALWI void reserve_upfront_2d(uint32_t, uint32_t) const {}
-    ALWI void push_at_end_2d(uint32_t, uint32_t) const {}
 };
 
 }  // namespace compute_kernel_lib
