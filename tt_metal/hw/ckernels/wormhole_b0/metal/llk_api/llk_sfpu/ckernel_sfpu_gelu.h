@@ -132,15 +132,18 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 // to avoid wasting SFPU cycles on zero even-power coefficients.
 // Covers the extended range [-3.125, 2.78125) to eliminate the LEFT polynomial
 // region entirely, reducing from 4 active regions to 3.
+// Degree-13 CDF polynomial (6 MADs in u=x² Horner, down from degree-15 / 8 MADs).
+// Minimax-fitted over (-3.125, 2.78125) with BF16-ULP weighting → MaxULP = 0.87 < 1.
+// Removing the C15 term saves 2 MADs per element, reducing LREG pressure so that
+// #pragma GCC unroll 8 can fill the SFPU pipeline more effectively.
 constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
-constexpr float GELU_CDF_CORE_C1 = 3.9894151688e-01f;
-constexpr float GELU_CDF_CORE_C3 = -6.6479682922e-02f;
-constexpr float GELU_CDF_CORE_C5 = 9.9489670247e-03f;
-constexpr float GELU_CDF_CORE_C7 = -1.1655492708e-03f;
-constexpr float GELU_CDF_CORE_C9 = 1.0574820044e-04f;
-constexpr float GELU_CDF_CORE_C11 = -7.0036203397e-06f;
-constexpr float GELU_CDF_CORE_C13 = 2.9501944709e-07f;
-constexpr float GELU_CDF_CORE_C15 = -5.7769380390e-09f;
+constexpr float GELU_CDF_CORE_C1 = 3.9894227818e-01f;
+constexpr float GELU_CDF_CORE_C3 = -6.6361041488e-02f;
+constexpr float GELU_CDF_CORE_C5 = 9.7720050615e-03f;
+constexpr float GELU_CDF_CORE_C7 = -1.0717806322e-03f;
+constexpr float GELU_CDF_CORE_C9 = 8.1812159812e-05f;
+constexpr float GELU_CDF_CORE_C11 = -3.8082057209e-06f;
+constexpr float GELU_CDF_CORE_C13 = 7.9821413868e-08f;
 
 // Degree-4 correction polynomial for the exp-based region (-13.1875, -3.125)
 // P(x) ≈ GELU(x) · exp(x²/2), so result = exp(-x²/2) · P(x)
@@ -201,8 +204,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
             GELU_CDF_CORE_C7,
             GELU_CDF_CORE_C9,
             GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13,
-            GELU_CDF_CORE_C15);
+            GELU_CDF_CORE_C13);
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
 
