@@ -34,7 +34,7 @@
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 LOCK_FILE="/tmp/tt-device.lock"
