@@ -56,8 +56,9 @@ void kernel_main() {
     dataflow_kernel_lib::Pipe<> reduce_pipe(
         noc,
         dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
-        reduce_sender_sem,     // data ready (S->R level flag)
-        reduce_receiver_sem);  // consumed (R->S counter)
+        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
+        reduce_sender_sem,       // data ready (S->R level flag)
+        reduce_receiver_sem);    // consumed (R->S counter)
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();

@@ -52,8 +52,9 @@ void kernel_main() {
     dataflow_kernel_lib::Pipe<> reduce_pipe(
         noc,
         dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
-        reduce_sender_sem,     // data ready (S->R level flag)
-        reduce_receiver_sem);  // consumed (R->S counter)
+        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
+        reduce_sender_sem,       // data ready (S->R level flag)
+        reduce_receiver_sem);    // consumed (R->S counter)
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
