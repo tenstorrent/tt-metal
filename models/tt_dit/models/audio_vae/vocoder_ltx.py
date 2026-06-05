@@ -25,277 +25,21 @@ from ...layers.audio_ops import (
     Snake,
     SnakeBeta,
     _all_gather_t,
-    _make_kaiser_sinc_kernel_1d,
     _pad_channels_to_aligned,
     _partition_t,
-    _replicate_pad_t,
     _set_tpad_tail,
     _t_neighbor_pad,
     _zero_pad_t,
     _zero_stuff_t,
     channel_align_unit,
     channel_axis,
-    depthwise_tap_filter,
     gather_channel_to_full,
     partition_channel,
 )
+from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
-
-# Depthwise fixed-kernel filters below use a "shifted multiply-accumulate":
-# the output is a weighted sum of K shifted slices of the padded input. Works
-# for any in_channels because the kernel scalar is the same at every channel.
-
-
-class LTXLowPassFilter1d(Module):
-    """Depthwise low-pass conv1d with a fixed kaiser-sinc kernel.
-
-    The kernel is constant (baked at __init__), so ``_prepare_torch_state`` only
-    absorbs a checkpoint-provided kernel if present (BigVGAN convention).
-    """
-
-    def __init__(
-        self,
-        *,
-        cutoff: float = 0.5,
-        half_width: float = 0.6,
-        stride: int = 1,
-        kernel_size: int = 12,
-        padding: bool = True,
-        padding_mode: str = "replicate",
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        if cutoff < 0.0 or cutoff > 0.5:
-            raise ValueError("cutoff must be in [0, 0.5]")
-        if padding_mode not in ("replicate", "zeros"):
-            raise ValueError(f"padding_mode must be replicate or zeros, got {padding_mode!r}")
-        sharded = parallel_config is not None and parallel_config.factor > 1
-        if sharded:
-            assert ccl_manager is not None, "T-sharding requires ccl_manager"
-            # stride > 1 sharded path requires T_per_device divisible by stride
-            # so per-chip output lengths sum correctly across the mesh; the
-            # Activation1d UpSample/DownSample pair preserves this.
-        self.kernel_size = kernel_size
-        self.even = kernel_size % 2 == 0
-        self.pad_left = kernel_size // 2 - int(self.even)
-        self.pad_right = kernel_size // 2
-        self.stride = stride
-        self.padding = padding
-        self.padding_mode = padding_mode
-        self.mesh_device = mesh_device
-        self.dtype = dtype
-        self.parallel_config = parallel_config
-        self.ccl_manager = ccl_manager
-
-        # Fixed kaiser-sinc kernel (no learned weight); a checkpoint ``...filter``
-        # buffer, if present, overrides it in _prepare_torch_state. forward
-        # consumes _taps_cpu via depthwise_tap_filter.
-        kernel = _make_kaiser_sinc_kernel_1d(cutoff, half_width, kernel_size)
-        self._taps_cpu = kernel.tolist()
-        self._conv1d_cache: dict = {}
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "filter" in state:
-            t = state.pop("filter")
-            assert tuple(t.shape) == (1, 1, self.kernel_size)
-            self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        """``x_BTC``: ``(B, T, C)`` ROW_MAJOR. Returns ``(B, T_out, C)``.
-
-        When ``parallel_config.factor > 1``, ``T`` is the *per-device* extent
-        and the replicate/zero pad becomes a halo exchange via the shared
-        ``_t_neighbor_pad`` helper.
-        """
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-
-        if self.padding:
-            if sharded:
-                x = _t_neighbor_pad(
-                    x_BTC,
-                    pad_left=self.pad_left,
-                    pad_right=self.pad_right,
-                    parallel_config=self.parallel_config,
-                    ccl_manager=self.ccl_manager,
-                    padding_mode=self.padding_mode,
-                )
-            elif self.padding_mode == "replicate":
-                x = _replicate_pad_t(x_BTC, self.pad_left, self.pad_right, self.mesh_device)
-            else:
-                x = _zero_pad_t(x_BTC, self.pad_left, self.pad_right, self.mesh_device)
-        else:
-            x = x_BTC
-
-        return depthwise_tap_filter(
-            x, self._taps_cpu, self.stride, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
-        )
-
-
-class LTXUpSample1d(Module):
-    """Anti-aliased kaiser-sinc upsampler (zero-stuff + depthwise lowpass).
-
-    The depthwise Conv1d formulation is bit-equivalent to ``F.conv_transpose1d``
-    for the symmetric kaiser-sinc kernel.
-    """
-
-    def __init__(
-        self,
-        *,
-        ratio: int = 2,
-        kernel_size: int | None = None,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        sharded = parallel_config is not None and parallel_config.factor > 1
-        if sharded:
-            assert ccl_manager is not None, "T-sharding requires ccl_manager"
-        self.ratio = ratio
-        self.stride = ratio
-        self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
-        self.pad = self.kernel_size // ratio - 1
-        self.pad_left_crop = self.pad * self.stride + (self.kernel_size - self.stride) // 2
-        self.pad_right_crop = self.pad * self.stride + (self.kernel_size - self.stride + 1) // 2
-        self.mesh_device = mesh_device
-        self.dtype = dtype
-        self.parallel_config = parallel_config
-        self.ccl_manager = ccl_manager
-
-        kernel = _make_kaiser_sinc_kernel_1d(cutoff=0.5 / ratio, half_width=0.6 / ratio, kernel_size=self.kernel_size)
-        self._taps_cpu = kernel.tolist()
-        self._conv1d_cache: dict = {}
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "filter" in state:
-            t = state.pop("filter")
-            assert tuple(t.shape) == (1, 1, self.kernel_size)
-            self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        B, T, C = x_BTC.shape
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-
-        # When sharded, halo brings ``pad`` samples from neighbors;
-        # ``padding_mode="replicate"`` makes boundary chips replicate their own
-        # first/last sample.
-        if sharded and self.pad > 0:
-            x_pad = _t_neighbor_pad(
-                x_BTC,
-                pad_left=self.pad,
-                pad_right=self.pad,
-                parallel_config=self.parallel_config,
-                ccl_manager=self.ccl_manager,
-                padding_mode="replicate",
-            )
-        else:
-            x_pad = _replicate_pad_t(x_BTC, self.pad, self.pad, self.mesh_device)
-        x_zs = _zero_stuff_t(x_pad, stride=self.stride, mesh_device=self.mesh_device)
-        x_padded = _zero_pad_t(x_zs, self.kernel_size - 1, self.kernel_size - 1, self.mesh_device)
-
-        # Fold the ratio scale into the kernel taps.
-        y = depthwise_tap_filter(
-            x_padded,
-            [t * self.ratio for t in self._taps_cpu],
-            1,
-            mesh_device=self.mesh_device,
-            dtype=self.dtype,
-            cache=self._conv1d_cache,
-        )
-
-        T_y = y.shape[1]
-        y_cropped = ttnn.slice(y, [0, self.pad_left_crop, 0], [B, T_y - self.pad_right_crop, C])
-        ttnn.deallocate(y)
-        return y_cropped
-
-
-class LTXDownSample1d(Module):
-    """Strided kaiser-sinc lowpass downsampler wrapping ``LTXLowPassFilter1d``."""
-
-    def __init__(
-        self,
-        *,
-        ratio: int = 2,
-        kernel_size: int | None = None,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        self.ratio = ratio
-        self.kernel_size = int(6 * ratio // 2) * 2 if kernel_size is None else kernel_size
-        self.lowpass = LTXLowPassFilter1d(
-            cutoff=0.5 / ratio,
-            half_width=0.6 / ratio,
-            stride=ratio,
-            kernel_size=self.kernel_size,
-            padding=True,
-            padding_mode="replicate",
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        return self.lowpass(x_BTC)
-
-
-class LTXVocoderActivation1d(Module):
-    """Anti-aliased activation: ``UpSample1d(2x) → activation → DownSample1d(2x)``."""
-
-    def __init__(
-        self,
-        *,
-        channels: int,
-        activation: Module,
-        up_ratio: int = 2,
-        down_ratio: int = 2,
-        up_kernel_size: int = 12,
-        down_kernel_size: int = 12,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        self.channels = channels
-        self.act = activation
-        self.upsample = LTXUpSample1d(
-            ratio=up_ratio,
-            kernel_size=up_kernel_size,
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
-        self.downsample = LTXDownSample1d(
-            ratio=down_ratio,
-            kernel_size=down_kernel_size,
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        y = self.upsample(x_BTC)
-        # Snake / SnakeBeta upcast to TILE internally; pull back to ROW_MAJOR
-        # for the downsample.
-        y = self.act(y)
-        if y.layout != ttnn.ROW_MAJOR_LAYOUT:
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        y = self.downsample(y)
-        return y
 
 
 class _AlignedOutConv1d(Conv1dViaConv3d):
@@ -602,7 +346,7 @@ class LTXAMPBlock1(Module):
         # Snake/SnakeBeta collapses it at load time.
         self.acts1 = ModuleList(
             [
-                LTXVocoderActivation1d(
+                Activation1d(
                     channels=channels,
                     activation=act_cls(
                         channels,
@@ -621,7 +365,7 @@ class LTXAMPBlock1(Module):
         )
         self.acts2 = ModuleList(
             [
-                LTXVocoderActivation1d(
+                Activation1d(
                     channels=channels,
                     activation=act_cls(
                         channels,
@@ -772,7 +516,7 @@ class LTXVocoder(Module):
 
         final_channels = upsample_initial_channel // (2**self.num_upsamples)
 
-        self.act_post = LTXVocoderActivation1d(
+        self.act_post = Activation1d(
             channels=final_channels,
             activation=SnakeBeta(
                 final_channels,

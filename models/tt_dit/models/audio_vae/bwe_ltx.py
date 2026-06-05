@@ -20,13 +20,11 @@ fp32 throughout: every conv is constructed with ``dtype=ttnn.float32`` (HiFi4 +
 
 from __future__ import annotations
 
-import math
-
 import torch
 
 import ttnn
 
-from ...layers.audio_ops import _replicate_pad_t, _zero_pad_t, _zero_stuff_t, depthwise_tap_filter
+from ...layers.audio_resample import UpSample1d
 from ...layers.module import Module, Parameter
 from .vocoder_ltx import LTXVocoder
 
@@ -219,88 +217,6 @@ class LTXMelSTFT(Module):
         return ttnn.to_layout(log_mel, ttnn.ROW_MAJOR_LAYOUT)
 
 
-def _make_hann_sinc_kernel_1d(*, ratio: int) -> tuple[torch.Tensor, int, int, int, int]:
-    """Return ``(kernel, kernel_size, pad, pad_left, pad_right)`` for the
-    Hann-window sinc resampler variant.
-    """
-    rolloff = 0.99
-    lowpass_filter_width = 6
-    width = math.ceil(lowpass_filter_width / rolloff)
-    kernel_size = 2 * width * ratio + 1
-    pad = width
-    pad_left = 2 * width * ratio
-    pad_right = kernel_size - ratio
-
-    time_axis = (torch.arange(kernel_size, dtype=torch.float64) / ratio - width) * rolloff
-    time_clamped = time_axis.clamp(-lowpass_filter_width, lowpass_filter_width)
-    window = torch.cos(time_clamped * math.pi / lowpass_filter_width / 2) ** 2
-    sinc_filter = torch.sinc(time_axis) * window * rolloff / ratio
-    return sinc_filter.float().reshape(kernel_size), kernel_size, pad, pad_left, pad_right
-
-
-class LTXHannUpSample1d(Module):
-    """Hann-window sinc upsampler (zero-stuff + zero-pad + depthwise conv).
-
-    The filter is non-persistent (not in any checkpoint) — always rebuilt on host
-    at construction time.
-    """
-
-    def __init__(
-        self,
-        *,
-        ratio: int,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-    ) -> None:
-        super().__init__()
-        self.ratio = ratio
-        self.stride = ratio
-        self.mesh_device = mesh_device
-        self.dtype = dtype
-
-        kernel, k, pad, pad_left_crop, pad_right_crop = _make_hann_sinc_kernel_1d(ratio=ratio)
-        self.kernel_size = k
-        self.pad = pad
-        self.pad_left_crop = pad_left_crop
-        self.pad_right_crop = pad_right_crop
-        self._taps_cpu = kernel.tolist()
-        self._conv1d_cache: dict = {}
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # The filter is non-persistent, but sync taps if a checkpoint provides one
-        # and pop the key so the loader doesn't flag it missing.
-        if "filter" in state:
-            t = state.pop("filter")
-            assert tuple(t.shape) == (1, 1, self.kernel_size)
-            self._taps_cpu = t.reshape(self.kernel_size).float().tolist()
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        B, T, C = x_BTC.shape
-
-        x_pad = _replicate_pad_t(x_BTC, self.pad, self.pad, self.mesh_device)
-        x_zs = _zero_stuff_t(x_pad, stride=self.stride, mesh_device=self.mesh_device)
-        ttnn.deallocate(x_pad)
-        x_padded = _zero_pad_t(x_zs, self.kernel_size - 1, self.kernel_size - 1, self.mesh_device)
-        ttnn.deallocate(x_zs)
-
-        # Fold the ratio scale into the kernel taps.
-        y = depthwise_tap_filter(
-            x_padded,
-            [t * self.ratio for t in self._taps_cpu],
-            1,
-            mesh_device=self.mesh_device,
-            dtype=self.dtype,
-            cache=self._conv1d_cache,
-        )
-        ttnn.deallocate(x_padded)
-
-        T_y = y.shape[1]
-        y_cropped = ttnn.slice(y, [0, self.pad_left_crop, 0], [B, T_y - self.pad_right_crop, C])
-        ttnn.deallocate(y)
-        return y_cropped
-
-
 class LTXVocoderWithBWE(Module):
     """Vocoder + bandwidth extension. fp32 throughout."""
 
@@ -330,7 +246,7 @@ class LTXVocoderWithBWE(Module):
         assert (
             ratio * input_sampling_rate == output_sampling_rate
         ), "output_sampling_rate must be an integer multiple of input_sampling_rate"
-        self.resampler = LTXHannUpSample1d(ratio=ratio, mesh_device=mesh_device, dtype=dtype)
+        self.resampler = UpSample1d(ratio=ratio, window="hann", mesh_device=mesh_device, dtype=dtype)
 
     @property
     def conv_pre(self):
