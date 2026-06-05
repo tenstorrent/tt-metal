@@ -747,6 +747,10 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     Test generic reduction ops across all documented dtype/layout combinations.
     Validates numerical correctness against PyTorch, verifies output dtype matches
     input dtype, and verifies output layout is TILE as documented in nanobind.
+
+    Note: the dense ROW_MAJOR fast path (which preserves ROW_MAJOR output for the
+    sum/mean cases) is gated off by default (use_row_major_support=false) pending
+    fixes, so every configuration currently tilizes and returns TILE. See #46110
     """
     shape = (4, 2, 64, 64)
     dim = -1
@@ -777,7 +781,9 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     # Validate output dtype matches input dtype
     assert ttnn_result.dtype == dtype, f"Expected output dtype {dtype}, got {ttnn_result.dtype}"
 
-    # Validate output layout is TILE as documented
+    # Validate output layout is TILE as documented. The dense ROW_MAJOR fast path that would
+    # preserve ROW_MAJOR output for sum/mean is gated off (use_row_major_support=false), so all
+    # configurations tilize and return TILE.
     assert ttnn_result.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {ttnn_result.layout}"
 
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
