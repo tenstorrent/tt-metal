@@ -1,8 +1,0 @@
-﻿ttnn.kv\_cache.zero\_cache\_range
-=================================
-
-.. currentmodule:: ttnn.kv_cache
-
-.. _ttnn.kv_cache.zero_cache_range:
-
-.. autooperation:: ttnn.kv_cache.zero_cache_range
