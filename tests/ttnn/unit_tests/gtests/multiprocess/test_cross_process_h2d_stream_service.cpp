@@ -107,9 +107,8 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 
         auto program = tt::tt_metal::CreateProgram();
 
-        auto cb_cfg =
-            tt::tt_metal::CircularBufferConfig(page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
-                .set_page_size(scratch_cb_index, page_size);
+        auto cb_cfg = tt::tt_metal::CircularBufferConfig(page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
+                          .set_page_size(scratch_cb_index, page_size);
         tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_cfg);
 
         std::vector<uint32_t> ct_args = {
@@ -119,7 +118,10 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
             page_size,
             static_cast<uint32_t>(scratch_cb_index),
             // Metadata copy block (indices 5..8). Disabled in this test.
-            0u, 0u, 0u, 0u,
+            0u,
+            0u,
+            0u,
+            0u,
         };
         ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
 
@@ -153,8 +155,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
                 ++worker_idx;
             }
         }
-        worker_workload.add_program(
-            tt::tt_metal::distributed::MeshCoordinateRange(coord, coord), std::move(program));
+        worker_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord), std::move(program));
     }
     return worker_workload;
 }
@@ -193,16 +194,16 @@ void run_owner(
     tt::tt_metal::H2DStreamService service(mesh_device, std::move(cfg));
 
     const auto& backing = service.get_backing_tensor();
-    auto output_tensor = tt::tt_metal::create_device_tensor(
-        backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
+    auto output_tensor =
+        tt::tt_metal::create_device_tensor(backing.tensor_spec(), mesh_device.get(), backing.tensor_topology());
 
     auto worker_workload = build_worker_workload(mesh_device, service, output_tensor, cs.worker_cores);
 
     const auto descriptor_path = service.export_descriptor(service_id);
     ASSERT_FALSE(descriptor_path.empty());
 
-    auto verify_mapper = ttnn::distributed::create_mesh_mapper(
-        *mesh_device, MeshMapperConfig{.placements = cs.placements});
+    auto verify_mapper =
+        ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements});
 
     const size_t volume = cs.global_shape.volume();
     for (uint32_t iter = 0; iter < cs.num_iterations; ++iter) {
@@ -232,8 +233,7 @@ void run_owner(
             std::vector<uint32_t> expected(exp_begin, exp_begin + exp_bytes.size() / sizeof(uint32_t));
 
             auto readback = sub.to_vector<uint32_t>();
-            ASSERT_EQ(readback.size(), expected.size())
-                << "size mismatch at iter=" << iter << " coord=" << coord;
+            ASSERT_EQ(readback.size(), expected.size()) << "size mismatch at iter=" << iter << " coord=" << coord;
             EXPECT_EQ(readback, expected) << "contents mismatch at iter=" << iter << " coord=" << coord;
         }
     }
@@ -279,8 +279,7 @@ protected:
             }
         }
         world->broadcast(
-            ttsl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(shape_msg.data()), shape_msg.size() * sizeof(uint32_t)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(shape_msg.data()), shape_msg.size() * sizeof(uint32_t)),
             ::tt::tt_metal::distributed::multihost::Rank{0});
         const uint32_t dims = shape_msg[0];
         ttsl::SmallVector<uint32_t> shape_dims(dims);
@@ -301,7 +300,7 @@ protected:
 };
 
 TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
-    constexpr uint32_t kNumIterations = 100; // per case
+    constexpr uint32_t kNumIterations = 100;  // per case
     const CoreRange worker_cores{CoreCoord{0, 0}, CoreCoord{3, 0}};
 
     // Mesh shape was negotiated in SetUp via MPI broadcast — both ranks
@@ -318,9 +317,9 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
         uint32_t per_device_pages;
     };
     const Size sizes[] = {
-        {"small",  640,  16},   // 2.5 KB page, 40 KB / device
-        {"medium", 2048, 64},   // 8 KB page,  512 KB / device
-        {"large",  4096, 128},  // 16 KB page, 2 MB / device
+        {"small", 640, 16},    // 2.5 KB page, 40 KB / device
+        {"medium", 2048, 64},  // 8 KB page,  512 KB / device
+        {"large", 4096, 128},  // 16 KB page, 2 MB / device
     };
 
     // Chunk plan: cb_pages bounds the on-core L1 scratch CB; fifo_pages bounds
@@ -332,9 +331,9 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
         const char* label;
     };
     const Chunking chunkings[] = {
-        {1, 1,  "cb1_fifo1"},
-        {1, 8,  "cb1_fifo8"},
-        {2, 8,  "cb2_fifo8"},
+        {1, 1, "cb1_fifo1"},
+        {1, 8, "cb1_fifo8"},
+        {2, 8, "cb2_fifo8"},
         {4, 16, "cb4_fifo16"},
         {4, 32, "cb4_fifo32"},
         {8, 64, "cb8_fifo64"},
@@ -347,19 +346,15 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
 
     std::vector<Pattern> patterns;
     if (mesh_dims == 2 && mesh_rows >= 2) {
-        patterns.push_back(Pattern{
-            "ShardRowsReplicateCols",
-            {MeshMapperConfig::Shard{3}, MeshMapperConfig::Replicate{}}});
+        patterns.push_back(
+            Pattern{"ShardRowsReplicateCols", {MeshMapperConfig::Shard{3}, MeshMapperConfig::Replicate{}}});
     }
     if (mesh_dims == 2 && mesh_cols >= 2) {
-        patterns.push_back(Pattern{
-            "ReplicateRowsShardCols",
-            {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}}});
+        patterns.push_back(
+            Pattern{"ReplicateRowsShardCols", {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}}});
     }
     if (mesh_dims == 2 && mesh_rows >= 2 && mesh_cols >= 2) {
-        patterns.push_back(Pattern{
-            "FullShard2D",
-            {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}}});
+        patterns.push_back(Pattern{"FullShard2D", {MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{3}}});
     }
 
     // Resolve a pattern's global shape against the active size tier. Each
@@ -396,12 +391,11 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
             const ttnn::Shape global_shape = resolve_shape(pattern, sz);
             for (const auto& ch : chunkings) {
                 SCOPED_TRACE(
-                    ::testing::Message() << "rank=" << rank_ << " size=" << sz.label
-                                         << " placement=" << pattern.label << " chunk=" << ch.label);
+                    ::testing::Message() << "rank=" << rank_ << " size=" << sz.label << " placement=" << pattern.label
+                                         << " chunk=" << ch.label);
 
                 // Service IDs must agree across ranks; use a deterministic counter.
-                const std::string service_id =
-                    "xproc_h2d_stream_" + std::to_string(case_counter++);
+                const std::string service_id = "xproc_h2d_stream_" + std::to_string(case_counter++);
 
                 CrossProcessCase cs{
                     .global_shape = global_shape,
