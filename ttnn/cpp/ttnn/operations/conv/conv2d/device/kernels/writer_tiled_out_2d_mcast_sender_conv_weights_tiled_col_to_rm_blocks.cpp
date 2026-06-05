@@ -158,8 +158,8 @@ void kernel_main() {
             mcast_rect.noc_x_start,
             mcast_rect.noc_y_start,
             mcast_rect.noc_x_end,
-            mcast_rect.noc_y_end,
-            weights_mcast_num_cores},
+            mcast_rect.noc_y_end},   // area() = weights_mcast_num_cores (the full mcast grid)
+        weights_mcast_num_dests,     // active-core ACK count (== num_cores in the 2D block-sharded path)
         weights_mcast_receiver_sem,  // data ready (S->R level flag)
         weights_mcast_sender_sem);   // consumed (R->S counter)
 #endif

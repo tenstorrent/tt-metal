@@ -84,6 +84,7 @@ void kernel_main() {
     dataflow_kernel_lib::Pipe<> weights_pipe(
         noc,
         dataflow_kernel_lib::McastRect::single_core(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y),
+        /*num_active_cores=*/1,      // unused on the receive path (receivers never multicast)
         weights_mcast_receiver_sem,  // data ready (S->R level flag)
         weights_mcast_sender_sem);   // consumed (R->S counter)
 

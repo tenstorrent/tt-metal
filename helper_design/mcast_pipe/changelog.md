@@ -69,3 +69,12 @@ a synthetic unit case is a follow-up.
 
 ### Round 2 — Phase 3 migration progress (per family, mapped-test gated, --mode=halt)
 - **matmul (4 kernels):** in0 sender/receiver, in1 sender/receiver. 1d + 2d PASS. ✓
+- **conv (3 migrated + 1 reverted):** 1d-receiver (HS) PASS; 2d sender+receiver (BS) PASS;
+  **width-sharded activation sender REVERTED to raw** — un-inferable partial-box self-gather
+  (see `loopback_inference_limitation.md`), raw test PASS. ✓
+- **groupnorm (2 kernels):** reduce-receiver (legacy) + welford-receiver PASS. ✓
+- **topk (1 kernel):** reader_final_topk send_signal PASS. ✓
+- **layernorm (1 kernel):** reader_mcast_sender_unary_sharded_ln send_signal PASS. ✓
+
+**Phase 3 result: 11 kernels migrated to the new API (all mapped tests green), 1 (conv-WS)
+intentionally kept raw + documented.** All on BH p150a, single parametrization each.
