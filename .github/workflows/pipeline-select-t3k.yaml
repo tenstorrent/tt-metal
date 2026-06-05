@@ -266,7 +266,6 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
