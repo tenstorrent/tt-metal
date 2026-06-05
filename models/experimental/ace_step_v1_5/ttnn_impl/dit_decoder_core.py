@@ -42,7 +42,8 @@ def _ace_step_flush_device_profiler(ttnn, device) -> None:
 
     The AceStep DiT core has ~24 layers; a single denoise step can emit > 12000 markers per RISC
     (the on-device profiler ring-buffer cap), causing kernels to silently drop markers and
-    ``tools/tracy/process_ops_logs.py`` to abort with ``Device data missing``. Flushing after
+    stock ``tools/tracy/process_ops_logs.py`` to abort with ``Device data missing`` (use
+    ``perf/process_ace_tracy_ops_logs.py`` for lenient Tracy merge). Flushing after
     every Nth layer keeps the buffer within capacity. No-op when neither
     ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs incur zero cost.
 
