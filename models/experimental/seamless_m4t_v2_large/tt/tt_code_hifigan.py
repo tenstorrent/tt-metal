@@ -82,6 +82,24 @@ def _vocoder_conv1d_prep_length(timeline_length: int, *, in_channels: int, paddi
     return fixed_in, True
 
 
+# Round short single-shot conv1d timelines up to this step so the nondeterministic decode/T2U output
+# length maps to a FEW stable conv shapes (compiled/prepped once, reused) instead of a cold compile +
+# program-cache bloat on every distinct length (~5x speech-output repeated-run slowdown). Tile-aligned.
+_VOCODER_CONV1D_BUCKET_STEP = int(os.environ.get("SEAMLESS_VOCODER_CONV1D_BUCKET", "256"))
+
+
+def _vocoder_conv1d_bucket(length: int) -> int:
+    """Tile-aligned bucket for a short (<= ``_HIFIGAN_MAX_CONV1D_TLEN``) conv1d timeline.
+
+    ``SEAMLESS_VOCODER_CONV1D_BUCKET<=1`` disables bucketing (exact length) for A/B."""
+    L = int(length)
+    raw = _VOCODER_CONV1D_BUCKET_STEP
+    if L <= 0 or raw <= 1:
+        return L
+    step = max(32, raw)
+    return min(((L + step - 1) // step) * step, _HIFIGAN_MAX_CONV1D_TLEN)
+
+
 def _vocoder_dram_slice_count(input_length: int) -> int:
     """DRAM height slices for long vocoder upsample timelines on Blackhole."""
     il = int(input_length)
@@ -683,6 +701,29 @@ class TTSeamlessM4Tv2CodeHifiGan:
         keep_sharded_output: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation."""
+        # Length-bucketing (fixes the ~5x speech-output repeated-run slowdown): the nondeterministic
+        # decode/T2U output makes this conv's timeline vary run-to-run, so each distinct length cold-
+        # compiles + preps (~15s) and bloats the program cache. Pad the (row-major, single-shot, stride-1)
+        # timeline up to a fixed bucket so few stable shapes compile once and reuse; slice the output
+        # prefix. PCC-safe: zero right-pad + symmetric ("same") conv padding leaves the valid prefix
+        # bit-identical (the trailing window already saw zeros), and stride 1 keeps out_len == in + const.
+        bucket_pad = 0
+        if (
+            not timeline_chunked
+            and int(stride) == 1
+            and 0 < int(input_length) <= _HIFIGAN_MAX_CONV1D_TLEN
+            and len(x_rm.shape) == 3
+            and not ttnn.is_sharded(x_rm)
+        ):
+            bucket = _vocoder_conv1d_bucket(int(input_length))
+            if bucket > int(input_length):
+                x_pad = ttnn.pad(x_rm, [(0, 0), (0, bucket - int(input_length)), (0, 0)], value=0.0)
+                if deallocate_input:
+                    ttnn.deallocate(x_rm)
+                x_rm = x_pad
+                deallocate_input = True  # we now own the padded copy
+                bucket_pad = bucket - int(input_length)
+                input_length = bucket
         conv_config = _vocoder_conv1d_config(
             fused_post_activation,
             input_length=input_length,
@@ -734,6 +775,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if not keep_sharded_output and ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (batch, out_len, out_channels))
+        if bucket_pad:
+            keep = out_len - bucket_pad  # stride-1 conv: out_len tracks input_length 1:1
+            out = ttnn.slice(out, [0, 0, 0], [batch, keep, out_channels], [1, 1, 1])
+            out_len = keep
         return out, out_len
 
     def _conv1d(
