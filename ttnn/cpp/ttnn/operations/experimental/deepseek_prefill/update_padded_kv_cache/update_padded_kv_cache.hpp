@@ -19,20 +19,20 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 //
 // Cache slot is addressed with users-outer, layers-inner linearization — the op composes
 // `batch_idx = slot_idx * num_layers + layer_idx`. For a single-user prefill workload, callers
-// pass a `slot_idx` tensor holding 0 and the desired `layer_idx`.
+// pass `slot_idx = 0` and the desired `layer_idx`.
 //
-// `slot_idx` and `kv_actual_global` are single-element ROW_MAJOR uint32 device tensors (read
-// on-device), not scalars, so their values stay out of the program hash and successive users/chunks
-// reuse one cached program (per layer) via the buffer-binding fast cache-hit path.
+// `slot_idx` and `kv_actual_global` are per-call scalars held in common runtime args and patched on
+// cache hits, so their values stay out of the program hash and successive users/chunks reuse one
+// cached program (per layer).
 //
 // In-place: returns a handle to `cache`.
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    const ttnn::Tensor& slot_idx,
+    uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,
-    const ttnn::Tensor& kv_actual_global,
+    uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

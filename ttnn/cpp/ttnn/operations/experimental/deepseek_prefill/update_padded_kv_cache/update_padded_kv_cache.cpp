@@ -10,10 +10,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    const ttnn::Tensor& slot_idx,
+    uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,
-    const ttnn::Tensor& kv_actual_global,
+    uint32_t kv_actual_global,
     uint32_t cluster_axis) {
     return ttnn::prim::update_padded_kv_cache(
         cache, input, slot_idx, layer_idx, num_layers, kv_actual_global, cluster_axis);

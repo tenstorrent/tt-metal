@@ -8,10 +8,12 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -20,11 +22,12 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct operation_attributes_t {
         // Cache slot is linearized as users-outer, layers-inner:
         //   batch_idx = slot_idx * num_layers + layer_idx
-        // slot_idx is a per-call device tensor (see tensor_args_t); layer_idx is hashed (structural):
-        // it takes only num_layers distinct values, so one cached program per layer is reused across
-        // users and chunks -- and a hashed scalar stays correct on the buffer-binding fast cache-hit
-        // path (each program bakes its own layer_idx), unlike a non-hashed common rt-arg which would
-        // go stale there.
+        // layer_idx is hashed (structural): it takes only num_layers distinct values, so one cached
+        // program per layer is reused across users and chunks. slot_idx and kv_actual_global are
+        // per-call scalars held in common runtime args and patched on cache hits by
+        // MeshWorkloadFactory::override_runtime_arguments, so they stay out of the program hash.
+        uint32_t slot_idx;          // TODO: move to metadata
+        uint32_t kv_actual_global;  // TODO: move to metadata
         uint32_t layer_idx;
         uint32_t num_layers;
         uint32_t cluster_axis;
@@ -33,12 +36,6 @@ struct UpdatePaddedKvCacheDeviceOperation {
     struct tensor_args_t {
         const Tensor& cache;
         const Tensor& input;
-        // Single-element ROW_MAJOR uint32 device tensors, read on-device by the writer kernel.
-        // Tensors (not scalar attrs) so their values stay out of the program hash and the
-        // buffer-binding fast cache-hit path can patch their addresses -- one cached program (per
-        // layer) is reused across users and chunks. NOT hashed by value.
-        const Tensor& slot_idx;          // user slot in the batched prefill cache
-        const Tensor& kv_actual_global;  // prior valid global KV length in tokens; tile-aligned
     };
 
     using spec_return_value_t = TensorSpec;
@@ -52,7 +49,36 @@ struct UpdatePaddedKvCacheDeviceOperation {
             const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    // Minimal operation-shaped helper so the descriptor factory can be adapted into a mesh workload.
+    struct DescriptorAdapterOperation {
+        using operation_attributes_t = UpdatePaddedKvCacheDeviceOperation::operation_attributes_t;
+        using tensor_args_t = UpdatePaddedKvCacheDeviceOperation::tensor_args_t;
+        using spec_return_value_t = UpdatePaddedKvCacheDeviceOperation::spec_return_value_t;
+        using tensor_return_value_t = UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t;
+    };
+
+    // Wraps the ProgramDescriptor factory so the default adapter patches buffer bindings on cache
+    // hits, and override_runtime_arguments additionally patches the per-call slot_idx/kv_actual_global
+    // scalars (common runtime args) -- the values the buffer-binding fast path would leave stale.
+    struct MeshWorkloadFactory {
+        using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
+            DescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<ProgramFactory>;
+        using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+
+        static cached_mesh_workload_t create_mesh_workload(
+            const operation_attributes_t& args,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& args,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<MeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -69,10 +95,10 @@ namespace ttnn::prim {
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    const ttnn::Tensor& slot_idx,
+    uint32_t slot_idx,
     uint32_t layer_idx,
     uint32_t num_layers,
-    const ttnn::Tensor& kv_actual_global,
+    uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::prim

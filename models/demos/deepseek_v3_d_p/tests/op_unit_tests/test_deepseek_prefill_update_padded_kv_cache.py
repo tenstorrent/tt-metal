@@ -25,21 +25,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 KVPE_HEAD_DIM = 576
 
 
-def _index_tensor(value, mesh_device):
-    """Single-element ROW_MAJOR uint32 device tensor (mesh-replicated), read on-device by the op.
-    slot_idx and kv_actual_global are passed this way so their values stay out of the program hash
-    and the buffer-binding fast cache-hit path can patch their addresses across calls. A fresh tensor
-    per call (different buffer address, same shape/dtype) exercises that path."""
-    return ttnn.from_torch(
-        torch.tensor([value], dtype=torch.int32).reshape(1, 1, 1, 1),
-        device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
@@ -109,10 +94,10 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=_index_tensor(u, mesh_device),
+                slot_idx=u,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=_index_tensor(0, mesh_device),
+                kv_actual_global=0,
                 cluster_axis=sp_axis,
             )
 
@@ -177,7 +162,7 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     return positions
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
     [
@@ -288,10 +273,10 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     kv_cache,
                     tt_input,
-                    slot_idx=_index_tensor(u, mesh_device),
+                    slot_idx=u,
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=_index_tensor(kv_actual, mesh_device),
+                    kv_actual_global=kv_actual,
                     cluster_axis=sp_axis,
                 )
         kv_actual = valid_end
