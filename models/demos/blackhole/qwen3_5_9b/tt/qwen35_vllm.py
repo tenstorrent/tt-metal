@@ -61,10 +61,11 @@ class Qwen35ForCausalLM(Generator):
         optimizations=None,
         **kwargs,
     ):
-        # HF_MODEL is the single source of truth; vLLM passes the hub name / local path
-        # via hf_config._name_or_path. Resolve to a local dir (download if needed).
-        name_or_path = hf_config._name_or_path
-        if name_or_path and not os.path.isdir(name_or_path):
+        # Resolution order: MODEL_WEIGHTS_DIR (tt-inference-server Docker convention) →
+        # HF_MODEL → vLLM's hf_config._name_or_path (the hub id). Resolve a hub id to a
+        # local snapshot dir (AutoConfig on a bare hub id is unreliable in this transformers).
+        name_or_path = os.environ.get("MODEL_WEIGHTS_DIR") or os.environ.get("HF_MODEL") or hf_config._name_or_path
+        if name_or_path and not os.path.isdir(os.path.expanduser(name_or_path)):
             from huggingface_hub import snapshot_download
 
             name_or_path = snapshot_download(name_or_path)
@@ -79,16 +80,42 @@ class Qwen35ForCausalLM(Generator):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
-        logits = prefill_dispatch(
-            self.model[0], tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False)
-        )
+        model = self.model[0]
+        if model.num_devices > 1:
+            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens)
+        logits = prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False))
         logits = ttnn.to_torch(logits)
         # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section;
         # zero deltas are correct for our text-only port.
         rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
         return logits, rope_deltas
 
+    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens):
+        """TP (B=1) paged prefill via the model-owned masked fixed-bucket path.
+
+        prefill_traced_chunked rounds the prompt up to a fixed bucket and masks the GDN to the
+        EXACT valid_len, so prefill runs one of a bounded, pre-warmed program set (the
+        compile-clobbers-trace fix) — for <=2048 prompts it is entirely the masked bucket (no
+        chunk trace needed). Longer prompts replay the chunk-outer trace (Milestone B). Returns
+        host logits [1, 1, vocab] gathered to a single replica."""
+        T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
+        if tokens.shape[1] > T:
+            tokens = tokens[:, :T]
+        logits = model.prefill_traced_chunked(tokens, page_table, actual_len=T)  # [1,1,vocab] replicated
+        logits = (
+            ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+            .reshape(-1, model.args.vocab_size)[:1]
+            .float()
+            .view(1, 1, -1)
+        )
+        return logits, torch.zeros(1, dtype=torch.long)
+
     def decode_forward(self, *args, **kwargs):
+        # Both single-device and TP serve TRACED decode. The decode trace is valid for TP
+        # because GDN state lives in fixed in-place buffers (reset_state_inplace preserves
+        # addresses), and it no longer collides with prefill: TP prefill runs the bounded,
+        # pre-warmed masked-bucket program set (warmed before the trace parks), so a request
+        # never compiles a new program that could clobber the parked decode trace.
         # Standard path (default): the decode trace is captured at position 0 during warmup by the
         # inherited WarmupForwardMixin, then replayed here by Generator.decode_forward — identical
         # to Llama/DeepSeek/Qwen-VL. current_pos and page_table are device input tensors the
@@ -113,6 +140,23 @@ class Qwen35ForCausalLM(Generator):
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
+        if self.model[0].num_devices > 1:
+            # TP (Milestone A): warm the bounded masked-bucket prefill program set so every
+            # bucket compiles HERE, before the decode trace is parked. After this a real
+            # request (<=2048 tokens) replays an already-compiled bucket and never compiles
+            # at request time — the fix that lets the decode trace coexist with eager prefill.
+            # No chunk-outer prefill trace yet (that is >2048-token support, Milestone B).
+            # Fire on the traced phase only (matching the single-device guard contract).
+            if not enable_trace or getattr(self, "already_warmed_up_prefill", False):
+                return
+            self.already_warmed_up_prefill = True
+            if kv_cache:
+                num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
+            else:
+                num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
+            page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+            self.model[0].warmup_prefill_masked_buckets(page_table)
+            return
         # The plugin's warmup_model() is two-phase: it calls this first with
         # enable_trace=False (compile), then resets ``already_warmed_up_prefill``
         # and calls again with enable_trace=True (capture). Only the traced phase
