@@ -46,6 +46,7 @@ Compute (FPU/matrix engine)
   transpose_wh_tile
 
   tilize
+  untilize
 
 .. only:: not html
 

@@ -129,6 +129,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/tilize.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
+    inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
     inc/api/lock.h
