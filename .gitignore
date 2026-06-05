@@ -164,3 +164,6 @@ models/experimental/petr/resources/*.pth
 CLAUDE.md
 CLAUDE_DOCUMENTATION_GUIDE.md
 CLAUDE_PRESENTATION_GUIDE.md
+
+# Local-only generated presentations
+presentations/
