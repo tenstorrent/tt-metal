@@ -880,6 +880,7 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 def test_reshape_conv2d(device, N, D, H, W, C):
     import logging
 
+    os.environ["PY_LOG_ENABLED"] = "0"
     torch.manual_seed(0)
     x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
     ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
@@ -891,6 +892,7 @@ def test_reshape_conv2d(device, N, D, H, W, C):
 
     print("")
     print("RESHAPE CALL START")
+    os.environ["PY_LOG_ENABLED"] = "1"
     t = ttnn.reshape(t, (N, C, D, H, W))
     print("RESHAPE CALL END")
     logging.info(f"POST reshape:           shape={t.shape} padded={t.padded_shape}")
