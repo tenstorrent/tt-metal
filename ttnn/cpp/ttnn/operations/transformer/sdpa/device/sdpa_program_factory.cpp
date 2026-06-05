@@ -73,10 +73,10 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute v2 eligibility. Sliding-window, causal, and chunked modes are handled downstream.
-// User-provided masks, attention sink, and fp32 dest accumulators still require the legacy path.
-bool can_use_streaming_compute(bool use_provided_mask, bool use_attention_sink, bool fp32_dest_acc_en) {
-    return !use_provided_mask && !use_attention_sink && !fp32_dest_acc_en;
+// Streaming compute v2 eligibility. Sliding-window, causal, chunked, and attention-sink modes are
+// handled downstream. User-provided masks and fp32 dest accumulators still require the legacy path.
+bool can_use_streaming_compute(bool use_provided_mask, bool fp32_dest_acc_en) {
+    return !use_provided_mask && !fp32_dest_acc_en;
 }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
@@ -360,8 +360,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute =
-        can_use_streaming_compute(use_provided_mask, use_attention_sink, fp32_dest_acc_en);
+    const bool use_streaming_compute = can_use_streaming_compute(use_provided_mask, fp32_dest_acc_en);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     const bool lightweight_causal = is_causal && !use_provided_mask && !has_sliding_window;

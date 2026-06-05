@@ -18,6 +18,7 @@
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -624,9 +625,24 @@ template <
     uint32_t dst_size,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
-    uint32_t normalized_out_cb>
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
-    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t sbh,
+    [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
+    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    // Attention sink: cb_attention_sink holds raw per-head sink logits (column 0, zeros elsewhere).
+    // exp((sink - max)*scale) is computed inline per-row via sub_bcast_cols+exp, then folded into
+    // the col-reduced denominator (DST[0]). sbh tiles consumed per call, popped once at end;
+    // across all normalize calls for the chunk this consumes exactly Sq_chunk_t tiles.
+    if constexpr (use_attention_sink) {
+        cb_wait_front(cb_attention_sink, sbh);
+        cb_wait_front(cur_max_cb_rt, sink_row_offset + sbh);
+    }
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
@@ -645,6 +661,18 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            if constexpr (use_attention_sink) {
+                // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
+                sub_bcast_cols_init_short(cb_attention_sink, cur_max_cb_rt);
+                sub_tiles_bcast_cols(cb_attention_sink, cur_max_cb_rt, s, sink_row_offset + s, 1);
+                // The custom first-column exp needs generic unary SFPU addrmod state, but not the
+                // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>()));
+                constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+                MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(1)));
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+            }
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
@@ -693,6 +721,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_pop_front(scratch_cb, 1);
             cb_pop_front(cur_out_cb, head_dim_t_);
         }
+    }
+    if constexpr (use_attention_sink) {
+        cb_pop_front(cb_attention_sink, sbh);
     }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
     // (e.g. salad_correct_fused on the next K-chunk's drain row) pack to F16b CBs
@@ -1020,7 +1051,9 @@ template <
     uint32_t kv_pad_kv_local_padded_Nt = 0,
     uint32_t v_cb_physical_width_t = vDHt,
     bool kt_inplace_v = false,
-    uint32_t sliding_window_size = 0>
+    uint32_t sliding_window_size = 0,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1343,6 +1376,7 @@ static void sdpa_inner_loop_step(
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
+        [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             cb_push_back(cur.sum, sbh);
@@ -1353,7 +1387,13 @@ static void sdpa_inner_loop_step(
                 dst_size,
                 cb_col_identity,
                 cb_recip_scratch,
-                cb_normalized_out>(cur.sum, out_cb, sbh);
+                cb_normalized_out,
+                scale_fp32,
+                use_attention_sink,
+                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+            if constexpr (use_attention_sink) {
+                sink_row_offset += sbh;
+            }
             pushed++;
         };
 
@@ -1594,7 +1634,9 @@ template <
     uint32_t cb_normalized_out,
     uint32_t cb_mask_in,
     uint32_t sliding_window_size = 0,
-    bool is_causal_sdpa = false>
+    bool is_causal_sdpa = false,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -1725,7 +1767,9 @@ void sdpa_standard_v2(
                 0,
                 vDHt,
                 false,
-                sliding_window_size>(
+                sliding_window_size,
+                use_attention_sink,
+                cb_attention_sink>(
                 prev,
                 cur,
                 is_last,

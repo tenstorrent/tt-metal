@@ -169,7 +169,9 @@ void kernel_main() {
             cb_out,  // normalized output goes directly to output CB
             cb_mask_in,
             sliding_window_size,
-            is_causal>(
+            is_causal,
+            use_attention_sink,
+            cb_attention_sink>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,
