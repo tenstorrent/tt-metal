@@ -21,8 +21,9 @@
 # ║   TT_CONV_BENCH_SUBBLOCK_H=2 TT_CONV_BENCH_SUBBLOCK_W=2 TT_CONV_BENCH_MODE=helper_trm ...    ║
 # ║                                                                                            ║
 # ║ IDIOT-PROOFING (the harness TT_FATALs loudly rather than let you misread a result):         ║
-# ║   • output_layout is FORCED to ROW_MAJOR and packer_l1_acc is FORCED OFF in every mode      ║
-# ║     (so the 3 modes are a fair, bug-free comparison — do NOT change those below).           ║
+# ║   • output_layout / packer_l1_acc / weights_dtype are REAL per-conv via CB_* env (defaults:  ║
+# ║     tile out, l1_acc on) so main/helper_sbm baselines match how models run the conv. The     ║
+# ║     ROW_MAJOR subblock-relaxation study (helper_trm) = CB_OUT_LAYOUT=row_major CB_L1_ACC=false║
 # ║   • helper_trm on a shape where out_subblock_w == per_core_N (weight_num_subblocks==1)       ║
 # ║     fatals: TileRowMajor would be identical to SubblockMajor (no-op). To make helper_trm     ║
 # ║     actually differ, the tuner must pick out_subblock_w < per_core_N — that needs            ║
