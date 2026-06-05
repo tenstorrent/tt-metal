@@ -5,6 +5,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include "debug/debug.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -74,6 +75,16 @@ void kernel_main() {
     experimental::CB cb_act_second_obj(cb_id_act_second_reader);
     experimental::CB cb_reader_indices_obj(cb_reader_indices);
     experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+
+    // mcast_pipe: receiver side of the weights (and bias) block channel. Degenerate 1x1 rect points
+    // back at the sender (consumed-ack target). data_ready=receiver_sem, consumed=sender_sem.
+    // (The 1D sender stays raw — its handshake count differs from its mcast geometry count, which a
+    // single-num_dests Pipe cannot express; the receiver side is count-independent and migrates.)
+    dataflow_kernel_lib::Pipe<> weights_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect::single_core(weights_mcast_sender_noc_x, weights_mcast_sender_noc_y),
+        weights_mcast_receiver_sem,  // data ready (S->R level flag)
+        weights_mcast_sender_sem);   // consumed (R->S counter)
 
     const uint32_t remaining_tiles_to_push =
         split_reader_enabled && activation_reuse_enabled ? get_arg_val<uint32_t>(i++) : 0;
@@ -174,15 +185,8 @@ void kernel_main() {
             // Receive weights
             cb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
-                // Set weights semaphore value to INVALID
-                weights_mcast_receiver_sem.set(INVALID);
-
-                // Atomic increment source core counter
-                weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts
-                // data)
-                weights_mcast_receiver_sem.wait(VALID);
+                // mcast_pipe: ack sender (consumed) + wait weights VALID flag + clear for next round.
+                weights_pipe.receive();
             }
 
             cb_weight_obj.push_back(weight_block_num_tiles);
@@ -192,14 +196,8 @@ void kernel_main() {
             if (load_bias) {
                 cb_bias_obj.reserve_back(bias_ntiles);
 
-                // Set weights semaphore value to INVALID
-                weights_mcast_receiver_sem.set(INVALID);
-
-                // Atomic increment source core counter
-                weights_mcast_sender_sem.up(noc, weights_mcast_sender_noc_x, weights_mcast_sender_noc_y, 1);
-
-                // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                weights_mcast_receiver_sem.wait(VALID);
+                // mcast_pipe: same channel, now waiting on the bias block.
+                weights_pipe.receive();
 
                 cb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
