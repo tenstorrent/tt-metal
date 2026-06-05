@@ -8,6 +8,12 @@ import torch
 
 import ttnn
 
+from models.common.utility_functions import skip_for_slow_dispatch
+
+# H2DStreamService claims FD dispatch-column service cores, so every test here requires
+# fast dispatch; skip the whole module when running in slow-dispatch mode.
+pytestmark = skip_for_slow_dispatch()
+
 
 # int32 source viewed as UINT32; compared as int64 (lossless for 0..INT32_MAX).
 _DTYPE_TORCH = torch.int32

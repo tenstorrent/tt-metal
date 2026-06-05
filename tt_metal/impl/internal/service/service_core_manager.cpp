@@ -93,6 +93,12 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
     }
 }
 
+void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
+    const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+    std::unordered_set<CoreCoord> not_done{physical_core};
+    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
+}
+
 std::unordered_set<CoreCoord> ServiceCoreManagerImpl::claimed_cores(ChipId device_id) const {
     std::unordered_set<CoreCoord> out;
     auto it = devices_.find(device_id);
@@ -235,13 +241,9 @@ size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) cons
     return pimpl_->bytes_available(device, core);
 }
 
+void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimpl_->wait_done(device, core); }
+
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
-
-void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const {
-    const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
-    std::unordered_set<CoreCoord> not_done{physical_core};
-    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
-}
 
 }  // namespace tt::tt_metal::internal
