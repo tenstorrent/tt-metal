@@ -11,6 +11,7 @@
 //  - dispatch buffer base must be page size aligned
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/device_print.h"
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
@@ -362,6 +363,8 @@ void process_write_host_h() {
 #endif
             noc_async_write(static_cast<uint32_t>(data_ptr), pcie_noc_xy | completion_queue_write_addr, xfer_size);
 #else
+            DEVICE_PRINT(
+                "process_write_host_h: calling cq_noc_async_write_with_state_any_len: xfer_size={}\n", xfer_size);
             cq_noc_async_write_with_state_any_len(
                 static_cast<uint32_t>(data_ptr), completion_queue_write_addr, xfer_size);
             // completion_queue_push_back below will do a write to host, so we add 1 to the number of data packets
@@ -373,10 +376,13 @@ void process_write_host_h() {
 
             // This will update the write ptr on device and host
             // We flush to ensure the ptr has been read out of l1 before we update it again
+            DEVICE_PRINT("process_write_host_h: calling completion_queue_push_back: npages={}\n", npages);
             completion_queue_push_back(npages);
 
             length -= xfer_size;
             data_ptr += xfer_size;
+            DEVICE_PRINT(
+                "process_write_host_h: calling noc_async_writes_flushed length={} data_ptr={}\n", length, data_ptr);
             noc_async_writes_flushed();
         }
     }
@@ -1043,9 +1049,11 @@ static void process_wait() {
     if (notify_prefetch) {
         // Same-core (prefetch+dispatch colocated): increment the sync sem in local L1 instead of
         // a NOC self-loopback. Sole writer, so a plain RMW through the uncached alias is safe.
+        DEVICE_PRINT("process_wait: incrementing upstream_sync_sem={}\n", upstream_sync_sem);
         volatile tt_l1_ptr uint32_t* upstream_sync_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             l1_uncached_addr(get_semaphore<fd_core_type>(upstream_sync_sem)));
         *upstream_sync_sem_addr += 1;
+        DEVICE_PRINT("process_wait: upstream_sync_sem value={}\n", *upstream_sync_sem_addr);
     }
 
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -1214,7 +1222,7 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DEVICE_PRINT("cmd_write_linear_h_host\n");
+            DEVICE_PRINT("cmd_write_linear_h_host\n");
             if (is_h_variant) {
                 process_write_host_h();
             } else {
@@ -1384,7 +1392,7 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DEVICE_PRINT("dispatch_h linear_h_host\n");
+            DEVICE_PRINT("dispatch_h linear_h_host\n");
             process_write_host_h();
             break;
 

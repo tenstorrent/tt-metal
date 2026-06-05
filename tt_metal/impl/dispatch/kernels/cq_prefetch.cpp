@@ -1519,8 +1519,8 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     uint64_t read_addr = cmd->relay_linear.addr;
     uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
-    // DEVICE_PRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
-    // noc_xy_addr);
+    DEVICE_PRINT(
+        "relay_linear: cmd_ptr={} wlength={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr, noc_xy_addr);
 
     // TRIDs for the two scratch DB halves (unique from fetch_q's 2-5 and exec_buf's 1).
     // Each TRID is barriered before the next read to the same half, so the max outstanding
@@ -1545,6 +1545,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
     while (wlength != 0) {
         uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
         wlength -= read_length;
+        DEVICE_PRINT("relay_linear: wlength={} read_length={}\n", wlength, read_length);
         while (read_length != 0) {
             noc_async_writes_flushed();
 
@@ -1558,6 +1559,7 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
             noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
             read_addr += amt_to_read;
 
+            DEVICE_PRINT("relay_linear: before read barrier\n");
             noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle ^ 1]);
 
             uint32_t npages =
@@ -1569,16 +1571,22 @@ uint32_t process_relay_linear_cmd(uintptr_t cmd_ptr, uint32_t& downstream_data_p
         }
     }
 
+    DEVICE_PRINT("relay_linear: calling noc_async_read_barrier_with_trid: trid={}\n", RELAY_LINEAR_TRIDS[db_toggle]);
     noc_async_read_barrier_with_trid(RELAY_LINEAR_TRIDS[db_toggle]);
 
     scratch_write_addr = scratch_db_top[db_toggle];
     uint32_t amt_to_write = amt_to_read;
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
+    DEVICE_PRINT(
+        "relay_linear: calling round_up_pow2: downstream_data_ptr={} downstream_cb_page_size={}\n",
+        downstream_data_ptr,
+        downstream_cb_page_size);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
     DispatchRelayInlineState::cb_writer.release_pages(npages + 1, downstream_data_ptr);
+    DEVICE_PRINT("relay_linear: calling noc_async_read_set_trid: trid={}\n", 0U);
     noc_async_read_set_trid(0U);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1592,12 +1600,18 @@ uint32_t process_stall(uintptr_t cmd_ptr) {
     WAYPOINT("PSW");
     volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         l1_uncached_addr(get_semaphore<fd_core_type>(my_downstream_sync_sem_id)));
+    DEVICE_PRINT(
+        "process_stall: count={} my_downstream_sync_sem_id={} sem count={}\n",
+        count,
+        my_downstream_sync_sem_id,
+        *sem_addr);
     uint32_t heartbeat = 0;
     do {
         invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
     } while (*sem_addr != count);
     WAYPOINT("PSD");
+    DEVICE_PRINT("process_stall: count={} sem count={}\n", count, *sem_addr);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -2240,6 +2254,7 @@ bool process_cmd(
 
     DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << " exec_buf=" << exec_buf
            << ENDL();
+    DEVICE_PRINT("process_cmd: cmd_id={} cmd_ptr={} exec_buf={}\n", (uint32_t)cmd->base.cmd_id, cmd_ptr, exec_buf);
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT << "relay linear: " << cmd_ptr << ENDL();
@@ -2249,7 +2264,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
-            // DEVICE_PRINT("relay_paged: {}\n", cmd_ptr);
+            DEVICE_PRINT("relay_paged: {}\n", cmd_ptr);
             {
                 uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
                 uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
@@ -2297,7 +2312,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             // DPRINT << "inline no flush" << ENDL();
-            // DEVICE_PRINT("relay_inline_noflush\n");
+            DEVICE_PRINT("relay_inline_noflush\n");
             if (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {

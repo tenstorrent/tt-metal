@@ -354,10 +354,16 @@ public:
         // Mask that off to avoid a race between the sem count and terminate
         n &= 0x7fffffff;
 
+        DEVICE_PRINT(
+            "CBWriter: wait_all_pages: n={} sem id={} (additional_counts + sem count)={}\n",
+            n,
+            my_sem_id,
+            additional_count + *sem_addr);
         WAYPOINT("TAPW");
         do {
             invalidate_l1_cache();
         } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        DEVICE_PRINT("CBWriter: wait_all_pages: after loop");
         WAYPOINT("TAPD");
     }
 
@@ -405,6 +411,11 @@ public:
 #endif
         DPRINT << "release_pages: n=" << n << " sem_addr: " << (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id)
                << "sem id: " << downstream_sem_id << ENDL();
+        DEVICE_PRINT(
+            "release_pages: n={} sem_addr={} sem id={}\n",
+            n,
+            (uintptr_t)get_semaphore<fd_core_type>(downstream_sem_id),
+            downstream_sem_id);
         Semaphore<fd_core_type>(downstream_sem_id).up(n);
     }
 
@@ -446,10 +457,16 @@ public:
         // Mask that off to avoid a race between the sem count and terminate
         to_wait_for &= 0x7fffffff;
 
+        DEVICE_PRINT(
+            "CBReader: wait_all_pages: to_wait_for={} sem id={} sem count={}\n",
+            to_wait_for,
+            my_sem_id,
+            (*sem_addr & 0x7fffffff));
         WAYPOINT("TAPW");
         do {
             invalidate_l1_cache();
         } while ((*sem_addr & 0x7fffffff) != to_wait_for);  // mask off terminate bit
+        DEVICE_PRINT("CBReader: wait_all_pages: after loop");
         WAYPOINT("TAPD");
     }
 
