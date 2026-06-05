@@ -63,6 +63,51 @@ DEVICE_PRINT("p={:#}\n", Perm::R | Perm::W);    // p=Perm::R | Perm::W
 DEVICE_PRINT("p={}\n",  static_cast<Perm>(24)); // p=(Perm)24    (unknown bits)
 ```
 
+## Printing arrays, tiles, and DEST
+
+Beyond scalars, `DEVICE_PRINT` can dump rows of data in a given `DataFormat`:
+
+### Typed arrays (`dp_typed_array_t`)
+
+Pulled in through [dprint.h](helpers/include/dprint.h). It wraps a `uint32_t` buffer plus a `DataFormat`.
+
+```cpp
+std::uint32_t arr[4] = {0x3F800000, 0x40000000, 0x40400000, 0x40800000};
+DEVICE_PRINT("{}", dp_typed_array_t<4>(static_cast<std::uint16_t>(DataFormat::Float32), arr));
+// ->  1.00   2.00   3.00   4.00
+```
+
+The template parameter is the buffer length in `uint32_t` words; pack narrower
+elements (Float16, Int8, ...) into the words yourself and pass the matching format
+code.
+
+### Tile slices
+
+Defined in [dprint_tile.h](helpers/include/dprint_tile.h). The
+`tile_slice<MAX_BYTES>(l1_addr, fmt, sr, ...)` helper fills a tile straight from an L1 address, decoding it as `fmt` over the cells picked by `SliceRange sr`. Tile and face dimensions default to the standard layout but can be passed explicitly as trailing arguments.
+
+```cpp
+#include "dprint_tile.h"
+
+const DataFormat fmt = static_cast<DataFormat>(formats.unpack_A_src);
+DEVICE_PRINT("{}", tile_slice<64>(params.buffer_A[0], fmt, SliceRange::hw0_32_8()));
+```
+
+- `SliceRange` (e.g. `hw0_32_8()`, `hw0_32_4()`) selects which cells of the tile to sample.
+- `MAX_BYTES` (template param, default 64) caps the captured payload. If the slice produces more data than fits, the row is emitted truncated.
+
+### DEST register dump
+
+Defined in [dprint_tensix.h](helpers/include/dprint_tensix.h). Dumps the Tensix DEST register, one row per DEST row, decoded against the configured DEST data format. (Wormhole and Blackhole only, Quasar is currently unsupported.) Call it from the **MATH** thread, after filling DEST and before `dest_section_done`:
+
+```cpp
+#include "dprint_tensix.h"
+
+// ... Operations on DEST ...
+dprint_tensix_dest_reg(params.DST_INDEX);   // prints "Tile ID = N" + one row per DEST row
+_llk_math_dest_section_done_<...>();
+```
+
 ## Tests that assert on prints
 
 `TestConfig.run()` returns a `TestOutcome` whose `device_print_lines` field holds every line emitted by `DEVICE_PRINT()` during that run, in order. When device print isn't on for the session, the list is empty.
