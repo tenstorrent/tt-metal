@@ -2150,9 +2150,17 @@ class TTSeamlessM4Tv2SpeechEncoder:
 
         Conformer self-attention always uses ``scale=1.0`` because Q weights are pre-scaled
         by 1/√head_dim during preprocessing. Cached tables are ``[S, S, D]`` for ``bmm`` (transpose_b).
+
+        Skips lengths where forward never uses the full table: chunked relative attention at
+        ``slen > _ATTN_QUERY_CHUNK_THRESHOLD``, or when the table would exceed
+        ``_MAX_CACHED_REL_POS_TABLE_BYTES`` (same conditions as ``_relative_embedding_table`` cache).
         """
+        head_dim = self.hidden_size // self.speech_encoder_attention_heads
         enc = self.parameters.encoder
         for slen in seq_lens:
+            table_bytes = slen * slen * head_dim * 2
+            if slen > _ATTN_QUERY_CHUNK_THRESHOLD or table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES:
+                continue
             for i in range(self.speech_encoder_layers):
                 sa = enc.layers[i].self_attn
                 self._relative_embedding_table(
@@ -2175,7 +2183,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Pre-populate shape-dependent caches for ``(batch, seq_len)`` before the first forward.
 
         Caches populated:
-        * ``_rel_pos_tab_cache``   — ``[S, S, D]`` tables (host embedding + TILE upload)
+        * ``_rel_pos_tab_cache``   — ``[S, S, D]`` tables for short seq only (skipped when chunked)
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
         * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
         * depthwise conv weight prep — ``prepare_conv_weights`` only (no Conv2d forward)
