@@ -70,6 +70,7 @@ def run_test_linear_impl(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    replicate_sp_axis=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -85,7 +86,8 @@ def run_test_linear_impl(
     M = torch_input.shape[2] if use_non_fused else torch_input.shape[0]
     K = torch_input.shape[3] if use_non_fused else torch_input.shape[1]
     N = weight_input.shape[3] if use_non_fused else weight_input.shape[1]
-    per_device_M = M // device.shape[sp_axis]
+    # When replicating on the sp axis, M is NOT sharded there — each sp replica holds the full M.
+    per_device_M = M if replicate_sp_axis else M // device.shape[sp_axis]
     if use_persistent_buffers:
         persistent_output_buffers = [
             ttnn.from_torch(
@@ -318,11 +320,13 @@ def run_test_linear_impl(
 
                     tt_device_output = tt_output_chunk[idx]
 
+                    # With sp replicated, every sp replica holds the full-M output, so compare each
+                    # to torch_output[:M] rather than to an M/sp slab.
+                    ref_m = slice(0, per_device_M) if replicate_sp_axis else m_slice
+
                     check_result_chunk.append(
                         assert_quality(
-                            torch_output[c][:, :, i * per_device_M : (i + 1) * per_device_M, :]
-                            if use_non_fused
-                            else torch_output[c][i * per_device_M : (i + 1) * per_device_M, :],
+                            torch_output[c][:, :, ref_m, :] if use_non_fused else torch_output[c][ref_m, :],
                             tt_device_output,
                         )
                     )
@@ -340,6 +344,20 @@ def _create_cluster_submesh(mesh_device, cluster_axis):
     """
     submesh_shape = [1, 1]
     submesh_shape[cluster_axis] = mesh_device.shape[cluster_axis]
+    return mesh_device.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
+
+
+def _create_sp_replicated_submesh(mesh_device, cluster_axis, total_devices=16):
+    """TEMP (profiling): submesh that keeps the full cluster-axis ring AND spans the non-cluster
+    (sp) axis up to `total_devices`, so the op runs on the same device count as the 2D fsdp test.
+    Data is REPLICATED on the sp axis (see run_test_linear), so per-device work is unchanged — the
+    point is to reproduce the fsdp run's fabric contention from concurrent rings, not to shard M.
+    """
+    ring = mesh_device.shape[cluster_axis]
+    sp = min(total_devices // ring, mesh_device.shape[1 - cluster_axis])
+    submesh_shape = [1, 1]
+    submesh_shape[cluster_axis] = ring
+    submesh_shape[1 - cluster_axis] = sp
     return mesh_device.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
 
 
@@ -375,6 +393,7 @@ def run_test_linear(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    replicate_sp_axis=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -419,7 +438,8 @@ def run_test_linear(
         # Fused AGMM gathers K (last dim) across cluster_axis
         shard_dims = [0, 0]
         shard_dims[cluster_axis] = 1  # K on cluster_axis
-        shard_dims[1 - cluster_axis] = 0  # M on the other axis
+        # M on the sp (non-cluster) axis — sharded normally, or replicated for the profiling mode.
+        shard_dims[1 - cluster_axis] = None if replicate_sp_axis else 0
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
@@ -469,6 +489,7 @@ def run_test_linear(
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
         broadcast_gate=broadcast_gate,
+        replicate_sp_axis=replicate_sp_axis,
     )
 
 
@@ -548,7 +569,7 @@ def run_test_linear(
             1,
             0,
             8,
-            8,
+            7,
             0,
         ],
         [
@@ -601,7 +622,8 @@ def run_test_linear(
         (115200, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
         # K-fractured-across-4-devices shapes (K_block_size chosen to evenly
         # divide K-tiles per device: 40 for K=5120, 27 for K=3456).
-        (3072, 5120, 3840, True, True, None, 1, False, 8, 8, 8, 2, 2),
+        (3072, 5120, 3840, True, True, None, 1, False, 12, 4, 10, 2, 2),
+        # (3072, 5120, 3840, True, True, None, 1, False, 14, 4, 8, 2, 2),
         (3072, 5120, 1280, True, True, None, 1, False, 8, 8, 8, 2, 2),
         (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
         (3072, 3456, 5120, True, True, None, 1, False, 8, 9, 8, 2, 2),
@@ -674,7 +696,14 @@ def test_linear(
     fuse_addcmul,
     chunks,
 ):
-    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    # TEMP (profiling): for the plain fused AGMM, run on the full 2D submesh (same device count as
+    # the fsdp test) with M replicated on the sp axis, so the op contends on the fabric like the
+    # 16-device fsdp run. The separate (use_non_fused) and addcmul variants keep the 1xN cluster ring.
+    replicate_sp_axis = (not use_non_fused) and (not fuse_addcmul)
+    if replicate_sp_axis:
+        submesh = _create_sp_replicated_submesh(mesh_device, cluster_axis)
+    else:
+        submesh = _create_cluster_submesh(mesh_device, cluster_axis)
     check_result = run_test_linear(
         submesh,
         M,
@@ -700,6 +729,7 @@ def test_linear(
         cluster_axis=cluster_axis,
         fuse_addcmul=fuse_addcmul,
         chunks=chunks,
+        replicate_sp_axis=replicate_sp_axis,
     )
 
     for n in range(num_iters):
@@ -946,6 +976,7 @@ def run_test_linear_fsdp(
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=2,
         )
+        ttnn.synchronize_device(device)
         return ttnn.experimental.all_gather_minimal_matmul_async(
             tt_input,
             gathered_weight,
@@ -1037,7 +1068,7 @@ def run_test_linear_fsdp(
             2,
             0,
             1,
-            7,
+            8,
             8,
         ],
     ],
@@ -1047,7 +1078,8 @@ def run_test_linear_fsdp(
 @pytest.mark.parametrize(
     "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (12288, 5120, 15360, True, None, 1, 14, 5, 9, 2, 1),
+        (12288, 5120, 15360, True, None, 1, 14, 4, 8, 2, 2),
+        #        (12288, 5120, 15360, True, None, 1, 12, 4, 10, 2, 2),
     ],
     ids=["1xqkv"],
 )
@@ -1092,9 +1124,10 @@ def test_linear_fsdp(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    # Fused path uses a 7x8 grid: the matmul is 7 wide so the freed last column holds the fsdp muxes
-    # (packed along the in1/Y axis) for a short horizontal sender->mux hop. The separate path runs the
-    # plain (non-fsdp) AGMM, which uses the full 8x8 grid (matching test_linear).
+    # Scheme-4 single-row muxes: the fused path now uses the full 8x8 grid (64 worker cores). All 8
+    # muxes (4 in0 + 4 fsdp) share the single row below the grid, interleaved by column parity, so the
+    # matmul reclaims both the old fsdp column and the second mux row. The separate path is the plain
+    # (non-fsdp) AGMM, which already uses the full 8x8 grid (matching test_linear).
     if not fuse_fsdp:
         core_grid_x = 8
         core_grid_y = 8
