@@ -1043,10 +1043,11 @@ static void process_wait() {
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
     }
     if (notify_prefetch) {
-        noc_semaphore_inc(
-            get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)),
-            1,
-            upstream_noc_index);
+        // Same-core (prefetch+dispatch colocated): increment the sync sem in local L1 instead of
+        // a NOC self-loopback. Sole writer, so a plain RMW through the uncached alias is safe.
+        volatile tt_l1_ptr uint32_t* upstream_sync_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            l1_uncached_addr(get_semaphore<fd_core_type>(upstream_sync_sem)));
+        *upstream_sync_sem_addr += 1;
     }
 
     cmd_ptr += sizeof(CQDispatchCmd);
