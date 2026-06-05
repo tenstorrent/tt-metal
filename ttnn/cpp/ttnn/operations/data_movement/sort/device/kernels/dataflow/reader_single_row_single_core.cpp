@@ -22,8 +22,6 @@ Writer:
     * Write output values from L1 to DRAM.
 */
 void kernel_main() {
-    Noc noc;
-
     // Runtime args
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(0);
     const uint32_t index_tensor_buffer_addr = get_arg_val<uint32_t>(1);
@@ -55,12 +53,13 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
     const auto index_accessor = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
-    constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
-    constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_output_cb_index);
+    Noc noc;
     CircularBuffer input_tensor_cb(input_tensor_cb_index);
     CircularBuffer index_output_cb(index_tensor_output_cb_index);
     CircularBuffer rm_input_cb(rm_input_cb_index);
     CircularBuffer rm_index_output_cb(rm_index_output_cb_index);
+    constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
+    constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_output_cb_index);
 
     if constexpr (!is_row_major) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -69,18 +68,28 @@ void kernel_main() {
 
             // Read input tiles from DRAM → tile input CB
             for (uint32_t w = 0; w < Wt; w++) {
-                cb_reserve_back(input_tensor_cb_index, one_tile);
-                noc.async_read(input_accessor, input_tensor_cb, input_tensor_tile_size, {.page_id = h * Wt + w}, {});
+                input_tensor_cb.reserve_back(one_tile);
+                noc.async_read(
+                    input_accessor,
+                    input_tensor_cb,
+                    input_tensor_tile_size,
+                    {.page_id = h * Wt + w, .offset_bytes = 0},
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_push_back(input_tensor_cb_index, one_tile);
+                input_tensor_cb.push_back(one_tile);
             }
 
             // Write sorted index tiles from index output CB → DRAM
             for (uint32_t w = 0; w < Wt; w++) {
-                cb_wait_front(index_tensor_output_cb_index, one_tile);
-                noc.async_write(index_output_cb, index_accessor, index_tensor_tile_size, {}, {.page_id = h * Wt + w});
+                index_output_cb.wait_front(one_tile);
+                noc.async_write(
+                    index_output_cb,
+                    index_accessor,
+                    index_tensor_tile_size,
+                    {.offset_bytes = 0},
+                    {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(index_tensor_output_cb_index, one_tile);
+                index_output_cb.pop_front(one_tile);
             }
         }
     } else {
@@ -107,10 +116,15 @@ void kernel_main() {
 
             // --- Read TILE_H input rows into rm_input_cb ---
             for (uint32_t row = 0; row < TILE_H; row++) {
-                cb_reserve_back(rm_input_cb_index, one_tile);
-                noc.async_read(input_accessor, rm_input_cb, W_value_bytes, {.page_id = row_base + row}, {});
+                rm_input_cb.reserve_back(one_tile);
+                noc.async_read(
+                    input_accessor,
+                    rm_input_cb,
+                    W_value_bytes,
+                    {.page_id = row_base + row, .offset_bytes = 0},
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_push_back(rm_input_cb_index, one_tile);
+                rm_input_cb.push_back(one_tile);
             }
 
             // --- Drain TILE_H untilized index rows from rm_index_output_cb → DRAM ---
@@ -121,10 +135,15 @@ void kernel_main() {
             // little-endian layout that the host expects, so no byte swap is
             // required here regardless of the index dtype.
             for (uint32_t row = 0; row < TILE_H; row++) {
-                cb_wait_front(rm_index_output_cb_index, one_tile);
-                noc.async_write(rm_index_output_cb, index_accessor, W_index_bytes, {}, {.page_id = row_base + row});
+                rm_index_output_cb.wait_front(one_tile);
+                noc.async_write(
+                    rm_index_output_cb,
+                    index_accessor,
+                    W_index_bytes,
+                    {.offset_bytes = 0},
+                    {.page_id = row_base + row, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(rm_index_output_cb_index, one_tile);
+                rm_index_output_cb.pop_front(one_tile);
             }
         }
     }

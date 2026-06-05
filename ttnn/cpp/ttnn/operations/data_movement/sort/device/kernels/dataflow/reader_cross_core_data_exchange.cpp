@@ -100,25 +100,29 @@ void kernel_main() {
             // input_tensor_cb_index for the existing TILE-format sort flow.
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                cb_reserve_back(rm_input_cb_index, one_tile);
+                rm_input_cb.reserve_back(one_tile);
                 noc.async_read(
                     input_tensor_accessor,
                     rm_input_cb,
                     W_value_slice_bytes,
                     {.page_id = row_base + row, .offset_bytes = value_slice_offset_bytes},
-                    {});
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_push_back(rm_input_cb_index, one_tile);
+                rm_input_cb.push_back(one_tile);
             }
         } else {
             // TILE input path
             for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-                cb_reserve_back(input_tensor_cb_index, one_tile);
+                input_tensor_cb.reserve_back(one_tile);
                 const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
                 noc.async_read(
-                    input_tensor_accessor, input_tensor_cb, input_tensor_tile_size_bytes, {.page_id = tile_offset}, {});
+                    input_tensor_accessor,
+                    input_tensor_cb,
+                    input_tensor_tile_size_bytes,
+                    {.page_id = tile_offset, .offset_bytes = 0},
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_push_back(input_tensor_cb_index, one_tile);
+                input_tensor_cb.push_back(one_tile);
             }  // w loop
         }
 
@@ -182,15 +186,15 @@ void kernel_main() {
             // produces little-endian uint16/uint32 elements, so no byte swap.
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                cb_wait_front(rm_index_output_cb_index, one_tile);
+                rm_index_output_cb.wait_front(one_tile);
                 noc.async_write(
                     rm_index_output_cb,
                     index_tensor_output_accessor,
                     W_index_slice_bytes,
-                    {},
+                    {.offset_bytes = 0},
                     {.page_id = row_base + row, .offset_bytes = index_slice_offset_bytes});
                 noc.async_write_barrier();
-                cb_pop_front(rm_index_output_cb_index, one_tile);
+                rm_index_output_cb.pop_front(one_tile);
             }
         } else {
             // Write output index data (TILE path)

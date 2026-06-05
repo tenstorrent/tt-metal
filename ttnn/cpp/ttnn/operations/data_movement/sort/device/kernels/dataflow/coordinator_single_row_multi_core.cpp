@@ -13,8 +13,6 @@
 #include <cstdint>
 
 void kernel_main() {
-    Noc noc;
-
     // Runtime args
     const uint32_t start_core_physical_coord_x = get_arg_val<uint32_t>(0);
     const uint32_t start_core_physical_coord_y = get_arg_val<uint32_t>(1);
@@ -54,12 +52,13 @@ void kernel_main() {
     const auto output_tensor_addr_gen = TensorAccessor(output_tensor_args, output_tensor_buffer_addr);
     const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
-    constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
-    constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
+    Noc noc;
     CircularBuffer input_tensor_cb(input_tensor_cb_index);
     CircularBuffer index_tensor_cb(index_tensor_cb_index);
     CircularBuffer rm_coord_value_row(rm_coord_value_row_cb);
     CircularBuffer rm_coord_index_row(rm_coord_index_row_cb);
+    const uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
+    const uint32_t index_tensor_tile_size = get_tile_size(index_tensor_cb_index);
 
     // Semaphore setup
     Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
@@ -76,26 +75,26 @@ void kernel_main() {
             // Generate indexes
             if constexpr (is_row_major) {
                 for (uint32_t row = 0; row < TILE_H; row++) {
-                    cb_reserve_back(rm_coord_value_row_cb, one_tile);
+                    rm_coord_value_row.reserve_back(one_tile);
                     noc.async_read(
                         input_tensor_addr_ger,
                         rm_coord_value_row,
                         W_tile_bytes,
                         {.page_id = row_base + row, .offset_bytes = static_cast<uint32_t>(w * W_tile_bytes)},
-                        {});
+                        {.offset_bytes = 0});
                     noc.async_read_barrier();
                     noc.async_write(
                         use<CircularBuffer::AddrSelector::WRITE_PTR>(rm_coord_value_row),
                         output_tensor_addr_gen,
                         W_tile_bytes,
-                        {},
+                        {.offset_bytes = 0},
                         {.page_id = row_base + row, .offset_bytes = static_cast<uint32_t>(w * W_tile_bytes)});
                     noc.async_write_barrier();
-                    cb_push_back(rm_coord_value_row_cb, one_tile);
-                    cb_pop_front(rm_coord_value_row_cb, one_tile);
+                    rm_coord_value_row.push_back(one_tile);
+                    rm_coord_value_row.pop_front(one_tile);
                 }
 
-                cb_reserve_back(rm_coord_index_row_cb, one_tile);
+                rm_coord_index_row.reserve_back(one_tile);
                 const uint32_t l1_idx = rm_coord_index_row.get_write_ptr();
                 const uint32_t idx_base = w * tile_width;
                 if (is_32_bit_data) {
@@ -114,12 +113,12 @@ void kernel_main() {
                         use<CircularBuffer::AddrSelector::WRITE_PTR>(rm_coord_index_row),
                         output_index_tensor_addr_gen,
                         W_index_bytes,
-                        {},
+                        {.offset_bytes = 0},
                         {.page_id = row_base + row, .offset_bytes = static_cast<uint32_t>(w * W_index_bytes)});
                     noc.async_write_barrier();
                 }
-                cb_push_back(rm_coord_index_row_cb, one_tile);
-                cb_pop_front(rm_coord_index_row_cb, one_tile);
+                rm_coord_index_row.push_back(one_tile);
+                rm_coord_index_row.pop_front(one_tile);
 
             } else {
                 if (is_32_bit_data) {
@@ -128,23 +127,35 @@ void kernel_main() {
                     generate_index_tile<uint16_t>(index_tensor_cb_index, w);
                 }
 
-                cb_wait_front(index_tensor_cb_index, one_tile);
+                index_tensor_cb.wait_front(one_tile);
                 noc.async_write(
-                    index_tensor_cb, output_index_tensor_addr_gen, index_tensor_tile_size, {}, {.page_id = h * Wt + w});
+                    index_tensor_cb,
+                    output_index_tensor_addr_gen,
+                    index_tensor_tile_size,
+                    {.offset_bytes = 0},
+                    {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(index_tensor_cb_index, one_tile);
+                index_tensor_cb.pop_front(one_tile);
 
-                cb_reserve_back(input_tensor_cb_index, one_tile);
+                input_tensor_cb.reserve_back(one_tile);
                 noc.async_read(
-                    input_tensor_addr_ger, input_tensor_cb, input_tensor_tile_size, {.page_id = h * Wt + w}, {});
+                    input_tensor_addr_ger,
+                    input_tensor_cb,
+                    input_tensor_tile_size,
+                    {.page_id = h * Wt + w, .offset_bytes = 0},
+                    {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_push_back(input_tensor_cb_index, one_tile);
+                input_tensor_cb.push_back(one_tile);
 
-                cb_wait_front(input_tensor_cb_index, one_tile);
+                input_tensor_cb.wait_front(one_tile);
                 noc.async_write(
-                    input_tensor_cb, output_tensor_addr_gen, input_tensor_tile_size, {}, {.page_id = h * Wt + w});
+                    input_tensor_cb,
+                    output_tensor_addr_gen,
+                    input_tensor_tile_size,
+                    {.offset_bytes = 0},
+                    {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(input_tensor_cb_index, one_tile);
+                input_tensor_cb.pop_front(one_tile);
             }
         }  // Wt loop
 

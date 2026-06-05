@@ -22,8 +22,6 @@ Writer:
     * Write output values from L1 to DRAM.
 */
 void kernel_main() {
-    Noc noc;
-
     // Runtime args
     const uint32_t value_tensor_buffer_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_loop_count = get_arg_val<uint32_t>(1);
@@ -54,9 +52,10 @@ void kernel_main() {
     // For ROW_MAJOR layout: one "page" = one row of W elements (W_value_bytes).
     const auto value_accessor = TensorAccessor(value_tensor_args, value_tensor_buffer_addr);
 
-    constexpr uint32_t value_tensor_tile_size = get_tile_size(value_tensor_cb_index);
+    Noc noc;
     CircularBuffer value_tensor_cb(value_tensor_cb_index);
     CircularBuffer rm_value_output_cb(rm_value_output_cb_index);
+    constexpr uint32_t value_tensor_tile_size = get_tile_size(value_tensor_cb_index);
 
     if constexpr (!is_row_major) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -74,10 +73,15 @@ void kernel_main() {
 
             // Write sorted value tiles from value_tensor_cb → DRAM
             for (uint32_t w = 0; w < Wt; w++) {
-                cb_wait_front(value_tensor_cb_index, one_tile);
-                noc.async_write(value_tensor_cb, value_accessor, value_tensor_tile_size, {}, {.page_id = h * Wt + w});
+                value_tensor_cb.wait_front(one_tile);
+                noc.async_write(
+                    value_tensor_cb,
+                    value_accessor,
+                    value_tensor_tile_size,
+                    {.offset_bytes = 0},
+                    {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(value_tensor_cb_index, one_tile);
+                value_tensor_cb.pop_front(one_tile);
             }
         }
     } else {
@@ -112,10 +116,15 @@ void kernel_main() {
             // Drain 32 sorted RM value rows from rm_value_output_cb → DRAM
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                cb_wait_front(rm_value_output_cb_index, one_tile);
-                noc.async_write(rm_value_output_cb, value_accessor, W_value_bytes, {}, {.page_id = row_base + row});
+                rm_value_output_cb.wait_front(one_tile);
+                noc.async_write(
+                    rm_value_output_cb,
+                    value_accessor,
+                    W_value_bytes,
+                    {.offset_bytes = 0},
+                    {.page_id = row_base + row, .offset_bytes = 0});
                 noc.async_write_barrier();
-                cb_pop_front(rm_value_output_cb_index, one_tile);
+                rm_value_output_cb.pop_front(one_tile);
             }
         }
     }
