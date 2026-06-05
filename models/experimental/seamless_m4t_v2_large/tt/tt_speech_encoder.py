@@ -2247,6 +2247,17 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if own_encoder_attn_4d and attn_4d is not None:
             ttnn.deallocate(attn_4d)
 
+        # At exactly ``_LONG_SEQ_LINEAR_CHUNK_ROWS`` (512) mel frames the chunked 1D FFN uses one
+        # full chunk with no pad — on TP>1 the encoder LN output can alias a buffer that is gone
+        # before ``h + intermediate_ffn``. Force DRAM interleaved before the residual add.
+        if seq == _LONG_SEQ_LINEAR_CHUNK_ROWS:
+            if ttnn.is_sharded(h):
+                h_dram = ttnn.sharded_to_interleaved(h, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+                ttnn.deallocate(h)
+                h = h_dram
+            else:
+                h = self._to_act_mc(h, seq_len=seq)
+
         im = p.intermediate_ffn
         # The 0.5 scale is folded into intermediate_ffn output_dense weights at load time.
         long_audio_add_mc = self._mc_act(seq_len=seq)
