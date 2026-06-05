@@ -325,8 +325,10 @@ void kernel_main() {
             DeviceZoneScopedN("RMS_POST");
             for (uint32_t r = 0; r < rows_in_chunk; r++) {
                 const uint32_t row_base = r * num_tile_cols;
+                // Single shared cos/sin tile cursor: in broadcast RoPE the cos
+                // and sin sequences cycle identically over head_dim_tiles, and
+                // the fused finalize multiplies both with the same index.
                 uint32_t rope_cos_tile_in_head = 0;
-                uint32_t rope_sin_tile_in_head = 0;
 
                 // Per-head norm: do reduce + eps+rsqrt + sub-phase 1 per head, so
                 // each head's rsqrt only stays in reduce_result_cb long enough to
@@ -550,105 +552,52 @@ void kernel_main() {
                     }  // P_MM
 
                     {
-                        DeviceZoneScopedN("P_COS");
-                        // ----- Sub-phase 3b: intermediate * cos → intermediate (in-place) -----
-                        // Per-head RoPE (per_head_rope=1): rope_cos_cb holds
-                        // num_tile_cols tiles (one per col), indexed directly by
-                        // col_tile+i. Broadcast RoPE (per_head_rope=0): rope_cos_cb
-                        // holds head_dim_tiles tiles, cycled with rope_cos_tile_in_head.
-                        // Cumulative wait lets compute start as soon as first cos
-                        // tiles arrive.
+                        DeviceZoneScopedN("P_ROPE");
+                        // ----- Fused RoPE finalize: out = x*cos + rotate(x)*sin -----
+                        // FPU dst-accumulate. The first mul writes x*cos into dst;
+                        // the second mul is initialized with acc_to_dest=true so the
+                        // FPU computes rotate(x)*sin + dst -> dst (the add is free,
+                        // done by the multiply, in fp32 dest). A SINGLE final rounding
+                        // happens at pack -> precision-preserving (same as the old
+                        // fp32-intermediate add). 1 dst reg / output tile (block_size
+                        // tiles per acquire), 1 pack/tile. Replaces P_COS/P_SIN/P_ADD.
+                        //
+                        // Broadcast RoPE (per_head_rope==0) reuses head_dim_tiles cos/
+                        // sin tiles cyclically; cos and sin share the same index, so we
+                        // recompute the cursor from rope_base for both mul passes.
                         reconfig_data_format(intermediate_cb, rope_cos_cb);
-                        pack_reconfig_data_format(intermediate_cb);
-                        mul_tiles_init(intermediate_cb, rope_cos_cb);
-                        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            const uint32_t cos_tiles_needed =
-                                (per_head_rope != 0)
-                                    ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size)
-                                                                                : num_tile_cols)
-                                    : (((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size)
-                                                                                  : head_dim_tiles);
-                            cb_wait_front(rope_cos_cb, cos_tiles_needed);
-                            cb_wait_front(intermediate_cb, block_size);
-                            tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                if constexpr (per_head_rope != 0) {
-                                    mul_tiles(intermediate_cb, rope_cos_cb, i, col_tile + i, i);
-                                } else {
-                                    mul_tiles(intermediate_cb, rope_cos_cb, i, rope_cos_tile_in_head, i);
-                                    rope_cos_tile_in_head++;
-                                    if (rope_cos_tile_in_head == head_dim_tiles) {
-                                        rope_cos_tile_in_head = 0;
-                                    }
-                                }
-                            }
-                            tile_regs_commit();
-                            cb_pop_front(intermediate_cb, block_size);
-                            cb_reserve_back(intermediate_cb, block_size);
-                            tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                pack_tile(i, intermediate_cb);
-                            }
-                            tile_regs_release();
-                            cb_push_back(intermediate_cb, block_size);
-                        }
-                    }  // P_COS
-
-                    {
-                        DeviceZoneScopedN("P_SIN");
-                        // ----- Sub-phase 3c: rotated * sin → rotated (in-place) -----
-                        // Same pattern as cos: per_head_rope=1 uses col_tile+i index
-                        // directly; per_head_rope=0 cycles within head_dim_tiles.
-                        reconfig_data_format(rotated_input_cb, rope_sin_cb);
-                        pack_reconfig_data_format(rotated_input_cb);
-                        mul_tiles_init(rotated_input_cb, rope_sin_cb);
-                        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-                            const uint32_t sin_tiles_needed =
-                                (per_head_rope != 0)
-                                    ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size)
-                                                                                : num_tile_cols)
-                                    : (((col_tile + block_size) < head_dim_tiles) ? (col_tile + block_size)
-                                                                                  : head_dim_tiles);
-                            cb_wait_front(rope_sin_cb, sin_tiles_needed);
-                            cb_wait_front(rotated_input_cb, block_size);
-                            tile_regs_acquire();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                if constexpr (per_head_rope != 0) {
-                                    mul_tiles(rotated_input_cb, rope_sin_cb, i, col_tile + i, i);
-                                } else {
-                                    mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_sin_tile_in_head, i);
-                                    rope_sin_tile_in_head++;
-                                    if (rope_sin_tile_in_head == head_dim_tiles) {
-                                        rope_sin_tile_in_head = 0;
-                                    }
-                                }
-                            }
-                            tile_regs_commit();
-                            cb_pop_front(rotated_input_cb, block_size);
-                            cb_reserve_back(rotated_input_cb, block_size);
-                            tile_regs_wait();
-                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                pack_tile(i, rotated_input_cb);
-                            }
-                            tile_regs_release();
-                            cb_push_back(rotated_input_cb, block_size);
-                        }
-                    }  // P_SIN
-
-                    {
-                        DeviceZoneScopedN("P_ADD");
-                        // ----- Sub-phase 3d: intermediate + rotated → output -----
-                        reconfig_data_format(intermediate_cb, rotated_input_cb);
                         pack_reconfig_data_format(output_cb);
-                        add_tiles_init(intermediate_cb, rotated_input_cb);
                         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                            const uint32_t rope_tiles_needed =
+                                (per_head_rope != 0)
+                                    ? ((col_tile + block_size <= num_tile_cols) ? (col_tile + block_size)
+                                                                                : num_tile_cols)
+                                    : head_dim_tiles;
+                            cb_wait_front(rope_cos_cb, rope_tiles_needed);
+                            cb_wait_front(rope_sin_cb, rope_tiles_needed);
                             cb_wait_front(intermediate_cb, block_size);
                             cb_wait_front(rotated_input_cb, block_size);
                             cb_reserve_back(output_cb, block_size);
-                            // Standard acquire→math→commit→wait→pack→release.
+                            const uint32_t rope_base = rope_cos_tile_in_head;
                             tile_regs_acquire();
+                            // x*cos -> dst (overwrite: acc_to_dest=false)
+                            binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(intermediate_cb, rope_cos_cb, false);
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                                add_tiles(intermediate_cb, rotated_input_cb, i, i, i);
+                                const uint32_t rope_idx =
+                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                mul_tiles(intermediate_cb, rope_cos_cb, i, rope_idx, i);
+                            }
+                            // rotate(x)*sin + dst -> dst (FPU accumulate: acc_to_dest=true)
+                            binary_tiles_init<true, EltwiseBinaryType::ELWMUL>(rotated_input_cb, rope_sin_cb, true);
+                            uint32_t valid = 0;
+                            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                                const uint32_t rope_idx =
+                                    (per_head_rope != 0) ? (col_tile + i) : ((rope_base + i) % head_dim_tiles);
+                                mul_tiles(rotated_input_cb, rope_sin_cb, i, rope_idx, i);
+                                valid++;
+                            }
+                            if constexpr (per_head_rope == 0) {
+                                rope_cos_tile_in_head = (rope_base + valid) % head_dim_tiles;
                             }
                             tile_regs_commit();
                             tile_regs_wait();
@@ -660,7 +609,7 @@ void kernel_main() {
                             cb_pop_front(intermediate_cb, block_size);
                             cb_pop_front(rotated_input_cb, block_size);
                         }
-                    }  // P_ADD
+                    }  // P_ROPE
                 }
 
                 if constexpr (fuse_rope) {
