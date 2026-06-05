@@ -64,7 +64,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     auto all_compute_cores = inputA_core_range_set.merge(output_core_range_set);
     auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
 
-    log_info(tt::LogOp, "MatmulDecode: all_compute_cores: {}", all_compute_cores_with_bbox.str());
+    log_debug(tt::LogOp, "MatmulDecode: all_compute_cores: {}", all_compute_cores_with_bbox.str());
 
     std::array<uint32_t, 2> inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
 
@@ -150,7 +150,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     constexpr uint32_t gather_sem_id = 0;
     constexpr uint32_t done_sem_id = 1;
-    log_info(tt::LogOp, "MatmulDecode: num_senders: {}", num_senders);
+    log_debug(tt::LogOp, "MatmulDecode: num_senders: {}", num_senders);
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = gather_sem_id,
         .core_ranges = all_compute_cores_with_bbox,
@@ -211,7 +211,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const std::vector<CoreCoord> all_reader_cores = corerange_to_cores(all_compute_cores_with_bbox, std::nullopt, true);
 
     auto build_reader_kernel = [&](const std::vector<CoreCoord>& cores, NOC noc) {
-        log_info(tt::LogOp, "MatmulDecode: building reader kernel for cores: {} on noc: {}", cores, noc);
+        log_debug(tt::LogOp, "MatmulDecode: building reader kernel for cores: {} on noc: {}", cores, noc);
         std::vector<CoreRange> ranges;
         ranges.reserve(cores.size());
         for (const auto& core : cores) {
@@ -275,14 +275,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
     const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "MatmulDecode: M_tiles: {}, K_tiles: {}, inB_N_tiles_per_core: {}, inA_K_tiles_per_core: {}",
         M_tiles,
         K_tiles,
         inB_N_tiles_per_core,
         inA_K_tiles_per_core);
-    log_info(tt::LogOp, "MatmulDecode: num_blocks_h: {}, last_out_block_h: {}", num_blocks_h, last_out_block_h);
+    log_debug(tt::LogOp, "MatmulDecode: num_blocks_h: {}, last_out_block_h: {}", num_blocks_h, last_out_block_h);
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/compute/compute_full_width_sharded.cpp";
