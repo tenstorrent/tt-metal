@@ -34,6 +34,7 @@ from .tracy_prefill_common import (
 )
 
 
+@pytest.mark.gemma4_pr_44957
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")

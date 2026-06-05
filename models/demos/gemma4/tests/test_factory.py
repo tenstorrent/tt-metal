@@ -29,7 +29,7 @@ _PCC_THRESHOLDS_PATH = os.path.join(os.path.dirname(__file__), "pcc_thresholds.j
 # sliding-window regime gets a prefill kernel run. Long lengths are gated by
 # the --max-prefill CLI option (see conftest); tests above the cap are
 # auto-skipped to keep the routine loop fast.
-PREFILL_BUCKETS = [128, 1024, 4096]
+PREFILL_BUCKETS = [128, 1024, 4096, 8192]
 
 
 def _get_model_path():
@@ -93,6 +93,21 @@ def _model_key():
     return os.path.basename(_get_model_path().rstrip("/"))
 
 
+def _lookup_model_entry(table, model_key):
+    """Resolve a model entry from pcc_thresholds.json, case-insensitively.
+
+    HF_MODEL may use ``google/gemma-4-31b-it`` while the table keys use
+    ``gemma-4-31B-it``; basename casing must not force the 0.99 default.
+    """
+    if model_key in table:
+        return table[model_key]
+    key_lower = model_key.lower()
+    for entry_key, entry in table.items():
+        if entry_key.lower() == key_lower:
+            return entry
+    return {}
+
+
 def _mesh_key_from_node_name(node_name):
     """Extract the mesh-shape suffix (e.g. "1x1") from a pytest node name.
 
@@ -124,7 +139,7 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
-    model_entry = table.get(_model_key(), {})
+    model_entry = _lookup_model_entry(table, _model_key())
     mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
     return mesh_entry.get(node_name, default)
 

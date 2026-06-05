@@ -4,6 +4,21 @@
 import pytest
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "gemma4_ashai_parity: Direct model prefill/decode PCC vs HF (Ashai regression guard)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_pr_44955: Batched prefill integration (#44955)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_pr_44957: Prefill device trace parity/perf (#44957)",
+    )
+
+
 def pytest_addoption(parser):
     """Add custom command line options for pytest"""
     parser.addoption(

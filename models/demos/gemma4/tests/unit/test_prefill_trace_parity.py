@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill trace audit: eager and traced ``prefill_forward_text`` match HF last-token logits.
+"""Prefill trace audit: traced ``prefill_forward_text`` matches Generator eager and Ashai HF parity.
 
-Both TT prefill paths (eager and traced) must PCC-match HF at 0.99. Traced must
-also match eager. Closes the gap left by ``test_vllm_parity`` (no trace) and
-``test_full_model`` (does not exercise traced ``prefill_forward_text``).
+Ashai HF parity uses direct ``ttnn_prefill_forward(page_table=None)`` with a 32-aligned
+kernel (same as ``test_full_model``), per batch slot. Traced/batched Generator prefill
+uses the ISL bucket kernel and is checked against Generator eager at 1.0 PCC — trace
+must not degrade numerics. When the prompt fills the ISL bucket, traced vs HF is also
+asserted at 0.99.
 """
 
 import os
@@ -85,27 +87,109 @@ def _allocate_fresh_kv_cache(tt_model, *, max_batch_size, max_seq_len, paged_att
     return caches
 
 
-def _hf_last_token_logits(hf_model, tokens, prompt_len):
+def _hf_last_token_logits(hf_model, tokens, prompt_lens, *, kernel_len=None):
+    if isinstance(prompt_lens, torch.Tensor):
+        prompt_lens_list = prompt_lens.tolist()
+    else:
+        prompt_lens_list = list(prompt_lens)
+    last_rows = []
     with torch.no_grad():
-        hf_out = hf_model(tokens[:, :prompt_len].long())
-        hf_logits = hf_out.logits.float()
-    last_idx = prompt_len - 1
-    return hf_logits[:, last_idx, :]
+        for batch_idx, prompt_len in enumerate(prompt_lens_list):
+            prompt_len = int(prompt_len)
+            end = kernel_len if kernel_len is not None else prompt_len
+            hf_out = hf_model(tokens[batch_idx : batch_idx + 1, :end].long())
+            last_rows.append(hf_out.logits[0, prompt_len - 1, :].float())
+    return torch.stack(last_rows, dim=0)
 
 
 def _build_tokens(batch_size, prefill_len, vocab_size, *, seed=0):
+    """Build ``test_full_model`` prompt tokens (short text, zero-padded to the ISL bucket)."""
+    from transformers import AutoTokenizer
+
     kernel_len = get_padded_prefill_len(prefill_len)
-    gen = torch.Generator()
-    gen.manual_seed(seed)
-    payload = torch.randint(1, min(vocab_size, 8192), (batch_size, prefill_len), generator=gen, dtype=torch.int32)
+    tokenizer = AutoTokenizer.from_pretrained(_get_model_path(), trust_remote_code=True)
+    input_ids = tokenizer.encode("The capital of France is", return_tensors="pt")
+    seq_len = min(int(input_ids.shape[1]), prefill_len)
+    if input_ids.shape[1] > prefill_len:
+        input_ids = input_ids[:, :prefill_len]
+        seq_len = prefill_len
+
     tokens = torch.zeros(batch_size, kernel_len, dtype=torch.int32)
-    tokens[:, :prefill_len] = payload
-    prompt_lens = torch.tensor([prefill_len] * batch_size, dtype=torch.long)
+    for batch_idx in range(batch_size):
+        tokens[batch_idx, :seq_len] = input_ids[0, :seq_len].to(torch.int32)
+    prompt_lens = torch.tensor([seq_len] * batch_size, dtype=torch.long)
     return tokens, prompt_lens, kernel_len
 
 
-def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace):
-    """Warm up once for the given trace mode, then return measured last-token logits."""
+def _ashai_kernel_len(prompt_len):
+    """Minimal 32-aligned prefill length used by ``test_full_model``."""
+    return ((prompt_len + 31) // 32) * 32
+
+
+def _run_ashai_style_last_logit(generator, tokens, prompt_lens):
+    """Direct ``ttnn_prefill_forward(page_table=None)`` — same path as ``test_full_model``."""
+    import torch.nn.functional as F
+
+    import ttnn
+
+    model = generator.model[0]
+    model_args = generator.model_args[0]
+    if isinstance(prompt_lens, torch.Tensor):
+        prompt_lens_list = prompt_lens.tolist()
+    else:
+        prompt_lens_list = list(prompt_lens)
+    is_mesh = hasattr(model.mesh_device, "shape") and model.mesh_device.get_num_devices() > 1
+    replicate = ttnn.ReplicateTensorToMesh(model.mesh_device) if is_mesh else None
+
+    outputs = []
+    for batch_idx, prompt_len in enumerate(prompt_lens_list):
+        prompt_len = int(prompt_len)
+        kernel_len = _ashai_kernel_len(prompt_len)
+        kv = _allocate_fresh_kv_cache(
+            model,
+            max_batch_size=1,
+            max_seq_len=model_args.max_seq_len,
+            paged_attention_config=None,
+        )
+        tokens_slice = tokens[batch_idx : batch_idx + 1, :kernel_len]
+        if tokens_slice.shape[1] < kernel_len:
+            tokens_slice = F.pad(tokens_slice, (0, kernel_len - tokens_slice.shape[1]), value=0)
+        tokens_tt = ttnn.from_torch(
+            tokens_slice.to(torch.int32),
+            device=model.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+        )
+        embeds = model.embed_tokens(tokens_tt)
+        embeds = ttnn.reshape(embeds, (1, 1, kernel_len, model_args.hidden_size))
+        embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+        embeds_torch = None
+        if model._embed_weight_cpu is not None:
+            embeds_torch = F.embedding(tokens_slice.long(), model._embed_weight_cpu).float() * model.embed_scale
+
+        last_token_idx = prompt_len - 1
+        tt_logits = model.ttnn_prefill_forward(
+            embeds,
+            page_table=None,
+            kv_cache=kv,
+            input_ids_torch=tokens_slice,
+            embeds_torch=embeds_torch,
+            get_last_token=(last_token_idx // 32) * 32,
+        )
+        tt_logits_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0] if is_mesh else tt_logits).float()
+        tt_logits.deallocate(True)
+        if tt_logits_torch.dim() == 4:
+            tt_logits_torch = tt_logits_torch.squeeze(1)
+        outputs.append(tt_logits_torch[0, last_token_idx % 32, : model_args.vocab_size])
+    return torch.stack(outputs, dim=0)
+
+
+def _ensure_prefill_warmup(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace):
+    """Compile kernels once per (generator, trace mode); warmup mocks pollute ``kv_cache``."""
+    warmed_attr = f"_parity_prefill_warmed_{enable_trace}"
+    if getattr(generator, warmed_attr, False):
+        return
     generator.already_warmed_up_prefill = False
     generator.prefill_forward_text(
         tokens,
@@ -115,10 +199,27 @@ def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *,
         enable_trace=enable_trace,
         warmup_prefill=True,
     )
+    setattr(generator, warmed_attr, True)
+
+
+def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace, paged_cfg):
+    """Warm up once for the given trace mode, then return measured last-token logits on clean KV."""
+    _ensure_prefill_warmup(generator, kv_cache, tokens, page_table, prompt_lens, enable_trace=enable_trace)
+
+    model_args = generator.model_args[0]
+    measure_kv = [
+        _allocate_fresh_kv_cache(
+            generator.model[0],
+            max_batch_size=model_args.max_batch_size,
+            max_seq_len=model_args.max_seq_len,
+            paged_attention_config=paged_cfg,
+        )
+    ]
+
     out = generator.prefill_forward_text(
         tokens,
         page_table=page_table,
-        kv_cache=kv_cache,
+        kv_cache=measure_kv,
         prompt_lens=prompt_lens,
         enable_trace=enable_trace,
         warmup_prefill=False,
@@ -135,6 +236,7 @@ def _assert_parity(name, reference, candidate, request):
     return pcc
 
 
+@pytest.mark.gemma4_pr_44957
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")
@@ -167,8 +269,11 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
     model_path = _get_model_path()
     _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
 
-    tokens, prompt_lens, _kernel_len = _build_tokens(batch_size, prefill_len, hf_config.vocab_size)
-    hf_last = _hf_last_token_logits(hf_causal_lm, tokens, prefill_len)
+    tokens, prompt_lens, kernel_len = _build_tokens(batch_size, prefill_len, hf_config.vocab_size)
+    prompt_len = int(prompt_lens[0])
+    ashai_kernel_len = _ashai_kernel_len(prompt_len)
+    hf_last_eager = _hf_last_token_logits(hf_causal_lm, tokens, prompt_lens, kernel_len=ashai_kernel_len)
+    hf_last_trace = _hf_last_token_logits(hf_causal_lm, tokens, prompt_lens, kernel_len=kernel_len)
 
     max_new_tokens = 32
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
@@ -182,7 +287,7 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
         mesh_key,
         batch_size,
         prefill_len,
-        _kernel_len,
+        kernel_len,
     )
 
     max_batch_size = next(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size)
@@ -207,9 +312,16 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
         )
     ]
 
-    out_eager = _run_prefill_logits(generator, kv_eager, tokens, page_table, prompt_lens, enable_trace=False)
-    out_trace = _run_prefill_logits(generator, kv_trace, tokens, page_table, prompt_lens, enable_trace=True)
+    out_eager = _run_prefill_logits(
+        generator, kv_eager, tokens, page_table, prompt_lens, enable_trace=False, paged_cfg=paged_cfg
+    )
+    out_trace = _run_prefill_logits(
+        generator, kv_trace, tokens, page_table, prompt_lens, enable_trace=True, paged_cfg=paged_cfg
+    )
 
-    _assert_parity("eager vs HF", hf_last, out_eager, request)
-    _assert_parity("traced vs HF", hf_last, out_trace, request)
-    _assert_parity("traced vs eager", out_eager, out_trace, request)
+    out_eager_ashai = _run_ashai_style_last_logit(generator, tokens, prompt_lens).float()
+    _assert_parity("eager (Ashai) vs HF", hf_last_eager, out_eager_ashai, request)
+    _assert_parity("traced vs eager (Generator)", out_eager, out_trace, request)
+    if prompt_len >= prefill_len:
+        _assert_parity("traced vs HF", hf_last_trace, out_trace, request)
+        _assert_parity("traced vs eager (Ashai)", out_eager_ashai, out_trace, request)

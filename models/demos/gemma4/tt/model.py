@@ -843,7 +843,9 @@ class Gemma4Model:
             tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
         else:
             per_user_seq_len = tokens_torch.shape[-1]
-            tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
+            # Match test_full_model / vLLM parity: [1, seq_len] token rows, not
+            # [1, 1, 1, seq_len]. The flattened layout is for batched-prefill streams.
+            tokens_for_embed = tokens_torch
 
         tt_tokens = ttnn.from_torch(
             tokens_for_embed,
@@ -885,14 +887,24 @@ class Gemma4Model:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, None
 
         tt_embeds = self.embed_tokens(tt_tokens)
-        if len(tt_embeds.shape) == 3:
-            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        if batch_size > 1:
+            if len(tt_embeds.shape) == 3:
+                tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        else:
+            tt_embeds = ttnn.reshape(tt_embeds, (1, 1, per_user_seq_len, self.hidden_size))
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
 
         return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
+
+    def _reshape_prefill_embeds(self, tt_embeds, seq_len):
+        if len(tt_embeds.shape) == 3:
+            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
+        if tt_embeds.shape[2] != seq_len:
+            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
+        return tt_embeds
 
     def transform_and_embed_prefill_inputs_device(
         self, tokens, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx=None
@@ -908,9 +920,13 @@ class Gemma4Model:
         (``transformed_inputs[3]`` → ``ttnn_prefill_forward(chunk_start_idx=...)``).
         Gemma4 doesn't chunk-prefill, so it's always ``None`` in practice.
         """
+        if len(tokens.shape) == 4 and tokens.shape[1] == 1 and tokens.shape[2] == 1:
+            seq_len = tokens.shape[3]
+            tokens = ttnn.reshape(tokens, (1, seq_len))
+        else:
+            seq_len = tokens.shape[-1]
         tt_embeds = self.embed_tokens(tokens)
-        if len(tt_embeds.shape) == 3:
-            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        tt_embeds = self._reshape_prefill_embeds(tt_embeds, seq_len)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
         return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
