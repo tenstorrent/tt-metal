@@ -52,6 +52,29 @@ if(ENABLE_TRACY AND TARGET TracyClient)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT metalium-runtime
     )
+
+    # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
+    # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
+    # COMPONENT-less (they land in "Unspecified", which cmake/packaging.cmake drops),
+    # so the packaged SDK advertised that include dir without shipping it -> every
+    # downstream find_package(tt-metalium) consumer failed at configure with
+    # "Imported target TT::Metalium includes non-existent path .../include/tracy".
+    # Ship the public headers under the dev component so the SDK package is consistent.
+    # Layout mirrors Tracy's own install: tracy/Tracy.hpp plus its ../client and
+    # ../common siblings, all under <includedir>/tracy.
+    install(
+        DIRECTORY
+            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/tracy
+            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/client
+            ${CMAKE_CURRENT_SOURCE_DIR}/tracy/public/common
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tracy
+        COMPONENT metalium-dev
+        FILES_MATCHING
+        PATTERN
+        "*.h"
+        PATTERN
+        "*.hpp"
+    )
 endif()
 
 set(NO_FILESELECTOR ON)
