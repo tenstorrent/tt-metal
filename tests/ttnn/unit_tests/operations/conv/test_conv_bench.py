@@ -34,27 +34,63 @@
 # ║   • run_conv checks PCC vs torch every run, so a mis-wired mode fails loudly (never a         ║
 # ║     silently-wrong perf number).                                                            ║
 # ╚══════════════════════════════════════════════════════════════════════════════════════════╝
+import os
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, BS
 
+
 # ════════════════════════════════════ EDIT ME ════════════════════════════════════
+# GH #45995 measurement note: the CONFIG values below are the harness defaults (unchanged).
+# Each field is ALSO overridable via a CB_* env var so a whole candidate sweep can be driven
+# by env (alongside the mode env TT_CONV_BENCH_MODE) without re-editing the file per run.
+# This is pure test scaffolding — no kernel / tuner / factory / harness-logic is touched.
+def _e(name, default, cast):
+    v = os.environ.get(name)
+    return default if v is None or v == "" else cast(v)
+
+
+_SHARD = {"HS": HS, "BS": BS}
+_DTYPE = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b, "float32": ttnn.float32}
+_FID = {"LoFi": ttnn.MathFidelity.LoFi, "HiFi2": ttnn.MathFidelity.HiFi2, "HiFi4": ttnn.MathFidelity.HiFi4}
+
+
+def _bool(v):
+    return str(v).lower() in ("1", "true", "yes")
+
+
+def _opt_int(v):
+    return None if str(v).lower() == "none" else int(v)
+
+
+def _pad(v):
+    return tuple(int(x) for x in v.split(","))
+
+
 CONFIG = dict(
-    batch_size=1,
-    output_channels=256,  # height-sharded per_core_N = out_channels / 32 (tiles). >DST to make helper_trm differ.
-    input_channels=256,
-    input_height=14,
-    input_width=14,
-    filter=3,  # square kernel (filter x filter)
-    stride=1,
-    padding=(1, 1, 1, 1),  # (top, bottom, left, right)
-    shard_layout=HS,  # HS or BS only (width-sharded fatals in bench mode)
-    act_block_h_override=None,  # None, or a multiple of 32 (e.g. 64) to grow act_block_h (=> more M-subblocks)
-    input_dtype=ttnn.bfloat16,  # bfloat16 | bfloat8_b | float32
-    output_dtype=ttnn.bfloat16,  # bfloat16 | float32  (bfloat8_b is illegal with ROW_MAJOR output)
-    fp32_accum=True,  # True => DST capacity 4 (helps force out_subblock_w < per_core_N => real helper_trm diff)
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    has_bias=True,
+    batch_size=_e("CB_BATCH", 1, int),
+    output_channels=_e(
+        "CB_OUT_CH", 256, int
+    ),  # height-sharded per_core_N = out_channels / 32 (tiles). >DST to make helper_trm differ.
+    input_channels=_e("CB_IN_CH", 256, int),
+    input_height=_e("CB_H", 14, int),
+    input_width=_e("CB_W", 14, int),
+    filter=_e("CB_FILTER", 3, int),  # square kernel (filter x filter)
+    stride=_e("CB_STRIDE", 1, int),
+    padding=_e("CB_PAD", (1, 1, 1, 1), _pad),  # (top, bottom, left, right)
+    shard_layout=_e("CB_SHARD", HS, lambda v: _SHARD[v]),  # HS or BS only (width-sharded fatals in bench mode)
+    act_block_h_override=_e(
+        "CB_ABH", None, _opt_int
+    ),  # None, or a multiple of 32 (e.g. 64) to grow act_block_h (=> more M-subblocks)
+    input_dtype=_e("CB_IN_DTYPE", ttnn.bfloat16, lambda v: _DTYPE[v]),  # bfloat16 | bfloat8_b | float32
+    output_dtype=_e(
+        "CB_OUT_DTYPE", ttnn.bfloat16, lambda v: _DTYPE[v]
+    ),  # bfloat16 | float32  (bfloat8_b is illegal with ROW_MAJOR output)
+    fp32_accum=_e(
+        "CB_FP32_ACCUM", True, _bool
+    ),  # True => DST capacity 4 (helps force out_subblock_w < per_core_N => real helper_trm diff)
+    math_fidelity=_e("CB_FIDELITY", ttnn.MathFidelity.HiFi4, lambda v: _FID[v]),
+    has_bias=_e("CB_BIAS", True, _bool),
 )
 # ══════════════════════════════════════════════════════════════════════════════════
 
