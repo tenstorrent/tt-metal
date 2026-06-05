@@ -11,10 +11,13 @@
 
 #include <unistd.h>
 #include <climits>
+#include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
@@ -57,18 +60,37 @@ TrayID get_tray_id_for_chip(
     if (using_mock_cluster_desc) {
         return TrayID{0};
     }
-    if (!mobo_to_bus_ids.contains(mobo_name)) {
-        auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
-        log_warning(
-            tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
-            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
-            mobo_name,
-            chip_id,
-            bus_id);
-        return TrayID{0};
+    // Per-host override: board_name (DMI) cannot disambiguate SIENAD8-2L2T variants whose
+    // trays 3/4 populate opposite PCIe slots, so allow a machine to declare its physical
+    // tray bus ordering directly via TT_TRAY_BUS_ORDER (tray 1..N, comma-separated bus ids,
+    // e.g. "0xc1,0x01,0x43,0x41"). Falls back to the per-motherboard table when unset.
+    std::vector<uint16_t> ordered_bus_ids;
+    if (const char* env = std::getenv("TT_TRAY_BUS_ORDER")) {
+        std::stringstream ss(env);
+        for (std::string tok; std::getline(ss, tok, ',');) {
+            const auto first = tok.find_first_not_of(" \t");
+            if (first == std::string::npos) {
+                continue;
+            }
+            const auto last = tok.find_last_not_of(" \t");
+            ordered_bus_ids.push_back(
+                static_cast<uint16_t>(std::stoul(tok.substr(first, last - first + 1), nullptr, 0)));
+        }
+        TT_FATAL(!ordered_bus_ids.empty(), "TT_TRAY_BUS_ORDER is set but no valid bus ids were parsed.");
+    } else {
+        if (!mobo_to_bus_ids.contains(mobo_name)) {
+            auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
+            log_warning(
+                tt::LogAlways,
+                "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — defaulting tray_id to 0. "
+                "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+                mobo_name,
+                chip_id,
+                bus_id);
+            return TrayID{0};
+        }
+        ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
     }
-    const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
     auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     // Apply alias if original bus_id not found and an alias exists
