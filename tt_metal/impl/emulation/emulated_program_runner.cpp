@@ -404,6 +404,8 @@ struct KernelInfo {
     uint32_t kernel_config_base = 0;
     uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
     uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    // Runtime-arg values handed to this kernel on its core (see PendingKernelInfo).
+    std::vector<uint32_t> rt_arg_values;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -470,6 +472,11 @@ struct PendingKernelInfo {
     uint32_t kernel_config_base = 0;
     uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
     uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    // Flat list of this kernel's runtime-arg values on its core (unique + common).
+    // Buffer L1 addresses handed to the kernel appear here verbatim, so they let
+    // the Object-Intent check discover which tensors are this kernel's I/O. See
+    // ObjectIntentTracker::pre_launch_snapshot.
+    std::vector<uint32_t> rt_arg_values;
 };
 
 // DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
@@ -1512,6 +1519,20 @@ static void collect_kernels(
                             rta_off = rta.rta_offset();
                             crta_off = rta.crta_offset();
                         }
+                        // Snapshot the runtime-arg values handed to this kernel on
+                        // this core (unique + common). Buffer L1 addresses passed as
+                        // args appear here verbatim; the Object-Intent check matches
+                        // them against live-tensor starts to discover the kernel's I/O
+                        // tensors (see ObjectIntentTracker::pre_launch_snapshot). Shared
+                        // across this kernel's proc_ids, so build once and copy.
+                        std::vector<uint32_t> rt_arg_values;
+                        if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
+                            const auto& ra = kernel->runtime_args(logical_core);
+                            rt_arg_values.insert(rt_arg_values.end(), ra.begin(), ra.end());
+                        }
+                        const auto& cra = kernel->common_runtime_args();
+                        rt_arg_values.insert(rt_arg_values.end(), cra.begin(), cra.end());
+
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
@@ -1523,7 +1544,8 @@ static void collect_kernels(
                                 procs.num_threads,
                                 kernel_config_base,
                                 rta_off,
-                                crta_off});
+                                crta_off,
+                                rt_arg_values});
                         }
                     }
                 }
@@ -2000,6 +2022,16 @@ public:
             // workload. Other sanitizers continue to run.
             return;
         }
+        // I/O tensors from other kernels: a tensor whose L1 address was handed to
+        // this kernel as a runtime arg is one the kernel was explicitly given to
+        // operate on — even if it "belongs" to another kernel's context, this
+        // kernel is allowed to write to it (in-place ops, fused producers). The
+        // base address passed as a runtime arg equals the buffer's start offset,
+        // so any live-tensor start that appears in the kernel's runtime args is an
+        // I/O tensor and must be exempt from the snapshot. (Same space, no
+        // normalization: runtime-arg buffer addresses and the live-range starts are
+        // both direct offsets into the core's L1 backing.)
+        std::unordered_set<uint32_t> io_arg_starts(ki_list[0].rt_arg_values.begin(), ki_list[0].rt_arg_values.end());
         snapshots_.reserve(oob.tensor_ranges_count);
         for (uint32_t i = 0; i < oob.tensor_ranges_count; ++i) {
             uint64_t packed = oob.tensor_ranges[i];
@@ -2013,6 +2045,10 @@ public:
             // be compared. Their address() == the buffer's start offset.
             if (std::find(persistent_cb_starts.begin(), persistent_cb_starts.end(), r_start) !=
                 persistent_cb_starts.end()) {
+                continue;
+            }
+            // Skip I/O tensors this kernel was handed (see above).
+            if (io_arg_starts.count(r_start) != 0) {
                 continue;
             }
             Snap snap;
@@ -2521,6 +2557,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
             }
+            ki.rt_arg_values = std::move(pk.rt_arg_values);
             core_kernels[logical_core].push_back(std::move(ki));
         }
     }

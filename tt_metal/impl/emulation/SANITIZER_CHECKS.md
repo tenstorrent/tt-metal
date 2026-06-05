@@ -246,6 +246,14 @@ into — its "intended write set". After the kernel exits, the runner `memcmp`s 
 snapshot vs current L1 for every buffer **not** in the resolved set; any change is
 an unintended write. (Exact attribution requires one kernel per core; multi-kernel
 programs hit a friendlier early-out.)
+**Exempt buffers (never snapshotted, so writes to them never flag):** (1) *persistent
+buffers* — globally-allocated CB backing buffers (`cb_impl->globally_allocated()`); the
+CB *is* the tensor, so the kernel owns it. (2) *I/O tensors handed to this kernel* — any
+live-tensor whose L1 start address appears in the kernel's runtime args. A buffer passed
+in as a runtime arg is one the kernel was explicitly told to operate on (in-place ops,
+fused producers/consumers), even if it "belongs" to another kernel's context, so writing
+to it is legitimate. The base address passed as a runtime arg equals the buffer's start
+offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
 *Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent violations + a control).
 
