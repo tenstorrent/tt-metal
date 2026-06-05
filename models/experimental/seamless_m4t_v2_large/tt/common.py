@@ -17,9 +17,8 @@ from models.common.utility_functions import nearest_32
 def _mesh_device_for_readback(t: ttnn.Tensor):
     """Best-effort lookup of the MeshDevice associated with a tensor.
 
-    Device tensors carry the device directly. Host tensors (after ``ttnn.from_device``) lose that
-    pointer, but the demo / perf tests always call ``ttnn.SetDefaultDevice(mesh_device)`` first,
-    so the default device is the right composer target. Returns ``None`` if nothing is set.
+    Device tensors carry the device directly. Host tensors fall back to ``ttnn.GetDefaultDevice()``.
+    Returns ``None`` if nothing is set.
     """
     if t.storage_type() == ttnn.StorageType.DEVICE:
         return t.device()
@@ -32,17 +31,10 @@ def _mesh_device_for_readback(t: ttnn.Tensor):
 def to_torch_replicated_first_shard(t: ttnn.Tensor) -> Any:
     """Read a replicated TTNN tensor back to torch, returning only the first device's data.
 
-    The demo / generate path makes per-step host readbacks of replicated control tensors (token
-    IDs, sequence lengths, vocoder cumsums, T2U duration counts, decoder logits, …). On a
-    multi-device mesh every device sees the same data because inputs are replicated and ops are
-    deterministic, so all shards are bit-identical and reading one is sufficient.
+    Replicated mesh tensors are bit-identical across devices; one shard suffices for host readback.
 
-    Fast path: ``ttnn.to_torch(ttnn.get_device_tensors(t)[0])`` — pulls only shard 0. This is the
-    same pattern used by ``models/demos/llama3_70b_galaxy/tt/llama_model.py::process_output_decode``
-    and by the devstral2 generator. For per-step decoder logits readback (``[B, 1, V=256k]`` bf16)
-    on a 1×4 mesh this cuts the device→host bytes by 4× vs the older ``ConcatMeshToTensor`` path
-    and removes the host-side concat + slice. Replicated shards are identical by construction so
-    the result matches the prior behaviour bit-for-bit.
+    Fast path: ``ttnn.to_torch(ttnn.get_device_tensors(t)[0])`` — pulls only shard 0. On a replicated
+    mesh this avoids ``ConcatMeshToTensor`` and host concat when one shard suffices.
 
     Slow-path fallback (kept for tensors where ``get_device_tensors`` is unavailable): use
     ``ConcatMeshToTensor(dim=0)`` and slice off the first per-device chunk.
@@ -128,11 +120,7 @@ def pick_largest_height_shard_nhw_cores(nhw_tiles: int, device: ttnn.Device) -> 
 
 
 def _pick_matmul_1d_grid(device: ttnn.Device, *, n_tiles: int) -> tuple[int, int]:
-    """Pick a worker grid for 1D-on-N multicast matmul (Devstral-style).
-
-    Chooses the smallest rectangle with at least ``n_tiles`` cores (up to the device grid) so
-    ``per_core_N`` stays near 1 and N-parallelism is maximized.
-    """
+    """Pick a worker grid for 1D-on-N multicast matmul (maximize N-parallelism)."""
     grid = device.compute_with_storage_grid_size()
     max_x, max_y = int(grid.x), int(grid.y)
     max_cores = max_x * max_y
@@ -182,7 +170,7 @@ def matmul_multicast_1d_program_config(
     n: int,
     force_in0_block_w: Optional[int] = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``mcast_in0=True``), aligned with Devstral2.
+    """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``mcast_in0=True``).
 
     ``force_in0_block_w`` pins the K-block to a specific value (clamped to a divisor of ``k_tiles``)
     instead of the per_core_M/N-derived cap. Used to keep ``in0_block_w`` — hence the K-reduction
@@ -278,11 +266,7 @@ def matmul_program_config(
     )
 
 
-# Tuned 2D block-sharded program configs for the text-encoder TP linears (QKV / out_proj /
-# fc1 / fc2), keyed by per-device (k, n).  Found by test_matmul_perf_report_sweep.py for
-# M=4096, bf16 x bfp8_b -> bf16, LoFi on an 8x8 grid; the value is the winning in0_block_w.
-# These beat the ttnn-default config (~8-10 TFLOPs, flagged SLOW in the perf report) by
-# 10-27x.  in0 + out live in L1 BLOCK_SHARDED across the 8x8 grid.
+# Text-encoder TP block-sharded matmul: tuned ``in0_block_w`` per (k, n) on an 8×8 grid.
 _ENCODER_TP_BS_GRID = 8
 _ENCODER_TP_BS_IBW = {
     (1024, 768): 4,  # QKV       (k = hidden, n = 3*hidden/tp); per-core Kt/8 = 4
@@ -321,7 +305,7 @@ def encoder_tp_block_sharded_matmul(
     if mt % gy or nt % gx or kt % gx:
         return None
     # in0 is BLOCK_SHARDED: each core owns kt_per_core = Kt/gx K-tiles (not full Kt).
-    # Sweep ibw against kt_per_core, not global Kt — e.g. out_proj Kt=8, gx=8 -> ibw must be 1.
+    # Cap ibw by per-core K tiles (Kt/gx), not global Kt.
     kt_per_core = kt // gx
     ibw = _largest_divisor_at_most(kt_per_core, ibw_cap)
     if kt_per_core % ibw:
@@ -816,14 +800,7 @@ def build_ln_sharded_config(
 
 
 def _all_gather_num_links() -> int:
-    """Ethernet links for the TP ``all_gather`` (env ``SEAMLESS_ALL_GATHER_NUM_LINKS``, default 2).
-
-    The gather of ``[1, ..., H]`` across TP devices is latency-bound at decode shapes (tiny
-    payload); driving it over both ethernet links of the BH QB 1x4 line cut AllGather kernel
-    time 17% (6167->5111us, -3.5% end-to-end) in the 2026_06_03 t2tt profile vs a single link.
-    Default 2 = the BH QB per-hop link count (3+ errors: only 2 links exist). Override per
-    topology; falls back to 1 on a bad/zero value.
-    """
+    """Ethernet links for TP ``all_gather`` (``SEAMLESS_ALL_GATHER_NUM_LINKS``, default 2)."""
     try:
         n = int(os.environ.get("SEAMLESS_ALL_GATHER_NUM_LINKS", "2"))
     except ValueError:
@@ -847,16 +824,7 @@ def all_reduce_sum_replicate(
     Each device starts with ``[1, ..., H]`` (a partial sum for the full output
     dimension), and after the all_reduce every device holds the full ``[1, ..., H]``.
 
-    Why gather on dim 0 rather than the last dim: gathering on the last dim gives
-    ``[..., tp*H]``, and separating the ``tp`` chunks then needs ``reshape [..., tp, H]``,
-    which splits the tile-packed last dim → a physical re-tilize (a full copy ~27 µs/call,
-    72×/decode step ≈ 25% of device time), plus a second reshape to restore ``[B, S, H]``
-    and a ``fill_pad`` for the non-tile-aligned ``tp`` dim. Gathering on the leading
-    (non-tiled) dim instead lets ``sum(dim=0)`` reduce across devices with no reshape,
-    no fill_pad, and no re-tilize — and it is memory-safe at prefill/encoder lengths
-    (``sum`` reads the gathered tensor and writes ``[1, ..., H]`` without a full extra copy),
-    so the same path serves decode and prefill. Native ``ttnn.all_reduce`` was measured
-    slower than ``all_gather`` + this local reduction on BH QB at H=1024.
+    Gathers on dim 0 (unit leading dim) to avoid retiling the last dim after TP gather.
 
     Assumes a unit leading dim (batch=1 decode/prefill here); see the assert below.
     """
@@ -979,25 +947,8 @@ def sdpa_program_config(
     return out
 
 
-# ============================================================================
-# gather_in0 DRAM-width-sharded matmul (ported from devstral2_opt_17).
-# ----------------------------------------------------------------------------
-# Pattern: activations live in L1 WIDTH_SHARDED across the compute grid (K-dim
-# sharded). Weights live in DRAM WIDTH_SHARDED across DRAM banks (N-dim sharded
-# in the per-device slice). The matmul kernel reads activations across the
-# core ring (``gather_in0=True``) so each core fetches its K shard from its
-# neighbour without an explicit ``sharded_to_interleaved → interleaved_to_sharded``
-# round trip. Output is L1 WIDTH_SHARDED on the same grid (now N-dim sharded).
-#
-# This pattern composes with TP because the gather happens *within* a device
-# (across cores), while TP shards weights *across* devices. Existing seamless
-# DRAM-sharded path (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``)
-# is gated to ``tp == 1`` because its grid-vs-DRAM-bank coupling does not
-# tolerate the per-device weight slice. gather_in0 does.
-#
-# Constraint per call: K_tiles % num_cores == 0 AND N_tiles % num_cores == 0
-# (both must shard evenly across the same compute grid).
-# ============================================================================
+# gather_in0: L1 WIDTH_SHARDED activations + DRAM WIDTH_SHARDED weights; K and N must
+# divide num_cores on the compute grid. Composes with TP (gather is within-device).
 
 
 def find_grid_for_k_n(k_tiles: int, n_tiles: int, max_rows: int = 10, max_cols: int = 13) -> Tuple[int, int]:

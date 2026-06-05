@@ -56,10 +56,7 @@ class TTSeamlessM4Tv2Encoder:
         self.hidden_size = hidden_size
         self._tp = get_tp(device)
         self._cluster_axis = mesh_cluster_axis(device)
-        # Keep the long-seq TP LayerNorm BLOCK_SHARDED so its output feeds the QKV / fc1 block-sharded
-        # matmuls in the matmul's own in0 layout (== build_ln_sharded_config's), running the LN at
-        # ~41us instead of the ~63us interleaved default. On by default; set SEAMLESS_TP_BS_LN=0 to
-        # fall back to the interleaved LN (kill-switch for untested mesh/seq/arch configs).
+        # Long-seq TP: block-sharded LN when enabled (``SEAMLESS_TP_BS_LN=0`` disables).
         self._tp_bs_ln = os.environ.get("SEAMLESS_TP_BS_LN", "1") == "1"
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -415,13 +412,9 @@ class TTSeamlessM4Tv2Encoder:
     ) -> ttnn.Tensor:
         """Sharded multicore LN. Set ``output_sharded=True`` to feed a matmul without an S2I.
 
-        Short-seq (``m_tiles == 1``) uses a WIDTH_SHARDED LN; long-seq (``m_tiles > 1``) can't
-        width-shard (one core would hold all M rows — OOM) so it uses a BLOCK_SHARDED LN, which is
-        PCC-correct (verified in ``test_layernorm_block_sharded_drift.py``) and ~39us vs the ~63us
-        interleaved default. The long-seq block-sharded path is gated on ``SEAMLESS_TP_BS_LN`` (on by
-        default; set =0 to fall back to the plain unsharded ``ttnn.layer_norm`` — identical math to
-        HF, slower per call) and only triggers when ``output_sharded`` is set (i.e. the result feeds
-        a block-sharded QKV / fc1 matmul in the TP path).
+        Short-seq (``m_tiles == 1``) uses WIDTH_SHARDED LN; long-seq uses BLOCK_SHARDED LN when
+        ``SEAMLESS_TP_BS_LN`` is on (default) and ``output_sharded`` feeds a block-sharded matmul.
+        Set ``SEAMLESS_TP_BS_LN=0`` to use interleaved ``ttnn.layer_norm`` instead.
         """
         if m_tiles > 1:
             # Block-sharded long-seq LN (see method docstring): keep the LN sharded so the downstream
@@ -507,12 +500,8 @@ class TTSeamlessM4Tv2Encoder:
         Each device computes a local partial result; the caller applies
         ``encoder_all_reduce_sum_replicate`` after row-parallel layers.
 
-        For the hot per-device shapes (QKV / out_proj / fc1 / fc2 at M=batch*seq) this uses
-        the tuned 2D block-sharded program config (see ``encoder_tp_block_sharded_matmul`` /
-        ``test_matmul_perf_report_sweep.py``), which is 10-27x faster than the ttnn default.
-        The TP activations are already L1-resident, so the interleaved->block reshard is a
-        cheap L1 op; output is resharded back to interleaved to preserve this method's
-        contract (interleaved in, interleaved out).
+        Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned; otherwise falls back to
+        interleaved ``ttnn.linear``. Output is resharded back to interleaved.
         """
         k = int(weight.shape[-2])
         n = int(weight.shape[-1])

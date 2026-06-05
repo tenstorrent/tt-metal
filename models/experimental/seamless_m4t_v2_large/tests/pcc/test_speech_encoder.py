@@ -1,46 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot PCC test for the SeamlessM4Tv2 speech encoder at its longest supported mel input.
+"""Speech encoder PCC at long mel sequences and a Tracy-safe shorter length.
 
-Tracy forward-only profiling (``test_seamless_m4t_v2_speech_encoder_max_seq_pcc``)::
+Tracy profiling (``test_seamless_m4t_v2_speech_encoder_max_seq_pcc``)::
 
     python -m tracy -p --op-support-count 100000 -r -v -m pytest \\
         models/experimental/seamless_m4t_v2_large/tests/pcc/test_speech_encoder.py::test_seamless_m4t_v2_speech_encoder_max_seq_pcc \\
         -k 1x4 -sv
 
-Init + warmup run before ``signpost("start")`` / ``signpost("stop")``; device profiler buffer is
-drained between warmup and the measured forward.
-
-``tt-perf-report`` (default = ops *after* the last signpost, so ``stop`` alone is empty)::
-
     tt-perf-report generated/profiler/reports/<run>/ops_perf_results_<run>.csv \\
-        --start-signpost start --end-signpost stop > speech_forward.txt
+        --start-signpost start --end-signpost stop
 
-HF's speech encoder has no fixed maximum input length: chunked self-attention
-(``speech_encoder_chunk_size`` = 20000 mel frames in the HF config) lets it process arbitrarily long
-audio bounded only by DRAM. The test below runs at ``seq=3000`` mel frames (~60 s at the
-SeamlessM4T mel rate), which exercises every long-audio code path in one go: chunked 1D matmul
-(active above ``MATMUL_1D_SEQ_THRESHOLD`` = 128), DRAM residual / LN (above
-``_LONG_AUDIO_RES_DRAM_THRESHOLD`` = 1024 mel frames), uncached relative-position tables (above
-``_MAX_CACHED_REL_POS_TABLE_BYTES`` = 32 MB, which seq=3000 vastly exceeds at ~1.1 GB per layer).
-
-Empirical ceiling (from ``test_sweep_max_seq.py`` on Blackhole 1×4):
-
-    seq=2125  PCC 0.9945  PASS
-    seq=2400  PCC 0.9951  PASS
-    seq=2700  PCC 0.9955  PASS
-    seq=3000  PCC 0.9966  PASS
-    seq=3600  PCC 0.9969  PASS  (full [S,S] softmax path)
-    seq=3700  PCC 0.9968  PASS
-    seq=3750+ full-path softmax CB-clash; above ``_ATTN_QUERY_CHUNK_THRESHOLD`` (3600) uses query-block
-    fused SDPA (``_ATTN_QUERY_CHUNK``=128, DRAM). At mel_seq=4096 the forward runs but PCC ≈0.94
-    (flash SDPA tiles); PCC ≥0.99 is validated through mel_seq=3700 on BH 1×4.
-
-Inputs longer than ~3600 mel frames use query-block fused SDPA; above ``speech_encoder_chunk_size``
-(20000) HF windowed attention applies.
-
-Real weights only — if ``huggingface_hub`` is missing or the download fails the test is skipped.
+Real weights only — skipped when download fails.
 """
 
 import os
@@ -80,14 +52,11 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSea
 
 PCC_THRESHOLD = 0.99
 PROF_CAPTURE_MEL_SEQ = SPEECH_ENCODER_MEL_SEQ
-# Empirically determined by ``test_sweep_max_seq.py`` — longest single-pass mel input where the
-# conformer attention's static CBs still fit per-core L1 (see file docstring for the seq vs PCC
-# scan; seq=3300 is the first FAIL, with CB clash on the softmax).
 MAX_SEQ = 4096
 
 
 def _drain_device_profiler(device: ttnn.Device) -> None:
-    """Flush and discard device profiler ops accumulated since the last drain."""
+    """Flush device profiler ops accumulated since the last drain."""
     if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
         return
     ttnn.ReadDeviceProfiler(device)
@@ -100,16 +69,7 @@ def _drain_device_profiler(device: ttnn.Device) -> None:
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Speech encoder PCC ≥ 0.99 at ``mel_seq=MAX_SEQ`` (3600 on BH 1×4), all long-audio paths active.
-
-    Above ``speech_encoder_chunk_size`` (20000) the encoder uses windowed attention to handle
-    arbitrarily long inputs. This test pins the longest mel length with bit-exact full attention
-    (``seq ≤ _ATTN_QUERY_CHUNK_THRESHOLD``). Longer single passes (e.g. 4096) run via query-block
-    SDPA but PCC is not yet ≥0.99 — see the file docstring sweep notes.
-
-    Tracy: ``pre_warm`` + warmup forward, drain device profiler, then
-    ``signpost("start")`` … measured forward … ``signpost("stop")`` for forward-only capture.
-    """
+    """PCC ≥ 0.99 at ``mel_seq=MAX_SEQ`` (long-audio paths: chunked matmul, DRAM residual, uncached rel-pos)."""
     _ = reset_seeds
     _ = device_params
 
@@ -171,12 +131,7 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_speech_encoder_prof_capture_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Speech encoder PCC ≥ 0.99 at the tracy-safe mel length (``PROF_CAPTURE_MEL_SEQ`` = 32).
-
-    Highest power-of-two mel length where ``python3 -m tracy -r -v`` and PCC both pass on BH 1×4.
-    mel_seq=64/128 fail PCC (bf16 drift); mel_seq=256+ overflows Tracy's 32K source locations.
-    ``test_seamless_m4t_v2_speech_encoder_max_seq_pcc`` (mel_seq=3000) also breaks capture.
-    """
+    """PCC ≥ 0.99 at ``PROF_CAPTURE_MEL_SEQ`` (Tracy-safe mel length on BH 1×4)."""
     _ = reset_seeds
     _ = device_params
 

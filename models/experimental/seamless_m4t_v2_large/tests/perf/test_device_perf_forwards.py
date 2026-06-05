@@ -73,10 +73,8 @@ def _weights_dir_or_skip() -> str:
         return ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
         pytest.skip(str(e))
-        raise
     except Exception as e:
         pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
-        raise
 
 
 def _torch_ids_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:

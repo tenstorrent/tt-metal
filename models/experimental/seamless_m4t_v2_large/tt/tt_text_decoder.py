@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 """TTNN [`SeamlessM4Tv2Decoder`] with prefill and KV-cache decode.
@@ -461,12 +461,7 @@ class TTSeamlessM4Tv2Decoder:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        # Experimental: emit matmul outputs sharded (1D->WIDTH, 2D->BLOCK) per the perf-sweep
-        # winners, then sharded_to_interleaved back so downstream is unchanged. Applies to ALL
-        # matmuls through _linear (prefill + decode). The sharded matmul kernel time lands in the
-        # ops-perf CSV for comparison vs interleaved. NB: the sweep tuned the decode shapes (M=32);
-        # prefill shapes inherit the same 1D/2D rule but were not separately swept.
-        # See tests/perf/test_text_decoder_matmul_perf_report_sweep.py.
+        # Optional L1-sharded matmul output (``SEAMLESS_DECODE_SHARDED_OUT=0`` disables).
         self._sharded_decode_out = os.environ.get("SEAMLESS_DECODE_SHARDED_OUT", "1") != "0"
         self._ln_sharded_cache: dict = {}
         self._matmul_pc_cache: dict = {}
@@ -515,17 +510,7 @@ class TTSeamlessM4Tv2Decoder:
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
 
     def _decode_matmul_pc(self, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
-        """Decode matmul PC (effective ``M=32`` tile rows).
-
-        Delegates to ``common.matmul_multicast_1d_program_config`` — the same 1D multicast builder
-        prefill uses for M<=128. Measured (perf sweep 2026_06_02, Blackhole) 1.0-1.48x faster than
-        the prior hand-rolled ``(cg.x, 1)`` grid across every decoder shape (QKV 8.0→6.1µs, out_proj
-        3.6→2.5µs, FFN fc1 10.9→8.9µs, fc2 14.0→11.0µs): the old grid wasted cores because cg.x=11
-        does not divide the N/K tile counts, and its 2048-N 2D branch collapsed back to 11x1.
-        ``_pick_matmul_1d_grid`` instead picks a divisor grid (8x3/8x8) with per_core_N≈1. Matmul
-        math is grid-invariant so cached K/V PCC is preserved; DRAM-width-sharding was measured
-        slower here (8-bank Blackhole pins it to 8 cores). See tests/perf/test_decode_dram_sharded_sweep.py.
-        """
+        """Decode matmul PC at effective ``M=32`` tile rows (1D multicast via ``common``)."""
         key = ("decode", in_dim, out_dim)
         cached = self._matmul_pc_cache.get(key)
         if cached is not None:

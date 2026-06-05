@@ -42,29 +42,13 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
 # Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
 # Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
-# Chunk width = 16 tiles (512 rows). The old 1-tile (32-row) chunk sliced every long-seq linear into
-# ~seq/32 pieces (≈94 at seq=3000) — each a slice + matmul + copy + untilize — which was the bulk of
-# the encoder's ~130k device ops. We pin ``in0_block_w`` (the K-block) to its 32-row baseline value
-# (8 for K=1024/4096) via ``force_in0_block_w`` so the K-reduction — and the output — stays bit-exact
-# at this wider chunk (per_core_M=16 would otherwise let the 1D cap shrink in0_block_w to 4). 512 rows
-# emits ~16× fewer chunked-linear ops than the original and still fits L1 at the speech-path budget.
+# Long mel: 512-row chunked 1D matmuls with pinned ``in0_block_w`` for bit-exact wider chunks.
 _LONG_SEQ_LINEAR_CHUNK_ROWS = 16 * TILE
-# Baseline K-block (per_core_M=1 → cap=8); pinned so the wider chunk stays bit-identical.
 _LONG_SEQ_LINEAR_IN0_BLOCK_W = 8
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
-# Above this mel-frame count the residual/hidden state in the conformer layer is kept in DRAM
-# rather than L1. The empirical threshold is where the per-layer L1 footprint (sharded LN +
-# height-sharded depthwise conv + transient activations) stops leaving room for kernel circular
-# buffers on Blackhole (failure mode: ``Statically allocated circular buffers ... clash with L1
-# buffers``). The demo's 22 s chain audio ≈ 1100 frames; pushing past needs the DRAM path.
+# Keep conformer residuals in DRAM above this frame count (L1 CB pressure on long audio).
 _LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
-# Above this mel seq the conformer relative-position attention is computed in QUERY-BLOCKS. The full
-# path materializes [B,H,S,S] scores + softmax + the [S,S,D] rel-pos table, which CB-clashes L1 at
-# S≈3300 and OOMs at 3600 — the encoder's hard ceiling. The chunked path loops query-blocks of
-# ``_ATTN_QUERY_CHUNK`` rows: each does ``q_blk@k + per-block rel logits + softmax + @v`` on
-# ``[B,H,Qc,S]`` and builds only a ``[Qc,S,D]`` table slice, so peak memory is O(Qc·S) not O(S²) →
-# arbitrary-length speech (matches HF, which attends over a 20000-frame window). Gated ABOVE the
-# validated full-attention range (demo ≤2048, PCC test 3000) so that path stays bit-identical.
+# Query-block relative attention above this seq (avoids O(S²) L1 use).
 _ATTN_QUERY_CHUNK_THRESHOLD = 3072
 _ATTN_QUERY_CHUNK = 512
 # A relative-position table at ``seq_len`` is ``seq * head_dim * seq * 2 B`` bf16. With 24

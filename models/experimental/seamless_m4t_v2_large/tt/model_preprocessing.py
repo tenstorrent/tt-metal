@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -571,16 +571,7 @@ def _tp_linear_pair(
     raise ValueError(f"_tp_linear_pair: parallel must be 'col' or 'row', got {parallel!r}")
 
 
-# ============================================================================
-# TP-aware DRAM-WIDTH-sharded weight builders for gather_in0 matmul.
-# ----------------------------------------------------------------------------
-# Each per-device weight slice is stored DRAM-WIDTH-sharded (N split across
-# DRAM banks) instead of interleaved DRAM. Combined with L1-WIDTH-sharded
-# activations and the gather_in0 matmul kernel, this avoids the
-# ``sharded → interleaved → sharded`` round-trip between encoder ops on tp > 1
-# (which the existing DRAM-sharded path is gated against because its
-# program config does not compose with per-device weight slicing).
-# ============================================================================
+# TP gather_in0: DRAM width-sharded per-device weight slices.
 
 
 def _dram_width_sharded_weight_tt(

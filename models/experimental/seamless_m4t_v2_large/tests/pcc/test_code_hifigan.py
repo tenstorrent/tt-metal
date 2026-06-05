@@ -43,12 +43,7 @@ PROF_CAPTURE_UNIT_SEQ = CODE_HIFIGAN_UNIT_SEQ
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_code_hifigan_prof_capture_unit_seq_pcc(mesh_device, device_params, reset_seeds):
-    """CodeHiFi-GAN PCC ≥ 0.99 at the tracy-safe unit length (``PROF_CAPTURE_UNIT_SEQ`` = 128).
-
-    Highest power-of-two ``unit_seq`` where ``python3 -m tracy -r -v`` and PCC both pass on BH 1×4.
-    ``unit_seq=256`` overflows Tracy's 32K source locations; ``test_*_max_unit_seq_pcc`` at 1024
-    also breaks capture even though the forward completes.
-    """
+    """PCC ≥ 0.99 at ``PROF_CAPTURE_UNIT_SEQ`` (Tracy-safe unit length)."""
     _ = reset_seeds
     _ = device_params
 

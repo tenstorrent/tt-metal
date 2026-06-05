@@ -1,38 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end PCC test for SeamlessM4Tv2 — ``TT generate()`` vs ``HF generate()`` across all 5 tasks.
+"""E2E PCC: ``TT generate()`` vs ``HF generate()`` for all five tasks (TP + 2CQ + decode trace).
 
-The TT model exposes only ``generate()`` (no ``forward()``) — this matches HF's public API and the
-demo's runtime path. A single pytest test exercises all five canonical inference tasks of
-SeamlessM4T v2 on the production device config (1×N mesh — TP — + 2CQ + decode-Trace), with the
-same default greedy decoding HF uses (``do_sample=False, num_beams=1``):
-
-  1. **T2TT** (text → text)    — long-greedy common-prefix match with HF.
-  2. **T2ST** (text → speech)  — voiced-audio plausibility (RMS band + voicing fraction).
-  3. **S2TT** (speech → text)  — soft: BOS+lang-code prefix match, non-empty content.
-  4. **S2ST** (speech → speech)— soft: both produce voiced audio with RMS in HF's plausible band.
-  5. **ASR**  (speech → same-lang text) — soft (same as S2TT; ``repetition_penalty=1.0`` like HF).
-
-This test runs at **demo length**: a long real prompt (~165-token translation) and, for the
-speech-input tasks, the chained ~33 s Hindi T2ST waveform → mel seq ≈ 1792 (the encoder's
-long-audio regime — chunked matmul, DRAM-resident conformer residual, uncached rel-pos tables).
-An earlier short-prompt version (10 tokens, ~1.3 s / mel seq ≈ 256) exercised none of those paths,
-which let a speech-encoder rewrite pass while garbaging long audio — hence the long inputs here.
-
-Because everything decodes a long greedy sequence, TT (device-bf16) and HF (CPU-bf16) accumulate
-different per-op rounding and **desync after some step** (greedy can't re-converge once one token
-differs). So full-sequence / exact-length parity is infeasible: T2TT checks a substantial matching
-prefix, the speech-output tasks check valid voiced audio, and the speech→text tasks check the
-seed + non-empty content. Tight numerical bounds live in the per-block PCC suite
-(``test_speech_encoder.py`` runs the conformer at mel seq = 3000).
-
-For the speech-input tasks (S2TT/S2ST/ASR) the Hindi audio is the HF T2ST output of the same
-prompt — same chaining strategy as the demo — so the audio is realistic, reproducible, and
-generated once per test invocation.
-
-Real weights only: ``ensure_seamless_m4t_v2_large_weights()`` auto-downloads if missing and
-``pytest.skip`` is raised on download failure. No synthetic-weight fallback.
+Uses the demo-length English prompt and HF T2ST Hindi audio for chained speech tasks. Long greedy
+decode desyncs TT/HF token-by-token; assertions are prefix match (T2TT), voiced-audio bands
+(T2ST/S2ST), or seed + non-empty content (S2TT/ASR). Per-module PCC tests cover tight numerics.
 """
 
 from __future__ import annotations
@@ -72,45 +45,20 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
     TTSeamlessM4Tv2Model,
 )
 
-# --- Test hyperparameters --------------------------------------------------------------------
-# LONG real prompt (the demo's story) — drives the long-sequence code paths the old short
-# "Hello, my name is SeamlessM4T." / ``max_new_tokens=10`` prompt never reached:
-#   * text encoder long prefill + ~165-token greedy decode (T2TT / T2ST), and
-#   * via the chained ~33 s Hindi T2ST waveform, the speech encoder's long-audio regime
-#     (mel seq ≈ 1792 → chunked 1-D matmul, DRAM-resident conformer residual at seq > 1024,
-#     uncached relative-position tables) — the exact path the demo runs.
-# The short prompt produced ~1.3 s / mel seq ≈ 256 audio, which exercised none of this. That
-# blind spot let a speech-encoder rewrite (efficient relative attention) pass this very test
-# while garbaging long audio — so the speech-input tasks below MUST run at demo length.
 _PROMPT = """Maya lived in a small coastal town where every morning began with the sound of fishing boats leaving the harbor. She worked at her grandfather's old bookstore, a narrow shop filled with dusty shelves, handwritten notes, and the smell of paper that had aged for decades. Most customers came looking for schoolbooks or travel guides, but Maya loved recommending forgotten stories hidden in the back corners of the store.
 
 One rainy evening, while organizing a stack of returned books, she discovered a small blue journal tucked between two novels. The cover had no title, only a silver compass symbol that shimmered faintly under the light. Curious, she opened it and found detailed sketches of places around the town along with cryptic messages about a hidden lighthouse path that only appeared during storms.
 
 At first, Maya thought someone was playing a prank. But the next night, as heavy clouds gathered over the sea, she noticed something unusual from the bookstore window. A narrow trail of lantern lights stretched along the cliffs where no road existed before. Holding the journal tightly, she followed the glowing path through the rain until she reached an abandoned lighthouse overlooking the crashing waves."""
-# T2TT common-prefix floor (TT-device-bf16 vs HF-cpu-bf16 desync after some greedy step; see
-# ``_assert_text_prefix_matches``). Measured first divergence at token 32 (a single near-tie flip,
-# after which the two sequences re-converge and the ~200-token tails match); 16 leaves a 2× margin
-# so a near-tie shifting earlier on a different build doesn't make this flaky.
 _MIN_TEXT_PREFIX = 16
 
-# Language pairs (same as the demo's chain):
-#   T2TT / T2ST: eng → hin     (Hindi text / Hindi speech)
-#   S2TT       : hin speech → eng text
-#   S2ST       : hin speech → spa speech
-#   ASR        : hin speech → hin text
 _TGT_HIN = "hin"
 _TGT_ENG = "eng"
 _TGT_SPA = "spa"
 
-# Speech-output tolerances (vs HF on the same inputs). Audio length parity is not asserted: every
-# speech-output task here decodes a long greedy text/unit sequence that desyncs from HF (bf16), so
-# sample counts legitimately differ — we check valid voiced output (RMS band + voicing) instead.
-_RMS_RATIO_LO = 0.70  # symmetric in log space with _RMS_RATIO_HI
+_RMS_RATIO_LO = 0.70
 _RMS_RATIO_HI = 1.43
 _VOICING_FRAC_TOL = 0.15
-
-
-# --- Helpers ---------------------------------------------------------------------------------
 
 
 def _weights_dir_or_skip() -> str:
@@ -118,10 +66,8 @@ def _weights_dir_or_skip() -> str:
         return ensure_seamless_m4t_v2_large_weights()
     except ImportError as e:
         pytest.skip(str(e))
-        raise
     except Exception as e:
         pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
-        raise
 
 
 def _torch_ids_to_ttnn(device: ttnn.Device, t: torch.Tensor) -> ttnn.Tensor:
@@ -259,15 +205,7 @@ def _longest_common_prefix(a: list, b: list) -> int:
 
 
 def _assert_text_prefix_matches(hf_ids: list, tt_ids: list, *, task: str, min_prefix: int) -> None:
-    """Long-greedy text-output check (T2TT).
-
-    TT decodes on-device (bf16) while HF decodes on CPU (bf16-emulated); over a ~165-token greedy
-    decode the two accumulate different per-op rounding and **desync after some step** — greedy
-    decoding has no mechanism to re-converge once one token differs, so full-sequence equality is
-    infeasible at long length (the short-prompt version of this test could assert strict equality
-    only because 10 tokens stayed in lockstep). We instead require a substantial matching prefix
-    (the text encoder + early decode must be correct) and that both sides produce a long output.
-    """
+    """T2TT: require a long common prefix (full equality is not expected at demo length)."""
     lcp = _longest_common_prefix(hf_ids, tt_ids)
     logger.info(f"[{task}] HF tokens ({len(hf_ids)}): {hf_ids}")
     logger.info(f"[{task}] TT tokens ({len(tt_ids)}): {tt_ids}")
@@ -283,21 +221,7 @@ def _assert_text_prefix_matches(hf_ids: list, tt_ids: list, *, task: str, min_pr
 
 
 def _assert_tokens_close_after_speech(hf_ids: list, tt_ids: list, *, task: str, min_prefix: int = 2) -> None:
-    """Softer token check for speech-input → text-output tasks (S2TT, ASR).
-
-    The HF speech encoder runs at fp32 while the TT one is bf16; accumulated rounding through
-    24 conformer layers + the long attention timeline pushes the first divergent token within a
-    handful of greedy steps. The demo already shows this as light paraphrasing in S2TT/ASR
-    outputs. Instead of token-for-token equality we require:
-
-    * The seed (BOS + lang-code) must match — this verifies ``tgt_lang`` plumbing and the
-      decoder-input-ids construction.
-    * TT produced *some* tokens after the seed (not collapsed to a bare seed).
-    * TT didn't terminate immediately after the seed (>= 2 content tokens produced).
-
-    Token *count* may legitimately differ — bf16 drift can cause one side to emit EOS one or two
-    steps earlier than the other, which is a valid generation outcome.
-    """
+    """S2TT/ASR: seed tokens must match; both sides emit non-trivial content after the seed."""
     logger.info(f"[{task}] HF tokens ({len(hf_ids)}): {hf_ids}")
     logger.info(f"[{task}] TT tokens ({len(tt_ids)}): {tt_ids}")
     assert (
@@ -309,14 +233,7 @@ def _assert_tokens_close_after_speech(hf_ids: list, tt_ids: list, *, task: str, 
 
 
 def _assert_audio_plausible_voiced(hf_wav: np.ndarray, tt_wav: np.ndarray, *, task: str) -> None:
-    """Soft audio check (S2ST): both back-ends produce voiced speech of comparable energy/voicing.
-
-    Speech-input speech-output compounds bf16 drift through the speech encoder *and* the
-    intermediate-text decode + T2U, so the unit count (and audio length) can diverge substantially
-    at small ``max_new_tokens`` budgets — the demo shows ~10 % length drift at realistic prompts.
-    The strict ±2 % length bound is meaningless here; instead we require valid voiced output
-    (RMS in HF's plausible band, voicing fraction close).
-    """
+    """T2ST/S2ST: non-empty audio with RMS and voicing fraction near HF."""
     hf_n, hf_rms, hf_voice = _audio_stats(hf_wav)
     tt_n, tt_rms, tt_voice = _audio_stats(tt_wav)
     logger.info(f"[{task}] HF audio: samples={hf_n} rms={hf_rms:.4f} voicing={hf_voice:.3f}")
@@ -328,13 +245,9 @@ def _assert_audio_plausible_voiced(hf_wav: np.ndarray, tt_wav: np.ndarray, *, ta
     assert (
         _RMS_RATIO_LO <= ratio <= _RMS_RATIO_HI
     ), f"[{task}] RMS ratio TT/HF={ratio:.3f} outside [{_RMS_RATIO_LO}, {_RMS_RATIO_HI}]"
-    # Slightly wider voicing tolerance than T2ST — different content can shift the voiced fraction.
     assert (
         abs(tt_voice - hf_voice) <= 2 * _VOICING_FRAC_TOL
     ), f"[{task}] voicing frac diff > {2 * _VOICING_FRAC_TOL} (TT={tt_voice:.3f} HF={hf_voice:.3f})"
-
-
-# --- The single all-5-tasks test -------------------------------------------------------------
 
 
 @pytest.mark.timeout(5400)
@@ -391,12 +304,6 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
         )
         _assert_text_prefix_matches(hf_t2tt_ids, _unpack_tt_text(tt_out), task="T2TT", min_prefix=_MIN_TEXT_PREFIX)
 
-        # =============================================================================
-        # 2. T2ST (eng text → hin speech) — plausible voiced audio (length parity dropped)
-        # =============================================================================
-        # T2ST shares T2TT's greedy text decode, so its intermediate Hindi text desyncs from HF at
-        # the same step → the unit sequence and audio length diverge. The old ±2 % length bound held
-        # only at the 10-token prompt; at ~165 tokens it cannot. Check valid voiced output instead.
         with torch.no_grad():
             hf_out = model.generate(
                 input_ids=text_input_ids,
@@ -417,8 +324,6 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
         )
         _assert_audio_plausible_voiced(hf_hin_wav, _unpack_tt_speech(tt_out), task="T2ST")
 
-        # ---- Build speech inputs for tasks 3-5 from the HF Hindi waveform ----------
-        # Same chaining pattern as the demo (S2TT/S2ST/ASR consume T2ST's audio).
         audio_inputs = processor(audios=hf_hin_wav, sampling_rate=sr, return_tensors="pt")
         sp_input_features = audio_inputs["input_features"]
         sp_attn = audio_inputs["attention_mask"]
