@@ -286,19 +286,19 @@ void run_single_core_transpose(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"num_tiles", num_tensor_tiles}}}},
-         }},
-        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = {{node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"num_tiles", num_tensor_tiles}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{.tensor = in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{.tensor = out_tensor}},
+        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

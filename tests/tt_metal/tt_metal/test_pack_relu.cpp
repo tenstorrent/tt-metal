@@ -154,28 +154,28 @@ static void run_pack_relu_test(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"src_addr", dram_buffer_src_addr},
-                    {"src_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", src_aligned_page_size}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"dst_addr", dram_buffer_dst_addr},
-                    {"dst_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", dst_aligned_page_size}}}},
-         }},
-        {COMPUTE,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"relu_config", relu_config}}}},
-         }},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_aligned_page_size}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_aligned_page_size}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = COMPUTE,
+            .runtime_arg_values = {{node, {{"relu_config", relu_config}}}},
+        },
     };
     experimental::SetProgramRunArgs(program, params);
 

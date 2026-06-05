@@ -118,11 +118,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     };
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {DM_KERNEL_1, make_kernel_run_params()},
-        {DM_KERNEL_2, make_kernel_run_params()},
-        {DM_KERNEL_3, make_kernel_run_params()},
-    };
+    auto kra1 = make_kernel_run_params();
+    kra1.kernel = DM_KERNEL_1;
+    auto kra2 = make_kernel_run_params();
+    kra2.kernel = DM_KERNEL_2;
+    auto kra3 = make_kernel_run_params();
+    kra3.kernel = DM_KERNEL_3;
+    params.kernel_run_args = {kra1, kra2, kra3};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
@@ -331,11 +333,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {COMPUTE_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}}}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}}}},
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));

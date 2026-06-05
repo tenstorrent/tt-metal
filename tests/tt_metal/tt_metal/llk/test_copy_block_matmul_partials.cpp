@@ -213,27 +213,27 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"src_addr", src_dram_buffer->address()},
-                    {"src_dram_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"ublock_size_tiles", test_config.reader_ublock},
-                    {"reader_only", 0u}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"dst_addr", dst_dram_buffer->address()},
-                    {"dst_dram_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"ublock_size_tiles", test_config.writer_ublock},
-                    {"writer_only", 0u}}}},
-         }},
-        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", src_dram_buffer->address()},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.reader_ublock},
+                   {"reader_only", 0u}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dst_addr", dst_dram_buffer->address()},
+                   {"dst_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.writer_ublock},
+                   {"writer_only", 0u}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

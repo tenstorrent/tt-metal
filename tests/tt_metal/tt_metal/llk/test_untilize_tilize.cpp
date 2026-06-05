@@ -375,32 +375,28 @@ void run_single_core_tilize_program(
 
     experimental::ProgramRunArgs params;
     if (is_unpack_a_tilize) {
-        params.kernel_run_args.emplace(
-            READER,
-            experimental::ProgramRunArgs::KernelRunArgs{
-                .runtime_arg_values =
-                    {{node,
-                      {{"src_addr", dram_buffer_src0_addr},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.num_tiles_c},
-                       {"reader_only", 0u}}}},
-            });
-    } else {
-        params.kernel_run_args.emplace(
-            READER,
-            experimental::ProgramRunArgs::KernelRunArgs{
-                .runtime_arg_values =
-                    {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
-            });
-    }
-    params.kernel_run_args.emplace(
-        WRITER,
-        experimental::ProgramRunArgs::KernelRunArgs{
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
             .runtime_arg_values =
-                {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src0_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", test_config.num_tiles_c},
+                   {"reader_only", 0u}}}},
         });
-    params.kernel_run_args.emplace(COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{});
+    } else {
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+        });
+    }
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = WRITER,
+        .runtime_arg_values = {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+    });
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
     experimental::SetProgramRunArgs(program_, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -896,25 +892,25 @@ static void run_quasar_tilize_untilize_test(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"src_addr", dram_buffer_src_addr},
-                    {"src_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", src_tile_stride_bytes}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"dst_addr", dram_buffer_dst_addr},
-                    {"dst_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", dst_tile_stride_bytes}}}},
-         }},
-        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_tile_stride_bytes}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_tile_stride_bytes}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

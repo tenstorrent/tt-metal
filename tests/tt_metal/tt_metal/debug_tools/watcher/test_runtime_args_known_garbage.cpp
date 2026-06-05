@@ -314,7 +314,8 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
                 krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, rtas_range2);
             }
         }
-        params.kernel_run_args = {{DM_KERNEL_NAME, krp}};
+        krp.kernel = DM_KERNEL_NAME;
+        params.kernel_run_args = {krp};
         experimental::SetProgramRunArgs(prog, params);
     };
 
@@ -444,7 +445,8 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     } else {
         krp.advanced_options.common_runtime_varargs = default_crtas;
     }
-    params_m2.kernel_run_args = {{OOB_KERNEL_NAME, krp}};
+    krp.kernel = OOB_KERNEL_NAME;
+    params_m2.kernel_run_args = {krp};
     experimental::SetProgramRunArgs(program, params_m2);
 
     workload.add_program(device_range, std::move(program));
@@ -500,7 +502,8 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     for (const auto& c : core_range) {
         krp.advanced_options.runtime_varargs.emplace(experimental::NodeCoord{c}, default_rtas);
     }
-    params.kernel_run_args = {{MULTI_DM_KERNEL_NAME, krp}};
+    krp.kernel = MULTI_DM_KERNEL_NAME;
+    params.kernel_run_args = {krp};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));

@@ -82,12 +82,11 @@ bool run_l2_flush_test(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {DM_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-             .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
@@ -173,12 +172,11 @@ bool run_l1_dcache_test(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {DM_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
-             .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"base_addr", config.base_addr}, {"test_mode", config.test_mode}}}},
+        .common_runtime_arg_values = {{"value", config.value}, {"num_words", config.num_words}},
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;

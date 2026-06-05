@@ -75,9 +75,10 @@ protected:
         // (Gen1) — see riscv_atomics.cpp.
         std::vector<experimental::KernelSpec> kernel_specs;
         std::vector<experimental::KernelSpecName> kernel_names;
-        experimental::Table<experimental::KernelSpecName, experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
-        const auto make_run_params = [&]() {
+        experimental::ProgramRunArgs params;
+        const auto make_run_params = [&](const experimental::KernelSpecName& kernel_name) {
             return experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = kernel_name,
                 .runtime_arg_values =
                     {{core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             };
@@ -96,7 +97,7 @@ protected:
                         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
             });
             kernel_names.push_back(DM_KERNEL);
-            kernel_run_args.emplace(DM_KERNEL, make_run_params());
+            params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
                 const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
@@ -115,7 +116,7 @@ protected:
                                 }},
                 });
                 kernel_names.push_back(name);
-                kernel_run_args.emplace(name, make_run_params());
+                params.kernel_run_args.push_back(make_run_params(name));
             }
         }
 
@@ -130,9 +131,6 @@ protected:
             .work_units = {main_wu},
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args = std::move(kernel_run_args);
         experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));

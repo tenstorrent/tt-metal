@@ -158,25 +158,25 @@ static vector<uint32_t> run_mxfp4_typecast(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"src_addr", src_buffer->address()},
-                    {"src_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", src_dram_stride}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"dst_addr", dst_buffer->address()},
-                    {"dst_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"dram_page_stride", dst_dram_stride}}}},
-         }},
-        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", src_buffer->address()},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_dram_stride}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values =
+                {{node,
+                  {{"dst_addr", dst_buffer->address()},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_dram_stride}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 

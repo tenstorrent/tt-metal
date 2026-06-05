@@ -76,11 +76,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {COMPUTE_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
@@ -153,11 +152,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {COMPUTE_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));

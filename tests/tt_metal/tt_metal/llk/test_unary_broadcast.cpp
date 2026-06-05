@@ -397,22 +397,22 @@ void run_single_core_unary_broadcast_quasar(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {READER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values =
-                 {{node,
-                   {{"src_addr", src_dram_addr},
-                    {"src_dram_bank_id", 0u},
-                    {"num_tiles", num_tiles},
-                    {"ublock_size_tiles", 1u},
-                    {"reader_only", 0u}}}},
-         }},
-        {WRITER,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
-         }},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values =
+                {{node,
+                  {{"src_addr", src_dram_addr},
+                   {"src_dram_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"ublock_size_tiles", 1u},
+                   {"reader_only", 0u}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
+        },
     };
-    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{.tensor = out_tensor}}};
+    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     std::vector<uint32_t> packed_tilized_input;

@@ -80,12 +80,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {DM_KERNEL,
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .runtime_arg_values = {{node, {{"address", address}}}},
-             .common_runtime_arg_values = {{"value", value}},
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = {{node, {{"address", address}}}},
+        .common_runtime_arg_values = {{"value", value}},
+    }};
     experimental::SetProgramRunArgs(program, params);
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
