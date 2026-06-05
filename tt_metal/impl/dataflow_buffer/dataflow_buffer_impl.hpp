@@ -130,6 +130,9 @@ void populate_dfb_global_header_participation(
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
+void verify_dfb_per_risc_byte_offsets(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
 // Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.
 uint32_t compute_dfb_config_serialized_size(
     const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);

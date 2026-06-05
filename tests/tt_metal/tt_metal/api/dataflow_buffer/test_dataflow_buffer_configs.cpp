@@ -278,7 +278,7 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_EQ(ghdr->num_dfbs, 1u);
     EXPECT_EQ(sizeof(dfb_global_header_t), 64u);
     const uint32_t prefix_size = dfb_config_prefix_size(ghdr->num_dfbs);
-    EXPECT_EQ(prefix_size, 68u);
+    EXPECT_EQ(prefix_size, 92u);
     EXPECT_EQ(ghdr->dm1_remapper_blob_offset, prefix_size);
     EXPECT_GT(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
     EXPECT_GT(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
@@ -286,6 +286,17 @@ TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
     const uint16_t* offset_table =
         reinterpret_cast<const uint16_t*>(buf.data() + dfb_byte_offset_table_byte_offset());
     EXPECT_EQ(offset_table[0], ghdr->per_dfb_layout_offset);
+
+    const uint16_t* per_risc_offset_table = reinterpret_cast<const uint16_t*>(
+        buf.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr->num_dfbs));
+    EXPECT_EQ(
+        per_risc_offset_table[dfb_per_risc_byte_offset_table_index(0, 0)],
+        static_cast<uint16_t>(ghdr->per_dfb_layout_offset + sizeof(dfb_initializer_t)));
+    EXPECT_EQ(
+        per_risc_offset_table[dfb_per_risc_byte_offset_table_index(0, 4)],
+        static_cast<uint16_t>(ghdr->per_dfb_layout_offset + sizeof(dfb_initializer_t) + sizeof(dfb_initializer_per_risc_t)));
+    experimental::dfb::detail::verify_dfb_per_risc_byte_offsets(buf, dfbs);
+
     const uint32_t payload_size =
         static_cast<uint32_t>(offset_table[0]) + dfbs[0]->serialized_size();
     EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));

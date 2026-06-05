@@ -80,6 +80,60 @@ void populate_dfb_global_header_participation(
         id_mask);
 }
 
+uint8_t dfb_risc_index_for_hart(uint16_t risc_mask, uint8_t hartid) {
+    const uint16_t prefix_mask = (hartid >= 16) ? 0u : static_cast<uint16_t>((1u << hartid) - 1u);
+    return static_cast<uint8_t>(__builtin_popcount(risc_mask & prefix_mask));
+}
+
+void verify_dfb_per_risc_byte_offsets(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    TT_FATAL(config_bytes.size() >= sizeof(dfb_global_header_t), "DFB config too small for per_risc offset verify");
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(config_bytes.data());
+    const uint16_t* dfb_byte_offset_table =
+        reinterpret_cast<const uint16_t*>(config_bytes.data() + dfb_byte_offset_table_byte_offset());
+    const uint16_t* per_risc_byte_offset_table = reinterpret_cast<const uint16_t*>(
+        config_bytes.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr->num_dfbs));
+
+    for (const auto& dfb : dfbs_on_core) {
+        const uint32_t layout_off = dfb_byte_offset_table[dfb->id];
+        const uint16_t risc_mask = dfb->risc_mask;
+        for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+            const uint32_t table_idx = dfb_per_risc_byte_offset_table_index(dfb->id, hartid);
+            const uint16_t stored = per_risc_byte_offset_table[table_idx];
+            if ((risc_mask & (1u << hartid)) == 0) {
+                TT_FATAL(
+                    stored == 0,
+                    "DFB {} per_risc_byte_offset[{}][{}] expected 0, got {}",
+                    dfb->id,
+                    dfb->id,
+                    hartid,
+                    stored);
+                continue;
+            }
+            const uint8_t risc_index = dfb_risc_index_for_hart(risc_mask, hartid);
+            const uint32_t expected = layout_off + sizeof(dfb_initializer_t) +
+                                      static_cast<uint32_t>(risc_index) * sizeof(dfb_initializer_per_risc_t);
+            TT_FATAL(
+                stored == expected,
+                "DFB {} per_risc_byte_offset[{}][{}] expected {} (risc_index {}), got {}",
+                dfb->id,
+                dfb->id,
+                hartid,
+                expected,
+                risc_index,
+                stored);
+            TT_FATAL(
+                stored + sizeof(dfb_initializer_per_risc_t) <= config_bytes.size(),
+                "DFB {} per_risc_byte_offset[{}][{}]={} overflows config size {}",
+                dfb->id,
+                dfb->id,
+                hartid,
+                stored,
+                config_bytes.size());
+        }
+    }
+}
+
 void verify_dfb_global_header_participation(
     const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     const uint32_t valid_dfb_mask =
@@ -145,6 +199,8 @@ size_t serialize_dfb_config_for_core(
     }
 
     uint16_t* dfb_byte_offset_table = reinterpret_cast<uint16_t*>(out.data() + dfb_byte_offset_table_byte_offset());
+    uint16_t* per_risc_byte_offset_table = reinterpret_cast<uint16_t*>(
+        out.data() + dfb_per_risc_byte_offset_table_byte_offset(ghdr.num_dfbs));
 
     for (const auto& dfb : dfbs_on_core) {
         auto blob = dfb->serialize_dm1_remapper_blob_for_core(core);
@@ -171,12 +227,33 @@ size_t serialize_dfb_config_for_core(
             "DFB {} layout offset {} exceeds uint16_t range",
             dfb->id,
             offset);
-        dfb_byte_offset_table[dfb->id] = static_cast<uint16_t>(offset);
+        const uint32_t layout_off = offset;
+        dfb_byte_offset_table[dfb->id] = static_cast<uint16_t>(layout_off);
+        const uint16_t risc_mask = dfb->risc_mask;
+        for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
+            const uint32_t table_idx = dfb_per_risc_byte_offset_table_index(dfb->id, hartid);
+            if ((risc_mask & (1u << hartid)) == 0) {
+                per_risc_byte_offset_table[table_idx] = 0;
+                continue;
+            }
+            const uint8_t risc_index = dfb_risc_index_for_hart(risc_mask, hartid);
+            const uint32_t per_risc_off = layout_off + sizeof(dfb_initializer_t) +
+                                          static_cast<uint32_t>(risc_index) * sizeof(dfb_initializer_per_risc_t);
+            TT_FATAL(
+                per_risc_off <= std::numeric_limits<uint16_t>::max(),
+                "DFB {} per_risc offset {} for hart {} exceeds uint16_t range",
+                dfb->id,
+                per_risc_off,
+                hartid);
+            per_risc_byte_offset_table[table_idx] = static_cast<uint16_t>(per_risc_off);
+        }
         auto serialized = dfb->serialize_for_core(core);
         TT_FATAL(offset + serialized.size() <= out.size(), "DFB config buffer overflow (layout)");
         std::memcpy(out.data() + offset, serialized.data(), serialized.size());
         offset += serialized.size();
     }
+
+    verify_dfb_per_risc_byte_offsets(std::span<const uint8_t>(out.data(), offset), dfbs_on_core);
 
     if (ghdr.num_dfbs > 0) {
         TT_FATAL(
