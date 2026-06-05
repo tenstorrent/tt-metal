@@ -260,14 +260,15 @@ def build_matmul_pcfg(
                     (128, 32): (24, 32),  # mlp_down:   keep verified config
                     (32, 80): (64, 8),  # qkv_fused:  tracy-verified -9%
                 }
-                # BH-recalibration attempts 2026-06-05 (all REVERTED, baseline 56.419 ms):
-                # - qkv_fused (32,80): (80,8) — matmul +0.18 ms (40→80 active cores too granular)
-                # - mlp_down (128,32): (32,32) — matmul +0.19 ms (16→32 active cores too granular)
-                # - mlp_gate_up (32,128): (32,16) — matmul +0.48 ms (fewer cores raises µs/call)
+                # BH-recalibration attempts 2026-06-05 (all REVERTED).
+                # Verified against true baseline 51.023 ms (full flag set incl.
+                # QWEN_NLP_*_HEAD_SPLIT=1 + PI0_UPSTREAM_MASKS=1 + PI0_LN_WEIGHTS_L1=1):
+                # - qkv_fused (32,80): (80,8) — matmul +0.186 ms (40→80 active cores too granular)
+                # - mlp_down (128,32): (32,32) — matmul +0.197 ms (16→32 active cores too granular)
+                # - mlp_gate_up (32,128): (32,16) — matmul +0.482 ms (fewer cores raises µs/call)
                 # - mlp_gate_up (32,128): (64,32) — matmul +0.04 ms (ibw=32 vs 16, neutral)
                 # Conclusion: V11 picker outputs are at the BH dispatch floor; pushing toward
                 # per_core_N=1 in any of these shapes worsens dispatch/work balance.
-                # See docs/claude_sessions/session_2026-06-05_bh_core_recalibration.md.
             else:
                 _DENOISE_TUNE_TABLE = {
                     (64, 32): (120, 32),  # o_proj:   M=32 K=2048 N=1024 — verified -10% kernel
