@@ -170,6 +170,6 @@ jobs:
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0
-      runner-label: tt-ubuntu-2204-n300-stable
+      runner-label: n300
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
