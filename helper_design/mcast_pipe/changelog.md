@@ -45,3 +45,27 @@ feedback round lands.
   pre_handshake), INCLUDE_SRC loopback inferred (sender in-rect: f3_loopback), degenerate
   self-only collapsed to local copy (num_active_cores==1: f3_degenerate). No hangs.
 - **Status:** helper + unit gate done (committed). 13 call sites (Phase 3) pending review.
+
+### Round 2 — inference refinement (Phase 3 finding)
+
+Phase 3 migrating matmul exposed a flaw in D2 as first implemented. The first rule was
+`loopback iff sender_in_box`, with `num_dsts = rect.area()`. That hung matmul 1d: the in0
+sender sits at the **top-left corner of its own broadcast box** but uses EXCLUDE_SRC — it
+already holds the in0 block as its mcast source and must not self-overwrite. "Sender in box"
+alone cannot tell EXCLUDE-in-box (matmul) from INCLUDE (conv-WS round-robin).
+
+**Refined rule (still no mode knob, still inferred):**
+- `num_active_cores` is the **recipient count** = the NoC `num_dsts` for data+flag = the ACK
+  count. (Confirmed against the proven raw matmul: it mcast to `in0_mcast_num_cores` with the
+  comment *"num_dests must not include source"*; round-1 used that same value for the wait and
+  passed → recipients == acks in the tested configs.)
+- **loopback (INCLUDE_SRC) iff `sender_in_box && num_active_cores == rect.area()`** — the sender
+  is in the box AND counted as a recipient. matmul: 15 recipients ≠ 16-core box → EXCLUDE ✓;
+  conv-WS: readers == box → INCLUDE ✓.
+- `rect.area()` is used ONLY for that test, never as a transfer count.
+
+Gap the unit suite missed (sender-in-box + EXCLUDE) is now covered by the matmul mapped test;
+a synthetic unit case is a follow-up.
+
+### Round 2 — Phase 3 migration progress (per family, mapped-test gated, --mode=halt)
+- **matmul (4 kernels):** in0 sender/receiver, in1 sender/receiver. 1d + 2d PASS. ✓
