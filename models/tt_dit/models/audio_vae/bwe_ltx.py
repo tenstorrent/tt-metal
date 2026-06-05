@@ -2,20 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""LTX-2 vocoder bandwidth-extension wrapper (Stage C).
-
-Pipeline:
-
-    mel (B, 2, T, mel_bins)
-        ──> main Vocoder ──> waveform_24k (B, 2, T*160)
-            ├── pad to multiple of hop_length
-            ├── MelSTFT  -> log-mel
-            ├── bwe_generator ──> residual (B, 2, T_out)
-            └── resampler (Hann-window sinc, ratio=2) ──> skip (B, 2, T_out)
-        ──> clamp(residual + skip, -1, 1)[..., :output_length]
-
-fp32 throughout: every conv is constructed with ``dtype=ttnn.float32`` (HiFi4 +
-``fp32_dest_acc``).
+"""LTX-2 vocoder bandwidth-extension wrapper (Stage C): main Vocoder → BWE generator
+residual + sinc-resampled skip, clamped to [-1, 1]. fp32 throughout (every conv is
+``dtype=ttnn.float32``, HiFi4 + ``fp32_dest_acc``).
 """
 
 from __future__ import annotations

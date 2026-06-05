@@ -1,22 +1,14 @@
 # LTX (audio/video) pipeline — supplemental requirements.
 #
-# These are intentionally kept OUT of the shared tt_metal/python_env/requirements-dev.txt
-# so that bumping deps for LTX does not affect everyone else's environment.
-#
-# Install ON TOP OF the normal dev env, AFTER running ./create_venv.sh:
+# Install on top of the dev env, after ./create_venv.sh:
 #
 #     source python_env/bin/activate
-#     uv pip install --prerelease=allow -r models/tt_dit/pipelines/ltx/requirements.txt
+#     uv pip install --no-deps -r models/tt_dit/pipelines/ltx/requirements.txt
 #
-# Why --prerelease=allow:
-#   diffusers==0.38.0 requires safetensors>=0.8.0rc0, and there is currently no
-#   *stable* safetensors >=0.8.0 on PyPI (latest stable is 0.7.0). The flag lets
-#   uv/pip select the 0.8.0rc pre-release. Drop the flag once safetensors 0.8.0
-#   ships a stable release.
+# --no-deps keeps the dev env's stable safetensors: diffusers 0.38.0 declares
+# safetensors>=0.8.0rc0 but never version-gates it at import and uses only stable
+# API, so the prerelease bump is unnecessary. Its other deps are already satisfied
+# by the dev env, and av has none.
 
-# Newer diffusers required by the LTX pipeline (shared env pins 0.35.1).
 diffusers==0.38.0
-
-# PyAV — used by models/tt_dit/utils/video.py to mux generated frames + audio
-# into the output .mp4.
 av==17.0.1

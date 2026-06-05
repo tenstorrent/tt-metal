@@ -4,17 +4,10 @@
 """LTX-2.3 22B two-stage audio-video pipeline.
 
 Mirrors the reference ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline``:
-
-- **Stage 1**: half-res AV denoise on the base 22B checkpoint with full
-  ``MultiModalGuider`` guidance (CFG + STG + AV-modality).
-- **Spatial upsample**: stage-1 latent is x2-upsampled on-device via the
-  ``LTXLatentUpsampler`` (eagerly constructed; it stays resident alongside the
-  transformer and is coresident-excluded only against the VAE — see
-  ``LTXPipeline._register_coresident_exclusions``).
-- **Stage 2**: full-res AV refine with the distilled LoRA fused into the
-  transformer and no guidance (``SimpleDenoiser`` equivalent), starting from
-  the upsampled video latent + stage-1 audio latent renoised at
-  ``sigmas[0] = 0.909375``.
+stage 1 denoises half-res AV on the base 22B checkpoint with full MultiModalGuider
+guidance; the stage-1 video latent is x2-upsampled on device; stage 2 refines at full
+res with the distilled LoRA fused in and no guidance, starting from the upsampled
+video + renoised stage-1 audio.
 
 Text-only; image conditioning is not wired here yet.
 """
@@ -226,11 +219,9 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         total_t0 = time.time()
 
-        # 1) Encode prompts once — same context is reused by both stages, matching
-        #    the reference which uses the same ``ctx_p`` for stage 1 and stage 2.
-        #    On-device Gemma encode; coresident-excluded with the DiT/VAE, so it
-        #    auto-evicts them and _prepare_transformer(0) evicts the encoder back.
-        #    Only load on a cache miss — a cached prompt skips the encoder entirely.
+        # Encode prompts once — both stages reuse the same context (matching the
+        # reference's shared ``ctx_p``). On-device Gemma encode is coresident-excluded
+        # with the DiT/VAE, so it auto-evicts them; load only on a cache miss.
         t0 = time.time()
         if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
             self.gemma_encoder_pair.ensure_loaded()

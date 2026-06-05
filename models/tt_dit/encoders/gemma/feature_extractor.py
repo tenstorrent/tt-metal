@@ -2,13 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX-2 Gemma FeatureExtractorV2 (on device).
+"""LTX-2 Gemma FeatureExtractorV2 (on device): per-token RMS-norm of the 49 Gemma
+hidden states, concat, rescale, and dual aggregate_embed projection into the
+video/audio feature dims the connectors consume.
 
-Mirrors ``ltx_core.text_encoders.gemma.feature_extractor.FeatureExtractorV2``: takes the
-49 Gemma hidden states, per-token RMS-normalises each over its hidden dim, concatenates,
-rescales, and projects through a per-output ``aggregate_embed`` into the video (4096) and
-audio (2048) feature dims the connectors consume. Everything stays on device.
+Reference: ltx_core.text_encoders.gemma.feature_extractor.FeatureExtractorV2
 """
 
 from __future__ import annotations
