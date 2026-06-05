@@ -120,6 +120,29 @@ inline void fetch_v_from_source(
     }
 }
 
+template <typename LocalVGenerator, typename GatheredVGenerator>
+struct VSourceGenerators {
+    LocalVGenerator local;
+    GatheredVGenerator gathered;
+};
+
+template <uint32_t cb_v_in, uint32_t v_cb_entry_tiles, uint32_t Sk_chunk_t, uint32_t vDHt, uint32_t k_tile_bytes>
+inline void materialize_v_prefix_from_k(uint32_t kt_base_addr, uint32_t rows_to_materialize) {
+    cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+    uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+    noc_async_read_one_packet_set_state(get_noc_addr(kt_base_addr), k_tile_bytes);
+    for (uint32_t sk = 0; sk < rows_to_materialize; ++sk) {
+        uint32_t kt_read_ptr = kt_base_addr + sk * k_tile_bytes;
+        for (uint32_t vd = 0; vd < vDHt; ++vd) {
+            noc_async_read_one_packet_with_state<true>(kt_read_ptr, v_write_ptr);
+            v_write_ptr += k_tile_bytes;
+            kt_read_ptr += Sk_chunk_t * k_tile_bytes;
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_v_in, v_cb_entry_tiles);
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -156,6 +179,10 @@ void kernel_main() {
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
     constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(29);
+    constexpr uint32_t NHV = get_compile_time_arg_val(30);
+    // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
+    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t q_heads_per_v = NH / NHV;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -163,7 +190,7 @@ void kernel_main() {
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
 
-    constexpr auto q_args = TensorAccessorArgs<30>();
+    constexpr auto q_args = TensorAccessorArgs<32>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -188,7 +215,7 @@ void kernel_main() {
     }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t cache_batch_idx = get_arg_val<uint32_t>(argidx++);
+    const uint32_t kv_cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -248,6 +275,7 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
+    constexpr uint32_t v_cb_entry_tiles = v_shares_k_buffer ? k_chunk_tiles : v_chunk_tiles;
 
     // Head chain (head-level): matches (batch, head), used by V and optionally K
     ChainLink<head_mcast_enabled, true> head_chain(
@@ -297,7 +325,7 @@ void kernel_main() {
         0,  // chain_head unused for batch-level chain
         batch_cfg.next_core_q_chunks);
 
-    // V always uses head chain
+    // Non-shared V uses the head chain. Latent-V reads V from K and does not need a separate V chain.
     auto& v_chain = head_chain;
 
     // K uses batch chain when NHK == 1 (MLA), else head chain (compile-time IIFE selection)
@@ -318,23 +346,26 @@ void kernel_main() {
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
-    const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
-    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
 
-    const uint32_t kv_batch_dim = indexed_kv_cache ? cache_batch_idx + 1 : B;
+    const uint32_t kv_batch_dim = indexed_kv_cache ? kv_cache_batch_idx + 1 : B;
     const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
-    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NH, kv_local_padded_Nt, vDHt);
     const auto gathered_k_input_tile_logical = TensorTileShape(kv_batch_dim, NHK, padded_Nt, DHt);
-    const auto gathered_v_input_tile_logical = TensorTileShape(kv_batch_dim, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
     const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
-    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
+    const auto local_v_reader = TensorAccessor(v_args, v_addr);
+    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
+    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
+    const auto gathered_v_input_tile_logical = TensorTileShape(kv_batch_dim, NHV, padded_Nt, vDHt);
+    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
+    [[maybe_unused]] const auto v_generators =
+        VSourceGenerators<decltype(local_v_generator), decltype(gathered_v_generator)>{
+            local_v_generator, gathered_v_generator};
 
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
@@ -469,32 +500,23 @@ void kernel_main() {
 
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
-                Slice v_slice;
-                uint32_t k_end_seq_tile;
-                uint32_t v_end_seq_tile;
+                uint32_t end_seq_tile;
                 const uint32_t nk = nq / q_heads_per_k;
-                const uint32_t kv_batch = indexed_kv_cache ? cache_batch_idx : nb;
+                const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
                 if (ring_iter == 0) {
                     const uint32_t local_k_start_tile = k_chunk * Sk_chunk_t;
-                    const uint32_t local_v_start_tile = k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(kv_batch, nq, local_v_start_tile, local_v_start_tile + Sk_chunk_t, 0, vDHt);
-                    k_end_seq_tile = ring_iter_valid_kv_tiles;
-                    v_end_seq_tile = ring_iter_valid_kv_tiles;
+                    end_seq_tile = ring_iter_valid_kv_tiles;
                 } else {
                     const uint32_t gathered_start_tile = ring_id * kv_local_padded_Nt + k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(kv_batch, nq, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, vDHt);
-                    k_end_seq_tile = ring_id * kv_local_padded_Nt + ring_iter_valid_kv_tiles;
-                    v_end_seq_tile = k_end_seq_tile;
+                    end_seq_tile = ring_id * kv_local_padded_Nt + ring_iter_valid_kv_tiles;
                 }
                 if constexpr (has_joint_k) {
                     if (kv_chunk_is_joint) {
                         const uint32_t joint_k_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
                         k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        k_end_seq_tile = Lt;
-                        v_end_seq_tile = Lt;
+                        end_seq_tile = Lt;
                     }
                 }
 
@@ -515,7 +537,7 @@ void kernel_main() {
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
                         fetch_block(
-                            k_gen, k_slice, k_end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                            k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
                     };
                     fetch_k_from_source<has_joint_k, joint_tensor_args_offset>(
                         kv_chunk_is_joint,
@@ -532,15 +554,17 @@ void kernel_main() {
                     k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
-                // Skip Q, V reads and V forward for padded iterations (K mcast sync only).
+                // Skip Q and compute-visible pushes for padded K-mcast iterations.
                 // Note: cb_push_back is intentionally skipped — without it, the write pointer
                 // doesn't advance, so cb_reserve_back returns the same address each iteration.
                 // This lets the buffer act as a reusable staging area for the mcast.
                 if (is_padded_iter) {
+                    // Padded iterations participate in the chain handshake but do not generate
+                    // compute-visible K/V. In latent-V mode, only the K^T segment is transported.
                     continue;
                 }
 
-                // Make K available to compute
+                // Make K available to compute.
                 cb_push_back(cb_k_in, k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
@@ -580,41 +604,79 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                // V: either read locally (injector or not participant) or receive from chain
-                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (v_chain.should_receive(nb, nq)) {
-                    v_chain.receive();
+                if constexpr (v_shares_k_buffer) {
+                    bool skip_v_materialization = false;
+                    uint32_t v_rows_to_materialize = Sk_chunk_t;
+                    if constexpr (is_causal && !chunked_enabled) {
+                        if (ring_iter == 0) {
+                            // Local causal chunks beyond this limit are fully masked. Compute still
+                            // advances the K/V FIFO phase, but does not consume V values for them.
+                            const uint32_t causal_k_limit =
+                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                            skip_v_materialization = k_chunk >= causal_k_limit;
+                            if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
+                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                                if (active_rows < Sk_chunk_t) {
+                                    // Compute narrows active_Sk to this same row count, so the unfilled tail
+                                    // of the fixed-size V entry is kept for FIFO phase only and is never read.
+                                    v_rows_to_materialize = active_rows;
+                                }
+                            }
+                        }
+                    }
+
+                    // Same physical CB as K. K^T is already pushed; reserve a second fixed-size
+                    // FIFO entry whose prefix is compact V[Sk, vDHt] via local L1-to-L1 NoC reads.
+                    if (skip_v_materialization) {
+                        // Preserve the logical V FIFO entry for phase alignment. No fill is needed
+                        // because compute skips the fully masked K chunk.
+                        cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                        cb_push_back(cb_v_in, v_cb_entry_tiles);
+                    } else {
+                        materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
+                            cb_k_start_address, v_rows_to_materialize);
+                    }
                 } else {
-                    const auto fetch_v = [&](const auto& v_gen) {
-                        fetch_block(
-                            v_gen, v_slice, v_end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
-                    };
-                    fetch_v_from_source<has_joint_k, joint_tensor_args_offset>(
-                        kv_chunk_is_joint,
-                        ring_iter,
-                        joint_v_addr,
-                        local_v_generator,
-                        gathered_v_generator,
-                        joint_input_tile_logical,
-                        fetch_v);
-                }
+                    // V: either read locally (injector or not participant) or receive from chain.
+                    const uint32_t nv = nq / q_heads_per_v;
+                    const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+                    cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                    uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
+                    if (v_chain.should_receive(nb, nv)) {
+                        v_chain.receive();
+                    } else {
+                        const auto fetch_v = [&](const auto& v_gen) {
+                            fetch_block(
+                                v_gen, v_slice, end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                        };
+                        fetch_v_from_source<has_joint_k, joint_tensor_args_offset>(
+                            kv_chunk_is_joint,
+                            ring_iter,
+                            joint_v_addr,
+                            v_generators.local,
+                            v_generators.gathered,
+                            joint_input_tile_logical,
+                            fetch_v);
+                    }
 
-                // Forward V to next core(s) before push_back — prevents compute from
-                // popping the buffer while the mcast is still reading from it.
-                if (v_chain.should_forward(nb, nq, q_iter_local)) {
-                    v_chain.forward(cb_v_start_address);
-                }
+                    // Forward V to next core(s) before push_back — prevents compute from
+                    // popping the buffer while the mcast is still reading from it.
+                    if (v_chain.should_forward(nb, nv, q_iter_local)) {
+                        v_chain.forward(cb_v_start_address);
+                    }
 
-                // Make V available to compute
-                cb_push_back(cb_v_in, v_chunk_tiles);
+                    // Make V available to compute.
+                    cb_push_back(cb_v_in, v_cb_entry_tiles);
+                }
             }
         }
-        if (KV_chunks_processed_in_iter % 2 == 0) {
+        for (uint32_t dummy_chunk = 0;
+             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
+             ++dummy_chunk) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
-            cb_reserve_back(cb_v_in, v_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
-            cb_push_back(cb_v_in, v_chunk_tiles);
+            cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+            cb_push_back(cb_v_in, v_cb_entry_tiles);
         }
     }
 }

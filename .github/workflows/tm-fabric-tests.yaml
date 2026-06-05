@@ -3,58 +3,63 @@ name: "(TM-Fabric) Fabric Tests"
 on:
   workflow_dispatch:
     inputs:
+      run-fabric-cpu-only-unit-tests:
+        description: "Run fabric CPU-only unit tests (no hardware needed)"
+        required: false
+        default: false
+        type: boolean
       run-wh-n300-fabric-tests:
-        description: 'Run Wormhole N300 fabric tests'
+        description: "Run Wormhole N300 fabric tests"
         required: false
         default: true
         type: boolean
       run-wh-t3k-fabric-tests:
-        description: 'Run Wormhole T3K fabric tests'
+        description: "Run Wormhole T3K fabric tests"
         required: false
         default: true
         type: boolean
       run-wh-t3k-perf-tests:
-        description: 'Run Wormhole T3K performance tests'
+        description: "Run Wormhole T3K performance tests"
         required: false
         default: true
         type: boolean
       run-perf-fabric-bw:
-        description: 'Run T3K ubench - Fabric BW performance test'
+        description: "Run T3K ubench - Fabric BW performance test"
         required: false
         default: true
         type: boolean
       run-perf-fabric-mux-bw:
-        description: 'Run T3K ubench - Fabric Mux BW performance test'
+        description: "Run T3K ubench - Fabric Mux BW performance test"
         required: false
         default: true
         type: boolean
       run-wh-6u-fabric-tests:
-        description: 'Run Wormhole 6U fabric tests'
+        description: "Run Wormhole 6U fabric tests"
         required: false
         default: true
         type: boolean
       run-bh-multi-card-unit-tests:
-        description: 'Run Blackhole multi-card unit tests'
+        description: "Run Blackhole multi-card unit tests"
         required: false
         default: true
         type: boolean
       bh-runner-llmbox:
-        description: 'Run tests on BH-LLMBox'
+        description: "Run tests on BH-LLMBox"
         required: false
         default: true
         type: boolean
       bh-runner-deskbox:
-        description: 'Run tests on BH-DeskBox'
+        description: "Run tests on BH-DeskBox"
         required: false
         default: true
         type: boolean
       bh-runner-loudbox:
-        description: 'Run tests on BH-LoudBox'
+        description: "Run tests on BH-LoudBox"
         required: false
         default: true
         type: boolean
       bh-runner-p300:
-        description: 'Run tests on P300-viommu'
+        description: "Run tests on P300-viommu"
         required: false
         default: true
         type: boolean
@@ -72,7 +77,7 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       build-type:
-        description: 'Build type for the workflow'
+        description: "Build type for the workflow"
         required: false
         default: Release
         type: choice
@@ -88,18 +93,31 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: true
       skip-tt-train: true
+
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-artifact]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
 
   generate-fabric-matrix:
     runs-on: ubuntu-latest
@@ -113,6 +131,7 @@ jobs:
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            run_cpu_only="${{ inputs.run-fabric-cpu-only-unit-tests }}"
             run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
             run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
             run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
@@ -124,6 +143,7 @@ jobs:
             bh_quietbox_2="${{ inputs.bh-runner-quietbox-2 }}"
           else
             # Default to true for workflow_call and push events
+            run_cpu_only="true"
             run_wh_n300="true"
             run_wh_t3k="true"
             run_wh_6u="true"
@@ -135,38 +155,41 @@ jobs:
             bh_quietbox_2="true"
           fi
 
+          if [[ "$run_cpu_only" == "true" ]]; then
+            matrix_items+=('{"test-type":"fabric-cpu-only-unit-tests","run-fabric-cpu-only-unit-tests":true,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+          fi
+
           if [[ "$run_wh_n300" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_wh_t3k" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-t3k-fabric-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":true,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-t3k-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":true,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_wh_6u" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-6u-fabric-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":true,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-6u-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":true,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_bh" == "true" ]]; then
             # Add blackhole test configurations for each selected runner
             if [[ "$bh_llmbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":true,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":true,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_deskbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":true,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":true,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_loudbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":true,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":true,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_p300" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":true,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":true,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_quietbox_2" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":true}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":true}')
             fi
           fi
 
-          # If no items selected, fail with an explicit error
           if [ ${#matrix_items[@]} -eq 0 ]; then
             echo "ERROR: No test configurations selected. Please select at least one test to run."
             exit 1
@@ -185,7 +208,7 @@ jobs:
           echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
           echo "Generated matrix: $matrix_json"
   fabric-tests:
-    needs: [build-artifact, generate-fabric-matrix]
+    needs: [resolve-docker-pull-refs, build-artifact, generate-fabric-matrix]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -193,9 +216,10 @@ jobs:
         test-config: ${{ fromJson(needs.generate-fabric-matrix.outputs.matrix) }}
     uses: ./.github/workflows/tm-fabric-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-fabric-cpu-only-unit-tests: ${{ matrix.test-config.run-fabric-cpu-only-unit-tests || false }}
       run-wh-n300-fabric-tests: ${{ matrix.test-config.run-wh-n300-fabric-tests }}
       run-wh-t3k-fabric-tests: ${{ matrix.test-config.run-wh-t3k-fabric-tests }}
       run-wh-6u-fabric-tests: ${{ matrix.test-config.run-wh-6u-fabric-tests }}
@@ -207,11 +231,11 @@ jobs:
       bh-runner-quietbox-2: ${{ matrix.test-config.bh-runner-quietbox-2 || false }}
   fabric-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
-    needs: build-artifact
+    needs: [resolve-docker-pull-refs, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/tm-fabric-tests-perf-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-perf-fabric-mux-bw: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-fabric-mux-bw != false || github.event_name == 'push' }}

@@ -548,6 +548,10 @@ Tensor TernaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor_a.device());
 }
 
+// Kept (not attribute_names): coarsens the input to its VOLUME (ternary is elementwise — program
+// depends on tile count, not shape). attribute_names can't express that — it only controls the attrs
+// struct, while the input shape is hashed from tensor_args. scalar_input_a/b are excluded here and
+// re-applied via get_dynamic_runtime_args.
 ttsl::hash::hash_t TernaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_a = tensor_args.input_tensor_a;

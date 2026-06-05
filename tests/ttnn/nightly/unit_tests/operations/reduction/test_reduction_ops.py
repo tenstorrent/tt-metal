@@ -738,7 +738,7 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
 
 
 # Test that generic reduction ops produce correct results, preserve dtype, and output
-# layout across all supported dtype/layout combinations documented in nanobind.
+# TILE layout across all supported dtype/layout combinations documented in nanobind.
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -746,9 +746,11 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     """
     Test generic reduction ops across all documented dtype/layout combinations.
     Validates numerical correctness against PyTorch, verifies output dtype matches
-    input dtype, and verifies output layout matches the documented contract:
-    TILE in general, but ROW_MAJOR is preserved on the sum/mean fast path for 4D
-    BFLOAT16/FLOAT32 ROW_MAJOR INTERLEAVED inputs reduced on dim -1 or -2.
+    input dtype, and verifies output layout is TILE as documented in nanobind.
+
+    Note: the dense ROW_MAJOR fast path (which preserves ROW_MAJOR output for the
+    sum/mean cases) is gated off by default (use_row_major_support=false) pending
+    fixes, so every configuration currently tilizes and returns TILE. See #46110
     """
     shape = (4, 2, 64, 64)
     dim = -1
@@ -779,17 +781,10 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     # Validate output dtype matches input dtype
     assert ttnn_result.dtype == dtype, f"Expected output dtype {dtype}, got {ttnn_result.dtype}"
 
-    # sum/mean preserve ROW_MAJOR on the dense RM fast path (4D, BF16/FP32,
-    # interleaved, reduce dim -1 or -2). All other configurations tilize.
-    rm_fast_path = (
-        op in ("sum", "mean")
-        and layout == ttnn.ROW_MAJOR_LAYOUT
-        and dtype in (ttnn.bfloat16, ttnn.float32)
-        and dim in (-1, -2)
-        and len(shape) == 4
-    )
-    expected_layout = ttnn.ROW_MAJOR_LAYOUT if rm_fast_path else ttnn.TILE_LAYOUT
-    assert ttnn_result.layout == expected_layout, f"Expected {expected_layout}, got {ttnn_result.layout}"
+    # Validate output layout is TILE as documented. The dense ROW_MAJOR fast path that would
+    # preserve ROW_MAJOR output for sum/mean is gated off (use_row_major_support=false), so all
+    # configurations tilize and return TILE.
+    assert ttnn_result.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {ttnn_result.layout}"
 
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
 

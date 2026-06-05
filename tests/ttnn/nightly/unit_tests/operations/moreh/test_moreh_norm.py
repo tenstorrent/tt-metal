@@ -324,6 +324,51 @@ def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device, 
     )
 
 
+@pytest.mark.parametrize("p", [2.0, 0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("is_linalg_vector_norm", [False, True])
+def test_moreh_norm_rank_1_dim_0(p, keepdim, device, is_linalg_vector_norm):
+    torch.manual_seed(2024)
+    if not keepdim:
+        torch_input, torch_output_grad = make_torch_tensors([5], 0, keepdim=keepdim)
+        expected_output, _ = torch_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=0,
+            keepdim=keepdim,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+            do_backward=False,
+        )
+        actual_output, _ = ttnn_norm(
+            torch_input,
+            torch_output_grad,
+            p=p,
+            dim=0,
+            keepdim=keepdim,
+            device=device,
+            do_backward=False,
+            dtype=ttnn.bfloat16,
+            is_linalg_vector_norm=is_linalg_vector_norm,
+        )
+        passing, out = comp_allclose(expected_output.reshape(-1), actual_output.reshape(-1), rtol=0.06, atol=0.06)
+        logger.info(f"output's {out}")
+        assert passing
+        return
+
+    run_moreh_norm(
+        [5],
+        p,
+        0,
+        0.06,
+        0.06,
+        device,
+        keepdim=keepdim,
+        ttnn_dtype=ttnn.bfloat16,
+        is_linalg_vector_norm=is_linalg_vector_norm,
+    )
+
+
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
 @pytest.mark.parametrize(
     "dim_rtol_atol",

@@ -237,19 +237,22 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         - if this is not the first ring iteration, do the LSE update.
     */
 
-    log_debug(tt::LogOp, "DEBUG: create_descriptor is called");
+    log_debug(tt::LogOp, "RingJointSDPA create_descriptor");
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
-    const auto& input_tensor_v = tensor_args.input_v;
+    const bool v_shares_k_buffer = tensor_args.has_latent_v();
+    const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
     const bool has_joint_tensors = tensor_args.joint_q.has_value();
     const Tensor* joint_tensor_q = has_joint_tensors ? &tensor_args.joint_q.value() : nullptr;
     const Tensor* joint_tensor_k = has_joint_tensors ? &tensor_args.joint_k.value() : nullptr;
-    const Tensor* joint_tensor_v = has_joint_tensors ? &tensor_args.joint_v.value() : nullptr;
+    const Tensor* joint_tensor_v =
+        has_joint_tensors ? (tensor_args.joint_v.has_value() ? &tensor_args.joint_v.value() : joint_tensor_k) : nullptr;
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
-    const auto& gathered_input_tensor_v = tensor_args.gathered_v;
+    const auto& gathered_input_tensor_v =
+        tensor_args.gathered_v.has_value() ? tensor_args.gathered_v.value() : gathered_input_tensor_k;
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
     auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
@@ -315,25 +318,35 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
 
     log_debug(tt::LogOp, "q_shape: {}", q_shape);
     log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
-    log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
+    if (tensor_args.gathered_v.has_value()) {
+        log_debug(tt::LogOp, "v_shape (gathered): {}", tensor_args.gathered_v->logical_shape());
+    } else {
+        log_debug(
+            tt::LogOp,
+            "v_shape (latent): [B={}, NHV=1, N=0, DH={}]",
+            q_shape[0],
+            tensor_args.v_head_dim(args.latent_v_head_dim));
+    }
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
     const bool indexed_kv_cache = args.has_indexed_kv_cache();
+    // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
+    // reads only the first vDHt head-dim tiles.
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
+    const uint32_t NHV = tensor_args.v_num_heads();
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     const uint32_t padded_N = k_shape[2];
-    const uint32_t cache_batch_idx = args.cache_batch_idx.value_or(0);
+    const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
     const uint32_t L = has_joint_tensors ? joint_tensor_q->logical_shape()[2] : 0;
-    const uint32_t vDH = v_shape[3];
+    const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -399,6 +412,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
     log_debug(tt::LogOp, "NHK: {}", NHK);
+    log_debug(tt::LogOp, "NHV: {}", NHV);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "vDH: {}", vDH);
@@ -503,7 +517,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
+    // materialize next V while compute still consumes current V.
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -547,6 +563,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         !kv_pad_rotation_enabled || use_streaming_compute,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
+    TT_FATAL(
+        use_streaming_compute || !v_shares_k_buffer,
+        "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",
@@ -559,6 +578,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
+    // height for odd Q chunks. The writer must drain cb_out with the same row-group
+    // cadence that compute pushes, otherwise deferred-save rows can be popped and
+    // reused before the matching grouped write has safely landed.
+    const uint32_t writer_out_row_group_h =
+        use_streaming_compute
+            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
+            : out_out_subblock_h;
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -696,6 +723,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(indexed_kv_cache),
         static_cast<uint32_t>(kv_pad_rotation_enabled),
         active_ring_iter_mask,
+        NHV,
+        static_cast<uint32_t>(v_shares_k_buffer),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -803,7 +832,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kernel_is_causal,
         args.is_balanced,
         static_cast<uint32_t>(enable_zigzag_balancing),
-        static_cast<std::uint32_t>(out_out_subblock_h),
+        static_cast<std::uint32_t>(writer_out_row_group_h),
         static_cast<uint32_t>(is_chunked),
         q_chunk_group_tile_count,
         active_ring_iter_mask,
@@ -863,7 +892,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         kv_pad_q_mapping.q_post_wrap_start_tile,
         kv_pad_q_mapping.q_valid_tile_count,
         active_ring_iter_mask,
-        last_active_ring_iter};
+        last_active_ring_iter,
+        static_cast<uint32_t>(v_shares_k_buffer)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -930,7 +960,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
     const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
@@ -1554,7 +1584,6 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
     }
 
-    log_debug(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
     if (k_uses_batch_chain) {
         log_debug(
             tt::LogOp,
@@ -1630,7 +1659,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
-        reader_args.push_back(cache_batch_idx);
+        reader_args.push_back(kv_cache_batch_idx);
 
         // Append chain runtime args for store-and-forward
         const auto& head_chain = head_chain_configs.at(i);
@@ -1710,14 +1739,12 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
+    std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
+    std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k};
+    if (!v_shares_k_buffer) {
+        all_gather_input_tensors.push_back(input_tensor_v);
+        all_gather_output_tensors.push_back(gathered_input_tensor_v);
+    }
     // Append the all-gather portion to `desc`. The helper assigns sequential
     // semaphore IDs starting at `desc.semaphores.size()` (current count) and
     // returns kernel indices into `desc.kernels`. Runtime args are auto-patched
