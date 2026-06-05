@@ -2653,8 +2653,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
 //   1Sx2A DFBs (16–31): one DM producer, two Neo ALL consumers (remapper 1-to-2)
 //     DFB 16–19 : DM2 (t2) → {Neo0, Neo2}  [t0:+4, t2:+8]
 //     DFB 20–23 : DM3 (t3) → {Neo0, Neo2}  [t0:+4, t2:+4, t3:+4]
-//     DFB 24–27 : DM0 (t0) → {Neo1, Neo3}  [t0:+4, t1:+4, t3:+4]
-//     DFB 28–31 : DM1 (t1) → {Neo1, Neo3}  [t1:+8, t3:+4]
+//     DFB 24–27 : DM4 (t0) → {Neo1, Neo3}  [t0:+4, t1:+4, t3:+4]
+//     DFB 28–31 : DM5 (t1) → {Neo1, Neo3}  [t1:+8, t3:+4]
 //
 // TC totals: t0=16, t1=16, t2=16, t3=16 (64/64 used).
 // Remapper:  16 × 1-to-2 entries — exhausts all 16 one-to-many remapper slots.
@@ -2685,7 +2685,6 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
     // risc_mask bit positions
     // DM k  → bit k        (bits 0–7)
     // Neo k → bit (8 + k)  (bits 8–11)
-    constexpr uint16_t DM1  = (1u << 1);
     constexpr uint16_t DM2  = (1u << 2);
     constexpr uint16_t DM3  = (1u << 3);
     constexpr uint16_t DM4  = (1u << 4);
@@ -2761,13 +2760,12 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
         experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM3, NEO0 | NEO2));
     }
     // DFBs 24–27: DM4 (t0) → {Neo1 (t1), Neo3 (t3)}
-    // DM4 maps to t0 (risc_id=4, 4%4=0), same tensix as DM0 it replaces.
     for (int i = 0; i < 4; i++) {
         experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM4, NEO1 | NEO3));
     }
-    // DFBs 28–31: DM1 (t1) → {Neo1 (t1), Neo3 (t3)}
+    // DFBs 28–31: DM5 (t1) → {Neo1 (t1), Neo3 (t3)}
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM1, NEO1 | NEO3));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM5, NEO1 | NEO3));
     }
 
     // -----------------------------------------------------------------------
@@ -2779,9 +2777,9 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
     constexpr const char* COMPUTE_KERNEL_SRC =
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst3_compute.cpp";
 
-    // 6-thread DM kernel: DM1–DM5 all run the same source; each checks mhartid
-    // and operates only on DFBs for which its bit is set in producer_risc_mask.
-    // DM4 handles DFBs 0-3 (1Sx1S→Neo0), 8-11 (1Sx1S→Neo2), 24-27 (1Sx2A→{Neo1,Neo3}).
+    // 6-thread DM kernel (DM0–DM5 launched; DM0/DM1 coordinators only).
+    // Producers DM2–DM5; each checks mhartid for DFBs in producer_risc_mask.
+    // DM4: DFBs 0-3, 8-11 (1Sx1S), 24-27 (1Sx2A). DM5: 4-7, 12-15 (1Sx1S), 28-31 (1Sx2A).
     experimental::quasar::CreateKernel(
         program,
         DM_KERNEL_SRC,
@@ -2813,7 +2811,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
 //     DFB  0– 3: DM2 → {Neo0, Neo2}
 //     DFB  4– 7: DM3 → {Neo0, Neo2}
 //     DFB  8–11: DM4 → {Neo1, Neo3}
-//     DFB 12–15: DM1 → {Neo1, Neo3}
+//     DFB 12–15: DM5 → {Neo1, Neo3}
 //
 //   1Sx1A (DFBs 16–23): 8 × 1-to-1 remapper entries (from the 48 one-to-one slots)
 //     DFB 16–17: DM2 → Neo1
@@ -2823,9 +2821,9 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
 //
 // TC budget: 64/64 (exactly 16 per tensix):
 //   t0: 4(DM4 prod 8-11) + 4(Neo0 cons DM2) + 4(Neo0 cons DM3) + 2(DM4 prod 22-23) + 2(Neo0 cons 22-23) = 16
-//   t1: 4(DM1 prod 12-15)+ 4(Neo1 cons DM4) + 4(Neo1 cons DM1) + 2(Neo1 cons 16-17) + 2(Neo1 cons 18-19) = 16
+//   t1: 4(DM5 prod 12-15)+ 4(Neo1 cons DM4) + 4(Neo1 cons DM5) + 2(Neo1 cons 16-17) + 2(Neo1 cons 18-19) = 16
 //   t2: 4(DM2 prod 0-3)  + 4(Neo2 cons DM2) + 4(Neo2 cons DM3) + 2(DM2 prod 16-17)  + 2(DM2 prod 20-21)  = 16
-//   t3: 4(DM3 prod 4-7)  + 4(Neo3 cons DM4) + 4(Neo3 cons DM1) + 2(DM3 prod 18-19)  + 2(Neo3 cons 20-21) = 16
+//   t3: 4(DM3 prod 4-7)  + 4(Neo3 cons DM4) + 4(Neo3 cons DM5) + 2(DM3 prod 18-19)  + 2(Neo3 cons 20-21) = 16
 //
 // Remapper: 16 × 1-to-2 (all 16 one-to-many slots) + 8 × 1-to-1 (8 of 48 one-to-one slots)
 //           = 24 total remapper entries, 16×2 + 8×1 = 40 set_clientR_slot writes.
@@ -2844,10 +2842,10 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
     constexpr uint32_t NUM_ENTRIES = 1;
 
     // risc_mask bit positions: DM k → bit k (bits 0–7), Neo k → bit (8+k) (bits 8–11)
-    constexpr uint16_t DM1  = (1u << 1);
     constexpr uint16_t DM2  = (1u << 2);
     constexpr uint16_t DM3  = (1u << 3);
     constexpr uint16_t DM4  = (1u << 4);
+    constexpr uint16_t DM5  = (1u << 5);
     constexpr uint16_t NEO0 = (1u << 8);
     constexpr uint16_t NEO1 = (1u << 9);
     constexpr uint16_t NEO2 = (1u << 10);
@@ -2887,9 +2885,9 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
     for (int i = 0; i < 4; i++) {
         experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM4, NEO1 | NEO3));
     }
-    // DFBs 12–15: DM1(t1) → {Neo1(t1), Neo3(t3)}
+    // DFBs 12–15: DM5(t1) → {Neo1(t1), Neo3(t3)}
     for (int i = 0; i < 4; i++) {
-        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM1, NEO1 | NEO3));
+        experimental::dfb::CreateDataflowBuffer(program, core_range_set, make_1sx2a(DM5, NEO1 | NEO3));
     }
 
     // -----------------------------------------------------------------------
@@ -2930,7 +2928,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
     }
 
     // -----------------------------------------------------------------------
-    // Kernels: 5-thread DM kernel (DM1–DM4) and 4-thread compute kernel (Neo0–Neo3).
+    // Kernels: 6-thread DM kernel (DM0–DM5 launched; DM0/DM1 coordinators only;
+    // producers DM2–DM5) and 4-thread compute kernel (Neo0–Neo3).
     // -----------------------------------------------------------------------
     constexpr const char* DM_KERNEL_SRC =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst4_dm.cpp";
@@ -2942,7 +2941,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
         DM_KERNEL_SRC,
         core_range_set,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 5,
+            .num_threads_per_cluster = 6,
         });
 
     experimental::quasar::CreateKernel(

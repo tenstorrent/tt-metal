@@ -21,30 +21,30 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::out);
     Noc noc;
 
-    uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+//     uint32_t entry_size = dfb.get_entry_size();
+//     const auto tensor_accessor = TensorAccessor(ta::src_tensor);
 
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        // Strided access: producer i owns pages i, i+P, i+2P, ...
-        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
-        // Skip if this producer's slice overshoots the actual buffer size (happens when
-        // entries_per_core is not a multiple of num_producers).
-        if (page_id >= chunk_offset + entries_per_core) {
-            break;
-        }
-        // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
-        if constexpr (implicit_sync) {
-#ifdef ARCH_QUASAR
-            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
-#endif
-        } else {
-            dfb.reserve_back(1);
-            noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
-            noc.async_read_barrier();
-            dfb.push_back(1);
-        }
-    }
-    // DPRINT("PFW\n");
-    dfb.finish();
+//     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
+//         // Strided access: producer i owns pages i, i+P, i+2P, ...
+//         const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+//         // Skip if this producer's slice overshoots the actual buffer size (happens when
+//         // entries_per_core is not a multiple of num_producers).
+//         if (page_id >= chunk_offset + entries_per_core) {
+//             break;
+//         }
+//         // DPRINT("producer tile id {} page id {}\n", tile_id, page_id);
+//         if constexpr (implicit_sync) {
+// #ifdef ARCH_QUASAR
+//             noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
+// #endif
+//         } else {
+//             dfb.reserve_back(1);
+//             noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
+//             noc.async_read_barrier();
+//             dfb.push_back(1);
+//         }
+//     }
+//     // DPRINT("PFW\n");
+//     dfb.finish();
     // DPRINT("PFD\n");
 }

@@ -35,14 +35,14 @@ void kernel_main() {
     DataflowBuffer out2(dfb::out2);
 
     // per_txn = 2: each DM issues 2 reads per DFB (4 DMs × 2 = 8 = hw_threshold)
-    dfb_issue_implicit_read(noc, out0);
-    dfb_issue_implicit_read(noc, out0);
+    // dfb_issue_implicit_read(noc, out0);
+    // dfb_issue_implicit_read(noc, out0);
 
-    dfb_issue_implicit_read(noc, out1);
-    dfb_issue_implicit_read(noc, out1);
+    // dfb_issue_implicit_read(noc, out1);
+    // dfb_issue_implicit_read(noc, out1);
 
-    dfb_issue_implicit_read(noc, out2);
-    dfb_issue_implicit_read(noc, out2);
+    // dfb_issue_implicit_read(noc, out2);
+    // dfb_issue_implicit_read(noc, out2);
 
     // out0.finish();
     // out1.finish();

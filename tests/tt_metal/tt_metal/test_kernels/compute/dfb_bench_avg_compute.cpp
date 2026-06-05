@@ -26,15 +26,15 @@ void kernel_main() {
     DataflowBuffer t6_out(dfb::t6_out);
 
     // Wait for ISR to fire and post 2 credits; pop all 2 to unblock DM finish()
-    ss_in.wait_front(1);
-    ss_in.pop_front(1);
+    // ss_in.wait_front(1);
+    // ss_in.pop_front(1);
 
-    sa_in.wait_front(1);
-    sa_in.pop_front(1);
+    // sa_in.wait_front(1);
+    // sa_in.pop_front(1);
 
-    // Push 1 credit to the writer DM via explicit sync
-    t6_out.reserve_back(1);
-    t6_out.push_back(1);
+    // // Push 1 credit to the writer DM via explicit sync
+    // t6_out.reserve_back(1);
+    // t6_out.push_back(1);
 
     // ss_in.finish();
     // sa_in.finish();

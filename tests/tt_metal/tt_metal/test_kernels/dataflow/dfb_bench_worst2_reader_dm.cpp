@@ -30,11 +30,11 @@ void kernel_main() {
     DataflowBuffer out2(dfb::out2);
 
     // per_txn = 8: each single DM must issue 8 reads per DFB (hw_threshold = 8)
-    for (int i = 0; i < 8; i++) {
-        dfb_issue_implicit_read(noc, out0);
-        dfb_issue_implicit_read(noc, out1);
-        dfb_issue_implicit_read(noc, out2);
-    }
+    // for (int i = 0; i < 8; i++) {
+    //     dfb_issue_implicit_read(noc, out0);
+    //     dfb_issue_implicit_read(noc, out1);
+    //     dfb_issue_implicit_read(noc, out2);
+    // }
 
     // out0.finish();
     // out1.finish();

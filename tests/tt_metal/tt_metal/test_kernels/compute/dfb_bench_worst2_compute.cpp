@@ -36,18 +36,18 @@ void kernel_main() {
 
     // Each Neo waits on ALL 12 DFBs; ISR posts 8 credits per DFB per Neo.
     // Pop 8 credits per DFB to unblock the corresponding DM finish().
-    in0.wait_front(1);  in0.pop_front(1);
-    in1.wait_front(1);  in1.pop_front(1);
-    in2.wait_front(1);  in2.pop_front(1);
-    in3.wait_front(1);  in3.pop_front(1);
-    in4.wait_front(1);  in4.pop_front(1);
-    in5.wait_front(1);  in5.pop_front(1);
-    in6.wait_front(1);  in6.pop_front(1);
-    in7.wait_front(1);  in7.pop_front(1);
-    in8.wait_front(1);  in8.pop_front(1);
-    in9.wait_front(1);  in9.pop_front(1);
-    in10.wait_front(1); in10.pop_front(1);
-    in11.wait_front(1); in11.pop_front(1);
+    // in0.wait_front(1);  in0.pop_front(1);
+    // in1.wait_front(1);  in1.pop_front(1);
+    // in2.wait_front(1);  in2.pop_front(1);
+    // in3.wait_front(1);  in3.pop_front(1);
+    // in4.wait_front(1);  in4.pop_front(1);
+    // in5.wait_front(1);  in5.pop_front(1);
+    // in6.wait_front(1);  in6.pop_front(1);
+    // in7.wait_front(1);  in7.pop_front(1);
+    // in8.wait_front(1);  in8.pop_front(1);
+    // in9.wait_front(1);  in9.pop_front(1);
+    // in10.wait_front(1); in10.pop_front(1);
+    // in11.wait_front(1); in11.pop_front(1);
 
     // in0.finish();  in1.finish();  in2.finish();  in3.finish();
     // in4.finish();  in5.finish();  in6.finish();  in7.finish();
