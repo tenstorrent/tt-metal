@@ -109,18 +109,6 @@ inline void _llk_math_wait_for_dest_available_()
     // These lightweight functions for sync with packer imply
     // no mode change - entire epoch is either double buffer or single buffer
     math_dest_wait();
-
-    bool is_fp32_dest_acc_en = cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32);
-
-    if constexpr (Dst == DstSync::SyncFull)
-    {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
-    }
-    else
-    {
-        static_assert(Dst == DstSync::SyncHalf);
-        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
-    }
 }
 
 template <DstSync Dst, bool is_fp32_dest_acc_en>
