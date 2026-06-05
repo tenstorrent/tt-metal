@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "ring_utils.hpp"
 #include <array>
 
@@ -40,6 +41,11 @@ struct RingSDPAOpReceiver {
         ASSERT(initialized);
         return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
             if (this->wait_for_op_signal) {
+                // DEBUG: is the AllGather signal semaphore already >= val BEFORE we wait? If so the gather
+                // is read prematurely -> a stale/aliased semaphore left by a prior op (the fused QK norm).
+                uint32_t have = *this->signal_op_semaphore_addr_ptrs[dir];
+                DPRINT << "RINGSDPA_SYNC dir=" << dir << " need=" << val << " have=" << have
+                       << (have >= val ? " PREMATURE" : " wait") << ENDL();
                 noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptrs[dir], val);
             }
         });

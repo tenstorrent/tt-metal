@@ -112,6 +112,14 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
 
+    // Drain each fabric connection BEFORE closing: wait until the EDM has freed our write slot (i.e.
+    // consumed the packets we sent this op), mirroring the CCL all_gather teardown
+    // (all_gather_async writer: wait_for_empty_write_slot + flush before close()). Without this the
+    // connection can close mid-stream, leaving the EDM write-pointer/credit state dirty for the NEXT op
+    // that opens a connection on this routing plane (the ring-joint SDPA), corrupting its gather even though
+    // its q/k/v inputs are clean. See NOTES_qk_divergence.md find #5.
+    fabric_connection.for_each(
+        [](tt::tt_fabric::WorkerToFabricEdmSender& s, uint32_t, uint32_t) { s.wait_for_empty_write_slot(); });
     close_connections(fabric_connection);
-    noc_async_write_barrier();
+    noc_async_full_barrier();
 }

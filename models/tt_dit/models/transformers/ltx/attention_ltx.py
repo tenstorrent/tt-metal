@@ -417,6 +417,45 @@ class LTXAttention(Module):
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
 
+    # --- TEMP debug: neighbor-tensor fingerprint for the Q/K-fused side-effect hunt.
+    # The Q/K norm OUTPUT is byte-identical wan-vs-fused (proven at op level), so the model fingerprint on
+    # norm outputs is blind to the corruption. This dumps tensors *downstream* of the Q/K norm (post-RoPE q/k,
+    # post-SDPA spatial) for a wan-vs-fused A/B; the first (idx,tag) that diverges localizes the side-effect.
+    # Set DUMP_ATTN_FP=<file>. Class-level counter -> idx is a global sequence in invocation order, identical
+    # across wan/fused runs (the only thing toggled is LTX_FUSED_AGRMS_QK).
+    _attn_fp_idx = 0
+
+    def _dump_attn_fp(self, t, tag):
+        fpfile = os.environ.get("DUMP_ATTN_FP")
+        idx = LTXAttention._attn_fp_idx
+        LTXAttention._attn_fp_idx += 1
+        if not fpfile:
+            return
+        try:
+            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+            sp_axis = self.parallel_config.sequence_parallel.mesh_axis
+            cd = [0, 0]
+            cd[tp_axis] = 1  # heads (BHNE dim 1)
+            cd[sp_axis] = 2  # seq   (BHNE dim 2)
+            comp = ttnn.ConcatMesh2dToTensor(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=tuple(cd))
+            arr = ttnn.to_torch(t, mesh_composer=comp).float()
+            a64 = arr.double()
+            flat = a64.reshape(-1)
+            n = flat.numel()
+            K = 64
+            m = (n // K) * K
+            reg = flat[:m].reshape(K, -1).sum(dim=1)
+            poschk = (reg * torch.arange(1, K + 1, dtype=torch.float64)).sum().item()
+            line = (
+                f"{idx:04d} {tag} self={int(self.is_self)} shape={tuple(arr.shape)} "
+                f"sum={a64.sum().item():.10e} sumsq={(flat * flat).sum().item():.10e} "
+                f"max={arr.max().item():.8e} min={arr.min().item():.8e} poschk={poschk:.10e}\n"
+            )
+        except Exception as e:  # noqa: BLE001 - diagnostic only
+            line = f"{idx:04d} {tag} self={int(self.is_self)} ERROR {type(e).__name__}: {e}\n"
+        with open(fpfile, "a") as f:
+            f.write(line)
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -501,6 +540,8 @@ class LTXAttention(Module):
         # kernel asserts rope shape `[1, 1, seq, head_dim]` — broadcast across heads.)
         q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
         k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        self._dump_attn_fp(q_BHNE, "norm_q")
+        self._dump_attn_fp(k_BHNE, "norm_k")
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -543,6 +584,16 @@ class LTXAttention(Module):
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
                 k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
             )
+            self._dump_attn_fp(q_BHNE, "rope_q")
+            self._dump_attn_fp(k_BHNE, "rope_k")
+
+        self._dump_attn_fp(v_BHNE, "v_in")
+
+        # TEMP debug discriminator: force the device to quiesce between the (fused) Q/K norm and the
+        # following fabric op (ring-joint SDPA). If this clears the sdpa_out divergence, the fused op
+        # isn't quiescing before it returns (in-flight fabric); if not, it's persistent EDM/fabric state.
+        if os.environ.get("LTX_SYNC_BEFORE_SDPA") in ("1", "true", "True"):
+            ttnn.synchronize_device(self.mesh_device)
 
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.
@@ -551,6 +602,15 @@ class LTXAttention(Module):
         elif prompt_1BLP is None:
             sp_factor = self.parallel_config.sequence_parallel.factor
             if sp_factor > 1 and attn_mask is None and is_blackhole():
+                # TEMP debug: hoist the ring-SDPA gathered-K/V ping-pong buffers so we can dump them after
+                # the call (the fabric all-gather fills them). Lets us localize: corrupt gathered K/V =>
+                # fabric transfer issue; clean gathered K/V => SDPA compute issue.
+                _pbk = self.ccl_manager.get_ag_ping_pong_buffer(
+                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                )
+                _pbv = self.ccl_manager.get_ag_ping_pong_buffer(
+                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
+                )
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
@@ -558,12 +618,8 @@ class LTXAttention(Module):
                     self.dummy_joint_input,
                     self.dummy_joint_input,
                     self.dummy_joint_input,
-                    persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                    ),
+                    persistent_output_buffer_k=_pbk,
+                    persistent_output_buffer_v=_pbv,
                     joint_strategy="rear",
                     logical_n=N,
                     program_config=self.ring_sdpa_program_config,
@@ -580,6 +636,8 @@ class LTXAttention(Module):
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                     use_column_major_ccl=True,
                 )
+                self._dump_attn_fp(_pbk, "gathered_k")
+                self._dump_attn_fp(_pbv, "gathered_v")
             elif sp_factor > 1:
                 # Masked audio self-attn: gather K/V; keep Q sharded (mask rows match local Q).
                 # NOTE: forcing this branch off via LTX_AUDIO_NO_ATTN_MASK=1
@@ -615,6 +673,8 @@ class LTXAttention(Module):
             # Cross-attention: K/V are full-seq (text replicated / a2v pre-gathered / v2a gathered above).
             # Q stays SP-sharded → local SDPA returns the local output shard directly.
             spatial_BHNE = self._sdpa_cross(q_BHNE, k_BHNE, v_BHNE, attn_mask=attn_mask)
+
+        self._dump_attn_fp(spatial_BHNE, "sdpa_out")
 
         # Apply per-head gate in BHNE space (before concatenate_heads).
         # Mathematically equivalent to the reference which applies gate after concat_heads
