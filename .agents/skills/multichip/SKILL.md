@@ -166,6 +166,10 @@ Check layouts and collectives before changing precision. Most multi-chip bringup
 
 ## Runtime Gotchas
 
+- Before opening any TTNN mesh that will run CCL, configure the fabric that matches the intended mesh/topology; prefer repo pytest `device_params`, or call `ttnn.set_fabric_config(...)` before `ttnn.open_mesh_device(...)`.
+    - For example, for 8-chip Wormhole/T3K 1D TP the expected setup is `FABRIC_1D_RING` before mesh open and `ttnn.Topology.Ring` for CCL ops.
+- Treat CCL failures from raw `open_mesh_device` as setup evidence, not hardware evidence, until the same case fails with the correct fabric config and matching CCL topology.
+- Reset all devices after any failed run that uses multiple chips.
 - Bind static mode choices at construction time when possible; keep runtime forward paths straight-line.
 - Avoid `ttnn.from_torch`, `ttnn.to_torch`, host reads, host writes, or tensor allocation after trace capture inside measured prefill/decode paths.
 - Use source-built watcher separately from profiler runs.

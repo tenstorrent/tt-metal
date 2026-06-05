@@ -2,7 +2,7 @@
 
 This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed functional decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
 
-Transition completion requirements:
+Goal completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
 - The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
@@ -12,5 +12,7 @@ Transition completion requirements:
 - The final optimized runtime path has no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, or host fallback in measured prefill/decode.
 - Stress or repeated-run coverage and a watcher-clean optimized correctness run exist.
 - models/autoports/<model>/doc/optimized_decoder/README.md and work_log.md summarize commands, before/after PCC and perf, chosen configs, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
+- The checklist in the $optimize skill has been completed with evidence
+- The decoder is genuinely optimized for the current hardware within TTNN's available capabilities. If remaining optimization work exists, keep working; do not defer it to a later stage.
 
-Mark this goal complete only when the decoder is genuinely optimized for the current hardware within TTNN's available capabilities. If remaining optimization work exists, keep working; do not defer it to a later stage. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.
+Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
