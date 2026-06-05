@@ -159,3 +159,7 @@ models/experimental/petr/resources/*.pth
 
 .claude
 .cursor/.DS_store
+
+# Local-only behavioral guidelines (intentionally not committed)
+CLAUDE.md
+CLAUDE_DOCUMENTATION_GUIDE.md
