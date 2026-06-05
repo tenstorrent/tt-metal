@@ -1258,8 +1258,8 @@ class MatmulGolden(FidelityMasking):
                 input_A_dimensions,
                 input_B_dimensions,
                 tilize,
-                input_A_format=input_A_format,
-                input_B_format=input_B_format,
+                input_A_format,
+                input_B_format,
             )
 
         return self._matmul_default(
@@ -1286,8 +1286,8 @@ class MatmulGolden(FidelityMasking):
         input_B_format: DataFormat = None,
     ):
         torch_format = format_dict[data_format]
-        operand_a_format = input_A_format or data_format
-        operand_b_format = input_B_format or data_format
+        operand_a_format = input_A_format
+        operand_b_format = input_B_format
 
         M, K1, K2, N, _ = self._resolve_matmul_dimensions(
             input_A_dimensions, input_B_dimensions
