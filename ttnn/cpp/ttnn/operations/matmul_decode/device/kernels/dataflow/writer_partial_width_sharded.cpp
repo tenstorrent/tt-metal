@@ -54,16 +54,12 @@ void kernel_main() {
     // reduce_cb has the same L1 address on every core, so our local write pointer is
     // also the base core's reduce_cb base address. Write into this core's k_idx slot.
     const uint32_t dst_addr = reduce_cb.get_write_ptr() + k_idx * block_size_bytes;
-    if (is_base) {
-        noc.async_write(partial_cb, base_core, block_size_bytes, {.offset_bytes = 0}, {.addr = dst_addr});
-    } else {
-        noc.async_write(
-            partial_cb,
-            base_core,
-            block_size_bytes,
-            {.offset_bytes = 0},
-            {.noc_x = base_noc_x, .noc_y = base_noc_y, .addr = dst_addr});
-    }
+    noc.async_write(
+        partial_cb,
+        base_core,
+        block_size_bytes,
+        {.offset_bytes = 0},
+        {.noc_x = base_noc_x, .noc_y = base_noc_y, .addr = dst_addr});
     noc.async_write_barrier();
 
     reduce_sem.up(noc, base_noc_x, base_noc_y, 1);

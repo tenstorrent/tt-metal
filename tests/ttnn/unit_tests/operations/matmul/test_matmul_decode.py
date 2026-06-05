@@ -72,6 +72,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     "m, k, n",
     [
         (32, 4096, 1024),
+        # (32, 64, 256),
     ],
 )
 @pytest.mark.parametrize(
@@ -87,8 +88,6 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     ],
 )
 def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks, num_inputA_cores):
-    torch.manual_seed(0)
-
     kc = k // k_blocks
     nc = n // n_blocks
     num_inputB_cores = k_blocks * n_blocks
@@ -97,8 +96,11 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
         f"kc: {kc}, nc: {nc}, k_blocks: {k_blocks}, n_blocks: {n_blocks}"
     )
 
-    torch_input_tensor_a = torch.ones((m, k), dtype=torch.bfloat16) / 4
-    torch_input_tensor_b = torch.ones((k, n), dtype=torch.bfloat16) / 32
+    # torch_input_tensor_a = torch.tensor([(x ) for x in range(m)], dtype=torch.bfloat16).reshape(m, 1).expand(m, k).contiguous()
+    # torch_input_tensor_a += torch.tensor([(x ) for x in range(k)], dtype=torch.bfloat16).reshape(1, k).expand(m, k).contiguous()
+
+    torch_input_tensor_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k, n), dtype=torch.bfloat16)
     ref = torch_input_tensor_a.to(torch.float32) @ torch_input_tensor_b.to(torch.float32)
 
     # Reshape + permute B so that a width-sharded tensor distributes a 2D (K x N)
@@ -131,10 +133,14 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in0_memory_config,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b_reshaped, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_memory_config
+        torch_input_tensor_b_reshaped,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+        dtype=ttnn.bfloat16,
     )
     print("input_tensor_a.shape:", input_tensor_a.shape)
     print("input_tensor_b.shape:", input_tensor_b.shape)
@@ -143,5 +149,8 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
 
     assert output_tensor.shape == (m, n)
 
-    out = ttnn.to_torch(output_tensor)
+    out = ttnn.to_torch(output_tensor).float()
+    print("ref:", ref)
+    print("out:", out)
+    assert torch.allclose(ref, out, atol=0.01, rtol=0.1)
     assert_with_pcc(ref, out, 0.99)
