@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// D2DStreamService creatability checks (milestone M1).
-//
-// These verify that `D2DStreamService::create_pair` runs end-to-end through the
-// validated -> mapper -> allocate -> claim-service-cores -> MeshSocket-pair
-// build and returns two queryable handles. No kernels run yet (steps 5/6), so
-// there is no data-path assertion here — only that construction succeeds and
-// the M1-live getters return sane state.
+// D2DStreamService unit tests, ordered from cheapest to most thorough:
+//   * creatability        — create_pair runs end-to-end and the getters return
+//                            sane state (no kernels exercised),
+//   * sync resources      — every worker-sync address is allocated / non-zero,
+//   * transfer            — a single host-driven transfer lands correctly,
+//   * handshake           — real worker workloads drive transfers through the
+//                            full sender/receiver handshake,
+//   * reuse / recreate    — the persistent service survives many transfers, and
+//                            a torn-down pair fully releases its resources.
 //
 // Hardware requirements (tests skip cleanly otherwise):
 //   * Fabric: create_pair builds a MeshSocket pair, which handshakes over the
@@ -17,7 +19,7 @@
 //     Galaxy clusters under Fast Dispatch (mirrors the precondition inside
 //     create_pair), so we skip on other clusters.
 //   * >= 2 devices in a 2D mesh: a sender/receiver pair needs two distinct
-//     submeshes (escalation ladder steps 1-2: 1x1<->1x1, 1x4<->1x4).
+//     submeshes (1x1<->1x1, and 1x4<->1x4 for the multi-socket cases).
 
 #include <chrono>
 #include <cstdint>
@@ -66,6 +68,8 @@ using ::tt::tt_metal::CreateKernel;
 using ::tt::tt_metal::CreateProgram;
 using ::tt::tt_metal::D2DStreamConfig;
 using ::tt::tt_metal::D2DStreamService;
+using ::tt::tt_metal::D2DStreamServiceReceiver;
+using ::tt::tt_metal::D2DStreamServiceSender;
 using ::tt::tt_metal::DataMovementConfig;
 using ::tt::tt_metal::DataMovementProcessor;
 using ::tt::tt_metal::DataType;
@@ -108,14 +112,14 @@ ttsl::SmallVector<MeshMapperConfig::Placement> replicate_all(const MeshDevice& m
     return ttsl::SmallVector<MeshMapperConfig::Placement>(mesh.shape().dims(), MeshMapperConfig::Replicate{});
 }
 
-// Single worker core per side for the bring-up tests (num_workers == 1).
+// Single worker core per side (num_workers == 1).
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{0, 0}};
 
 uint32_t core_range_volume(const CoreRange& cr) {
     return (cr.end_coord.x - cr.start_coord.x + 1) * (cr.end_coord.y - cr.start_coord.y + 1);
 }
 
-// Standard V0 config: UINT32 ROW_MAJOR DRAM-interleaved, replicated on every
+// Standard config: UINT32 ROW_MAJOR DRAM-interleaved, replicated on every
 // device, L1 socket FIFO. The mapper is built fresh per call (create_pair
 // moves it out).
 D2DStreamConfig make_config(const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape) {
@@ -132,7 +136,7 @@ D2DStreamConfig make_config(const std::shared_ptr<MeshDevice>& sender_mesh, cons
     };
 }
 
-// Build a D2DStreamConfig, run create_pair, and assert the M1-live getters.
+// Run create_pair and assert the construction-time getters return sane state.
 void verify_creatable(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -167,7 +171,7 @@ void verify_creatable(
     }
 }
 
-// M2: every worker-sync resource address (per-coord service-core L1 slots +
+// Every worker-sync resource address (per-coord service-core L1 slots +
 // mesh-wide GlobalSemaphores) is allocated and non-zero. The GlobalSemaphore
 // addresses are uniform by construction (a single getter, no coord).
 void verify_sync_resources(
@@ -193,10 +197,11 @@ void verify_sync_resources(
     }
 }
 
-// M3: first end-to-end transfer. Host-loads the sender backing tensor with iota,
-// simulates the sender worker grid (bumps data_ready_counter by num_workers on
-// each sender service core so the persistent sender does exactly one transfer),
-// then polls the receiver backing tensor until it matches.
+// A single end-to-end transfer without real worker ops. Host-loads the sender
+// backing tensor with iota, simulates the sender worker grid (bumps
+// data_ready_counter by num_workers on each sender service core so the
+// persistent sender does exactly one transfer), then polls the receiver backing
+// tensor until it matches.
 void verify_transfer(
     const std::shared_ptr<MeshDevice>& sender_mesh,
     const std::shared_ptr<MeshDevice>& receiver_mesh,
@@ -230,9 +235,9 @@ void verify_transfer(
     }
     Finish(sender_mesh->mesh_command_queue());
 
-    // Simulate the (not-yet-wired, step 8) sender worker grid: write num_workers
-    // into each coord's data_ready_counter so (cur - 0) == num_workers triggers
-    // exactly one transfer.
+    // Simulate the sender worker grid: write num_workers into each coord's
+    // data_ready_counter so (cur - 0) == num_workers triggers exactly one
+    // transfer (no real producer op in this test).
     const uint32_t num_workers = core_range_volume(sender->get_worker_cores());
     std::vector<uint32_t> trigger{num_workers};
     for (const auto& coord : coords) {
@@ -243,8 +248,8 @@ void verify_transfer(
             trigger);
     }
 
-    // No host-visible completion signal in M3 (worker handshake lands in steps
-    // 7/8), so poll the receiver backing tensor until the transfer lands.
+    // No host-visible completion signal without a consumer op, so poll the
+    // receiver backing tensor until the transfer lands.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     bool all_match = false;
     std::vector<uint32_t> readback;
@@ -266,32 +271,18 @@ void verify_transfer(
     EXPECT_TRUE(all_match) << "receiver backing tensor did not match sender iota within timeout";
 }
 
-// M4: full worker handshake (steps 7-8). Launches placeholder sender + receiver
-// worker workloads that drive `num_iters` end-to-end transfers through the real
-// handshakes (sender: data_ready_counter / consumed_sem; receiver:
-// data_ready_sem / consumed_counter). The sender worker writes value (iter+1)
-// uniformly each iteration, so the receiver backing tensor must hold `num_iters`
-// after the loop — and the test only completes if nothing deadlocked.
-void verify_handshake(
-    const std::shared_ptr<MeshDevice>& sender_mesh,
-    const std::shared_ptr<MeshDevice>& receiver_mesh,
-    const ttnn::Shape& global_shape,
-    uint32_t num_iters) {
-    auto [sender, receiver] =
-        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
-
+// Build a sender-side placeholder worker workload: one program per coord
+// (uniform CT args; per-coord RT args for the service-core counter + NoC coords).
+// Each worker produces value (fill_base + iter) for num_iters then exits.
+MeshWorkload make_sender_worker_workload(
+    D2DStreamServiceSender* sender, const std::shared_ptr<MeshDevice>& mesh, uint32_t num_iters, uint32_t fill_base) {
     const auto& coords = sender->get_backing_tensor().tensor_topology().mesh_coords();
-
     const auto* sender_buffer = sender->get_backing_tensor().buffer();
-    ASSERT_NE(sender_buffer, nullptr);
     const uint32_t tensor_page_size = sender_buffer->aligned_page_size();
     const uint32_t num_pages = sender_buffer->num_pages();
-
     constexpr auto kScratchCb = CBIndex::c_0;
 
-    // ---- sender worker workload: one program per coord (uniform CT args, per-
-    //      coord RT args for the service-core counter + NoC coords) ----
-    MeshWorkload sender_workload;
+    MeshWorkload workload;
     for (const auto& coord : coords) {
         auto program = CreateProgram();
 
@@ -308,6 +299,7 @@ void verify_handshake(
             tensor_page_size,
             num_iters,
             static_cast<uint32_t>(kScratchCb),
+            fill_base,
         };
         ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
@@ -318,7 +310,7 @@ void verify_handshake(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = sender_mesh->get_device(coord);
+        auto* device = mesh->get_device(coord);
         const auto service_phys = device->worker_core_from_logical_core(sender->get_service_core(coord));
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(sender->get_data_ready_counter_addr(coord)),
@@ -328,11 +320,18 @@ void verify_handshake(
         for (const auto& wc : kWorkerCores) {
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
-        sender_workload.add_program(MeshCoordinateRange(coord), std::move(program));
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
+    return workload;
+}
 
-    // ---- receiver worker workload: handshake only (no data read needed) ----
-    MeshWorkload receiver_workload;
+// Build a receiver-side placeholder worker workload: handshake only (no data
+// read needed). Acks num_iters times then exits.
+MeshWorkload make_receiver_worker_workload(
+    D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t num_iters) {
+    const auto& coords = receiver->get_backing_tensor().tensor_topology().mesh_coords();
+
+    MeshWorkload workload;
     for (const auto& coord : coords) {
         auto program = CreateProgram();
         std::vector<uint32_t> ct_args = {
@@ -346,7 +345,7 @@ void verify_handshake(
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = ct_args});
 
-        auto* device = receiver_mesh->get_device(coord);
+        auto* device = mesh->get_device(coord);
         const auto service_phys = device->worker_core_from_logical_core(receiver->get_service_core(coord));
         const std::vector<uint32_t> rt_args = {
             static_cast<uint32_t>(receiver->get_consumed_counter_addr(coord)),
@@ -356,8 +355,41 @@ void verify_handshake(
         for (const auto& wc : kWorkerCores) {
             SetRuntimeArgs(program, kernel, wc, rt_args);
         }
-        receiver_workload.add_program(MeshCoordinateRange(coord), std::move(program));
+        workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
+    return workload;
+}
+
+// Assert the receiver backing tensor holds `value` uniformly on every coord.
+void expect_receiver_backing_equals(
+    D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t value) {
+    auto mesh_buffer = receiver->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
+    const size_t num_u32 = receiver->get_backing_tensor().buffer()->size() / sizeof(uint32_t);
+    const std::vector<uint32_t> expected(num_u32, value);
+    std::vector<uint32_t> readback;
+    for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
+        readback.clear();
+        ReadShard(mesh->mesh_command_queue(), readback, mesh_buffer, coord);
+        EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (expected " << value << ")";
+    }
+}
+
+// Full worker handshake. Launches placeholder sender + receiver worker
+// workloads that drive `num_iters` end-to-end transfers through the real
+// handshakes (sender: data_ready_counter / consumed_sem; receiver:
+// data_ready_sem / consumed_counter). With fill_base=1 the sender writes values
+// 1..num_iters, so the receiver backing tensor must hold `num_iters` after the
+// loop — and the test only completes if nothing deadlocked.
+void verify_handshake(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    uint32_t num_iters) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+
+    auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, num_iters);
+    auto sender_workload = make_sender_worker_workload(sender.get(), sender_mesh, num_iters, /*fill_base=*/1);
 
     // Launch receivers first so they're ready to ack, then the senders produce.
     EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
@@ -369,18 +401,42 @@ void verify_handshake(
     Finish(sender_mesh->mesh_command_queue());
     Finish(receiver_mesh->mesh_command_queue());
 
-    auto receiver_mesh_buffer = receiver->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
-    const size_t num_u32 = sender_buffer->size() / sizeof(uint32_t);
-    const std::vector<uint32_t> expected(num_u32, num_iters);
-    std::vector<uint32_t> readback;
-    for (const auto& coord : coords) {
-        readback.clear();
-        ReadShard(receiver_mesh->mesh_command_queue(), readback, receiver_mesh_buffer, coord);
-        EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord;
+    expect_receiver_backing_equals(receiver.get(), receiver_mesh, num_iters);
+}
+
+// Reuse check. Builds the pair ONCE (persistent service kernels launched once),
+// then drives `num_rounds` independent single-transfer rounds against that same
+// service, each with a distinct seed, host-verifying the readback every round.
+// If a persistent kernel had exited after round 0, later rounds would either
+// deadlock (Finish never returns) or read back round 0's seed — both fail loudly.
+void verify_reuse(
+    const std::shared_ptr<MeshDevice>& sender_mesh,
+    const std::shared_ptr<MeshDevice>& receiver_mesh,
+    const ttnn::Shape& global_shape,
+    uint32_t num_rounds) {
+    auto [sender, receiver] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        // Distinct, non-trivial seed per round (avoids 0 / small values that
+        // could collide with uninitialised state).
+        const uint32_t seed = 0x1000u + round * 0x111u;
+
+        auto receiver_workload = make_receiver_worker_workload(receiver.get(), receiver_mesh, /*num_iters=*/1);
+        auto sender_workload =
+            make_sender_worker_workload(sender.get(), sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
+
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+
+        expect_receiver_backing_equals(receiver.get(), receiver_mesh, seed);
     }
 }
 
-// Escalation-ladder step 1: 1x1 <-> 1x1 (single chip each).
+// 1x1 <-> 1x1 (single chip each).
 TEST_F(D2DStreamServiceTest, CreatableSingleChipPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
@@ -398,8 +454,8 @@ TEST_F(D2DStreamServiceTest, CreatableSingleChipPair) {
     verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// Escalation-ladder step 2: 1x4 <-> 1x4 (exercises the per-coord SocketConnection
-// list and the 1:1 coord mapping with > 1 socket).
+// 1x4 <-> 1x4 (exercises the per-coord SocketConnection list and the 1:1 coord
+// mapping with > 1 socket).
 TEST_F(D2DStreamServiceTest, CreatableRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
@@ -415,10 +471,10 @@ TEST_F(D2DStreamServiceTest, CreatableRowPair) {
     verify_creatable(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// M2: worker-sync resources (data_ready_counter / consumed_counter L1 slots +
+// Worker-sync resources (data_ready_counter / consumed_counter L1 slots +
 // consumed_sem / data_ready_sem GlobalSemaphores) are allocated with non-zero
 // addresses.
-TEST_F(D2DStreamServiceTest, Milestone2SyncResources) {
+TEST_F(D2DStreamServiceTest, SyncResourceAddresses) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
@@ -435,9 +491,9 @@ TEST_F(D2DStreamServiceTest, Milestone2SyncResources) {
     verify_sync_resources(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// M3: first end-to-end device-to-device transfer (single chip pair). Host-readback
+// Single end-to-end device-to-device transfer (single chip pair). Host-readback
 // of the receiver backing tensor must equal the sender iota.
-TEST_F(D2DStreamServiceTest, Milestone3TransferSingleChipPair) {
+TEST_F(D2DStreamServiceTest, TransferSingleChipPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
@@ -454,8 +510,8 @@ TEST_F(D2DStreamServiceTest, Milestone3TransferSingleChipPair) {
     verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// M3: same first transfer across a 1x4 row pair (exercises > 1 socket / coord).
-TEST_F(D2DStreamServiceTest, Milestone3TransferRowPair) {
+// Same single transfer across a 1x4 row pair (exercises > 1 socket / coord).
+TEST_F(D2DStreamServiceTest, TransferRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
@@ -470,9 +526,9 @@ TEST_F(D2DStreamServiceTest, Milestone3TransferRowPair) {
     verify_transfer(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}));
 }
 
-// M4: worker handshake end-to-end on a single chip pair, driven by real
-// placeholder worker workloads over several iterations.
-TEST_F(D2DStreamServiceTest, Milestone4HandshakeSingleChipPair) {
+// Worker handshake end-to-end on a single chip pair, driven by real placeholder
+// worker workloads over several iterations.
+TEST_F(D2DStreamServiceTest, HandshakeSingleChipPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
@@ -489,8 +545,8 @@ TEST_F(D2DStreamServiceTest, Milestone4HandshakeSingleChipPair) {
     verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
 }
 
-// M4: worker handshake across a 1x4 row pair (multiple sockets / coords).
-TEST_F(D2DStreamServiceTest, Milestone4HandshakeRowPair) {
+// Worker handshake across a 1x4 row pair (multiple sockets / coords).
+TEST_F(D2DStreamServiceTest, HandshakeRowPair) {
     if (!service_cores_supported()) {
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
     }
@@ -503,6 +559,64 @@ TEST_F(D2DStreamServiceTest, Milestone4HandshakeRowPair) {
     auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
 
     verify_handshake(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_iters=*/4);
+}
+
+// Reuse the persistent service across several rounds with distinct seeds,
+// verifying each round. Fails loudly if a persistent kernel exited early.
+TEST_F(D2DStreamServiceTest, ReuseSingleChipPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+
+    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
+}
+
+// Reuse across a 1x4 row pair.
+TEST_F(D2DStreamServiceTest, ReuseRowPair) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[0] < 2 || shape[1] < 4) {
+        GTEST_SKIP() << "Need a >= 2x4 mesh to carve 1x4 <-> 1x4 submeshes; got " << shape;
+    }
+
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(0, 0));
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 4), MeshCoordinate(1, 0));
+
+    verify_reuse(sender_mesh, receiver_mesh, ttnn::Shape({1, 1, 32, 64}), /*num_rounds=*/4);
+}
+
+// Per-handle teardown must release service cores / L1 / sockets so a fresh pair
+// can be built on the same submeshes. Each verify_handshake creates and destroys
+// a pair; the second call only succeeds if the first dtor released everything
+// (otherwise create_pair's service-core claim TT_FATALs).
+TEST_F(D2DStreamServiceTest, RecreateAfterTeardown) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || this->mesh_device_->num_devices() < 2) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 2 devices to carve distinct submeshes; got " << shape;
+    }
+
+    const auto coord0 = MeshCoordinate(0, 0);
+    const auto coord1 = (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0);
+    auto sender_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord0);
+    auto receiver_mesh = this->mesh_device_->create_submesh(MeshShape(1, 1), coord1);
+
+    const auto shape_arg = ttnn::Shape({1, 1, 32, 64});
+    verify_handshake(sender_mesh, receiver_mesh, shape_arg, /*num_iters=*/2);
+    verify_handshake(sender_mesh, receiver_mesh, shape_arg, /*num_iters=*/2);
 }
 
 }  // namespace

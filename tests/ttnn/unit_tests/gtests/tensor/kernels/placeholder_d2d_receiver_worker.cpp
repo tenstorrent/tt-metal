@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Placeholder receiver-side worker kernel for D2DStreamService tests (M4,
-// step 7). Stands in for a real consumer op: it runs the H2D-shaped handshake
-// against the persistent receiver service kernel.
+// Placeholder receiver-side worker kernel for D2DStreamService tests. Stands in
+// for a real consumer op: it runs the receiver-side handshake against the
+// persistent receiver service kernel.
 //
 // Per iteration:
 //   1. spin on the local data_ready_sem until the service multicast-incs it

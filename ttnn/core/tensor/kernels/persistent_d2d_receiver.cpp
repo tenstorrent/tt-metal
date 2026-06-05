@@ -127,7 +127,7 @@ void kernel_main() {
             break;
         }
 
-        // Receiver-side worker handshake (step 7). Compile-time-gated.
+        // Receiver-side worker handshake. Compile-time-gated.
         if constexpr (worker_sync_enabled) {
             // Ensure the backing-tensor writes are globally visible before we
             // release the workers — they read the slice as soon as they observe
@@ -138,7 +138,8 @@ void kernel_main() {
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             // 2. Wait for exactly num_workers acks on the consumed counter, or for
             //    host-signalled termination (teardown can land here when no real
-            //    workers are running, e.g. the M3 host-simulated path).
+            //    workers are running, e.g. a host-driven transfer with no
+            //    consumer op).
             while (true) {
                 invalidate_l1_cache();
                 if (termination_semaphore[0] == 1) {

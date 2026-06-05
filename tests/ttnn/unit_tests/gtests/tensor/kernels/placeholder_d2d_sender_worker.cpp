@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Placeholder sender-side worker kernel for D2DStreamService tests (M4, step 8).
-// Stands in for a real producer op: it fills the sender backing tensor with a
+// Placeholder sender-side worker kernel for D2DStreamService tests. Stands in
+// for a real producer op: it fills the sender backing tensor with a
 // per-iteration value, then runs the inverted handshake against the persistent
 // sender service kernel.
 //
 // Per iteration:
-//   1. write value (iter+1) into every page of the sender backing tensor,
+//   1. write value (fill_base + iter) into every page of the sender backing
+//      tensor,
 //   2. atomic-inc data_ready_counter on the sender service core (the service
 //      kernel waits for num_workers of these),
 //   3. spin on the local consumed_sem until the service multicast-incs it
 //      (transfer drained over fabric), then reset it to 0.
 //
 // Runs a fixed num_iters then exits, so a test can Finish() the worker workload.
+// `fill_base` lets the host pick a distinct per-launch seed (used by the reuse
+// test to give each round a unique value).
 
 #include <cstdint>
 
@@ -27,7 +30,8 @@ constexpr uint32_t num_pages = get_compile_time_arg_val(2);
 constexpr uint32_t tensor_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_iters = get_compile_time_arg_val(4);
 constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
-constexpr auto backing_tensor_accessor_args = TensorAccessorArgs<6>();
+constexpr uint32_t fill_base = get_compile_time_arg_val(6);
+constexpr auto backing_tensor_accessor_args = TensorAccessorArgs<7>();
 
 void kernel_main() {
     const uint32_t data_ready_counter_addr = get_arg_val<uint32_t>(0);
@@ -47,7 +51,7 @@ void kernel_main() {
         // 1. Produce this iteration's slice: a uniform per-iter value across the
         //    whole backing tensor (distinct per iter so a stuck/reused transfer
         //    is caught by the readback).
-        const uint32_t value = iter + 1;
+        const uint32_t value = fill_base + iter;
         for (uint32_t e = 0; e < page_elems; ++e) {
             scratch[e] = value;
         }

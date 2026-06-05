@@ -30,8 +30,12 @@ namespace tt::tt_metal {
 // backing tensor, D2D drains a worker-produced backing tensor on a SENDER mesh
 // into a backing tensor on a RECEIVER mesh.
 //
-// See d2d_stream_service.md for the full topology, sync protocol, and the
-// multi-Galaxy prefill pipeline this is built for.
+// The data path is fully device-side after construction: one persistent kernel
+// per side per participating coord is launched at create_pair and forwards over
+// fabric for the lifetime of the service. Host involvement is limited to
+// building the pair (create_pair) and tearing it down (the handle destructors).
+// Producer/consumer worker ops synchronize with the service through the
+// per-handle getters (data_ready / consumed semaphores + counters).
 
 // Configuration for a D2DStreamService pair. The same per-shard spec & topology
 // (derived from `global_spec` + `mapper`) is allocated on both the sender and

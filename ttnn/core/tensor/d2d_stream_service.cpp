@@ -61,7 +61,7 @@ Tensor make_zero_host_tensor(const TensorSpec& spec) {
 }
 
 // Claim one service core per participating coord on `mesh`, recording the
-// choice per coord. Mirrors the B3.5 block in socket_services.cpp.
+// choice per coord. Mirrors the service-core claim in socket_services.cpp (H2D).
 std::map<distributed::MeshCoordinate, CoreCoord> claim_service_cores(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::vector<distributed::MeshCoordinate>& coords,
@@ -149,11 +149,10 @@ std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
 // Sender / Receiver Impl state
 // ===========================================================================
 //
-// V0 staging: at step 2 these hold only the state produced by the validated +
-// allocate + claim portion of create_pair (backing tensor, per-shard spec,
-// worker cores, service-core map, mesh device handle). Sockets, worker-sync
-// resources, termination semaphores, and the persistent MeshWorkload land in
-// later steps.
+// Everything create_pair builds for one side: the backing tensor + per-shard
+// spec, the claimed service core per coord, the MeshSocket endpoint, the
+// worker-sync resources (counters / semaphores / termination words), and the
+// persistent MeshWorkload. The handle destructor tears all of it down.
 
 struct D2DStreamServiceSender::Impl {
     std::shared_ptr<distributed::MeshDevice> mesh_device;
@@ -165,7 +164,7 @@ struct D2DStreamServiceSender::Impl {
     // the config buffer). std::optional because MeshSocket has no default ctor.
     std::optional<distributed::MeshSocket> socket;
 
-    // --- step 4: chunk plan + worker-sync resources ------------------------
+    // Chunk plan + worker-sync resources.
     uint32_t socket_page_size = 0;
     uint32_t num_socket_pages = 0;
     uint32_t pages_per_chunk = 0;
@@ -174,10 +173,10 @@ struct D2DStreamServiceSender::Impl {
     std::map<distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
     // Mesh-wide GlobalSemaphore on sender_worker_cores; the service kernel
-    // multicast-incs it once per drained iter.
+    // multicast-incs it once per drained iteration.
     std::optional<GlobalSemaphore> consumed_sem;
 
-    // --- step 6: persistent sender workload --------------------------------
+    // Persistent sender workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
     bool launched = false;
 };
@@ -192,7 +191,7 @@ struct D2DStreamServiceReceiver::Impl {
     // buffer). std::optional because MeshSocket has no default ctor.
     std::optional<distributed::MeshSocket> socket;
 
-    // --- step 4: chunk plan + worker-sync resources ------------------------
+    // Chunk plan + worker-sync resources.
     uint32_t socket_page_size = 0;
     uint32_t num_socket_pages = 0;
     uint32_t pages_per_chunk = 0;
@@ -204,7 +203,7 @@ struct D2DStreamServiceReceiver::Impl {
     // multicast-incs it after the transfer has landed.
     std::optional<GlobalSemaphore> data_ready_sem;
 
-    // --- step 5: persistent receiver workload ------------------------------
+    // Persistent receiver workload, launched once at create_pair.
     std::unique_ptr<distributed::MeshWorkload> workload;
     bool launched = false;
 };
@@ -216,10 +215,14 @@ struct D2DStreamServiceReceiver::Impl {
 D2DStreamServiceSender::D2DStreamServiceSender(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
 D2DStreamServiceSender::~D2DStreamServiceSender() {
-    // Teardown (step 9 shape, minus the multi-side coordination): flip this
-    // side's termination word so the persistent kernel exits at its next
-    // data_ready poll, drain the kernel, free service-core L1, drop the socket,
-    // and release the cores. The two handles tear down independently.
+    // Flip this side's termination word so the persistent kernel exits at its
+    // next data_ready poll, drain the kernel, free service-core L1, drop the
+    // socket, and release the cores. The two handles tear down independently.
+    //
+    // This assumes the data path has quiesced (no transfer in flight) — the
+    // sender kernel only observes termination at the top of its loop, not while
+    // draining a transfer. Callers Finish() their worker workloads before
+    // destroying the service, which leaves both kernels parked at that point.
     try {
         if (impl_ == nullptr) {
             return;
@@ -303,10 +306,9 @@ DeviceAddr D2DStreamServiceSender::get_consumed_sem_addr() const {
 D2DStreamServiceReceiver::D2DStreamServiceReceiver(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 
 D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
-    // Mirror of the sender dtor. The receiver kernel exits at its next
-    // socket_wait_for_pages_with_termination poll (its idle state between
-    // transfers), so termination is clean once outstanding transfers have
-    // drained.
+    // Mirror of the sender dtor. The receiver kernel observes termination at its
+    // socket-wait poll and its consumed-counter poll (its idle states between
+    // transfers), so teardown is clean once outstanding transfers have drained.
     try {
         if (impl_ == nullptr) {
             return;
@@ -386,7 +388,7 @@ DeviceAddr D2DStreamServiceReceiver::get_consumed_counter_addr(const distributed
 }
 
 // ===========================================================================
-// Persistent program builders (steps 5 + 6)
+// Persistent program builders
 // ===========================================================================
 
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -613,6 +615,34 @@ D2DStreamService::create_pair(
     auto sender_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(sender_mesh, coords, "sender");
     auto receiver_service_cores = CMAKE_UNIQUE_NAMESPACE::claim_service_cores(receiver_mesh, coords, "receiver");
 
+    // If create_pair throws before the handles take ownership, release the
+    // claimed service cores (and the L1 they back) so a later create_pair on the
+    // same process can re-claim them — the claims live in a process-global
+    // manager, so leaking them would cascade into subsequent failures. On
+    // success the handle destructors own teardown; `committed` disarms the guard.
+    // (Both maps are moved into the handles before commit, so on a post-commit
+    // throw the guard sees empty maps and the handle destructors do the release.)
+    bool committed = false;
+    struct ClaimReleaseGuard {
+        const std::shared_ptr<distributed::MeshDevice>& sender_mesh;
+        const std::shared_ptr<distributed::MeshDevice>& receiver_mesh;
+        const std::map<distributed::MeshCoordinate, CoreCoord>& sender_cores;
+        const std::map<distributed::MeshCoordinate, CoreCoord>& receiver_cores;
+        const bool& committed;
+        ~ClaimReleaseGuard() {
+            if (committed) {
+                return;
+            }
+            auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+            for (const auto& [coord, core] : sender_cores) {
+                svc.release(sender_mesh->get_device(coord), {core});
+            }
+            for (const auto& [coord, core] : receiver_cores) {
+                svc.release(receiver_mesh->get_device(coord), {core});
+            }
+        }
+    } claim_release_guard{sender_mesh, receiver_mesh, sender_service_cores, receiver_service_cores, committed};
+
     // --- (f) build the SocketConnection list + create the MeshSocket pair -----
     // One connection per PARTICIPATING coord (topology.mesh_coords(), NOT the
     // full mesh range): a stray connection on an unparticipating coord asserts
@@ -636,10 +666,10 @@ D2DStreamService::create_pair(
     auto& sender_socket = socket_pair.first;
     auto& receiver_socket = socket_pair.second;
 
-    // Sanity print: the active cores on each endpoint must be the claimed
-    // service cores, 1:1 per coord.
+    // The active cores on each endpoint are the claimed service cores, 1:1 per
+    // coord; log them at debug level for socket setup diagnosis.
     for (const auto& active : sender_socket.get_active_cores()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "D2DStreamService: sender socket active core coord={} logical=({}, {})",
             active.device_coord,
@@ -647,7 +677,7 @@ D2DStreamService::create_pair(
             active.core_coord.y);
     }
     for (const auto& active : receiver_socket.get_active_cores()) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "D2DStreamService: receiver socket active core coord={} logical=({}, {})",
             active.device_coord,
@@ -682,7 +712,7 @@ D2DStreamService::create_pair(
         tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
     TT_FATAL(fabric_max_payload_size > 0, "D2DStreamService: fabric max payload size rounded to zero");
 
-    // --- (h) allocate the per-side worker-sync resources (step 4) -------------
+    // --- (h) allocate the per-side worker-sync resources ----------------------
     const uint32_t sender_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.sender_worker_cores);
     const uint32_t receiver_num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores);
 
@@ -696,20 +726,21 @@ D2DStreamService::create_pair(
         CMAKE_UNIQUE_NAMESPACE::allocate_service_core_words(receiver_mesh, receiver_service_cores);
 
     // Mesh-wide worker-grid GlobalSemaphores (same L1 address on every
-    // (device, worker core)). Allocated now so the getters can expose them to
-    // the worker kernels landing in steps 7/8.
+    // (device, worker core)), exposed to the user's worker kernels via the
+    // getters.
     auto consumed_sem = ttnn::global_semaphore::create_global_semaphore(
         sender_mesh.get(), CoreRangeSet(cfg.sender_worker_cores), /*initial_value=*/0, BufferType::L1);
     auto data_ready_sem = ttnn::global_semaphore::create_global_semaphore(
         receiver_mesh.get(), CoreRangeSet(cfg.receiver_worker_cores), /*initial_value=*/0, BufferType::L1);
 
-    // --- (i) build the persistent receiver + sender workloads (steps 5 + 6) ---
-    // Worker sync is always on (M4, steps 7-8): the receiver multicast-incs
-    // data_ready_sem after each transfer lands and waits for num_workers acks on
-    // consumed_counter; the sender multicast-incs consumed_sem after each drain.
-    // The sender's data_ready_counter gate is always-on regardless. Tests that
-    // run without real workers (M3) simulate the acks from host and rely on the
-    // service kernels' termination poll to tear down cleanly.
+    // --- (i) build the persistent receiver + sender workloads -----------------
+    // Worker sync is always on: the receiver multicast-incs data_ready_sem after
+    // each transfer lands and waits for num_workers acks on consumed_counter;
+    // the sender multicast-incs consumed_sem after each drain and gates each
+    // iteration on num_workers increments of data_ready_counter. The flag is a
+    // compile-time arg so a future "service-only" mode could disable it; tests
+    // that drive the handshake from host (no real workers) rely on the service
+    // kernels' termination poll to tear down cleanly.
     constexpr bool worker_sync_enabled = true;
 
     auto receiver_workload = std::make_unique<distributed::MeshWorkload>();
@@ -845,6 +876,8 @@ D2DStreamService::create_pair(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
     sender_handle->impl_->launched = true;
 
+    // Ownership of the service-core claims now lives in the handles.
+    committed = true;
     return {std::move(sender_handle), std::move(receiver_handle)};
 }
 
