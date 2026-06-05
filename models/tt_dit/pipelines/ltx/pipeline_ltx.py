@@ -1551,9 +1551,9 @@ class LTXPipeline:
         No weights are loaded — ``_prepare_audio_decoder`` handles that via the
         disk cache the same way ``_prepare_vae`` does for the video VAE.
         """
-        from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
-        from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
-        from ...models.audio_vae.vocoder_ltx import LTXVocoder
+        from ...models.audio_vae.audio_decoder_ltx import AudioDecoder
+        from ...models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
+        from ...models.audio_vae.vocoder_ltx import Vocoder
 
         with safe_open(self.checkpoint_name, framework="pt") as f:
             config = json.loads(f.metadata()["config"])
@@ -1590,7 +1590,7 @@ class LTXPipeline:
             audio_parallel_config = None
         audio_ccl = self.vae_ccl_manager if audio_parallel_config is not None else None
 
-        self.tt_audio_decoder = LTXAudioDecoder(
+        self.tt_audio_decoder = AudioDecoder(
             ch=ddconfig.get("ch", 128),
             out_ch=ddconfig.get("out_ch", 2),
             ch_mult=tuple(ddconfig.get("ch_mult", (1, 2, 4))),
@@ -1607,7 +1607,7 @@ class LTXPipeline:
             dtype=ttnn.bfloat16,
         )
 
-        # Architecture params come from the checkpoint config; LTXVocoder owns the
+        # Architecture params come from the checkpoint config; Vocoder owns the
         # defaults for anything it omits (its defaults are the LTX-2 main-vocoder values).
         voc_keys = (
             "resblock_kernel_sizes",
@@ -1621,8 +1621,8 @@ class LTXPipeline:
             "use_bias_at_final",
         )
 
-        def _tt_vocoder(cfg: dict, *, apply_final_activation: bool, parallel_config) -> LTXVocoder:
-            return LTXVocoder(
+        def _tt_vocoder(cfg: dict, *, apply_final_activation: bool, parallel_config) -> Vocoder:
+            return Vocoder(
                 **{k: cfg[k] for k in voc_keys if k in cfg},
                 apply_final_activation=apply_final_activation,
                 mesh_device=self.mesh_device,
@@ -1640,7 +1640,7 @@ class LTXPipeline:
         )
         main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config)
         bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc)
-        mel_stft = LTXMelSTFT(
+        mel_stft = MelSTFT(
             filter_length=bwe_cfg["n_fft"],
             hop_length=bwe_cfg["hop_length"],
             win_length=bwe_cfg["n_fft"],
@@ -1648,7 +1648,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             dtype=ttnn.float32,
         )
-        self.tt_vocoder_with_bwe = LTXVocoderWithBWE(
+        self.tt_vocoder_with_bwe = VocoderWithBWE(
             vocoder=main_voc,
             bwe_generator=bwe_voc,
             mel_stft=mel_stft,
@@ -1741,7 +1741,7 @@ class LTXPipeline:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 
         The single audio-decode entry point for every LTX pipeline: routes the latent
-        through ``LTXAudioDecoder`` (mel-VAE) then ``LTXVocoderWithBWE`` (vocoder + BWE).
+        through ``AudioDecoder`` (mel-VAE) then ``VocoderWithBWE`` (vocoder + BWE).
         Both take and return torch tensors, handling device upload/download internally.
         ``num_frames``/``fps`` trim the output to the clip duration.
         """

@@ -23,7 +23,7 @@ from ...utils.conv3d import conv_pad_in_channels
 LATENT_DOWNSAMPLE_FACTOR = 4
 
 
-class LTXAudioPatchifier:
+class AudioPatchifier:
     """Host-side patchifier with ``patch_size=1``: flatten over (channels, mel_bins).
 
     Per-channel un-normalize stats are applied to the patchified tensor so they
@@ -54,7 +54,7 @@ class LTXAudioPatchifier:
         return einops.rearrange(audio_latents, "b t (c f) -> b c t f", c=channels, f=mel_bins)
 
 
-class LTXAudioPixelNorm(Module):
+class PixelNorm(Module):
     """Per-pixel RMS normalization over the channel (last) axis. No learned params."""
 
     def __init__(self, eps: float = 1e-6) -> None:
@@ -68,7 +68,7 @@ class LTXAudioPixelNorm(Module):
         return ttnn.multiply(x_BHWC, ttnn.reciprocal(rms))
 
 
-class LTXAudioResnetBlock(Module):
+class ResnetBlock(Module):
     """LTX-2 audio mel-VAE Resnet block. No temb branch, no dropout."""
 
     def __init__(
@@ -86,7 +86,7 @@ class LTXAudioResnetBlock(Module):
         self.out_channels = out_channels
         self.has_shortcut = in_channels != out_channels
 
-        self.norm1 = LTXAudioPixelNorm()
+        self.norm1 = PixelNorm()
         self.conv1 = Conv2dViaConv3d(
             in_channels,
             out_channels,
@@ -96,7 +96,7 @@ class LTXAudioResnetBlock(Module):
             mesh_device=mesh_device,
             dtype=dtype,
         )
-        self.norm2 = LTXAudioPixelNorm()
+        self.norm2 = PixelNorm()
         self.conv2 = Conv2dViaConv3d(
             out_channels,
             out_channels,
@@ -151,7 +151,7 @@ class LTXAudioResnetBlock(Module):
         return ttnn.add(residual, h)
 
 
-class LTXAudioUpsample(Module):
+class AudioUpsample(Module):
     """Nearest-neighbour 2x upsample + causal conv + drop leading H row."""
 
     def __init__(
@@ -195,13 +195,13 @@ class _MidBlock(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
-        self.block_1 = LTXAudioResnetBlock(
+        self.block_1 = ResnetBlock(
             in_channels=channels,
             out_channels=channels,
             mesh_device=mesh_device,
             dtype=dtype,
         )
-        self.block_2 = LTXAudioResnetBlock(
+        self.block_2 = ResnetBlock(
             in_channels=channels,
             out_channels=channels,
             mesh_device=mesh_device,
@@ -239,7 +239,7 @@ class _UpStage(Module):
         cur_in = in_channels
         for _ in range(num_res_blocks_in_stage):
             self.block.append(
-                LTXAudioResnetBlock(
+                ResnetBlock(
                     in_channels=cur_in,
                     out_channels=out_channels,
                     mesh_device=mesh_device,
@@ -250,7 +250,7 @@ class _UpStage(Module):
 
         self.has_upsample = has_upsample
         if has_upsample:
-            self.upsample = LTXAudioUpsample(
+            self.upsample = AudioUpsample(
                 in_channels=out_channels,
                 mesh_device=mesh_device,
                 dtype=dtype,
@@ -273,7 +273,7 @@ class _UpStage(Module):
         return x_BHWC
 
 
-class LTXAudioDecoder(Module):
+class AudioDecoder(Module):
     """LTX-2 audio mel-VAE decoder.
 
     ``forward`` accepts a torch tensor ``(B, z_channels, frames, mel_bins)`` and
@@ -302,10 +302,10 @@ class LTXAudioDecoder(Module):
 
         if attn_resolutions:
             raise NotImplementedError(
-                "LTXAudioDecoder Stage A does not support attention blocks; " f"got attn_resolutions={attn_resolutions}"
+                "AudioDecoder Stage A does not support attention blocks; " f"got attn_resolutions={attn_resolutions}"
             )
         if mid_block_add_attention:
-            raise NotImplementedError("LTXAudioDecoder Stage A does not support mid_block_add_attention=True")
+            raise NotImplementedError("AudioDecoder Stage A does not support mid_block_add_attention=True")
 
         self.ch = ch
         self.out_ch = out_ch
@@ -327,7 +327,7 @@ class LTXAudioDecoder(Module):
         self._stats_std = torch.ones(ch)
         self._stats_mean = torch.zeros(ch)
 
-        self.patchifier = LTXAudioPatchifier(
+        self.patchifier = AudioPatchifier(
             patch_size=1,
             sample_rate=sample_rate,
             hop_length=mel_hop_length,
@@ -375,7 +375,7 @@ class LTXAudioDecoder(Module):
 
         final_block_channels = block_in
 
-        self.norm_out = LTXAudioPixelNorm()
+        self.norm_out = PixelNorm()
         self.conv_out = Conv2dViaConv3d(
             final_block_channels,
             out_ch,

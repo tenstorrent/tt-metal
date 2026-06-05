@@ -22,9 +22,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
-from models.tt_dit.models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
-from models.tt_dit.models.audio_vae.vocoder_ltx import LTXVocoder
+from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
+from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
+from models.tt_dit.models.audio_vae.vocoder_ltx import Vocoder
 from models.tt_dit.parallel.config import ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -262,8 +262,8 @@ def _audio_parallel_config(mesh_shape: tuple[int, int]) -> ParallelFactor | None
 
 def _build_tt_stage_b(
     mesh_device: ttnn.MeshDevice, *, parallel_config: ParallelFactor | None, ccl_manager: CCLManager | None
-) -> LTXVocoder:
-    return LTXVocoder(
+) -> Vocoder:
+    return Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
         in_channels=128,
@@ -319,8 +319,8 @@ def _build_torch_stage_c(seed: int = 42):
 
 def _build_tt_stage_c(
     mesh_device: ttnn.MeshDevice, *, parallel_config: ParallelFactor | None, ccl_manager: CCLManager | None
-) -> LTXVocoderWithBWE:
-    main_voc = LTXVocoder(
+) -> VocoderWithBWE:
+    main_voc = Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
         in_channels=128,
@@ -329,7 +329,7 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
     )
-    bwe_voc = LTXVocoder(
+    bwe_voc = Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
         in_channels=128,
@@ -338,8 +338,8 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_BWE_VOCODER_CFG),
     )
-    mel_stft = LTXMelSTFT(mesh_device=mesh_device, dtype=ttnn.float32, **_MEL_STFT_CFG)
-    return LTXVocoderWithBWE(
+    mel_stft = MelSTFT(mesh_device=mesh_device, dtype=ttnn.float32, **_MEL_STFT_CFG)
+    return VocoderWithBWE(
         vocoder=main_voc,
         bwe_generator=bwe_voc,
         mel_stft=mel_stft,
@@ -407,7 +407,7 @@ def test_stage_a_audio_decoder(
     stats_std = torch.ones(z_times_f)
     stats_mean = torch.zeros(z_times_f)
 
-    tt_decoder = LTXAudioDecoder(mesh_device=mesh_device, **_AUDIO_DECODER_CFG)
+    tt_decoder = AudioDecoder(mesh_device=mesh_device, **_AUDIO_DECODER_CFG)
     tt_decoder.load_torch_state_dict(
         _audio_decoder_state_from_diffusers(ref_vae, stats_std=stats_std, stats_mean=stats_mean)
     )

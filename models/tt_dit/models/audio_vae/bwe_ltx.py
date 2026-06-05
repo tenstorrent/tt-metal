@@ -7,9 +7,9 @@
 Pipeline:
 
     mel (B, 2, T, mel_bins)
-        ──> main LTXVocoder ──> waveform_24k (B, 2, T*160)
+        ──> main Vocoder ──> waveform_24k (B, 2, T*160)
             ├── pad to multiple of hop_length
-            ├── LTXMelSTFT  -> log-mel
+            ├── MelSTFT  -> log-mel
             ├── bwe_generator ──> residual (B, 2, T_out)
             └── resampler (Hann-window sinc, ratio=2) ──> skip (B, 2, T_out)
         ──> clamp(residual + skip, -1, 1)[..., :output_length]
@@ -26,10 +26,10 @@ import ttnn
 
 from ...layers.audio_resample import UpSample1d
 from ...layers.module import Module, Parameter
-from .vocoder_ltx import LTXVocoder
+from .vocoder_ltx import Vocoder
 
 
-class LTX_STFTFn(Module):
+class _STFTFn(Module):
     """Causal STFT expressed as a host-side ``unfold`` + on-device matmul.
 
     We avoid ``Conv1dViaConv3d`` here: the conv3d kernel forces ``C_in_block=32``
@@ -146,7 +146,7 @@ class LTX_STFTFn(Module):
         return magnitude, phase
 
 
-class LTXMelSTFT(Module):
+class MelSTFT(Module):
     """Causal log-mel spectrogram: ``log(clamp(mel_basis @ |STFT(y)|, min=1e-5))``.
 
     Input ``(B, T, 1)`` ROW_MAJOR → log-mel ``(B, T_frames, n_mels)`` ROW_MAJOR.
@@ -171,7 +171,7 @@ class LTXMelSTFT(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        self.stft_fn = LTX_STFTFn(
+        self.stft_fn = _STFTFn(
             filter_length=filter_length,
             hop_length=hop_length,
             win_length=win_length,
@@ -217,15 +217,15 @@ class LTXMelSTFT(Module):
         return ttnn.to_layout(log_mel, ttnn.ROW_MAJOR_LAYOUT)
 
 
-class LTXVocoderWithBWE(Module):
+class VocoderWithBWE(Module):
     """Vocoder + bandwidth extension. fp32 throughout."""
 
     def __init__(
         self,
         *,
-        vocoder: LTXVocoder,
-        bwe_generator: LTXVocoder,
-        mel_stft: LTXMelSTFT,
+        vocoder: Vocoder,
+        bwe_generator: Vocoder,
+        mel_stft: MelSTFT,
         input_sampling_rate: int,
         output_sampling_rate: int,
         hop_length: int,

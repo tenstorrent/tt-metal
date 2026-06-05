@@ -36,7 +36,7 @@ from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
 
 
-class LTXDilatedConv1d(_AlignedOutConv1d):
+class DilatedConv1d(_AlignedOutConv1d):
     """Dilated 1D conv: a symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with
     ``dilation`` passed through to conv3d. For the AMP block's ``(k-1)*d`` (always
     even) the base's ``eff_k // 2`` halo equals the symmetric ``same_pad``."""
@@ -69,7 +69,7 @@ class LTXDilatedConv1d(_AlignedOutConv1d):
         )
 
 
-class LTXAMPBlock1(Module):
+class AMPBlock1(Module):
     """Three parallel residual branches with anti-aliased SnakeBeta activations."""
 
     def __init__(
@@ -94,7 +94,7 @@ class LTXAMPBlock1(Module):
 
         self.convs1 = ModuleList(
             [
-                LTXDilatedConv1d(
+                DilatedConv1d(
                     in_channels=channels,
                     out_channels=channels,
                     kernel_size=kernel_size,
@@ -110,7 +110,7 @@ class LTXAMPBlock1(Module):
         )
         self.convs2 = ModuleList(
             [
-                LTXDilatedConv1d(
+                DilatedConv1d(
                     in_channels=channels,
                     out_channels=channels,
                     kernel_size=kernel_size,
@@ -193,7 +193,7 @@ class LTXAMPBlock1(Module):
         return x_BTC
 
 
-class LTXVocoder(Module):
+class Vocoder(Module):
     """BigVGAN-v2 AMP1 vocoder for LTX-2 audio decode (Stage B).
 
     Maps mel ``(B, 2, T_frames, mel_bins)`` to a waveform
@@ -284,7 +284,7 @@ class LTXVocoder(Module):
             ch = upsample_initial_channel // (2 ** (i + 1))
             for ks, ds in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
                 self.resblocks.append(
-                    LTXAMPBlock1(
+                    AMPBlock1(
                         channels=ch,
                         kernel_size=ks,
                         dilation=ds,
