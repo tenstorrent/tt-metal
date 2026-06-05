@@ -15,7 +15,6 @@
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
-#include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
@@ -279,9 +278,6 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 
     // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-    if (MetalEnvAccessor(*env_).impl().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return experimental::make_mock_allocator(config);
-    }
     return std::make_unique<L1BankingAllocator>(config);
 }
 
@@ -338,8 +334,8 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     // pointers for a serviced device must therefore be written into that device's DRAM, not
                     // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
                     // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel =
-                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
+                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
+                        this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
                         pointers.data(),
                         pointers.size() * sizeof(uint32_t),

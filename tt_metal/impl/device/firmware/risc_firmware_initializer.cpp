@@ -75,7 +75,6 @@ int firmware_wait_timeout_ms() {
     }
     return kDefaultTimeoutMs;
 }
-
 }  // namespace
 
 RiscFirmwareInitializer::RiscFirmwareInitializer(

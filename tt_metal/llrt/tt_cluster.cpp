@@ -494,11 +494,7 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
                     include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
                 }
                 ll_api::configure_static_tlbs(
-                    this->arch_,
-                    mmio_device_id,
-                    this->get_soc_desc(mmio_device_id),
-                    *this->driver_,
-                    include_dram_tlbs);
+                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_, include_dram_tlbs);
             }));
         }
 
