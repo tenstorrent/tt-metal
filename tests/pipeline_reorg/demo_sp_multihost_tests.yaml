@@ -48,15 +48,17 @@
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
     echo "============= SP1 superpod: using ttrun.py new mode with MGD ============="
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+    SHARED_TT_METAL_HOME=/ci/tt-metal
+    TTRUN_PY="${SHARED_TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     MGD_FILE="/ci/ttrun/mgd.textproto"
+    cd "${SHARED_TT_METAL_HOME}"
 
     HOSTS=$(awk '{print $1}' /ci/ttrun/hostfile | paste -sd,)
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
       --mesh-graph-descriptor "${MGD_FILE}" \
       --hosts "${HOSTS}" \
-      --mpi-args "--bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
+      --mpi-args "--bind-to hwt:overload-allowed --tag-output --wdir ${SHARED_TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
