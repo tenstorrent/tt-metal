@@ -303,7 +303,8 @@ inline void invalidate_cache_all(uint32_t hartid) {
     invalidate_l2_cache(hartid);
 
     // 2. Invalidate local L1 (D$ + I$)
-    invalidate_l1_cache();
+    invalidate_l1_dcache(0);
+    invalidate_l1_icache();
 }
 
 #endif  // ARCH_QUASAR && COMPILE_FOR_DM
