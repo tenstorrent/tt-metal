@@ -480,7 +480,9 @@ async def notify_clients():
     if clients:
         logger.debug(f"Notifying {len(clients)} clients")
         # gather() accepts coroutines directly; asyncio.wait() rejects raw coroutines on Python 3.11+.
-        await asyncio.gather(*(client.send("reload") for client in clients))
+        # return_exceptions=True: a disconnected client (ConnectionClosed) must not abort the
+        # broadcast to the others or bubble up and kill the watch loop / WS thread.
+        await asyncio.gather(*(client.send("reload") for client in clients), return_exceptions=True)
 
 
 async def watch_embed_file():
