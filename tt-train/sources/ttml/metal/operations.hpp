@@ -14,6 +14,7 @@
 #include "ops/mla_qkv_assemble_fw/mla_qkv_assemble_fw.hpp"
 #include "ops/polynorm_fw/polynorm_fw.hpp"
 #include "ops/profiler_no_op/profiler_no_op.hpp"
+#include "ops/q_rope_fw/q_rope_fw.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/sdpa_bw/sdpa_bw.hpp"
