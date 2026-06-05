@@ -211,12 +211,40 @@ std::vector<CBInfo> get_cb_info(
 
     // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
     // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
-    cb_info.emplace_back(CBInfo{
-        .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
-        .page_size = partial_tile_size,
-        .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
-        .data_format = partial_df});
+    {
+        uint32_t partials_num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles;
+        // conv_bench helper_trm (TileRowMajor + software-reload + multi-K-block) CB sizing fix:
+        // The MATMUL_PARTIALS CB is sized to per_core_out_ntiles, which exactly fills it after one
+        // non-last K-block's per-subblock spills (out_block_num_tiles == per_core_out_ntiles).
+        // On the last K-block the TileRowMajor path does reserve_back(row_group_tiles) at the outer
+        // in0_subblock loop level BEFORE the inner-loop reload drain (TRISC0 wait_front/pop_front).
+        // TRISC2 polls llk_wait_for_free_tiles holding the pack engine; TRISC0's _llk_unpack_A_
+        // hardware call stalls waiting for the pack engine — circular deadlock.
+        // Fix: size CB to per_core_out_ntiles + row_group_tiles so the outer-loop reserve always
+        // finds free space even when the CB holds a full block's spill.
+        // Gated on HelperRowMajor mode (experimental conv_bench scaffolding only — zero production impact).
+        if (ttnn::operations::conv::conv2d_bench_mode() == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor &&
+            !packer_l1_acc && in0_num_blocks_w > 1 && untilize_out && !enable_bias && !is_1d_depthwise_conv) {
+            const uint32_t row_group_tiles = block_config.out_subblock_h_ntiles * per_core_out_matrix_width_ntiles;
+            partials_num_pages += row_group_tiles;
+            log_debug(
+                tt::LogOp,
+                "conv_bench helper_trm: bumped MATMUL_PARTIALS from {} to {} pages "
+                "(+row_group_tiles={} for TileRowMajor+reload deadlock fix; "
+                "out_subblock_h={} per_core_N={})",
+                per_core_out_ntiles,
+                partials_num_pages,
+                row_group_tiles,
+                block_config.out_subblock_h_ntiles,
+                per_core_out_matrix_width_ntiles);
+        }
+        cb_info.emplace_back(CBInfo{
+            .name = Conv2dCb::MATMUL_PARTIALS,
+            .num_pages = partials_num_pages,
+            .page_size = partial_tile_size,
+            .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
+            .data_format = partial_df});
+    }
 
     // conv_bench main mode: main's verbatim no-helper kernel takes a TEMP_SUM CB index arg (which it does
     // not actually read for non-depthwise). Emit a 0-page entry so get_cb_info_by_name(TEMP_SUM) resolves
