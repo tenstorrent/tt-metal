@@ -214,7 +214,7 @@ template <
     uint32_t logk,
     uint32_t input_cb_index,
     uint32_t expert_mask_cb_index,
-    uint32_t masked_temp_cb_index,
+    uint32_t masked_input_cb_index,
     uint32_t index_cb_index,
     uint32_t input_transposed_cb_index,
     uint32_t index_transposed_cb_index,
@@ -233,7 +233,7 @@ void mask_and_topk() {
 
     CircularBuffer input_cb(input_cb_index);
     CircularBuffer expert_mask_cb(expert_mask_cb_index);
-    CircularBuffer masked_temp_cb(masked_temp_cb_index);
+    CircularBuffer masked_input_cb(masked_input_cb_index);
     CircularBuffer index_cb(index_cb_index);
     CircularBuffer input_transposed_cb(input_transposed_cb_index);
     CircularBuffer index_transposed_cb(index_transposed_cb_index);
@@ -244,7 +244,7 @@ void mask_and_topk() {
         transpose_wh_init(input_cb_index, input_transposed_cb_index);
     }
 
-    // Expert mask is the same row broadcast for every Ht row, so wait for all Wt tiles once.
+    // The expert mask is the same for all rows, so wait for all Wt tiles once before the loop.
     expert_mask_cb.wait_front(Wt);
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -257,41 +257,35 @@ void mask_and_topk() {
         input_transposed_cb.reserve_back(Wt);
         index_transposed_cb.reserve_back(Wt);
 
-    // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
-    for (uint32_t wt = 0; wt < Wt; wt += 2) {
-        // Re-init bcast for all iterations after the first (hardware was left in
-        // transpose mode from the previous iteration or merge loop).
-        if (ht > 0 || wt > 0) {
+        // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
+        for (uint32_t wt = 0; wt < Wt; wt += 2) {
+            input_cb.wait_front(2);
+            index_cb.wait_front(2);
+
+            // Before transposing, add expert_mask to the two input tiles and store the result in masked_input_cb.
+            // Cannot write back to input_cb as the reader kernel already writes into it.
+            acquire_dst();
             reconfig_data_format(input_cb_index, expert_mask_cb_index);
             add_bcast_rows_init_short(input_cb_index, expert_mask_cb_index);
-        }
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, wt, 0);
+            add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, wt + 1, 1);
+            masked_input_cb.reserve_back(2);
+            pack_reconfig_data_format(masked_input_cb_index);
+            pack_tile(0, masked_input_cb_index);
+            pack_tile(1, masked_input_cb_index);
+            masked_input_cb.push_back(2);
+            input_cb.pop_front(2);
+            release_dst();
 
-        // Block 1: bcast-add input+mask -> pack back to input_cb (at write_ptr).
-        // push_back(2) makes masked tiles visible. pop_front(2) discards original
-        // tiles. This rotates the CB so masked data becomes the new readable front.
-        input_cb.wait_front(2);
-        index_cb.wait_front(2);
-        acquire_dst();
-        add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 0, wt, 0);
-        add_tiles_bcast_rows(input_cb_index, expert_mask_cb_index, 1, wt + 1, 1);
-        // pack_reconfig_data_format(input_cb_index);
-        // cb_pop_front(input_cb_index, 2);          // consume the input tile
-        cb_pop_front(input_cb_index, 2);
-        cb_reserve_back(input_cb_index, 2);
-        pack_tile(0, input_cb_index);  // DST[0] -> input_cb at write_ptr (slot 2)
-        pack_tile(1, input_cb_index);  // DST[1] -> input_cb (slot 3)
-        input_cb.push_back(2);         // make masked tiles visible (ready_count = 4)
-        // input_cb.pop_front(2);   // discard original tiles (read_ptr -> slot 2, ready_count = 2)
-        release_dst();
+            acquire_dst();
+            // local sort into k groups
+            masked_input_cb.wait_front(2);
 
-        // Block 2: transpose from input_cb (now read_ptr points to masked data).
-        acquire_dst();
-        reconfig_data_format_srca(input_cb_index);
-        transpose_wh_init_short(input_cb_index);
-        input_cb.wait_front(2);
-        transpose_wh_tile(input_cb_index, 0, 0);  // masked tile 0 -> DST[0]
-        transpose_wh_tile(input_cb_index, 1, 1);  // masked tile 1 -> DST[1]
-        input_cb.pop_front(2);
+            reconfig_data_format_srca(masked_input_cb_index);
+            transpose_wh_init_short(masked_input_cb_index);
+            transpose_wh_tile(masked_input_cb_index, 0, 0);
+            transpose_wh_tile(masked_input_cb_index, 1, 1);
+            masked_input_cb.pop_front(2);
 
             reconfig_data_format_srca(index_cb_index);
             transpose_wh_init_short(index_cb_index);
@@ -433,12 +427,11 @@ void kernel_main() {
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
     constexpr uint32_t tile_width = get_compile_time_arg_val(17);
-    constexpr uint32_t masked_temp_cb_index = get_compile_time_arg_val(18);
+    constexpr uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
-    // expert_mask (row broadcast) is applied to each input pair, written to a 2-tile scratch CB
-    // and transposed from there -- no separate full masked-input CB -- then top-k selects.
+    // Apply expert_mask to each input tile pair and run top-k on the masked values.
     mask_and_topk<
         Ht,
         Wt,
@@ -447,7 +440,7 @@ void kernel_main() {
         logk,
         input_cb_index,
         expert_mask_cb_index,
-        masked_temp_cb_index,
+        masked_input_cb_index,
         index_cb_index,
         input_transposed_cb_index,
         index_transposed_cb_index,

@@ -74,11 +74,9 @@ void kernel_main() {
     CircularBuffer cb_topk(cb_topk_mask);
     CircularBuffer cb_expert(cb_expert_mask);
 
-    // Expert mask: load a single row of Wt tiles BEFORE streaming the input. The compute kernel
-    // waits on all Wt expert-mask tiles up front (it row-broadcasts them across every Ht row while
-    // masking each input tile), so producing the mask first avoids a deadlock: input_cb only holds
-    // a few tiles, so for Ht>1 the reader would otherwise block filling input_cb while compute
-    // blocks waiting for the mask that comes after.
+    // Load expert mask before the input loop to avoid deadlock when Ht > 1.
+    // The compute kernel waits for the full expert mask before processing any input tiles,
+    // so loading it after the input would cause the reader and compute to block each other.
     uint32_t tile_id_expert = 0;
     cb_expert.reserve_back(Wt);
     for (uint32_t j = 0; j < Wt; ++j) {

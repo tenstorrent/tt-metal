@@ -210,15 +210,14 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         }}},
     });
 
-    // 2-tile scratch CB: top_k bcast-adds input+expert_mask into here, then transposes directly
-    // from it. Produced/consumed only by the compute kernel (not the reader), so no two-producer
-    // race. Constant 2-tile size (not Ht*Wt) because one tile pair is in flight at a time.
-    uint32_t masked_temp_cb_index = tt::CBIndex::c_12;
+    // Intermediate buffer for adding input + expert_mask before sorting.
+    // Takes 2 tiles because two tiles are processed and freed before the next two are loaded.
+    uint32_t masked_input_cb_index = tt::CBIndex::c_12;
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * input_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(masked_temp_cb_index),
+            .buffer_index = static_cast<uint8_t>(masked_input_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_tile_size,
         }}},
@@ -280,7 +279,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         cb_cur_max_index,
         cb_cur_sum_index,
         tile_width,
-        masked_temp_cb_index};
+        masked_input_cb_index};
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp";

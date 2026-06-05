@@ -110,9 +110,6 @@ class TtMoeLayer(LightweightModule):
             dtype=ttnn.bfloat16,
         )
         if mode == Mode.DECODE:
-            print(f"[DEBUG DECODE] gate_logits shape: {gate_logits_1SB8.shape}")
-            print(f"[DEBUG DECODE] top8_mask shape:   {self.top8_mask_11B_64.shape}")
-            print(f"[DEBUG DECODE] top2_mask shape:   {self.top2_mask_11BB.shape}")
             weights_1SB1 = ttnn.moe(gate_logits_1SB8, self.top8_mask_11B_64, self.top2_mask_11BB, 32)
         else:
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
