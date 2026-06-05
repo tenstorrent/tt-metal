@@ -332,6 +332,32 @@ def test_five_hz_lm_bfloat8_weights_env_opt_out(monkeypatch):
     assert not ace_step_five_hz_lm_bfloat8_weights_enabled()
 
 
+def test_five_hz_lm_accuracy_optimizations_from_ace_model_params():
+    import ttnn
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_five_hz_lm_accuracy_decoder_config_path,
+        ace_step_five_hz_lm_accuracy_optimizations,
+    )
+    from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup, TensorGroup
+
+    class _FakeModelArgs:
+        n_layers = 28
+        model_name = "acestep-5Hz-lm-1.7B"
+
+    path = ace_step_five_hz_lm_accuracy_decoder_config_path(_FakeModelArgs.model_name)
+    assert path is not None
+    assert path.name == "accuracy_decoder_config.json"
+    assert "experimental/ace_step_v1_5/model_params" in str(path)
+
+    dec = ace_step_five_hz_lm_accuracy_optimizations(_FakeModelArgs())
+    bf16 = ttnn.bfloat16
+    for layer in range(_FakeModelArgs.n_layers):
+        for tg in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO, TensorGroup.KV_CACHE):
+            assert dec.get_tensor_dtype(layer, tg) == bf16
+        for op in (OpGroup.LI_FF1_FF3, OpGroup.LI_FF2, OpGroup.LI_QKV_PREFILL, OpGroup.LI_O_PREFILL):
+            assert dec.decoder_optimizations[layer].op_fidelity_settings[op] == MathFidelitySetting.HIFI4
+
+
 def test_five_hz_lm_hifi2_optimizations_default():
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_five_hz_lm_optimizations
     from models.tt_transformers.tt.model_config import MathFidelitySetting, OpGroup

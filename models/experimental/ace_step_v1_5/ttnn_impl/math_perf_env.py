@@ -38,7 +38,7 @@ Other expected DRAM in DiT/VAE traces:
 
 - ``proj_in`` uses **L1 TILE linear** patch embed (not ``conv1d``) to avoid ``Tilize`` / ``Copy`` / im2col DRAM matmul.
 - Denoise feeds **TILE BF16 L1** ``xt``/``ctx`` (not ROW_MAJOR DRAM) so Tracy drops front ``Tilize``/``CopyDevice``.
-- 5 Hz LM decoder **matmuls**: default **BF16** weights + ``accuracy_decoder_config.json`` (HiFi4) for HF logits PCC; opt-in ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` (via :func:`ace_step_five_hz_lm_optimizations`). DiT decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
+- 5 Hz LM decoder **matmuls**: default **BF16** weights + HiFi4 via :func:`ace_step_five_hz_lm_accuracy_optimizations` (``model_params/<variant>/accuracy_decoder_config.json`` in this demo); opt-in ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` (via :func:`ace_step_five_hz_lm_optimizations`). DiT decoder **matmuls**: LoFi + ``bfloat8_b`` weights + L1 activations; **rms_norm**: LoFi + L1 (not default HiFi4).
 - **SDPA attn masks**: DRAM-only (TTNN requirement).
 - **RoPE / norm / linear weights**: DRAM storage; matmul reads weights from DRAM while ``in0`` activations are L1.
 - Residual **BinaryNg (in0:dram)** (~0.3%): usually scalar-broadcast or slice outputs — call sites use :func:`ace_step_ensure_l1_activation` after ``ace_step_add_one``.
@@ -85,6 +85,7 @@ Condition encoder linears (lyric/timbre, ``hidden_size=2048``) are often DRAM-bo
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 # Lyric/timbre encoders use intermediate ≥ 6144; gate/up L1 CBs need in0_block_w=1 there.
@@ -1499,18 +1500,52 @@ def ace_step_qwen3_optimizations(model_args: Any):
 def ace_step_five_hz_lm_bfloat8_weights_enabled() -> bool:
     """Use ``bfloat8_b`` for all 5 Hz causal-LM decoder weights (opt-in for perf).
 
-    Default **off** — production uses ``accuracy_decoder_config.json`` (BF16 weights + HiFi4)
-    via ``optimizations=None`` in :mod:`qwen_tt_transformers_lm` for HF logits PCC (~0.98).
-    Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` (~0.90 HF PCC).
+    Default **off** — production uses :func:`ace_step_five_hz_lm_accuracy_optimizations`
+    (BF16 weights + HiFi4 from ``model_params/<variant>/accuracy_decoder_config.json`` under
+    this demo) for HF logits PCC (~0.98).  Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 +
+    ``bfloat8_b`` (~0.90 HF PCC).
     """
     return os.environ.get("ACE_STEP_LM_BFLOAT8_WEIGHTS", "0").lower() in ("1", "true", "yes", "on")
+
+
+_ACE_STEP_MODEL_PARAMS_ROOT = Path(__file__).resolve().parent.parent / "model_params"
+
+
+def ace_step_five_hz_lm_accuracy_decoder_config_path(model_name: str) -> Path | None:
+    """Resolve ACE-Step-owned ``accuracy_decoder_config.json`` for a 5 Hz LM variant."""
+    import re
+
+    root = _ACE_STEP_MODEL_PARAMS_ROOT
+    exact = root / model_name / "accuracy_decoder_config.json"
+    if exact.is_file():
+        return exact
+    m = re.match(r"(acestep-5Hz-lm-\d+(?:\.\d+)?B)", model_name)
+    if m is not None:
+        candidate = root / m.group(1) / "accuracy_decoder_config.json"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def ace_step_five_hz_lm_accuracy_optimizations(model_args: Any):
+    """Load BF16 + HiFi4 decoder settings from ACE-Step ``model_params/`` (default quality path)."""
+    from models.tt_transformers.tt.model_config import (
+        DecodersPrecision,
+        ModelOptimizations,
+        parse_decoder_json,
+    )
+
+    config_path = ace_step_five_hz_lm_accuracy_decoder_config_path(model_args.model_name)
+    if config_path is not None:
+        return parse_decoder_json(config_path, default_optimization=ModelOptimizations.accuracy)
+    return DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)
 
 
 def ace_step_lm_prefill_qkv_sweep_enabled() -> bool:
     """Pin swept 5 Hz LM prefill attention matmuls (QKV 128×2048×4096, WO 128×2048×2048).
 
     Default **on** — HiFi4/bf16 1D 8×4 w8 l1/dram/l1 (QKV) and l1/dram/ws (WO).  Keeps
-    ``accuracy_decoder_config`` (BF16 weights + HiFi4).  Disables with
+    :func:`ace_step_five_hz_lm_accuracy_optimizations` (BF16 weights + HiFi4).  Disables with
     ``ACE_STEP_LM_PREFILL_QKV_SWEEP=0``.
     """
     return os.environ.get("ACE_STEP_LM_PREFILL_QKV_SWEEP", "1").lower() not in ("0", "false", "no", "off")
@@ -1582,7 +1617,7 @@ def ace_step_lm_narrow_audio_vocab_enabled() -> bool:
 def ace_step_five_hz_lm_optimizations(model_args: Any):
     """``tt_transformers`` decoder config for ACE 5 Hz causal LM: HiFi2 + ``bfloat8_b`` on all weights.
 
-    Replaces the default ``accuracy_decoder_config.json`` path (BF16 weights) when
+    Replaces :func:`ace_step_five_hz_lm_accuracy_optimizations` (BF16 weights) when
     :func:`ace_step_five_hz_lm_bfloat8_weights_enabled` is true. Embedding / ``lm_head`` use
     ``dtype=ttnn.bfloat8_b`` from :func:`create_tt_model`; ``LMHead`` keeps the stock HiFi2
     compute kernel (see :mod:`qwen_tt_transformers_lm`).

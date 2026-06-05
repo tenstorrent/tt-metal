@@ -87,7 +87,11 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **PCC / accuracy**
 
-Default path uses swept prefill matmul program configs (HiFi4 + BF16, 1D 8×4 w8):
+Decoder precision/fidelity comes from
+``models/experimental/ace_step_v1_5/model_params/<variant>/accuracy_decoder_config.json``
+via :func:`~math_perf_env.ace_step_five_hz_lm_accuracy_optimizations` (BF16 + HiFi4).
+
+Default path also uses swept prefill matmul program configs (HiFi4 + BF16, 1D 8×4 w8):
 QKV 128×2048×4096 (l1/dram/l1), WO 128×2048×2048 (l1/dram/ws), MLP w1/w3 128×2048×6144 and
 w2 128×6144×2048 (l1/dram/ws) via :func:`~math_perf_env.ace_step_lm_prefill_qkv_sweep_enabled`
 and :func:`~math_perf_env.ace_step_lm_prefill_mlp_sweep_enabled` (both default on).
@@ -110,6 +114,7 @@ import ttnn
 from models.experimental.ace_step_v1_5.ttnn_impl.ace_step_lm_head_narrow import ace_step_patch_lm_head_narrow_forward
 from models.experimental.ace_step_v1_5.ttnn_impl.lm_logits_debug import ace_step_debug_lm_logits_enabled
 from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+    ace_step_five_hz_lm_accuracy_optimizations,
     ace_step_five_hz_lm_bfloat8_weights_enabled,
     ace_step_five_hz_lm_optimizations,
     ace_step_lm_decode_qk_norm_sharded_enabled,
@@ -244,7 +249,9 @@ class QwenModelTtTransformers:
                 tt_dtype = ttnn.bfloat8_b
             else:
                 tt_dtype = ttnn.bfloat16
-            lm_optimizations = ace_step_five_hz_lm_optimizations if _bf8_weights else None
+            lm_optimizations = (
+                ace_step_five_hz_lm_optimizations if _bf8_weights else ace_step_five_hz_lm_accuracy_optimizations
+            )
             (
                 self.model_args,
                 self.tt_model,
