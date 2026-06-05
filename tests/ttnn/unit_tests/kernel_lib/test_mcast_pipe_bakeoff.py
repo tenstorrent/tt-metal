@@ -1,23 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Unit test for the materialized `Pipe` helper (ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp).
-# Ported from the tune-helper bake-off harness (now test_mcast_pipe_bakeoff.py): same program
-# shape + coverage matrix, but the mcast+handshake block is driven through Pipe::send/receive
-# instead of the raw object-API bake-off kernels.
+# tune-helper `mcast_pipe` style bake-off harness (Blackhole p150a, throwaway-grade).
 #
-# What changed vs the bake-off:
-#   * F1 fence is BAKED IN to flush — there is no barrier variant to test (the helper has no
-#     barrier knob, by design). The "f1_*"/"f4_unlinked" loser variants are gone.
-#   * Variants now exercise the helper's actual axes: STAGING (Flag default | Counter knob),
-#     LINK (linked default | unlinked fallback), MCAST (EXCLUDE default | INCLUDE loopback),
-#     PRE_HANDSHAKE.
-#
-# Green here == the helper reproduces the bake-off WINNERS' behavior bit-exact, with no hang.
+# Drives the matched object-API bake-off kernels (bakeoff_mcast_sender/receiver.cpp) over a
+# topology matrix to decide F1 (flush vs barrier), F3 (loopback), F2 (flag vs counter) by
+# measurement. Correctness = each receiver's DRAM shard == the broadcast payload, bit-exact.
 #
 # HARDCODED virtualization offset for THIS machine (Blackhole p150a, COORDINATE_VIRTUALIZATION):
 #   worker logical (lx, ly) -> virtual NoC (lx + 1, ly + 2)   [VIRTUAL_TENSIX_START_X/Y]
+# Not portable across arches / harvesting layouts — bake-off scaffold only.
 
+import os
 import torch
 import pytest
 import ttnn
@@ -29,19 +23,25 @@ TILE_BYTES = 32 * 32 * 2  # bf16 tile
 KERNEL_DIR = "tests/ttnn/unit_tests/kernel_lib/kernels"
 
 
-def _defines(staging_counter, loopback_include, linked):
+def _defines(fence_barrier, staging_counter, loopback_include, linked):
     return [
+        ("FENCE_BARRIER", str(fence_barrier)),
         ("STAGING_COUNTER", str(staging_counter)),
         ("LOOPBACK_INCLUDE", str(loopback_include)),
         ("LINKED", str(linked)),
     ]
 
 
-# (name, staging_counter, loopback_include, linked)
+# (name, fence_barrier, staging_counter, loopback_include, linked)
 VARIANTS = {
-    "flag_linked": (0, 0, 1),  # canonical clean-spine path: Flag + linked pair + flush
-    "flag_unlinked": (0, 0, 0),  # F4 unlinked fallback (barrier-between)
-    "counter": (1, 0, 0),  # Staging::Counter knob (atomic-barrier fence)
+    "f1_flush": (0, 0, 0, 0),
+    "f1_barrier": (1, 0, 0, 0),
+    "f2_flag": (0, 0, 0, 0),
+    "f2_counter": (0, 1, 0, 0),
+    "f3_exclude": (0, 0, 0, 0),
+    "f3_include": (0, 0, 1, 0),
+    "f4_linked": (0, 0, 0, 1),
+    "f4_unlinked": (1, 0, 0, 0),
 }
 
 
@@ -49,11 +49,13 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     """recv_rect = ((rx0,ry0),(rx1,ry1)) logical; sender_logical = (sx,sy) logical."""
     (rx0, ry0), (rx1, ry1) = recv_rect
     sx, sy = sender_logical
-    stage_c, loop_i, linked = VARIANTS[variant]
+    fence_b, stage_c, loop_i, linked = VARIANTS[variant]
 
     nrx, nry = rx1 - rx0 + 1, ry1 - ry0 + 1
     num_recv = nrx * nry
-    num_dests = num_recv  # sender out-of-rect; receiver rect cores
+    sender_in_rect = (rx0 <= sx <= rx1) and (ry0 <= sy <= ry1)
+    # num_dests: INCLUDE counts self (only meaningful if sender in rect); EXCLUDE never counts self
+    num_dests = num_recv if (loop_i == 0 or not sender_in_rect) else num_recv  # rect cores; self handled by HW
 
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -73,11 +75,15 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     # ---- core sets ----
     recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(rx0, ry0), ttnn.CoreCoord(rx1, ry1))])
     sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(sx, sy))])
-    union_crs = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(rx0, ry0), ttnn.CoreCoord(rx1, ry1)),
-            ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(sx, sy)),
-        ]
+    union_crs = (
+        recv_crs.merge(sender_crs)
+        if hasattr(recv_crs, "merge")
+        else ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(rx0, ry0), ttnn.CoreCoord(rx1, ry1)),
+                ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(sx, sy)),
+            ]
+        )
     )
 
     # ---- virtual mcast rectangle ----
@@ -126,11 +132,11 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     sender_rt = ttnn.RuntimeArgs()
     sender_rt[sx][sy] = [input_tensor.buffer_address(), 0, vx0, vy0, vx1, vy1]
     sender_k = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_sender.cpp",
+        kernel_source=f"{KERNEL_DIR}/bakeoff_mcast_sender.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=sender_crs,
         compile_time_args=sender_ct,
-        defines=_defines(stage_c, loop_i, linked),
+        defines=_defines(fence_b, stage_c, loop_i, linked),
         runtime_args=sender_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -145,11 +151,11 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
             recv_rt[rx][ry] = [output_tensor.buffer_address(), j * payload_pages, sender_vx, sender_vy]
             j += 1
     recv_k = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
+        kernel_source=f"{KERNEL_DIR}/bakeoff_mcast_receiver.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=recv_crs,
         compile_time_args=recv_ct,
-        defines=_defines(stage_c, loop_i, linked),
+        defines=_defines(fence_b, stage_c, loop_i, linked),
         runtime_args=recv_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -167,11 +173,11 @@ def _run_pipe(device, variant, recv_rect, sender_logical, payload_tiles, n_iters
     logger.info(f"variant={variant} rect={recv_rect} sender={sender_logical} N={n_iters}: PASS")
 
 
-# ---------- SMOKE: single cell, canonical flag+linked, 1x2 rect, sender out-of-rect ----------
-def test_smoke(device):
+# ---------- SMOKE: single cell, F1 flush, 1x2 rect, sender out-of-rect, N=1 ----------
+def test_smoke_flush(device):
     _run_pipe(
         device,
-        variant="flag_linked",
+        variant="f1_flush",
         recv_rect=((0, 0), (0, 1)),
         sender_logical=(1, 1),
         payload_tiles=1,
@@ -180,14 +186,15 @@ def test_smoke(device):
     )
 
 
-# ---------- coverage: helper variants, sender out-of-rect ----------
+# ---------- PASS 1 coverage: F1 / F2 / F4, sender out-of-rect ----------
+# rects chosen to span shapes; sender (5,5) is outside all of them.
 RECTS = {
     "1x2": ((0, 0), (0, 1)),
     "1x8": ((0, 0), (0, 7)),
     "4x2": ((0, 0), (3, 1)),
 }
 SENDER = (5, 5)
-COVERAGE_VARIANTS = ["flag_linked", "flag_unlinked", "counter"]
+COVERAGE_VARIANTS = ["f1_flush", "f1_barrier", "f2_flag", "f2_counter", "f4_linked", "f4_unlinked"]
 
 
 @pytest.mark.parametrize("variant", COVERAGE_VARIANTS)
@@ -195,6 +202,8 @@ COVERAGE_VARIANTS = ["flag_linked", "flag_unlinked", "counter"]
 @pytest.mark.parametrize("n_iters", [1, 8])
 @pytest.mark.parametrize("payload_tiles", [1, 4])
 def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
+    # pre_handshake stays False (use-case knob, settled on paper); this is what stresses the
+    # flag-vs-counter stale-retrigger hazard at N>1.
     _run_pipe(
         device,
         variant=variant,
@@ -206,33 +215,15 @@ def test_coverage(device, variant, rect_name, n_iters, payload_tiles):
     )
 
 
-# ---------- PRE_HANDSHAKE confirmation (provisional item: consumer-wait-inside-send vs reused dest) ----------
-# Drives the multi-round reused-dest protocol with PRE_HANDSHAKE=true. This is the in-context
-# stand-in for "matmul in0": the sender refills its source each round and the consumed-wait inside
-# send() must gate the mcast (not the fill). Green confirms the wait-inside-send ordering.
-@pytest.mark.parametrize("rect_name", ["1x2", "1x8"])
-@pytest.mark.parametrize("n_iters", [1, 8])
-def test_pre_handshake(device, rect_name, n_iters):
-    _run_pipe(
-        device,
-        variant="flag_linked",
-        recv_rect=RECTS[rect_name],
-        sender_logical=SENDER,
-        payload_tiles=4,
-        n_iters=n_iters,
-        pre_handshake=True,
-    )
-
-
-# ================== F3: sender IN rect, INCLUDE_SRC loopback (bake-off winner) ==================
-# Clean setup (no same-core two-kernel hang): the sender (column corner) runs the F3 sender
-# kernel and writes its OWN shard; the other column cores run the plain receiver kernel.
-def _run_f3(device, rect_len, payload_tiles, n_iters):
+# ================== F3 bake-off: sender IN rect, INCLUDE_SRC vs EXCLUDE_SRC + local self-copy ==================
+# Clean setup (no same-core two-kernel hang): the sender (column corner) runs ONLY the F3 sender
+# kernel and writes its OWN output shard; the other column cores run the plain receiver kernel.
+def _run_f3(device, mode_include, rect_len, payload_tiles, n_iters):
     """1xrect_len column rect at x=0; sender = (0,0); receivers = (0,1)..(0,rect_len-1)."""
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
     R = rect_len
-    num_dests = R  # INCLUDE_SRC counts self
+    num_dests = R if mode_include else (R - 1)
 
     in_shape = [1, 1, 32, 32 * payload_tiles]
     payload = torch.arange(0, payload_tiles * 1024, dtype=torch.float32).reshape(in_shape).to(torch.bfloat16)
@@ -247,7 +238,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
 
     full_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, R - 1))])
     sender_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    has_receivers = R > 1  # degenerate (R==1) self-only: no receiver cores, sender does a local copy
+    recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, R - 1))])
 
     vx0, vy0, vx1, vy1 = 0 + VIRT_X, 0 + VIRT_Y, 0 + VIRT_X, (R - 1) + VIRT_Y
     sender_vx, sender_vy = 0 + VIRT_X, 0 + VIRT_Y
@@ -274,6 +265,7 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
         ttnn.SemaphoreDescriptor(id=DATA_READY, core_ranges=full_crs, initial_value=0),
         ttnn.SemaphoreDescriptor(id=CONSUMED, core_ranges=full_crs, initial_value=0),
     ]
+    f3_defines = [("LOOPBACK_INCLUDE", "1" if mode_include else "0")]
 
     # sender kernel (writes its own shard 0)
     sender_ct = [cb_src, cb_dst, DATA_READY, num_dests, payload_pages, page_bytes, n_iters]
@@ -282,50 +274,85 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     sender_rt = ttnn.RuntimeArgs()
     sender_rt[0][0] = [input_tensor.buffer_address(), 0, vx0, vy0, vx1, vy1, output_tensor.buffer_address(), 0]
     sender_k = ttnn.KernelDescriptor(
-        kernel_source=f"{KERNEL_DIR}/pipe_f3_sender.cpp",
+        kernel_source=f"{KERNEL_DIR}/bakeoff_f3_sender.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=sender_crs,
         compile_time_args=sender_ct,
+        defines=f3_defines,
         runtime_args=sender_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    kernels = [sender_k]
-    # receiver kernel on the other column cores (shards 1..R-1); none in the degenerate case
-    if has_receivers:
-        recv_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, R - 1))])
-        recv_ct = [cb_dst, DATA_READY, CONSUMED, payload_pages, page_bytes, n_iters, 0]
-        recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-        recv_rt = ttnn.RuntimeArgs()
-        for j in range(1, R):
-            recv_rt[0][j] = [output_tensor.buffer_address(), j * payload_pages, sender_vx, sender_vy]
-        recv_k = ttnn.KernelDescriptor(
-            kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=recv_crs,
-            compile_time_args=recv_ct,
-            defines=[("STAGING_COUNTER", "0")],
-            runtime_args=recv_rt,
-            config=ttnn.WriterConfigDescriptor(),
-        )
-        kernels.append(recv_k)
+    # receiver kernel on the other column cores (shards 1..R-1)
+    recv_ct = [cb_dst, DATA_READY, CONSUMED, payload_pages, page_bytes, n_iters, 0]
+    recv_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    recv_rt = ttnn.RuntimeArgs()
+    for j in range(1, R):
+        recv_rt[0][j] = [output_tensor.buffer_address(), j * payload_pages, sender_vx, sender_vy]
+    recv_k = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/bakeoff_mcast_receiver.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=recv_crs,
+        compile_time_args=recv_ct,
+        defines=[("STAGING_COUNTER", "0")],
+        runtime_args=recv_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
 
-    pd = ttnn.ProgramDescriptor(kernels=kernels, semaphores=semaphores, cbs=cbs)
+    pd = ttnn.ProgramDescriptor(kernels=[sender_k, recv_k], semaphores=semaphores, cbs=cbs)
     output = ttnn.generic_op(io_tensors, pd)
     torch_out = ttnn.to_torch(output).reshape(R, 1, 32, 32 * payload_tiles)
     for jj in range(R):
         assert torch.equal(
             torch_out[jj].to(torch.float32), payload[0].to(torch.float32)
-        ), f"F3 INCLUDE_SRC: shard {jj} mismatch (jj==0 is the sender's own loopback copy)"
-    logger.info(f"F3 INCLUDE_SRC R={R} pt={payload_tiles} N={n_iters}: PASS")
+        ), f"F3 mode_include={mode_include}: shard {jj} mismatch (jj==0 is the sender's own copy)"
+    logger.info(f"F3 include={mode_include} R={R} pt={payload_tiles} N={n_iters}: PASS")
 
 
+@pytest.mark.parametrize("mode_include", [True, False], ids=["include", "excludecopy"])
 @pytest.mark.parametrize("payload_tiles", [1, 4, 16])
-def test_f3_loopback(device, payload_tiles):
-    _run_f3(device, rect_len=4, payload_tiles=payload_tiles, n_iters=1)
+def test_f3_coverage(device, mode_include, payload_tiles):
+    _run_f3(device, mode_include=mode_include, rect_len=4, payload_tiles=payload_tiles, n_iters=1)
 
 
-# Degenerate guard: rect_len==1 => num_dests==1 self-only. The Pipe must collapse INCLUDE_SRC
-# loopback to a local copy (else the raw loopback hangs). Only the sender core participates.
-def test_f3_degenerate(device):
-    _run_f3(device, rect_len=1, payload_tiles=1, n_iters=1)
+@pytest.mark.parametrize("mode_include", [True, False], ids=["include", "excludecopy"])
+@pytest.mark.parametrize("payload_tiles", [1, 4, 16, 64], ids=lambda p: f"pt{p}")
+def test_f3_perf(device, mode_include, payload_tiles):
+    # 8-core column, N=8; sweep payload to find any INCLUDE-vs-EXCLUDE+copy crossover.
+    _run_f3(device, mode_include=mode_include, rect_len=8, payload_tiles=payload_tiles, n_iters=8)
+
+
+# ---------- F3 loopback (OLD, scoped out): sender INSIDE the rect, same-core two-kernel hang ----------
+# SCOPED OUT (Step ★ R6): forcing the sender to also be a receiver puts the sender (NCRISC)
+# and receiver (BRISC) kernels on the SAME core — the rotating-sender/role-flip hybrid. This
+# HANGS with a dispatch/program-construction exception (not a NoC timeout), confirming the
+# two-roles-on-one-core shape is out of scope for a single Pipe object (needs the two-Pipe
+# refactor). INCLUDE_SRC itself is proven in production (census C1/C2: rms_sender,
+# ln_post_allgather). Skipped so it doesn't hang the device on a routine run.
+@pytest.mark.skip(reason="R6 same-core sender+receiver hybrid: out of scope (Step ★), hangs device")
+def test_f3_loopback_self(device):
+    # sender (0,0) is one of the 2 rect cores; INCLUDE_SRC must deliver to self + the other.
+    _run_pipe(
+        device,
+        variant="f3_include",
+        recv_rect=((0, 0), (0, 1)),
+        sender_logical=(0, 0),
+        payload_tiles=1,
+        n_iters=1,
+        pre_handshake=False,
+    )
+
+
+# ---------- PASS 2 perf: amplifying cell (1x8 rect, N=8, payload 4), one variant per run ----------
+# Run under tracy:  python -m tracy -r -m pytest <this>::test_perf -k "<variant>"
+@pytest.mark.parametrize("variant", ["f1_flush", "f1_barrier", "f2_flag", "f2_counter", "f4_linked"])
+def test_perf(device, variant):
+    _run_pipe(
+        device,
+        variant=variant,
+        recv_rect=((0, 0), (0, 7)),  # 1x8 = 8 receivers (barrier waits 8 ACKs)
+        sender_logical=SENDER,
+        payload_tiles=4,
+        n_iters=8,
+        pre_handshake=False,
+    )
