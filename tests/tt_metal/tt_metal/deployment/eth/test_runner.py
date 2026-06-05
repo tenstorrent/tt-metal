@@ -10,6 +10,7 @@ import pprint
 import json
 import sys
 import re
+import os
 
 timeregex = "\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+"
 teststart = re.compile("\[\s+RUN\s+\] (.*)")
@@ -661,6 +662,7 @@ async def main():
     parser.add_argument("-l", action="store_true", help="List all of the available tests")
     parser.add_argument("-q", action="store_true", help="Don't print the logs as the tests run")
     parser.add_argument("-n", action="store_true", help="Don't print the summary")
+    parser.add_argument("-v", action="store_true", help="Verbose output")
     parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
     opts = parser.parse_args()
@@ -698,7 +700,11 @@ async def main():
         program = "build/test/tt_metal/unit_tests_deployment"
         args = [f"--gtest_filter={filters}"]
 
-        proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE)
+        env = os.environ
+        if not opts.v:
+            env["TT_LOGGER_TYPES"] = "Test"
+
+        proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
         p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
 
