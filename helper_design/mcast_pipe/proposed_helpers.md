@@ -1,5 +1,11 @@
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
 
+> **⚠ SUPERSEDED by Round 2 (2026-06-05).** This proposal exposes `MCAST` (EXCLUDE/INCLUDE) as a
+> caller knob and a single `num_dests`. The shipped helper instead takes pure-geometry `McastRect`
+> + `num_active_cores` and **infers** the mode (`loopback iff sender_in_rect && num_active==area`).
+> One case is un-inferable (conv width-sharded partial-box self-gather → kept raw). Authoritative
+> Round-2 docs: `changelog.md`, `round2_active_cores_plan.md`, `loopback_inference_limitation.md`.
+
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +
 semaphore-handshake block, built on the object API (`Noc` / `Semaphore<>` / `MulticastEndpoint`),
 with all style choices **decided by the on-device bake-off** (`style_bakeoff.md`), not by argument.
