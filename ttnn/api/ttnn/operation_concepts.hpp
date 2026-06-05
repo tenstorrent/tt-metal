@@ -72,42 +72,96 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunArgs) from create_program_artifacts. The framework adapter stamps a Program
-// from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
-// via experimental::UpdateTensorArgs on cache hit.
+// Metal 2.0 factory concept:
+// Factories that return EITHER:
+//  - ProgramArtifacts (a ProgramSpec + ProgramRunArgs) from create_program_artifacts, or
+//  - A separate ProgramSpec from create_program_spec, ProgramRunArgs from create_program_run_args,
+//    and a minimal struct of extracted data from the input args, chained into create_program_spec.
+//
+//-----------------------------------------------------------------------------------
+// "Option 1" (via create_program_artifacts):
+//
+// The framework adapter stamps a Program from the spec onto each mesh coordinate range on
+// cache miss, and patches ONLY the tensor arguments on cache hit.
+//
+// The ProgramCache hash key is automatically computed by the TTNN infrastructure based on
+// the op's type and arguments (taking into account any TensorParameter relaxations).
+// The factory author writes NO fast-path-specific code.
+//
+// The factory-provided create_program_artifacts is only called on cache miss.
 //
 // NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable
-// from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
-// matches by pointer identity. Constructing or copying a MeshTensor and referencing the
-// copy will TT_FATAL at runtime.
+//   from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
+//   matches by pointer identity.
 //
-// NOTE: A separate MeshWorkloadSpecFactoryConcept is planned for ops whose programs vary
-// across the mesh (CCL-style); that one will require a multi-program artifact.
-// Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
-// (Should follow whatever style ProgramDescriptor port ends up using.)
+// CAUTION: Do not pass raw tensor addresses through runtime arguments!
+//   If a raw address is passed as a user-defined runtime argument, only the first dispatch
+//   succeeds; every subsequent program-cache hit then silently uses a stale address.
+//   A Metal 2.0 program factory should NEVER take the address of any tensor or buffer.
+//   Instead, declare a TensorParameter on the ProgramSpec and pass MeshTensor arguments
+//   directly through the ProgramRunArgs. The Metal 2.0 runtime infrastructure implicitly
+//   captures the pointer (and other tensor properties), which the kernel retrieves via
+//   TensorAccessor.
 //
-// ANTI-PATTERN — do not pass raw tensor addresses through runtime arguments:
+//-----------------------------------------------------------------------------------
+// "Option 2" (ALSO via create_program_artifacts):
 //
-//   uint32_t addr = input.buffer()->address();  // WRONG
-//   // ...stuff `addr` into kernel_run_args.runtime_arg_values...
+// The framework adapter stamps a Program from the spec onto each mesh coordinate range on
+// cache miss, and applies the FULL ProgramRunArgs on cache hit.
 //
-// The first dispatch succeeds; every subsequent program-cache hit then
-// silently uses a stale address. The cached Program's RTA was frozen at the
-// previous cache miss, but the next dispatch's tensor may live at a different
-// device address. Memory corruption follows.
+// The ProgramCache hash key is automatically computed by the TTNN infrastructure by hashing
+// the immutable ProgramSpec struct. The factory author writes NO fast-path-specific code.
 //
-// CORRECT: declare a TensorParameter on the ProgramSpec and bind it via a
-// TensorArgument on the ProgramRunArgs. The framework rebinds the device
-// address on every dispatch through the typed channel; kernels read the
-// binding through TensorAccessor.
+// The factory-provided create_program_artifacts is always called (both cache miss and hit).
 //
-// General rule: any value derived from a tensor's mutable state (address,
-// device, allocation) routes through TensorParameter, never through an RTA.
-// See ProgramSpecMeshWorkloadFactoryAdapter for the full RTA constraint.
+// NOTE: Compared to Option 1, Option 2:
+//   - Exposes all of Metalium's ProgramRunArgs (not limited to tensor arguments) for maximum
+//     fast path flexibility.
+//   - Is always safe. The cache key and mutable Program update are guaranteed to be correct
+//     by construction.
+//   - Has greater host overhead on cache hit; create_program_artifacts is always invoked.
+//
+//-----------------------------------------------------------------------------------
+// "Option 3" (AdvancedProgramSpecFactoryConcept):
+//
+// The framework adapter:
+//  - Calls extract_immutable_info and computes the hash key from the returned struct.
+//  - On cache miss, create_program_spec is called using the returned immutable info struct.
+//    The resulting Program is cached; create_program_run_args is then called to generate
+//    the ProgramRunArgs to run the Program.
+//  - On cache hit, ONLY create_program_run_args is called.
+//
+// For the most efficient fast path, minimize the logic in extract_immutable_info.
+//
+// NOTE: Compared to Options 1 and 2:
+//  - Option 3 is the most complex factory to implement.
+//  - Like Option 2, it is always safe (guaranteed to be correct by construction).
+//  - It provides the greatest fast-path flexibility of all options. The factory author
+//    can leverage the full Program mutability, and can also minimize fast-path host
+//    overhead.
+//
 template <typename T>
-concept ProgramSpecFactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
-                                    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+concept WorkloadArtifactConcept = requires { &T::create_workload_artifacts; };
+
+template <typename T>
+concept AdvancedProgramSpecFactoryConcept = requires {
+    &T::create_program_spec;
+    &T::create_program_run_args;
+    &T::extract_immutable_info;
+};
+
+// TODO: Define how the "switch" to select between Option 1 and 2 works.
+//
+// "Exactly one of the three forms is satisfied" is enforced by sum-equals-1
+// (the same pattern Diego uses for outer-factory disambiguation in
+// AllFactoriesValid below). A factory that accidentally exposes two shapes
+// is rejected at the concept level rather than silently picked apart by
+// adapter precedent order.
+template <typename T>
+concept ProgramSpecFactoryConcept =
+    ((requires { &T::create_program_artifacts; } + AdvancedProgramSpecFactoryConcept<T> + WorkloadArtifactConcept<T>) ==
+     1) &&
+    !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
