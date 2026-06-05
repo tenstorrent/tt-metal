@@ -148,4 +148,6 @@ private:
     std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
 
+ServiceCoreManager& service_core_manager();
+
 }  // namespace tt::tt_metal::internal

@@ -246,4 +246,6 @@ void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimp
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
 
+ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
+
 }  // namespace tt::tt_metal::internal
