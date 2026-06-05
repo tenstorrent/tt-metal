@@ -110,15 +110,22 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_heads_per_device,
-    const bool per_head_norm) {
+    const bool per_head_norm,
+    const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& transformation_mat,
+    const std::optional<const ttnn::Tensor>& rope_cos,
+    const std::optional<const ttnn::Tensor>& rope_sin) {
     // Build only what compute_sizing actually reads: ring_size + per_head_norm.
     // The other Params fields aren't used in the sizing math.
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
+    // fp32_dest_acc=true to MATCH the op's default — the streaming-low-L1 chunk
+    // decision (and thus the buffer's window/page sizing) depends on the
+    // intermediate-CB tile size, which fp32_dest_acc selects.
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, true, false);
 
     auto params = ttnn::experimental::prim::WanFusedDistributedRmsnormParams(
         /*epsilon=*/0.0f,
@@ -134,7 +141,13 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
         /*sub_device_id=*/std::nullopt,
         kernel_config_val);
 
-    const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
+    // RoPE/weight are passed through so the streaming-low-L1 chunk decision here
+    // matches the program (the buffer's window/pages depend on chunk_size_rows).
+    // Optional/absent for the common broadcast-RoPE callers (their sizing is
+    // unaffected); required for per-head RoPE at feat>=1024, which streams.
+    ttnn::experimental::prim::WanFusedDistributedRmsnormInputs sizing_args{
+        input_tensor, weight, /*bias=*/std::nullopt, transformation_mat, rope_cos, rope_sin, std::nullopt};
+    const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor, sizing_args);
     if (!sizing.use_mux) {
         return std::nullopt;
     }
