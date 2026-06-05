@@ -158,7 +158,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/
 TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 
 ######################################
-# Blitz superpod automapper tests (mock cluster / CPU sim — canonical + 5 variations)
+# Blitz superpod mapping determinism tests (mock cluster / CPU sim — canonical + 5 variations)
 # Variations: shuffled mock rank binding, relabeled MGD descriptors, permuted mesh_id in instances/connections.
 ######################################
 AUTOMAPPER_DEFAULT_ARGS=(
