@@ -22,8 +22,6 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-from conftest import skip_for_coverage
-
 pytestmark = skip_for_coverage
 
 
