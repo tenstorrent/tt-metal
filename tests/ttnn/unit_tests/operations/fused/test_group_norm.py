@@ -1153,6 +1153,20 @@ def test_group_norm_negative_tests(
         )
 
 
+def test_group_norm_rejects_host_input_mask(device):
+    input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
+    input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
+
+    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=32,
+            input_mask=input_mask,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            inplace=False,
+        )
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", DRAM_GRID_SIZE_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid):

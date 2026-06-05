@@ -156,6 +156,12 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             "Input mask must have TILE layout, got: {}",
             input_mask.value().layout());
         TT_FATAL(
+            input_mask.value().storage_type() == StorageType::DEVICE,
+            "Input mask must be on device, got storage type: {}",
+            input_mask.value().storage_type());
+        TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
+        TT_FATAL(
             input_mask.value().padded_shape()[1] == args.num_groups,
             "Input mask dim1 must match number of groups, got: {} vs {}",
             input_mask.value().padded_shape()[1],
