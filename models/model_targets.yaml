@@ -553,10 +553,12 @@ targets:
       p300x2:
         entries:
           - status: active
+            # Perf seeded from data-parallel run 27016350392 (b4 aggregate);
+            # accuracy is the token-matching (b1) target.
             perf:
-              prefill_time_to_first_token: 53
-              decode_t/s/u: 21.8
-              decode_t/s: 21.7
+              prefill_time_to_first_token: 19
+              decode_t/s/u: 20.88
+              decode_t/s: 83.5
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -743,7 +745,10 @@ targets:
               prefill_time_to_first_token: 136
               decode_t/s/u: 16.30
               decode_t/s: 521.6
-            accuracy: {}
+            # Token-matching (b1) accuracy; seeded from run 27016350392.
+            accuracy:
+              top1: 96
+              top5: 100
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-galaxy:
@@ -917,20 +922,28 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
+            # Seeded from scheduled run 27016350392 (ci eval-32).
             perf:
-              decode_t/s/u: 200.8
-              prefill_time_to_first_token: 3
-            accuracy:
-              top1: 9
-              top5: 9
+              decode_t/s/u: 22.66
+              prefill_time_to_first_token: 101
+            accuracy: {}
       p300x2:
         entries:
+          # Token-matching (b1) accuracy; seeded from run 27016350392.
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 98
+              top5: 99
           - batch_size: 32
             seq_len: 707
             status: active
+            # Seeded from scheduled run 27016350392 (ci eval-32).
             perf:
-              decode_t/s/u: 200.8
-              prefill_time_to_first_token: 3
+              decode_t/s/u: 7.63
+              prefill_time_to_first_token: 189
             accuracy: {}
   qwen2.5-72b:
     aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
