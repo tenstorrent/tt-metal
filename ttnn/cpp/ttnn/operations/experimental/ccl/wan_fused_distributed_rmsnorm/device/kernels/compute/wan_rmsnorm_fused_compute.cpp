@@ -120,8 +120,23 @@ void kernel_main() {
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
-    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
-    binary_op_init_common(input_cb, input_cb, input_cb);
+    // WAN_ABLATION=7: skip ALL compute LLKs (math, reduce, tile_regs, pack,
+    // reconfig, init) but keep the exact external CB flow so the reader/writer
+    // never stall. This isolates compute time: if wall-clock collapses with
+    // skip_compute, the critical path was the LLKs; if not, it's the
+    // reader/writer/CB-sync/drain path. Only valid for the common AG path
+    // (whole-row norm, packed AG, non-streaming, is_tp_1==0) — i.e. the galaxy
+    // bench shapes. Not bit-correct; this is a timing probe only.
+#ifdef WAN_ABL_SKIP_COMPUTE
+    constexpr bool skip_compute = true;
+#else
+    constexpr bool skip_compute = false;
+#endif
+
+    if constexpr (!skip_compute) {
+        mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+        binary_op_init_common(input_cb, input_cb, input_cb);
+    }
 
     // One-time waits for reader-produced singletons.
     cb_wait_front(reduce_scalar_sum_cb, 1);
@@ -147,6 +162,36 @@ void kernel_main() {
         // head) instead of stats_tiles_cols (== ring_size) for the AG path.
         constexpr uint32_t per_row_stats_count = (per_head_norm != 0) ? num_heads_per_device : stats_tiles_cols;
         const uint32_t chunk_stats_tiles = rows_in_chunk * per_row_stats_count;
+
+        if constexpr (skip_compute) {
+            // --- PASSTHROUGH: replicate the external CB handshake, no LLKs ---
+            // PRE: produce one local-stats tile per row (forwarder consumes these).
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                cb_reserve_back(stats_dest_cb, 1);
+                cb_push_back(stats_dest_cb, 1);
+            }
+            // AG-wait + consume gathered stats (writer produced them).
+            cb_wait_front(stats_gathered_cb, chunk_stats_tiles);
+            cb_pop_front(stats_gathered_cb, chunk_stats_tiles);
+            // POST: consume rope cos/sin per row, produce output blocks (writer drains).
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                if constexpr (fuse_rope) {
+                    cb_wait_front(rope_cos_cb, head_dim_tiles);
+                    cb_wait_front(rope_sin_cb, head_dim_tiles);
+                    cb_pop_front(rope_cos_cb, head_dim_tiles);
+                    cb_pop_front(rope_sin_cb, head_dim_tiles);
+                }
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    cb_reserve_back(output_cb, block_size);
+                    cb_push_back(output_cb, block_size);
+                }
+            }
+            // Release the resident input chunk (reader produced it).
+            cb_wait_front(input_cb, chunk_input_tiles);
+            cb_pop_front(input_cb, chunk_input_tiles);
+            row_processed += rows_in_chunk;
+            continue;
+        }
 
         // -------- PHASE 1: PRE — sum(x**2) per row --------
         // Cumulative input wait (Phase 4): instead of one cb_wait_front for the
