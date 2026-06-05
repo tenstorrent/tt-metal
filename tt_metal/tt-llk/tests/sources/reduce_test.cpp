@@ -46,7 +46,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(tensor_shape);
     for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
     {
-        _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[0]));
+        _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(L1_ADDRESS(params.buffer_A[i]), L1_ADDRESS(params.buffer_B[0]), tensor_shape);
     }
 }
 

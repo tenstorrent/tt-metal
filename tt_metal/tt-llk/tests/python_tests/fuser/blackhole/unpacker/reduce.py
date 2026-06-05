@@ -100,4 +100,8 @@ class ReduceUnpacker(Unpacker):
         buffer_b = compute_unit.src_b.cpp_name
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        tile_shape = compute_unit.src_a.tile_shape
+        tensor_shape_instantiation: str = (
+            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
+        )
+        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]), {tensor_shape_instantiation});\n"
