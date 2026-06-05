@@ -137,23 +137,17 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         if self._fsdp_enabled:
             # reshard_after_forward keeps peak memory low by resharding weights
             # between forward and backward and re-gathering them in the backward
-            # pre-hook. That re-gather path is sensitive to autograd-callback
-            # ordering across a deep block stack + the tied-embedding root
-            # wrapper; until that is validated for this model, default to
-            # keeping weights gathered between forward and backward (params are
-            # still sharded at rest and gradients are still reduce-scattered, so
-            # the FSDP grad path is exercised). Set GRPO_QWEN_FSDP_RESHARD=1 to
-            # opt into the memory-efficient reshard path.
-            reshard = os.environ.get("GRPO_QWEN_FSDP_RESHARD", "0") == "1"
-            # The root wrapper manages the tied tok_emb/fc weight (used at both
-            # ends of the network) + ln_fc, and its backward window spans the
-            # whole block stack. That combination breaks the reshard re-gather
-            # contract (the first fc backward closure crashes). Per-block
-            # wrapping is the tested-good configuration. Set
-            # GRPO_QWEN_FSDP_WRAP_ROOT=0 to shard only the blocks (the bulk of
-            # params) and leave embeddings/lm_head/final-norm replicated, which
-            # sidesteps the root-wrapper issue while keeping memory-efficient
-            # sharding of the layers.
+            # pre-hook. This is required to fit large models (e.g. 32B). It is
+            # validated for Qwen3 GRPO (the RMSNorm backward was fixed to
+            # re-read the weight via get_value() instead of snapshotting the
+            # gathered forward value; see models/qwen3/autograd_ops.py). Set
+            # GRPO_QWEN_FSDP_RESHARD=0 to keep weights gathered between
+            # forward/backward (more memory, fewer CCL ops).
+            reshard = os.environ.get("GRPO_QWEN_FSDP_RESHARD", "1") == "1"
+            # Whether to also wrap the root model (shards tok_emb / lm_head /
+            # final norm). Set GRPO_QWEN_FSDP_WRAP_ROOT=0 to shard only the
+            # transformer blocks (the bulk of params) and leave the embeddings /
+            # lm_head / final norm replicated.
             wrap_root = os.environ.get("GRPO_QWEN_FSDP_WRAP_ROOT", "1") == "1"
             logging.info(
                 "Applying FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
