@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -401,19 +402,28 @@ void kernel_main() {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                {
+                    DeviceZoneScopedN("mm_wait_in0");
+                    cb_wait_front(in0_cb, in0_block_num_tiles);
+                }
+                {
+                    DeviceZoneScopedN("mm_wait_in1");
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
+                }
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                {
+                    DeviceZoneScopedN("mm_matmul");
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
@@ -443,7 +453,9 @@ void kernel_main() {
             cb_push_back(intermediate_cb, out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-            cb_reserve_back(out_cb, out_block_num_tiles);
+            {
+                DeviceZoneScopedN("mm_out");
+                cb_reserve_back(out_cb, out_block_num_tiles);
 #ifndef FUSE_TERNARY
             cb_wait_front(intermediate_cb, out_block_num_tiles);
 #ifndef FUSE_BIAS
@@ -467,6 +479,7 @@ void kernel_main() {
                 N_block_tiles,
                 broadcast_ternary_b);
 #endif  // FUSE_TERNARY
+            }
         }
     }
 }
