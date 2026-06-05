@@ -185,8 +185,16 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().layout() == Layout::TILE,
-            "Negative musk must be in TILE layout, but layout is {}",
+            "Negative mask must have TILE layout, got: {}",
             negative_mask.value().layout());
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(
+            a.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
         TT_FATAL(
             negative_mask.value().padded_shape()[1] == args.num_groups,
             "Negative mask padded shape[1] must be equal to num_groups, but is {} and num_groups is {}",
@@ -313,6 +321,15 @@ Tensor group_norm(
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
     std::optional<Tensor> reciprocals) {
+    if (negative_mask.has_value()) {
+        TT_FATAL(
+            negative_mask.value().storage_type() == StorageType::DEVICE,
+            "Negative mask must be on device, got storage type: {}",
+            negative_mask.value().storage_type());
+        TT_FATAL(
+            negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
+        TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
+    }
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,
