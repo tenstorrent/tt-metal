@@ -2675,10 +2675,12 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         ttnn.deallocate(pos_emb_tt)
         ttnn.deallocate(char_emb_tt)
         char_h = ttnn.add(char_h, up1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(up1)
+        # Keep up1 alive until after up2: ttnn.add may reuse up1's buffer for char_h.
 
         char_pad_tt = ttnn.reshape(char_pad, (batch, char_len, 1))
 
+        char_h_dp_to_free = None
+        char_pad_dp_to_free = None
         if reference_discrete_durations is None:
             # Run the duration predictor at a bucketed char length so its conv1d programs don't recompile
             # on char_len jitter. Pad char_h + mask with zeros past char_len (masked inside the predictor;
@@ -2688,14 +2690,13 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             if dp_seq != char_len:
                 char_h_dp = ttnn.pad(char_h, [(0, 0), (0, dp_seq - char_len), (0, 0)], value=0.0)
                 char_pad_dp = ttnn.pad(char_pad_tt, [(0, 0), (0, dp_seq - char_len), (0, 0)], value=0.0)
+                char_h_dp_to_free = char_h_dp
+                char_pad_dp_to_free = char_pad_dp
             else:
                 char_h_dp, char_pad_dp = char_h, char_pad_tt
             log_dur = self._duration_predictor(char_h_dp, char_pad_dp, seq=dp_seq)
             dur_list = _discrete_duration_counts(log_dur, batch=batch, seq=dp_seq)[:char_len]
             ttnn.deallocate(log_dur)
-            if dp_seq != char_len:
-                ttnn.deallocate(char_h_dp)
-                ttnn.deallocate(char_pad_dp)
         else:
             dur_list = [int(x) for x in reference_discrete_durations]
             if len(dur_list) != char_len:
@@ -2723,7 +2724,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             frame_idx_f32=unit_frame_f32,
             frame_idx_cache=None if full_trace_prebuf else self._frame_idx_cache,
         )
-        ttnn.deallocate(char_h)
         unit_seq = int(sum(dur_list))
         if self._tp == 1 and int(up2.shape[1]) != unit_seq:
             raise RuntimeError(
@@ -2759,7 +2759,6 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(pos2_tt)
-        ttnn.deallocate(up2)
 
         # Pad the unit sequence to a tile-aligned length so the decoder SDPA does not score real
         # queries against tile-padded garbage keys. ``pad_unit`` carries the valid-prefix length so
@@ -2784,6 +2783,16 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
                     cache=self._unit_pad_tail_cache,
                 )
             hidden = ttnn.concat([hidden, tail_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Break aliasing from upsample/add/concat in-place reuse before freeing intermediates.
+        hidden = ttnn.clone(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(up2)
+        ttnn.deallocate(char_h)
+        ttnn.deallocate(up1)
+        if char_h_dp_to_free is not None:
+            ttnn.deallocate(char_h_dp_to_free)
+        if char_pad_dp_to_free is not None:
+            ttnn.deallocate(char_pad_dp_to_free)
+
         if full_trace_prebuf:
             pad_unit = tb.pad_unit_bf16_tile
             attn_4d_tt = tb.attn_4d_bf16_tile
