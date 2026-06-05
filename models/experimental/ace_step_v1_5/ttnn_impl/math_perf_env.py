@@ -330,7 +330,7 @@ def ace_step_vae_quality_decode_enabled(
     Default: ≥30 s / ≥750 frames on mesh (BFP8 overlap-add hiss). ``--clarity`` is the same
     threshold; ≥40 s / ≥1000 frames also qualify without clarity.
     """
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_needs_split_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_needs_split_device
 
     env = os.environ.get("ACE_STEP_VAE_QUALITY", "")
     if env.lower() in ("1", "true", "yes", "on"):
@@ -1262,7 +1262,7 @@ def ace_step_dit_long_clip_quality_enabled(
     mesh_sku: str | None = None,
 ) -> bool:
     """Default-on for mesh clips >=30 s / >=750 latent frames (LoFi+BFP4 drifts audibly)."""
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_needs_split_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_needs_split_device
 
     env = os.environ.get("ACE_STEP_DIT_LONG_CLIP_QUALITY", "")
     if env.lower() in ("0", "false", "no", "off"):

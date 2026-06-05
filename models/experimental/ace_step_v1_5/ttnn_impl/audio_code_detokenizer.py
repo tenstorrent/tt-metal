@@ -19,7 +19,7 @@ from .qwen3_embedding_encoder import Qwen3EmbeddingEncoderConfig, _TtQwen3Encode
 
 
 def load_audio_detokenizer_weights_np(safetensors_path: str) -> Dict[str, np.ndarray]:
-    from models.experimental.ace_step_v1_5.weight_cache import load_prefix_weights_np
+    from models.experimental.ace_step_v1_5.utils.weight_cache import load_prefix_weights_np
 
     return load_prefix_weights_np(
         safetensors_path,
@@ -351,7 +351,7 @@ class TtAceStepAudioCodeDetokenizer:
         """Trace + 2CQ detokenizer for a fixed ``N = len(code_ids)`` (recapture when N changes)."""
         if not hasattr(ttnn, "begin_trace_capture"):
             return self.forward(code_str)
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_command_queues
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_command_queues
 
         if ace_step_device_num_command_queues(self.device) < 2:
             return self.forward(code_str)

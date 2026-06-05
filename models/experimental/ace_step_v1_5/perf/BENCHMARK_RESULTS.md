@@ -15,7 +15,7 @@ python models/experimental/ace_step_v1_5/perf/export_testing_ace_md.py
 **Mention the demo command:**
 
 ```bash
-python models/experimental/ace_step_v1_5/run_prompt_to_wav.py   --variant acestep-v15-base   --lm_variant acestep-5Hz-lm-4B   --mesh-device BH_QB --prompt "Guitar "   --infer_steps 50 --guidance_scale 7 --duration_sec 60      --out /tmp/base_60_4.wav
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py   --variant acestep-v15-base   --lm_variant acestep-5Hz-lm-4B   --mesh-device BH_QB --prompt "Guitar "   --infer_steps 50 --guidance_scale 7 --duration_sec 60      --out /tmp/base_60_4.wav
 ```
 
 | Varient | base | turbo | stf |

@@ -327,7 +327,7 @@ def build_filtered_dit_kwargs_for_handler(
     dit_input_vocal_language = params.vocal_language
     dit_input_lyrics = params.lyrics
 
-    from models.experimental.ace_step_v1_5.acestep_preprocess_shim import (
+    from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import (
         _load_cached_repaint_source,
         _resample_matching_source_seeds,
         _update_metadata_from_lm,
