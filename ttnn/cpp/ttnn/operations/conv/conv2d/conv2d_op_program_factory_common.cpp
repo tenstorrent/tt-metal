@@ -211,6 +211,11 @@ std::vector<CBInfo> get_cb_info(
 
     // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
     // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
+    // conv_bench note: the old helper_trm (TileRowMajor WITHOUT pin, l1_acc off) needed a
+    // +row_group_tiles bump here — its last K-block reserve_back(row_group_tiles) deadlocked against
+    // the software-reload drain when the CB held a full block's spill. The TRM+pin substrate this
+    // branch benches reserves out_block_num_tiles ONCE at helper entry (no per-row-group reserve, no
+    // software reload — pin requires packer_l1_acc), so per_core_out_ntiles is exactly sufficient.
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
