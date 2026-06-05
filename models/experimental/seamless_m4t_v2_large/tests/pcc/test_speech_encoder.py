@@ -76,9 +76,20 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
         tt_x = from_torch_bfloat16_tile(mesh_device, input_features, memory_config=ttnn.L1_MEMORY_CONFIG)
         m1 = from_torch_bfloat16_tile(mesh_device, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        tt_model.pre_warm(batch, seq)
+        # Optional signposts for device performance measurement (forward only).
+        try:
+            from tracy import signpost
+
+            use_signpost = True
+        except ImportError:
+            use_signpost = False
+
+        if use_signpost:
+            signpost("start")
         tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
         ttnn.synchronize_device(mesh_device)
+        if use_signpost:
+            signpost("stop")
 
         tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)
 
