@@ -28,34 +28,52 @@ inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Transpose 32-bit data in dest without bit 11, using the same SrcA format
-        // override approach as transpose_dest_32b: lo16 first into SrcA cache,
-        // then hi16 directly to dest, then lo16 from SrcA cache to dest.
+        // Transpose 32-bit data in dest by splitting into hi16 and lo16.
+        // TRNSPSRCB only operates on SrcB rows 16-31, so data goes through SRC_ROW16_OFFSET.
+        // SrcA_val=Tf32 addresses hi16 (DEST_NORM), SrcA_val=Float32 addresses lo16 (DEST_32B_LOW).
+        // Writing hi16 via MOVB2D(Tf32) clobbers lo16, so we cache lo16 in SrcA first.
 
+        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing,
+        // and Zero_Flag_disabled_src to prevent mantissa flushing during MOV operations.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
 
+        // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_32B_LOW reads the lo16 half of 32-bit dest.
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
+        // move row D2B again for cases of reducing across multiple tiles
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // Step 2: Cache the transposed lo16 data from SrcB rows 16-31 into SrcA rows 0-15.
+        // This preserves lo16 before hi16 MOVB2D(Tf32) clobbers it in dest.
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
         TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
 
+        // Step 3: Read hi16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_NORM reads the hi16 half of 32-bit dest.
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // Step 4: Write transposed hi16 back to dest. SrcA_val=Tf32 makes MOVB2D target
+        // the hi16 (DEST_NORM) address space. This clobbers lo16 and that's why we cached it.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
+        // Step 5: Write cached lo16 from SrcA back to dest. SrcA_val=Float32 makes MOVA2D
+        // target the lo16 (DEST_32B_LOW) address space, restoring the mantissa bits.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
         TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
+        // Restore: disable SrcA format override and re-enable zero flag.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
@@ -314,7 +332,6 @@ inline void _llk_math_reduce_init_()
 }
 
 template <bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
+inline void _llk_math_reduce_uninit_([[maybe_unused]] const std::uint32_t srca_data_format)
 {
-    (void)srca_data_format;
 }
