@@ -24,6 +24,40 @@ is a 2-mode (`main` vs `helper_sbm`) comparison; the relaxation only ever engage
 
 ---
 
+## Blackhole cross-arch results (p100a, 2026-06-05)
+
+Re-ran all families at the **same real configs** on Blackhole p100a, plus the WH "did-not-fit" cases and a new SDXL VAE set (→ `conv_bench_data_bh.csv`).
+
+**The migration win is ~2× larger on Blackhole.** Across the 35 convs that fit both archs:
+
+| arch | migration Δ (helper_sbm vs main) | mean |
+|---|---|---|
+| Wormhole n150 | −6.8% → +1.3% | **−0.90%** |
+| Blackhole p100a | −10.5% → +1.4% | **−1.95%** |
+
+BH win ≥ WH win on **23/35** convs; BH is also **1.5–4.7× faster per conv** in absolute device-kernel time. Largest amplifications (big BLOCK_SHARDED convs):
+
+| conv | WH Δ | BH Δ |
+|---|---|---|
+| ResNet50 L4 512←512 14² / 7² | −6.8 / −5.8% | **−10.4 / −10.5%** |
+| vanilla 512←512 30×40 BS | −2.6% | **−10.2%** |
+| ResNet50 DS3 2048←1024 BS | −5.3% | −7.4% |
+| vanilla 256←512 60×80 BS | +0.2% | −3.8% |
+| SDXL 768←384 64² | −0.1% | −2.8% |
+
+(A few tiny 1×1 downsamples flip to a negligible +1.2–1.4% on BH.)
+
+**"Did-not-fit-WH" cases on BH — 5 newly fit** (BH's larger L1 cleared the borderline L1-allocation failures), all neutral-to-favorable:
+- SDXL 1536←1536 64², 384←384 128², 768←1536 64² (WH L1-alloc FAIL → BH ok, Δ −0.6…−1.1%)
+- vanilla 128←256 120×160 (WH FAIL → BH ok, −0.1%)
+- SDXL VAE 512←512 64×64 (not runnable WH → BH ok, −3.6%)
+
+**Still don't fit even on BH** (genuinely need DRAM activation slicing — single-chip L1, even BH's, is insufficient): the 512²/1024²-spatial VAE convs (14 of 15 VAE), the 128×128 high-channel SDXL convs (384←1152, 384←768, 768←768), and vanilla 480×640 / 240×320.
+
+**BH conclusion:** migrating conv onto the matmul helper is an *even bigger* win on Blackhole (mean −1.95%, up to −10.5% on heavy BLOCK_SHARDED convs) — safe everywhere (no meaningful regression), and BH's extra L1 lets a handful more convs run single-chip; the truly-huge VAE/SDXL convs still need DRAM slicing on BH too.
+
+---
+
 ## 1. Methodology — what is held vs varied
 
 The conv_bench harness runs the conv compute kernel in 3 env-selected modes (`TT_CONV_BENCH_MODE`):

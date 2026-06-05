@@ -1,6 +1,6 @@
 #!/bin/bash
 cd /localdev/wransom/tt-metal
-CSV=/localdev/wransom/tt-metal/conv_bench_data.csv
+CSV="${CB_CSV:-/localdev/wransom/tt-metal/conv_bench_data.csv}"
 if [ ! -f "$CSV" ]; then echo "timestamp,model,label,batch,in_ch,out_ch,H,W,filter,stride,shard,abh,fp32_accum,bias,mode,per_core_M,per_core_N,sbm,trm,used,median_ns,min_ns,max_ns,n,spread_pct,pcc,status" > "$CSV"; fi
 REPS="$1"; shift; MODES="$*"
 for MODE in $MODES; do
