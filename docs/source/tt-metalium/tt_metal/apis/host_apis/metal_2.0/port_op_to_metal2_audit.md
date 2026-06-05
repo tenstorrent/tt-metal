@@ -81,7 +81,7 @@ For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature 
 - **Follow kernel references, not directory boundaries.** Audit every kernel referenced by any `KernelDescriptor::kernel_source` in the op's program factories — cross-op kernels living in adjacent directories (e.g. `eltwise/`, `data_movement/`, `kernels/dataflow/`) are in scope when the op uses them.
 - **Unreferenced kernel files in the op's directory are out of scope.** If the op's directory contains kernel files that no factory references (dead code, tests, work-in-progress), do not audit their contents. If their presence could confuse a reader of the report, mention them in the identifying section as unreferenced; otherwise ignore them.
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
-- **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arguments_schema` and `ProgramRunParams`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
+- **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
 
 Gating semantics across the five steps:
 
@@ -178,13 +178,13 @@ Recognition: the op defines an `override_runtime_arguments` method. Inspect it a
 
 Categorize and report a tier:
 
-- **Trivial** — RTA values only, < 30 lines, no per-shape branching. Ports directly into per-execution `ProgramRunParams` build logic.
+- **Trivial** — RTA values only, < 30 lines, no per-shape branching. Ports directly into per-execution `ProgramRunArgs` build logic.
 - **Moderate** — 30-100 lines, includes per-shape branching or conditional RTA assembly but no CB or semaphore mutation. Substantial but tractable port.
 - **Heavy** — CB sizing mutations, semaphore mutations, `set_address_offset` recomputation, or > 100 lines of dense logic. **Flag with a star** — likely needs design discussion before the Metal 2.0 port.
 
 Line counts are heuristic anchors, not strict cutoffs — a 35-line method that's purely RTA values is closer to trivial; a 25-line method with three nested per-shape branches is closer to moderate. Use judgment near the boundaries, and if the case is genuinely ambiguous, name it as such in the report.
 
-`override_runtime_arguments` complexity is the best proxy for both `ProgramDescriptor`-lift difficulty (a separate, ongoing migration workstream) and Metal 2.0 `ProgramRunParams`-build complexity, since the same patching logic translates to both. Reporting it here helps both teams scope work.
+`override_runtime_arguments` complexity is the best proxy for both `ProgramDescriptor`-lift difficulty (a separate, ongoing migration workstream) and Metal 2.0 `ProgramRunArgs`-build complexity, since the same patching logic translates to both. Reporting it here helps both teams scope work.
 
 ### Step 0.4 — Out-of-directory call surface
 
@@ -375,7 +375,7 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 | GlobalCircularBuffer | GREEN | |
 | Dynamic CircularBuffer (CB on borrowed memory) | GREEN | (if the op uses this, the port uses `borrowed_from`) |
 | CBDescriptor `address_offset` (non-zero) | RED | see detail below |
-| Aliased Circular Buffers | GREEN | (if the op uses this, the port uses `alias_with`) |
+| Aliased Circular Buffers | GREEN | (if the op uses this, the port uses `advanced_options.alias_with`) |
 | GlobalSemaphore | GREEN | |
 | Non-zero semaphore initial value | GREEN | |
 | Dynamic TensorAccessor (`ArgConfig::Runtime*`) | GREEN | |
@@ -621,7 +621,7 @@ If you find no concrete non-zero usage in the op being ported, this rule is gree
 
 ### Aliased Circular Buffers (CBs sharing backing memory) — LANDED
 
-**Status**: Supported in Metal 2.0. The legacy aliased-CB pattern — a single `CBDescriptor` whose `format_descriptors` contains multiple `CBFormatDescriptor` elements (each at a distinct `buffer_index`, sharing backing memory) — translates to Metal 2.0 as **aliased DFBs** via `DataflowBufferSpec::alias_with`. See [`dataflow_buffer_spec.hpp:97-104`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp#L97) for the spec field and constraints, and the migration guide's "Aliased DFBs" note in the [DataflowBufferSpec section](metal2_migration_guide.md#dataflowbufferspec) for the porting shape.
+**Status**: Supported in Metal 2.0. The legacy aliased-CB pattern — a single `CBDescriptor` whose `format_descriptors` contains multiple `CBFormatDescriptor` elements (each at a distinct `buffer_index`, sharing backing memory) — translates to Metal 2.0 as **aliased DFBs** via `DataflowBufferSpec::advanced_options.alias_with`. Note: aliasing is an **advanced/ninja feature** — the field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), with a CAUTION header documenting that aliased DFBs offer no clobbering guarantees. See the migration guide's "Aliased DFBs" note in the [DataflowBufferSpec section](metal2_migration_guide.md#dataflowbufferspec) for the porting shape.
 
 The term "aliased CB" is descriptive — it does not appear in the legacy API surface. The legacy expression of this feature lives in the array-shape of certain `CircularBufferConfig` fields (sized `NUM_CIRCULAR_BUFFERS`, almost always populated with one entry) and in the `SmallVector<CBFormatDescriptor, 1>` shape of `CBDescriptor::format_descriptors`. The signal is the cardinality of those collections, not any named field.
 
@@ -629,7 +629,7 @@ The term "aliased CB" is descriptive — it does not appear in the legacy API su
 
 - **Descriptor API** (the in-scope path): a `CBDescriptor` whose `format_descriptors` initializer contains **more than one** `CBFormatDescriptor` element. Concretely:
   - Single-element (normal): `format_descriptors = {{CBFormatDescriptor{...}}}` → standard `DataflowBufferSpec`.
-  - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → one `DataflowBufferSpec` per buffer index, mutually declared via `alias_with`.
+  - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → one `DataflowBufferSpec` per buffer index, mutually declared via `advanced_options.alias_with`.
   - The differing element is typically `buffer_index` — two distinct indices sharing the same backing storage.
 - **Imperative API** (an op on the imperative `host_api.hpp` builder API also trips Step 0.1 Check 1 RED; these signals additionally catch usage that leaks in via shared utility code):
   - `CircularBufferConfig(total_size, data_format_spec)` where `data_format_spec` is a `std::map<uint8_t, tt::DataFormat>` with **more than one** key (e.g. `{{idx1, fmt1}, {idx2, fmt2}}`).
@@ -642,7 +642,7 @@ The term "aliased CB" is descriptive — it does not appear in the legacy API su
 - Single-element initializers (`{{CBFormatDescriptor{...}}}` for the descriptor form, single-key `{{idx, fmt}}` map for the imperative form) are the dominant pattern by a wide margin → standard DFB for this rule.
 - The `CBDescriptor::remote_format_descriptors` field is a *different* concept (relates to remote DFBs, a separate planned feature) and is not covered by this rule. Multi-element values there have a different meaning; do not conflate.
 
-**Action**: Proceed with the port. Declare one `DataflowBufferSpec` per buffer index, each with `alias_with` mutually naming the other(s). All aliased DFBs must have the same `num_entries * entry_size` and must be bound to the same kernels. The header docs at `dataflow_buffer_spec.hpp:97-104` capture the legality constraints; the migration guide section linked above shows the porting shape. **Do not** "split" the aliased CB into independent DFBs — that changes the L1 footprint and breaks the kernel's assumption that the indices share an address.
+**Action**: Proceed with the port. Declare one `DataflowBufferSpec` per buffer index, each with `advanced_options.alias_with` mutually naming the other(s). All aliased DFBs must have the same `num_entries * entry_size` and must be bound to the same kernels. The `DFBAdvancedOptions` header comments capture the legality constraints; the migration guide section linked above shows the porting shape. **Do not** "split" the aliased CB into independent DFBs — that changes the L1 footprint and breaks the kernel's assumption that the indices share an address.
 
 **Examples in the wild** (op locations whose port exercises this construct):
 - Descriptor-API form: currently not exercised by any checked-in ttnn op (every `format_descriptors` initializer in current op factories is single-element).
@@ -677,7 +677,7 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 
 ### Non-zero semaphore initial value — DISCOURAGED
 
-**Status**: Supported by Metal 2.0 on Gen1 today, but discouraged. The legacy path lets you create a semaphore with a non-zero initial value via `CreateSemaphore(program, core_spec, initial_value)` (where `initial_value != 0`) or by setting `SemaphoreDescriptor::initial_value` to a non-zero value. Metal 2.0's `SemaphoreSpec` accepts a non-zero `initial_value` on Gen1, so the translation works; however, the planned **Remote DFB** feature is intended to supplant this use case once it lands, at which point non-zero-init semaphores will likely be deprecated. Use of non-zero initial values today is therefore a yellow flag, not a red one.
+**Status**: Supported by Metal 2.0 on Gen1 today, but **explicitly deprecated**. The legacy path lets you create a semaphore with a non-zero initial value via `CreateSemaphore(program, core_spec, initial_value)` (where `initial_value != 0`) or by setting `SemaphoreDescriptor::initial_value` to a non-zero value. The Metal 2.0 destination is `SemaphoreSpec::advanced_options.initial_value` (on `SemaphoreAdvancedOptions`) — which carries a `[[deprecated]]` attribute. The translation works on Gen1, but the field is **unsupported on Gen2** and will be removed when the planned **Remote DFB** feature lands and supplants the use case. Use of non-zero initial values today is therefore a yellow flag, not a red one.
 
 **Recognition — definitely this feature** (report yellow; await user decision):
 
@@ -697,7 +697,7 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 - The initial-value expression as written.
 - A note that the construct is supported today but discouraged, and that the user may override and proceed.
 
-**Do not refuse the port outright on this signal alone.** The user may decide to proceed; this is their call. On override: the translation is direct — set `SemaphoreSpec::initial_value` to the same value used in the legacy code. The port's mechanical work is unaffected.
+**Do not refuse the port outright on this signal alone.** The user may decide to proceed; this is their call. On override: the translation is direct — set `SemaphoreSpec::advanced_options.initial_value` to the same value used in the legacy code (acknowledging the `[[deprecated]]` warning and the Gen2 unsupported status). The port's mechanical work is unaffected.
 
 **Examples in the wild** (for ground-truthing your match):
 - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp` (`INVALID` sentinel)
@@ -737,7 +737,7 @@ The single-argument form `TensorAccessorArgs(buffer)` (with no second arg, or wi
 
 ### Per-execution CircularBuffer size updates (UpdateCircularBufferTotalSize, UpdateCircularBufferPageSize, UpdateDynamicCircularBufferAddressAndTotalSize) — UNSUPPORTED
 
-**Status**: Not yet supported in Metal 2.0. The legacy free functions `UpdateCircularBufferTotalSize(program, cb_handle, total_size)` and `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)` mutate a CB's total size or per-buffer-index page size between Program executions. The combo function `UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` folds the per-execution total-size mutation onto a dynamic-CB address rebind — the address-rebind part is supported (borrowed-memory DFBs), but the bundled total-size mutation is the same UNSUPPORTED capability. Metal 2.0 does not yet expose an equivalent — `ProgramRunParams` reserves placeholder fields for per-execution DFB size / entry size, but they are explicitly "not yet supported."
+**Status**: Not yet supported in Metal 2.0. The legacy free functions `UpdateCircularBufferTotalSize(program, cb_handle, total_size)` and `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)` mutate a CB's total size or per-buffer-index page size between Program executions. The combo function `UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` folds the per-execution total-size mutation onto a dynamic-CB address rebind — the address-rebind part is supported (borrowed-memory DFBs), but the bundled total-size mutation is the same UNSUPPORTED capability. Metal 2.0 does not yet expose an equivalent — `ProgramRunArgs` reserves placeholder fields for per-execution DFB size / entry size, but they are explicitly "not yet supported."
 
 **Recognition — definitely this feature** (refuse and report):
 

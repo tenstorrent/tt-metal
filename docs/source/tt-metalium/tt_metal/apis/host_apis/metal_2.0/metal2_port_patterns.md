@@ -43,7 +43,7 @@ Entry shape:
 
 **Recognition signal**: A compute kernel that both produces and consumes the same buffer. Common in accumulator patterns where the kernel writes a partial result, reads it back, and updates it across iterations.
 
-**Decision**: Declare two `DFBBinding`s on the same `KernelSpec` for the same DFB — one with `endpoint_type = PRODUCER`, one with `endpoint_type = CONSUMER`. The two bindings may share a single `local_accessor_name` (yielding one device-side `dfb::name` handle), or use two distinct names (yielding two device-side handles aliasing the same DFB).
+**Decision**: Declare two `DFBBinding`s on the same `KernelSpec` for the same DFB — one with `endpoint_type = PRODUCER`, one with `endpoint_type = CONSUMER`. The two bindings may share a single `accessor_name` (yielding one device-side `dfb::name` handle), or use two distinct names (yielding two device-side handles aliasing the same DFB).
 
 **Correct port**:
 
@@ -78,7 +78,7 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 // Host:
 const bool fuse_pre_add = ...;
 KernelSpec compute{
-    .compile_time_arg_bindings = { /* ... */ },
+    .compile_time_args = { /* ... */ },
     .defines = fuse_pre_add
         ? std::map<std::string, std::string>{{"FUSE_PRE_ADD", "1"}}
         : std::map<std::string, std::string>{},
@@ -114,25 +114,25 @@ The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the co
 
 **Recognition signal**: Legacy code that places two or more `buffer_index` values on the *same* `CBDescriptor` — multi-element `format_descriptors`, multi-key `data_format_spec` map in the imperative form, or repeated `set_page_size` calls with different `buffer_index` arguments on the same `CircularBufferConfig`. The legacy intent is two logically distinct buffers sharing one L1 region. The audit's [Aliased Circular Buffers entry](port_op_to_metal2_audit.md#aliased-circular-buffers-cbs-sharing-backing-memory--landed) catches this in the legacy inventory.
 
-**Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Set each spec's `alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
+**Decision**: Declare one `DataflowBufferSpec` per legacy `buffer_index`. Aliasing is an **advanced/ninja feature** — the `alias_with` field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), reached via `DataflowBufferSpec::advanced_options.alias_with`. Set each spec's `advanced_options.alias_with` to mutually reference the others — the alias group must be a *strict clique* (every member names every other member). All members of the alias group share these legality constraints:
 - Same `num_entries * entry_size` (total backing size identical).
 - Bound to the same set of kernels.
 - Borrowed-memory consistency (either all `borrowed_from` matching `TensorParameter`s, or none borrowed).
 
-The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause). The header at `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:97-104` is the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
+The validator enforces these as the three legality rules; missing any of them surfaces with a message in the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause). The `DFBAdvancedOptions` header comments are the authoritative source for the field's contract — including the explicit "no clobbering guarantees" note: aliased DFBs share backing memory, and correctness of *which* logical buffer's data is live at any moment is the kernel author's responsibility.
 
 **Correct port**:
 
 ```cpp
 // Two indices that legacy shared via a single CBDescriptor become two
-// DFBs with mutual alias_with entries:
+// DFBs with mutual alias_with entries (advanced_options-nested):
 DataflowBufferSpec INTERM0{ .unique_id = INTERM0_ID, .num_entries = N, .entry_size = S,
-                            .alias_with = {OUTPUT_ID} };
+                            .advanced_options = {.alias_with = {OUTPUT_ID}} };
 DataflowBufferSpec OUTPUT{  .unique_id = OUTPUT_ID,  .num_entries = N, .entry_size = S,
-                            .alias_with = {INTERM0_ID} };
+                            .advanced_options = {.alias_with = {INTERM0_ID}} };
 ```
 
-For larger alias groups (three or more), every member names every other member in its `alias_with` — partial mentions are rejected by the validator.
+For larger alias groups (three or more), every member names every other member in its `advanced_options.alias_with` — partial mentions are rejected by the validator.
 
 **Don't split** the aliased CB into independent, non-aliased DFBs. That changes the L1 footprint and breaks any kernel assumption that the indices shared an address.
 
@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts MyFactory::create_program_spec(
 }
 ```
 
-Each variant's helper builds its own `ProgramSpec` and `ProgramRunParams`. Where variants share kernels, the same kernel source is reused (with different `KernelSpec`s, possibly different CTA bindings).
+Each variant's helper builds its own `ProgramSpec` and `ProgramRunArgs`. Where variants share kernels, the same kernel source is reused (with different `KernelSpec`s, possibly different CTA bindings).
 
 ---
 
@@ -234,7 +234,7 @@ This isn't a Metal 2.0-specific issue, but it surfaces during op porting because
 
 **Category**: Anti-pattern
 
-**Recognition signal**: A legacy factory uses `split_work_to_cores` and creates two `KernelDescriptor`s for the compute kernel (one per core group) with different per-group CTA values (e.g. one with `Ht=X1`, one with `Ht=X2`). The Metal 2.0 port has *one* `KernelSpec` for the compute kernel, and the dimension that varied per group has been moved into `KernelSpec::runtime_arguments_schema.named_runtime_args` instead of `compile_time_arg_bindings`.
+**Recognition signal**: A legacy factory uses `split_work_to_cores` and creates two `KernelDescriptor`s for the compute kernel (one per core group) with different per-group CTA values (e.g. one with `Ht=X1`, one with `Ht=X2`). The Metal 2.0 port has *one* `KernelSpec` for the compute kernel, and the dimension that varied per group has been moved into `KernelSpec::runtime_arg_schema.runtime_arg_values` instead of `compile_time_args`.
 
 **Why wrong**: The premise — "Metal 2.0 supports only one `KernelSpec` per kernel source" — is false. Metal 2.0 supports multiple `KernelSpec`s referencing the same source with different CTA bindings, each placed in its own `WorkUnitSpec`, sharing upstream/downstream DFBs as multi-bindings. The "two `KernelDescriptor`s per work split" idiom translates 1:1 to "two `KernelSpec`s of the same source, in two `WorkUnitSpec`s, both binding the same input/output DFBs."
 
@@ -247,8 +247,8 @@ The demotion sacrifices compile-time loop unrolling on the demoted dimension —
 auto make_compute = [&](const char* unique_id, uint32_t Ht) {
     return KernelSpec{
         .unique_id = unique_id,
-        .source = KernelSpec::SourceFilePath{"reduce.cpp"},
-        .compile_time_arg_bindings = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}},
+        .source = "reduce.cpp",
+        .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}},
         .dfb_bindings = { /* INPUT consumer, OUTPUT producer */ },
         // ...
     };
@@ -294,7 +294,7 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Category**: Caution
 
-**Recognition signal**: A `KernelSpec` declares `runtime_arguments_schema.num_runtime_varargs > 0` (or `num_common_runtime_varargs > 0`), or a kernel uses `get_vararg(i)` / `get_common_vararg(i)`.
+**Recognition signal**: A `KernelSpec` declares `advanced_options.num_runtime_varargs > 0` (or `advanced_options.num_common_runtime_varargs > 0`), or a kernel uses `get_vararg(i)` / `get_common_vararg(i)`. The vararg fields live on `KernelAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)) — they're an explicit advanced/temporary mechanism slated for deprecation in favor of `std::array` typed arguments.
 
 **Decision**: Varargs are designed for kernels whose device-side code retrieves arguments via `get_vararg(i)` with `i` a runtime variable — the canonical case is an N-dimensional shape gated on a CTA-known `rank`. When each argument is referenced by a constant index (`get_vararg(0)`, `get_vararg(1)`, ...), the named form is clearer on both sides.
 
