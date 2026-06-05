@@ -77,14 +77,11 @@ DEVICE_PRINT("{}", dp_typed_array_t<4>(static_cast<std::uint16_t>(DataFormat::Fl
 // ->  1.00   2.00   3.00   4.00
 ```
 
-The template parameter is the buffer length in `uint32_t` words; pack narrower
-elements (Float16, Int8, ...) into the words yourself and pass the matching format
-code.
+The template parameter is the buffer length in `uint32_t` words; pack narrower elements (Float16, Int8, ...) into the words yourself and pass the matching format code.
 
 ### Tile slices
 
-Defined in [dprint_tile.h](helpers/include/dprint_tile.h). The
-`tile_slice<MAX_BYTES>(l1_addr, fmt, sr, ...)` helper fills a tile straight from an L1 address, decoding it as `fmt` over the cells picked by `SliceRange sr`. Tile and face dimensions default to the standard layout but can be passed explicitly as trailing arguments.
+Defined in [dprint_tile.h](helpers/include/dprint_tile.h). The`tile_slice<MAX_BYTES>(l1_addr, fmt, sr, ...)` helper fills a tile straight from an L1 address, decoding it as `fmt` over the cells picked by `SliceRange sr`. Tile and face dimensions default to the standard layout but can be passed explicitly as trailing arguments.
 
 ```cpp
 #include "dprint_tile.h"
