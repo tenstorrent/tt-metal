@@ -430,6 +430,75 @@ class TTNNDotsOCRMLP(TTNNModule):
         return output
 
 
+class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
+    """Fused gate+up for the column-parallel (Megatron) text SwiGLU.
+
+    Single column-sharded matmul producing ``[*, 2*intermediate]`` (N-sharded
+    across the TP axis), replacing the two separate gate/up matmuls in
+    ``TTNNDotsOCRMLPColParallel``. The two halves are interleaved per TP device
+    on the host so that the on-device N-shard each chip holds is exactly
+    ``[gate_i | up_i]`` for its slice ``i`` of the intermediate dim. A local
+    ``ttnn.chunk`` on the last dim then recovers the matching gate/up shards
+    (mirrors the row-parallel ``TTNNDotsOCRFusedGateUpRowSharded`` interleave so
+    the silu*mul shard lines up with the down_proj K-shard, no reshard).
+
+    Replicated activation in, N-sharded out, NO collective (column-parallel).
+    """
+
+    @classmethod
+    def from_two_torch(cls, gate_linear: torch.nn.Linear, up_linear: torch.nn.Linear):
+        new_linear = cls(in_features=gate_linear.in_features, out_features=gate_linear.out_features * 2)
+        new_linear._fallback_torch_layer = gate_linear
+        new_linear._gate_weight_torch = gate_linear.weight
+        new_linear._up_weight_torch = up_linear.weight
+        new_linear._gate_bias_torch = gate_linear.bias if gate_linear.bias is not None else None
+        new_linear._up_bias_torch = up_linear.bias if up_linear.bias is not None else None
+        new_linear.weight = None
+        new_linear.bias = None
+        return new_linear
+
+    def preprocess_weights_impl(self):
+        self.tt_weight_host = None
+        self.tt_bias_host = None
+
+    def move_weights_to_device_impl(self):
+        # Interleave gate/up by TP shard BEFORE the column-shard mapper runs, so
+        # device ``i`` ends up with ``[gate_i | up_i]`` (and not gate-then-up,
+        # which would split a single half across devices). num_tp is the TP
+        # (last) mesh axis size; single-device collapses to a plain fuse.
+        mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
+        num_tp = int(mesh_shape[-1]) if mesh_shape else 1
+        intermediate = int(self._gate_weight_torch.shape[0])
+        shard = intermediate // num_tp
+        has_bias = self._gate_bias_torch is not None or self._up_bias_torch is not None
+        weight_chunks = []
+        bias_chunks = []
+        for i in range(num_tp):
+            start = i * shard
+            end = (i + 1) * shard
+            weight_chunks.extend([self._gate_weight_torch[start:end], self._up_weight_torch[start:end]])
+            if has_bias:
+                dtype = self._gate_weight_torch.dtype
+                gate_bias = (
+                    self._gate_bias_torch[start:end]
+                    if self._gate_bias_torch is not None
+                    else torch.zeros(shard, dtype=dtype)
+                )
+                up_bias = (
+                    self._up_bias_torch[start:end]
+                    if self._up_bias_torch is not None
+                    else torch.zeros(shard, dtype=dtype)
+                )
+                bias_chunks.extend([gate_bias, up_bias])
+
+        # Hand the fused [2*intermediate, hidden] weight to the base column-shard
+        # loader, which transposes to [hidden, 2*intermediate] and shards the
+        # last (N) dim across the TP axis -- yielding the per-device interleave.
+        self.tt_weight_host = torch.cat(weight_chunks, dim=0)
+        self.tt_bias_host = torch.cat(bias_chunks, dim=0) if bias_chunks else None
+        super().move_weights_to_device_impl()
+
+
 class TTNNDotsOCRMLPColParallel(TTNNModule):
     """Column-parallel (Megatron) text SwiGLU: REPLICATED in -> REPLICATED out.
 
@@ -477,6 +546,69 @@ class TTNNDotsOCRMLPColParallel(TTNNModule):
         # Column-parallel gate/up: replicated activation in, N-sharded out, no CCL.
         gate = self.gate_proj(hidden_states)
         up = self.up_proj(hidden_states)
+        gate_up_mul = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        # Row-parallel down: K-sharded in -> reduce_scatter + all_gather -> replicated.
+        return self.down_proj(gate_up_mul)
+
+
+class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
+    """Column-parallel text SwiGLU with FUSED gate+up: REPLICATED in -> REPLICATED out.
+
+    Fused-gate-up counterpart of ``TTNNDotsOCRMLPColParallel``. Instead of two
+    separate column-parallel matmuls (gate and up), a single column-sharded
+    matmul emits ``[*, 2*intermediate]`` (N-sharded), which is then split locally
+    on each device into its matching ``[gate_i | up_i]`` shard via ``ttnn.chunk``.
+
+    Trade vs the unfused col MLP: one larger matmul (identical FLOPs) + one chunk
+    instead of two matmuls -- saves a device-op launch. down stays row-parallel
+    and all-reduces so the output returns replicated. Kept side by side with the
+    unfused col variant and the row-parallel default for perf comparison.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_mlp):
+        tt_module = cls()
+        tt_module._fallback_torch_layer = torch_mlp
+        tt_module.intermediate_size = torch_mlp.gate_proj.out_features
+        tt_module.fused_gate_up_proj = TTNNDotsOCRFusedGateUpColParallel.from_two_torch(
+            torch_mlp.gate_proj, torch_mlp.up_proj
+        )
+        # Kept for introspection parity with the unfused col variant; unused in forward.
+        tt_module.gate_proj = None
+        tt_module.up_proj = None
+        tt_module.down_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(torch_mlp.down_proj)
+        return tt_module
+
+    def set_weight_dtype(self, dtype):
+        self.fused_gate_up_proj.set_weight_dtype(dtype)
+        # down is the QKV-style all-reduced class; it hardcodes bfloat8_b and has
+        # no set_weight_dtype, so only forward the dtype when supported.
+        if hasattr(self.down_proj, "set_weight_dtype"):
+            self.down_proj.set_weight_dtype(dtype)
+        return self
+
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Fused column-parallel gate/up: replicated activation in, 2N-sharded out, no CCL.
+        gate_up = self.fused_gate_up_proj(hidden_states)
+
+        # Per-device the shard is [gate_i | up_i]; chunk on the last dim recovers
+        # the matching gate/up halves for this device's slice of intermediate.
+        gate, up = ttnn.chunk(gate_up, 2, dim=-1)
+        ttnn.deallocate(gate_up)
+
         gate_up_mul = ttnn.mul(
             gate,
             up,

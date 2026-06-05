@@ -31,7 +31,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRMLP, TTNNDotsOCRMLPColParallel
+from models.experimental.tt_symbiote.modules.dots_ocr_mlp import (
+    TTNNDotsOCRMLP,
+    TTNNDotsOCRMLPColParallel,
+    TTNNDotsOCRMLPColParallelFusedGateUp,
+)
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsVisionMLP
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
@@ -89,14 +93,18 @@ def _raw_ttnn(t):
 
 # Real model shapes: decode is one token (tile-padded to 32 rows on device), prefill
 # is the full padded prompt length (2816 = 88 tiles) the e2e text decoder runs at.
-# Both TP schemes are exercised:
-#   "row" -> TTNNDotsOCRMLP (default): K-sharded in -> N-sharded out, 2x reduce_scatter.
-#   "col" -> TTNNDotsOCRMLPColParallel: replicated in/out, gate/up column-parallel
-#            (no CCL) + down all-reduce (reduce_scatter + all_gather).
+# All TP schemes are exercised:
+#   "row"        -> TTNNDotsOCRMLP (default): K-sharded in -> N-sharded out, fused
+#                   gate+up, 2x reduce_scatter.
+#   "col"        -> TTNNDotsOCRMLPColParallel: replicated in/out, UNFUSED gate/up
+#                   column-parallel (no CCL) + down all-reduce.
+#   "col_fused"  -> TTNNDotsOCRMLPColParallelFusedGateUp: same as "col" but the
+#                   gate/up are a single fused column-parallel matmul + chunk.
 @pytest.mark.parametrize("seq_len", [1], ids=["decoder"])
 # @pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
-@pytest.mark.parametrize("scheme", ["col"])
-# @pytest.mark.parametrize("scheme", ["row", "col"])
+@pytest.mark.parametrize("scheme", ["col_fused"])
+# @pytest.mark.parametrize("scheme", ["col", "col_fused"])
+# @pytest.mark.parametrize("scheme", ["row", "col", "col_fused"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -117,6 +125,10 @@ def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len, scheme):
         tt_mlp = TTNNDotsOCRMLP.from_torch(torch_mlp)
         # Input is hidden-K-sharded across the TP axis (post-attention norm contract).
         in_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+    elif scheme == "col_fused":
+        tt_mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_mlp)
+        # Column-parallel takes a replicated full-hidden activation on every device.
+        in_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         tt_mlp = TTNNDotsOCRMLPColParallel.from_torch(torch_mlp)
         # Column-parallel takes a replicated full-hidden activation on every device.
