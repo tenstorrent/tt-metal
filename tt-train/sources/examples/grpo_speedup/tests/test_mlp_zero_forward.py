@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, build_completer, teardown_completer
+from _completer_utils import as_update_input, open_completer
 
 # Prefill seq_len for the synthetic MLP input. 128 stays well below
 # args.prefill_len_cutoff (512 on WH / 1024 on BH) so MLP.forward does
@@ -31,11 +31,8 @@ SEQ_LEN = 128
 
 @pytest.fixture(scope="module")
 def completer_and_mlp():
-    completer = build_completer(dummy_weights=True)
-    try:
+    with open_completer(dummy_weights=True) as completer:
         yield completer, completer.model.layers[0].feed_forward
-    finally:
-        teardown_completer(completer)
 
 
 def _build_random_mlp_input(completer):

@@ -11,9 +11,6 @@ from typing import Any, List, Optional
 
 import ttnn
 
-import ttml
-from ttml.common.config import DeviceConfig
-
 
 def _bf16_decoders_precision(num_decoders: int, model_name: str) -> Any:
     from models.tt_transformers.tt.model_config import (
@@ -52,22 +49,23 @@ def _bf16_decoders_precision(num_decoders: int, model_name: str) -> Any:
     return inst
 
 
-class LlamaGRPOCompleter:
-    """Llama completer backed by a tt-transformers ``Transformer``."""
+class LlamaCompleterTtt:
+    """Llama completer backed by a tt-transformers ``Transformer``.
 
-    def setup_device(self, device_config: DeviceConfig) -> Any:
-        if device_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(device_config.total_devices())
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-        return autograd_ctx.get_device()
+    The completer does NOT open or close any device. The caller must
+    provide an already-open ``ttnn.MeshDevice`` via the mandatory
+    ``mesh_device`` kwarg, and is responsible for closing it after the
+    completer is dropped. This makes it possible to host multiple
+    completers (e.g. a TTT replica plus a ttml producer) on the same
+    parent mesh or on sibling submeshes.
+    """
 
     def __init__(
         self,
-        device_config: DeviceConfig,
+        *,
+        mesh_device: Any,
         model_source: str,
         max_batch_size: int,
-        *,
         max_seq_len: int = 2048,
         instruct: bool = True,
         dummy_weights: bool = False,
@@ -79,7 +77,7 @@ class LlamaGRPOCompleter:
         from models.tt_transformers.tt.model import Transformer
         from models.tt_transformers.tt.model_config import ModelArgs
 
-        self.mesh_device: Any = self.setup_device(device_config)
+        self.mesh_device: Any = mesh_device
         self._model_source: str = model_source
 
         os.environ["HF_MODEL"] = model_source

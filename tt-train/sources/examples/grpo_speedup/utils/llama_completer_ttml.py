@@ -25,7 +25,7 @@ import numpy as np
 import ttnn
 
 import ttml
-from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.config import TransformerConfig
 from ttml.common.utils import no_grad
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
@@ -152,12 +152,17 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
 
 
 class LlamaCompleterTtml(GRPOCompleter):
-    """Legacy Llama-specific completion engine (ttml ``Llama`` backend).
+    """Llama-specific completion engine (ttml ``Llama`` backend).
 
-    Renamed from ``LlamaGRPOCompleter`` so this module can co-exist with
-    :mod:`utils.llama_completer` (the new tt-transformers-backed completer)
-    without import-time name collisions. Behaviour is otherwise unchanged
-    from the ``examples/grpo`` original.
+    The completer does NOT open or close any device. The caller must
+    open the ttml ``AutoContext`` (via
+    ``ttml.autograd.AutoContext.get_instance().open_device(...)`` or
+    equivalent) and pass the resulting ``ttnn.MeshDevice`` via the
+    mandatory ``mesh_device`` kwarg. The caller also owns the
+    corresponding ``close_device()`` after the completer is dropped.
+    This makes it possible to co-host this completer with other
+    completers on the same mesh without each one fighting for control
+    of ``AutoContext``.
 
     Args:
         ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
@@ -165,49 +170,27 @@ class LlamaCompleterTtml(GRPOCompleter):
         transformer_config: Model architecture config (a
             :class:`ttml.common.config.TransformerConfig` instance, typically
             built via ``get_model_config``).
-        device_config: Device mesh config (a
-            :class:`ttml.common.config.DeviceConfig` instance). Device
-            initialisation (``enable_fabric``, ``open_device``) is delegated
-            to :meth:`setup_device`, which the constructor calls. Subclasses
-            and tests may override ``setup_device`` to swap that behaviour
-            (e.g. reuse an already-open device).
+        mesh_device: An already-open ``ttnn.MeshDevice`` that the
+            ``AutoContext`` singleton has been pointed at. Mandatory.
         model_source: HuggingFace model ID or path to a local directory
             containing ``model.safetensors``.
+        enable_ddp: If True, initialise the ``AutoContext`` parallelism
+            context with DDP enabled (TP disabled). Mirrors the
+            ``device_config.enable_ddp`` flag that the old constructor
+            consumed.
     """
-
-    def setup_device(self, device_config: DeviceConfig) -> Any:
-        """Enable fabric (multi-device) and open the AutoContext mesh device.
-
-        Returns the resulting ``ttnn.MeshDevice``. Tests may override this
-        method (e.g. via ``monkeypatch.setattr``) to reuse a device that was
-        already opened earlier in the process by returning
-        ``ttml.autograd.AutoContext.get_instance().get_device()`` without
-        calling ``open_device`` again. Overrides must return a mesh whose
-        topology matches ``device_config``; otherwise the cached
-        ``_mesh_device``/``_num_devices`` will be inconsistent with the rest
-        of the completer.
-        """
-        if device_config.total_devices() > 1:
-            ttml.core.distributed.enable_fabric(device_config.total_devices())
-        autograd_ctx = ttml.autograd.AutoContext.get_instance()
-        autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
-        return autograd_ctx.get_device()
 
     def __init__(
         self,
         ctx: LlamaCompletionCtx,
         transformer_config: TransformerConfig,
-        device_config: DeviceConfig,
+        *,
+        mesh_device: Any,
         model_source: str,
+        enable_ddp: bool = False,
     ) -> None:
         tf_config = transformer_config
-        dev_config = device_config
 
-        # Cache the device + parallelism state on ``self`` rather than going
-        # through ``AutoContext`` on every tensor upload. The completer (and
-        # the trainer that drives it) only handles single-device or DDP today;
-        # tensor parallelism is intentionally not supported here.
-        mesh_device: Any = self.setup_device(dev_config)
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         self._mesh_device: Any = mesh_device
         self._num_devices: int = mesh_device.get_num_devices()
@@ -245,7 +228,7 @@ class LlamaCompleterTtml(GRPOCompleter):
 
         tt_model = LlamaCompositeKV(llama_cfg)
 
-        if dev_config.enable_ddp:
+        if enable_ddp:
             autograd_ctx.initialize_parallelism_context(
                 ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
             )

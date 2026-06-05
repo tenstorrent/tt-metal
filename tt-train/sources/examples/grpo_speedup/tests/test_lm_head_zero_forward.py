@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, build_completer, teardown_completer
+from _completer_utils import as_update_input, open_completer
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 8
@@ -32,15 +32,12 @@ TEMPERATURE = 0.0  # greedy -> uniform softmax collapses to a fixed argmax tie-b
 @pytest.fixture(scope="module")
 def completer():
     """Module-scoped: build once, zero the LM head once, run both tests."""
-    c = build_completer(dummy_weights=True)
-    try:
+    with open_completer(dummy_weights=True) as c:
         V = c.model.lm_head.vocab_size
         H = c.model.lm_head.args.dim
         weight_hf = torch.zeros(V, H, dtype=torch.bfloat16)
         c.model.lm_head.update(weight=as_update_input(weight_hf, c.mesh_device))
         yield c
-    finally:
-        teardown_completer(c)
 
 
 def _build_random_hidden_state(completer):
