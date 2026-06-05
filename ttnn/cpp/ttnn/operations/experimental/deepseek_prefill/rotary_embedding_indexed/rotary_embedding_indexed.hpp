@@ -23,15 +23,15 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 // shard the same way the per-chip kv-cache writer derives its `update_idxt`, so the boundary chip's
 // older-then-wrap token layout is read with a single contiguous offset.
 //
-// `kv_actual_global` is a single-element ROW_MAJOR uint32 device tensor read on-device; its value is
-// out of the program hash, so successive chunks reuse one cached program (buffer addresses are
-// patched on cache hits). Returns a new tensor with the same spec as `input`.
+// `kv_actual_global` is a per-call scalar (tokens, tile-aligned) held in a common runtime arg and
+// patched on cache hits, so its value is out of the program hash and successive chunks reuse one
+// cached program. Returns a new tensor with the same spec as `input`.
 ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
-    const ttnn::Tensor& kv_actual_global,
+    uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);

@@ -63,7 +63,7 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     return positions
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev",
     [
@@ -190,24 +190,14 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
             **from_torch_kwargs,
         )
 
-        # kv_actual_global is a single ROW_MAJOR uint32 device tensor, read on-device. A fresh tensor
-        # each iteration (different buffer address, same shape/dtype) exercises the buffer-binding
-        # cache-hit path while keeping the value out of the program hash.
-        kv_tt = ttnn.from_torch(
-            torch.tensor([kv_actual], dtype=torch.int32).reshape(1, 1, 1, 1),
-            device=mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
+        # kv_actual_global is a per-call scalar held in a common runtime arg and patched on cache hits,
+        # so its value stays out of the program hash and successive chunks reuse one cached program.
         tt_out = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             tt_input,
             cos_tt,
             sin_tt,
             trans_tt,
-            kv_actual_global=kv_tt,
+            kv_actual_global=kv_actual,
             cluster_axis=sp_axis,
         )
         if entries_after_first is None:

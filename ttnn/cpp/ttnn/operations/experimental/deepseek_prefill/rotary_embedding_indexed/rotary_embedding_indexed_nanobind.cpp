@@ -26,8 +26,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             chip's older-then-wrap token layout is read with a single contiguous offset because the
             wrap is absorbed by the block-cyclic cos/sin shard layout.
 
-            `kv_actual_global` is passed as a device tensor read on-device, so its value is out of the
-            program hash and successive chunks reuse one cached program.
+            `kv_actual_global` is a per-call scalar held in a common runtime arg and patched on cache
+            hits, so its value is out of the program hash and successive chunks reuse one cached program.
 
             Args:
                 input (ttnn.Tensor): 4D per-chip input chunk on device, TILE layout
@@ -36,8 +36,7 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                     `cluster_axis` in block-cyclic order keyed by `chunk_local`.
                 sin (ttnn.Tensor): 4D sin cache, same layout/shape as `cos`.
                 trans_mat (ttnn.Tensor): rotation transformation matrix (one tile), replicated.
-                kv_actual_global (ttnn.Tensor): single-element ROW_MAJOR uint32 device tensor holding
-                    the prior valid global KV length in tokens (tile-aligned).
+                kv_actual_global (int): prior valid global KV length in tokens (tile-aligned).
                 cluster_axis (int): mesh axis the cos/sin caches are SP-sharded along (0 or 1).
 
             Returns:
@@ -48,7 +47,7 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
         nb::arg("cos").noconvert(),
         nb::arg("sin").noconvert(),
         nb::arg("trans_mat").noconvert(),
-        nb::arg("kv_actual_global").noconvert(),
+        nb::arg("kv_actual_global"),
         nb::arg("cluster_axis"),
         nb::arg("memory_config") = std::nullopt,
         nb::arg("compute_kernel_config") = std::nullopt);
