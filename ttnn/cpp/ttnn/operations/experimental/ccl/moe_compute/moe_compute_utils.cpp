@@ -366,11 +366,38 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& routed_w2,
     const ttnn::Tensor& shared_w0,
     const ttnn::Tensor& shared_w1,
-    const ttnn::Tensor& shared_w2) {
-    auto output_w0 = ttnn::concat({routed_w0, shared_w0}, 1);
-    auto output_w1 = ttnn::concat({routed_w1, shared_w1}, 1);
-    auto output_w2 = ttnn::concat({routed_w2, shared_w2}, 1);
-    return {output_w0, output_w1, output_w2};
+    const ttnn::Tensor& shared_w2,
+    const uint32_t cluster_axis) {
+    const auto intermediate_dim = routed_w0.logical_shape()[-1];
+    const auto tp_axis = 1 - cluster_axis;
+
+    auto working_shared_w0 = ttnn::mesh_partition(shared_w0, -1, tp_axis);
+
+    const auto padding = intermediate_dim - working_shared_w0.logical_shape()[-1];
+    const std::array<4, std::tuple<uint32_t, uint32_t>> padding_spec01 = {{0, 0}, {0, 0}, {0, 0}, {0, padding}};
+    working_shared_w0 = ttnn::pad(working_shared_w0, padding_spec01);
+
+    auto output_w0 = ttnn::concat({routed_w0, working_shared_w0}, 1);
+    auto tile_w0 = ttnn::to_layout(output_w0, ttnn::Layout::TILE);
+    working_shared_w0.deallocate(/*force*/ = true);
+    output_w0.deallocate(/*force=*/true);
+
+    auto working_shared_w1 = ttnn::mesh_partition(shared_w1, -1, tp_axis);
+    working_shared_w0 = ttnn::pad(working_shared_w1, padding_spec01);
+
+    auto output_w1 = ttnn::concat({routed_w1, working_shared_w0}, 1);
+    auto tile_w1 = ttnn::to_layout(output_w1, ttnn::Layout::TILE);
+    working_shared_w1.deallocate(/*force*/ = true);
+    output_w1.deallocate(/*force=*/true);
+
+    auto working_shared_w2 = ttnn::mesh_partition(shared_w2, -2, tp_axis);
+    const std::array<4, std::tuple<uint32_t, uint32_t>> padding_spec2 = {{0, 0}, {0, 0}, {0, padding}, {0, 0}};
+    working_shared_w2 = ttnn::pad(working_shared_w2, padding_spec2);
+
+    auto output_w2 = ttnn::concat({routed_w2, working_shared_w2}, 1);
+    auto tile_w2 = ttnn::to_layout(output_w2, ttnn::Layout::TILE);
+    output_w2.deallocate(/*force=*/true);
+    return {tile_w0, tile_w1, tile_w2};
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(

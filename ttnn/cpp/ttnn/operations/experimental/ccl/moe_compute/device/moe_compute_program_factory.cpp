@@ -458,6 +458,10 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t hidden_tiles = hidden_size / 32;
     const uint32_t intermediate_tiles = intermediate_size / 32;
 
+    // Number of shared experts (nullopt when unset). Plumbed through from the op kwarg;
+    // TODO: consume in the program build (kernel CT/RT args) once the behavior is defined.
+    [[maybe_unused]] const std::optional<uint32_t> num_shared_experts = args.num_shared_experts;
+
     // Cores
     const auto
         [tilize_cores,

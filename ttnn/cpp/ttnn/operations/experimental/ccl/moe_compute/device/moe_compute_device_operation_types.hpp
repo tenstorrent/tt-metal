@@ -29,6 +29,9 @@ struct MoEComputeParams {
     uint32_t layer_id = 0;
     uint32_t output_height_shard_dim = 0;
     uint32_t intermediate_size = 0;
+    // Number of shared experts (nullopt when unset / no shared experts). Plumbed through to
+    // the program factory; stored in attributes() so the program cache distinguishes it.
+    std::optional<uint32_t> num_shared_experts;
     bool has_bias = false;
 
     // Number of token-parallel and data-parallel cores. These govern matmul output shard layout
@@ -63,6 +66,7 @@ struct MoEComputeParams {
         attrs.emplace_back("layer_id", layer_id);
         attrs.emplace_back("output_height_shard_dim", output_height_shard_dim);
         attrs.emplace_back("intermediate_size", intermediate_size);
+        attrs.emplace_back("num_shared_experts", num_shared_experts);
         attrs.emplace_back("has_bias", has_bias);
         attrs.emplace_back("num_token_parallel_cores", num_token_parallel_cores);
         attrs.emplace_back("num_data_parallel_cores", num_data_parallel_cores);

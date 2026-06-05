@@ -146,7 +146,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("bh_ring_size") = nb::none());
+        nb::arg("bh_ring_size") = nb::none(),
+        nb::arg("num_shared_experts") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
