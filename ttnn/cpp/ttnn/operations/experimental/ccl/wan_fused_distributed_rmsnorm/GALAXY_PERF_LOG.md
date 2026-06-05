@@ -346,3 +346,35 @@ client-connect + sem handshake + DRAM round-trip, ~tens of us, documented in
 PERF_LOG.md) — both a large fraction when there are only ~3 rows/worker. The
 composite's separate well-tuned all_gather_async + dedicated POST kernel carry
 less fixed overhead at this size, which is why it stays ~even on N2368.
+
+## Block-major POST (mirror composite) — DEAD END (regression)
+
+Tried restructuring the fused POST to block-major like the composite
+(rmsnorm_post_allgather.cpp): per row compute 1/rms, then for each col-block do
+norm-mul -> weight -> matmul -> *cos -> *sin -> add nested (each block flows
+through all sub-phases), reading input by index from the RESIDENT input_cb (not
+popped). Gated to the common case (whole-row norm + broadcast weight/RoPE);
+exotic variants kept phase-major.
+
+Correctness: fused-vs-baseline PCC ~1.0 (output identical, as expected — same
+math). PASS. But perf REGRESSED on every shape:
+
+| config | phase-major (current) | block-major | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 740 | 870 | +17.6% |
+| N9472 RoPE  | 432 | 521 | +20.6% |
+| N2368 RoPE  | 206 | 246 | +19.4% |
+| N18944 no-rope | 589 | 623 | +5.7% |
+| N2368 no-rope  | 140 | 152 | +8% |
+
+**Why block-major is worse for the fused (reverted):** it is reconfig-bound.
+Block-major issues ~6-7 reconfig_data_format per col-block -> ~70/row at 40
+cols; the phase-major POST issues 7/row total (one reconfig per full-column
+sub-phase pass). The composite tolerates block-major because it is DRAM-bound
+(re-reads input from DRAM, which masks the reconfig cost); the FUSED keeps input
+resident and has its reads/AG already optimized, so it is compute/reconfig-bound
+-- fewer reconfigs (phase-major) wins decisively. This also confirms the N2368
+gap vs composite is NOT the POST loop structure (block-major makes the fused
+worse, not better); it is the fused's fixed in-kernel PRE+AG-wait + MUX-AG setup
+overhead (documented above), which block-major does nothing to address.
+Reverted; phase-major POST retained.
