@@ -140,10 +140,27 @@ class Qwen35DecoderLayer:
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:
                 if mode == "prefill":
-                    attn_output = self.attention.forward_prefill(attn_input, cos, sin)
+                    # Contract/vLLM path supplies a page_table → paged KV prefill; the
+                    # demo path (no page_table) uses the internal concat caches.
+                    if page_table is not None:
+                        attn_output = self.attention.forward_prefill_paged(
+                            attn_input,
+                            cos,
+                            sin,
+                            page_table,
+                            chunk_page_table=chunk_page_table,
+                            chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
+                            chunk_start_idx_tensor=chunk_start_idx_tensor,
+                        )
+                    else:
+                        attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
-                    attn_output = self.attention.forward_decode(attn_input, position_tensor, cos, sin)
+                    attn_output = self.attention.forward_decode(
+                        attn_input, position_tensor, cos, sin, page_table=page_table
+                    )
             else:
+                # GDN carries its recurrent/conv state internally (capture_state on
+                # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
                     attn_output = self.attention.forward_prefill(
                         attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
