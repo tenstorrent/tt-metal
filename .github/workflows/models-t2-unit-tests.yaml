@@ -84,6 +84,8 @@ permissions:
 run-name: "(Tier 2) Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -110,8 +112,10 @@ jobs:
           echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
