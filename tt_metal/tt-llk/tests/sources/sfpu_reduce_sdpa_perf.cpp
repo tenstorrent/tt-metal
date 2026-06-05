@@ -38,8 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Configure unpacker for Float16_b format
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
@@ -55,8 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -107,8 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t block_height = BLOCK_RT_DIM;
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Initialize datacopy from srcA to dest
         _llk_math_eltwise_unary_datacopy_init_wrapper_<
             DataCopyType::A2D,
@@ -128,8 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             return;
@@ -218,8 +214,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Configure packer hardware
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
@@ -230,8 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             return;

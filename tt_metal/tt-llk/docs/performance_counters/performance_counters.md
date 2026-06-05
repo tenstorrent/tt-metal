@@ -31,12 +31,12 @@ Tensix cores contain five hardware performance counter banks. Every bank exposes
 
 Every test source under `tests/sources/*_perf.cpp` is compiled twice from the same C++ file. The build is selected by two preprocessor flags:
 
-| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active macro | What it measures |
-|-------|----------------|--------------------------|--------------|------------------|
+| Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half of `START_PERF_MEASURE` | What it measures |
+|-------|----------------|--------------------------|--------------------------------------|------------------|
 | NC (no counters) | defined | undefined | `ZONE_SCOPED` | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
 | WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` | Per-zone HW counter snapshot |
 
-The two macros are mutually exclusive — only one of them is non-empty in any given build, so wall-clock and counter measurements are never taken simultaneously and cannot perturb each other. Pairing them in the source by the same name is a **convention**, not a hardware requirement: it keeps NC wall-clock data and WC counter data joinable by zone name in the host driver. The driver runs whichever build is needed and merges the resulting DataFrames on the zone name.
+`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. The two halves are mutually exclusive — only one of them is non-empty in any given build, so wall-clock and counter measurements are never taken simultaneously and cannot perturb each other. The single name keeps NC wall-clock data and WC counter data joinable by zone name in the host driver; the driver runs whichever build is needed and merges the resulting DataFrames on that name.
 
 Source-side, this is the pattern:
 
@@ -44,14 +44,12 @@ Source-side, this is the pattern:
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // ... unpack hw_configure, math_init, pack_init ...
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         for (uint32_t tile = 0; tile < TILE_CNT; ++tile)
         {
             // ... per-tile work ...
@@ -60,7 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 ```
 
-Each zone is registered once at its first encounter (`MEASURE_PERF_COUNTERS` is RAII-scoped and assigns a stable zone id by hashing the name), so placing the macro **outside** the loop is preferred — counter start is not a no-op and would dominate per-iteration cost if done on every tile.
+Each zone is registered once at its first encounter (the counter half is RAII-scoped and assigns a stable zone id by hashing the name), so placing `START_PERF_MEASURE` **outside** the loop is preferred — counter start is not a no-op and would dominate per-iteration cost if done on every tile.
 
 ### `PerfRunType` and the split arm/freeze model
 
@@ -69,7 +67,7 @@ Each LLK perf test is associated with a `PerfRunType` (declared in `perf.h`):
 | Run type | Purpose | Arm thread | Freeze thread |
 |----------|---------|-----------|---------------|
 | `L1_TO_L1` | End-to-end pipeline cycles, unpack → math → pack | UNPACK | PACK |
-| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention, unpack → math → pack | UNPACK | PACK |
+| `L1_CONGESTION` | Pipeline cycles under L1 traffic contention, unpack → pack | UNPACK | PACK |
 | `UNPACK_ISOLATE` | Unpack-only kernels (no math/pack) | UNPACK | UNPACK |
 | `MATH_ISOLATE` | Math/SFPU-only kernels (no unpack/pack) | MATH | MATH |
 | `PACK_ISOLATE` | Pack-only kernels (no unpack/math) | PACK | PACK |

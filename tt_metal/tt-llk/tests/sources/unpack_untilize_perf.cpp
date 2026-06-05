@@ -48,8 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t TILE_SIZE = 2048 / 16; // size of tile in 16B words
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats.unpack_A_src,
             formats.unpack_B_src,
@@ -64,8 +63,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile += FULL_CT_DIM)
         {
@@ -98,8 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
             4 /* num_faces */, formats.math);
@@ -109,8 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
@@ -155,8 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr bool UNTILIZE = false;
 
     {
-        MEASURE_PERF_COUNTERS("INIT")
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
 
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
@@ -166,8 +161,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     {
-        MEASURE_PERF_COUNTERS("TILE_LOOP")
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {

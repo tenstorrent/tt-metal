@@ -12,12 +12,8 @@
 
 #include "ckernel.h"
 
-// L1 layout: shared config + per-zone data (always compiled).
-
-#define PERF_COUNTERS_BASE_ADDR         0x169000
-#define PERF_COUNTERS_CONFIG_WORDS      200
-#define PERF_COUNTERS_DATA_WORDS        200
-#define PERF_COUNTERS_BANK_CYCLES_WORDS 5
+// L1 region constants (PERF_COUNTERS_BASE_ADDR and friends) live in perf.h next to the
+// stimuli buffer addresses so the disjoint L1 ranges are visible side-by-side.
 
 namespace llk_perf
 {
@@ -112,6 +108,10 @@ inline std::uint32_t get_counter_base_addr(counter_bank bank)
         RISCV_DEBUG_REG_PERF_CNT_L1_0,
         RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,
     };
+    // Guarantees every valid `counter_bank` enumerator is a safe index into base_addrs[],
+    // so the runtime check below is purely defensive against future enum growth.
+    static_assert(
+        static_cast<std::uint32_t>(counter_bank::tdma_pack) == COUNTER_BANK_COUNT - 1, "counter_bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
     volatile auto b = static_cast<std::uint32_t>(bank);
     return b < COUNTER_BANK_COUNT ? base_addrs[b] : 0u;
 }
@@ -581,3 +581,11 @@ inline void configure_and_arm_from_brisc()
 } // namespace llk_perf
 
 #endif // PERF_COUNTERS_COMPILED
+
+// Convenience macro for the conventional pairing at the top of a measured scope.
+// Expands to MEASURE_PERF_COUNTERS + ZONE_SCOPED with the same `name`, so the
+// counter zone and profiler marker stay in sync. One of the two halves is empty
+// in any given build, so this never emits both timing paths at once.
+#define START_PERF_MEASURE(zone_name) \
+    MEASURE_PERF_COUNTERS(zone_name)  \
+    ZONE_SCOPED(zone_name)

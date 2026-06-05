@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "ckernel_addrmod.h"
+#include "ckernel_fence.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 // #include "fw_debug.h"
@@ -902,15 +903,6 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
     asm volatile("fence" ::: "memory");
 
     return dst;
-}
-
-/**
- * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
- * @note Does not enforce CPU or system memory ordering by itself.
- */
-inline void fence_compiler()
-{
-    asm volatile("" ::: "memory");
 }
 
 } // namespace ckernel
