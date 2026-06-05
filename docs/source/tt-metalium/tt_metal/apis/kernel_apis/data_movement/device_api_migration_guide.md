@@ -541,34 +541,36 @@ dfb.push_back(1);
 
 `async_write_zeros(dst, size_bytes, {.offset_bytes = off})` zeroes `size_bytes` starting at `dst.get_write_ptr() + off` (`off` defaults to `0`). `dst` must be a `CircularBuffer` or `DataflowBuffer`.
 
+Zeroing a CB/DFB entry is the common case: legacy kernels obtained the zero target's address from a CB (e.g. `get_write_ptr(cb_id)`), so the migrated form zeroes that same CB/DFB entry directly.
+
 #### Zero pages of a DRAM tensor
 
-The DRAM overload streams zeros from a caller-provided **scratch** CB/DFB that has been pre-zeroed:
+The DRAM overload streams zeros from a pre-zeroed L1 source, read from its **front (read) pointer**. A CB/DFB is required to source the zeros (the reserved L1 zeros region is reclaimed on Quasar). **Reuse a `DataflowBuffer` (or `CircularBuffer`) the kernel already has** — do not allocate one solely for this if possible, since CB/DFB consumes Quasar tile counter resources. Zero one entry, `push_back`/`wait_front` it to the front before streaming, then `pop_front` to release:
 ```cpp
 Noc noc;
-DataflowBuffer scratch(scratch_dfb_id);
+DataflowBuffer dfb(dfb_id);              // a DFB the kernel already owns
 
-// 1. Pre-zero the scratch once
-scratch.reserve_back(1);
-noc.async_write_zeros(scratch, scratch_bytes);
+// 1. Pre-zero the DFB entry once
+dfb.reserve_back(1);
+noc.async_write_zeros(dfb, zero_bytes);
 noc.write_zeros_l1_barrier();
-scratch.push_back(1);
+dfb.push_back(1);
 
-// 2. Stream zeros to DRAM pages from the (front of the) scratch
-scratch.wait_front(1);
+// 2. Stream zeros to DRAM pages from the (front of the) DFB
+dfb.wait_front(1);                       // the zeroed entry is now the front
 for (uint32_t p = page_start; p < page_end; ++p) {
     noc.async_write_zeros(
-        dram_accessor,                     // Destination DRAM tensor accessor
-        page_size,                         // Number of bytes to zero (per page)
-        {.page_id = p},                    // Destination page args (page_id, optional offset_bytes)
-        scratch                            // Pre-zeroed L1 scratch (source of zeros)
+        dram_accessor,                   // Destination DRAM tensor accessor
+        page_size,                       // Number of bytes to zero (per page)
+        {.page_id = p},                  // Destination page args (page_id, optional offset_bytes)
+        dfb                              // Pre-zeroed L1 source of zeros
     );
 }
 noc.write_zeros_dram_barrier();
-scratch.pop_front(1);
+dfb.pop_front(1);                        // release; the buffer is left as it was
 ```
 
-The scratch is read from its **front (read) pointer**, so pre-zero it and then `push_back`/`wait_front` as above. Its pre-zeroed prefix must cover at least `min(size_bytes, NOC_MAX_BURST_SIZE)` bytes. This overload pairs with `write_zeros_dram_barrier()`.
+Any buffer the kernel already owns can be reused (i.e. it needn't be one dedicated to zeroing). The pre-zeroed prefix must cover at least `min(page_size, NOC_MAX_BURST_SIZE)` bytes. This overload pairs with `write_zeros_dram_barrier()`.
 
 #### Barriers and the Quasar command-buffer contract
 
