@@ -1,11 +1,11 @@
-# BH single Loudbox exposed as a 1x8 LINE.
+# --- Meshes ---------------------------------------------------------------
 
 mesh_descriptors {
   name: "M0"
-  arch: BLACKHOLE
-  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, LINE ] }
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 16 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
-  channels { count: 2 policy: RELAXED }
+  channels { count: 4 policy: RELAXED }
 }
 
 # --- Instantiation ----------------------------------------------------------
