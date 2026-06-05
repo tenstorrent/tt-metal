@@ -227,21 +227,21 @@ void kernel_main() {
     constexpr uint32_t matmul_partials_cb = get_compile_time_arg_val(22);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
-    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
-    constexpr bool check_skip_compute = get_compile_time_arg_val(28);
-    constexpr bool pack_relu = get_compile_time_arg_val(29);
-    constexpr bool packer_untilize = get_compile_time_arg_val(30);
-    constexpr bool packer_l1_acc = get_compile_time_arg_val(31);
-    constexpr bool fuse_bias = get_compile_time_arg_val(32);
-    constexpr bool split_reader = get_compile_time_arg_val(33);
-    constexpr bool activation_reuse = get_compile_time_arg_val(34);
+    constexpr bool partials_cb_uses_output = get_compile_time_arg_val(25);
+    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(26);
+    constexpr bool check_skip_compute = get_compile_time_arg_val(27);
+    constexpr bool pack_relu = get_compile_time_arg_val(28);
+    constexpr bool packer_untilize = get_compile_time_arg_val(29);
+    constexpr bool packer_l1_acc = get_compile_time_arg_val(30);
+    constexpr bool fuse_bias = get_compile_time_arg_val(31);
+    constexpr bool split_reader = get_compile_time_arg_val(32);
+    constexpr bool activation_reuse = get_compile_time_arg_val(33);
 
-    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(35);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(36);
-    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
-    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
-    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
+    constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
+    constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
+    constexpr bool split_reader_cb_shared = get_compile_time_arg_val(38) == 1;
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -303,7 +303,7 @@ void kernel_main() {
 
             if constexpr (pack_relu) {
                 // for each output block we start we relu disabled so that intermediate results are not relu'd
-                PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                PACK((llk_pack_relu_config(ReluConfig::none())));
             }
             if constexpr (partials_cb_uses_output) {
                 UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr;)
@@ -317,7 +317,7 @@ void kernel_main() {
                         if constexpr (pack_relu && !fuse_bias) {
                             if (last_inner_dim_block) {
                                 // if last block we pack the final result with relu enabled
-                                PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                                PACK((llk_pack_relu_config(ReluConfig::none())));
                             }
                         }
                         if constexpr (packer_l1_acc) {
@@ -349,7 +349,7 @@ void kernel_main() {
                     if constexpr (pack_relu && !fuse_bias) {
                         if (last_inner_dim_block) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                            PACK((llk_pack_relu_config(ReluConfig::none())));
                         }
                     }
                     if constexpr (packer_l1_acc) {
@@ -415,7 +415,7 @@ void kernel_main() {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                            PACK((llk_pack_relu_config(ReluConfig::zero())));
                         }
                         curr_matmul_out_cb = mm_out_cb_id;
                     }
@@ -583,7 +583,7 @@ void kernel_main() {
             if constexpr (fuse_bias) {
                 if constexpr (pack_relu) {
                     // if last block we pack the final result with relu enabled
-                    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+                    PACK((llk_pack_relu_config(ReluConfig::zero())));
                 }
                 pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
@@ -639,7 +639,7 @@ void kernel_main() {
                     pack_reconfig_l1_acc(0);
                 }
                 if constexpr (pack_relu) {
-                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+                    PACK((llk_pack_relu_config(ReluConfig::none())));
                 }
                 if constexpr (!fuse_bias) {
                     reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);

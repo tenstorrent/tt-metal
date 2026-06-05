@@ -782,22 +782,45 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 }
 
-// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets
+// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions.
+// Topology=Ring: 1D ring multicast that covers all dispatch_devices with just 2 packets instead of
+//                (dispatch_devices - 1) unicasts. DoubleAntipodalAtomicInc=true: the antipodal device
+//                receives the inc from both directions (used when the caller wants N total receipts).
+// Topology=Linear: 1D line multicast. Range is derived from the source chip's CT-known position on
+//                the line, so endpoints elide the absent-direction `if constexpr` branch entirely
+//                (this is required for correctness on LINE meshes — see below).
+//
+// Why Topology must be a template parameter, not a runtime arg:
+//   fabric_connections is `std::array<SenderType, 4>` stack-default-constructed at the caller. The
+//   caller's `open_direction_connections_async` only initializes the slots flagged true in the host-
+//   built `directions[]` mask. Indexing an unopened slot (e.g. `fabric_connections[WEST]` at the
+//   leftmost chip on a LINE) dereferences uninitialized L1 stack memory inside the fabric API and
+//   causes either an infinite hang on a never-ticking flow-control word OR a stray NOC write to a
+//   garbage endpoint. There is no NOC fallback. So the absent-direction send MUST be compiled out,
+//   not branched out at runtime.
 template <
     uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
     bool DoubleAntipodalAtomicInc = false,
     class SenderType = WorkerToFabricEdmSender>
-FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
+FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_1d(
     std::array<SenderType, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header_pos,
     volatile PACKET_HEADER_TYPE* packet_header_neg,
     uint64_t semaphore_noc_addr) {
     using ttnn::operations::ccl::common::ReplicateGroup;
+    static_assert(
+        Topology == tt::tt_fabric::Topology::Ring || Topology == tt::tt_fabric::Topology::Linear,
+        "fabric_multicast_bidirectional_atomic_inc_1d only supports Ring or Linear 1D topology");
+    // ReplicateGroup::NONE would silently fall through the COLS/ROWS ternaries and compute
+    // axis_position/dispatch_devices off the wrong dim — a concrete axis is required.
+    static_assert(
+        Axis == ReplicateGroup::COLS || Axis == ReplicateGroup::ROWS,
+        "fabric_multicast_bidirectional_atomic_inc_1d requires a concrete dispatch axis (COLS or ROWS)");
+
     const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
 
     // ReplicateGroup::COLS (axis=0): targets on same column, dispatch vertically (SOUTH/NORTH),
@@ -806,13 +829,23 @@ FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
     constexpr uint32_t dispatch_devices =
         Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
 
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
-    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
-    // dispatch_devices) if DoubleAntipodalAtomicInc is true
-    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2;
+    // Source chip's position along the dispatch axis (CT-derived from per-device LinearizedSrcMeshCoord).
+    constexpr uint32_t axis_position =
+        Axis == ReplicateGroup::COLS ? (LinearizedSrcMeshCoord / MeshCols) : (LinearizedSrcMeshCoord % MeshCols);
+
+    // Ring (DoubleAntipodalAtomicInc=true):  positive + negative = dispatch_devices     (each device receives N inc's)
+    // Ring (DoubleAntipodalAtomicInc=false): positive + negative = dispatch_devices - 1 (one inc per other sender)
+    // Linear:                                positive = (N-1) - axis_position, negative = axis_position
+    //                                        Total = dispatch_devices - 1 per sender. At an endpoint, one of the
+    //                                        ranges is 0 and the `if constexpr` below elides the absent send.
+    constexpr uint32_t positive_range =
+        (Topology == tt::tt_fabric::Topology::Linear)
+            ? (dispatch_devices - 1) - axis_position
+            : (DoubleAntipodalAtomicInc ? (dispatch_devices + 1) / 2 : dispatch_devices / 2);
     constexpr uint32_t negative_range =
-        DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range;
+        (Topology == tt::tt_fabric::Topology::Linear)
+            ? axis_position
+            : (DoubleAntipodalAtomicInc ? dispatch_devices - positive_range : (dispatch_devices - 1) - positive_range);
 
     // Determine directions based on axis:
     // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative

@@ -28,6 +28,12 @@ from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 
 
+# Position of the page table within the decode input tuple produced by
+# LlamaModel.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
+# Used to refresh only the page-table trace input when KV blocks are reallocated.
+DECODE_PAGE_TABLE_INPUT_IDX = 3
+
+
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     """
     Returns powers of 2 from 128 up to max_seq_len (inclusive).
@@ -248,7 +254,6 @@ class Generator(WarmupForwardMixin):
                 if not sampling_parameters_sweeped:
                     sampling_params_list = self._create_sampling_params(
                         can_sample_on_device=sampling_on_device_enabled,
-                        non_greedy_decoding_on_device=sampling_on_device_enabled,
                         batch_size=batch,
                     )
                 else:
@@ -1105,19 +1110,19 @@ class Generator(WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         if prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device:
             reset_inputs = True
-        if self.prev_page_table is None:
-            self.prev_page_table = (
-                page_table.clone()
-            )  # Make sure we reference a fresh page table, in case it has changed
-        if torch.any(self.prev_page_table != page_table).item():
-            reset_inputs = True  # doesn't this do what reset_batch does?
-            self.prev_page_table = (
-                page_table.clone()
-            )  # Make sure we reference a fresh page table, in case it has changed
+        page_table_changed = page_table is not None and (
+            self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()
+        )
 
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
+
+        if reset_batch:
+            # A new batch layout (real reset or slot remap) leaves the device
+            # token/current_pos buffers holding the previous batch's values, so
+            # host inputs are authoritative again and must be fully reloaded.
+            reset_inputs = True
 
         kv_cache = kv_cache[0]
         decode_kwargs = {
@@ -1151,6 +1156,7 @@ class Generator(WarmupForwardMixin):
             tt_tok, tt_log_probs = self._decode_easy_trace_text(
                 **decode_kwargs,
                 reset_inputs=reset_inputs,
+                page_table_changed=page_table_changed,
                 return_logits=return_logits,
             )
         else:
@@ -1280,6 +1286,7 @@ class Generator(WarmupForwardMixin):
         page_table=None,
         kv_cache=None,
         reset_inputs=False,
+        page_table_changed=False,
         is_cur_pos_sharded=False,
         is_page_table_sharded=False,
         return_logits=False,
@@ -1303,6 +1310,8 @@ class Generator(WarmupForwardMixin):
             self.trace_inputs_decode[return_logits] = device_inputs
             self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
+            # Full resets are required when host token/position inputs are
+            # authoritative again (host sampling, trace switch, or batch reset).
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
             )
@@ -1312,6 +1321,20 @@ class Generator(WarmupForwardMixin):
                 device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
+        elif page_table_changed:
+            # With async device sampling, token/position inputs may intentionally
+            # be stale on host: the previous decode updates them on device. Page
+            # tables still need refreshing when new KV blocks are allocated, so
+            # copy only that trace input and preserve device-produced tokens.
+            host_inputs = self.model.prepare_decode_inputs_host(
+                tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+            )
+            host_page_table = host_inputs[DECODE_PAGE_TABLE_INPUT_IDX]
+            device_page_table = self.trace_inputs_decode[return_logits][DECODE_PAGE_TABLE_INPUT_IDX]
+            if host_page_table is not None:
+                ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+        if page_table_changed:
+            self.prev_page_table = page_table.clone()
 
         trace_tok_rm = self._decode_forward_trace_text(
             self.trace_ids_decode[return_logits],
@@ -1448,7 +1471,7 @@ class Generator(WarmupForwardMixin):
 
         return padded_page_table
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         # page_table gets padded properly in prefill_forward_text
         # be sure to pad correctly for non traced sequences in future warmup calls
         page_table = torch.zeros(1, 1, dtype=torch.int32)

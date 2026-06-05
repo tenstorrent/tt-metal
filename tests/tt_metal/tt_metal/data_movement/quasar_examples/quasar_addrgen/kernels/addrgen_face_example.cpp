@@ -27,6 +27,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 // 2 faces, each face: 4 cols x 4 rows
 constexpr uint32_t src_base = 0x10000;
 constexpr LoopConfig src_inner_cfg = {.stride = 128, .end_addr = 4 * 128};    // 4 cols, 128B apart
@@ -69,8 +71,7 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint32_t)src_addr << " Destination address: " << HEX()
-               << (uint32_t)dest_addr << ENDL();
+        DPRINT("  Source address: {:#X} Destination address: {:#X}\n", src_addr, dest_addr);
     }
 }
 // /* Real loop with noc */

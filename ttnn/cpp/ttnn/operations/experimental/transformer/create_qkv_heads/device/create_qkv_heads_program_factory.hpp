@@ -5,32 +5,14 @@
 #pragma once
 
 #include "create_qkv_heads_device_operation_types.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct CreateQKVHeadsSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_id = 0;
-    tt::tt_metal::CBHandle cb_in0_id = 0;
-    tt::tt_metal::CBHandle cb_out0_id = 0;
-    tt::tt_metal::CBHandle cb_out1_id = 0;
-    tt::tt_metal::CBHandle cb_out2_id = 0;
-    CoreRangeSet all_cores;
-    bool has_compute_kernel = false;
-};
-
 struct CreateQKVHeadsProgramFactory {
-    using shared_variables_t = CreateQKVHeadsSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const CreateQKVHeadsParams& operation_attributes,
-        const CreateQKVHeadsInputs& tensor_args,
-        CreateQKVHeadsResult& output);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const CreateQKVHeadsParams& operation_attributes,
         const CreateQKVHeadsInputs& tensor_args,
         CreateQKVHeadsResult& output);

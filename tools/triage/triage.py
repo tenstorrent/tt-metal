@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -25,6 +25,8 @@ Options:
     --disable-progress               Disable progress bars. [default: False]
     --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
+    --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
+    --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -60,7 +62,6 @@ _triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
     import capnp
-    from mpi4py import MPI
 except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
@@ -76,7 +77,6 @@ import importlib
 import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
-from rich.table import Table
 import sys
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -435,8 +435,11 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     # When in a terminal, let Rich auto-detect the terminal width.
     # Similarly, if verbosity is increased, use larger width to avoid wrapping.
     width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
-    console = Console(theme=utils.create_console_theme(args["--disable-colors"]), highlight=False, width=width)
-    progress_disabled = bool(args["--disable-progress"])
+    # --llm-output implies no colors: non-table console output (status lines,
+    # warnings) needs to stay plain text for cheap LLM consumption.
+    disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
+    console = Console(theme=utils.create_console_theme(disable_colors), highlight=False, width=width)
+    progress_disabled = bool(args["--disable-progress"]) or bool(args["--llm-output"])
 
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"] or 0
@@ -617,13 +620,55 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
     log_warning_location(location, f"{risc_name}: {message}")
 
 
+_output_serializer: Any = None
+
+
+def get_output_serializer() -> Any:
+    """Return the active serializer, defaulting to a Rich-console one on first use."""
+    global _output_serializer
+    if _output_serializer is None:
+        from serializers import RichSerializer
+
+        _output_serializer = RichSerializer(console, utils, get_verbose_level)
+    return _output_serializer
+
+
+def set_output_serializer(serializer: Any) -> None:
+    global _output_serializer
+    _output_serializer = serializer
+
+
+def init_output_serializer(args: ScriptArguments) -> None:
+    """Build the active serializer(s) based on CLI args.
+
+    Combinations:
+      neither flag                      -> RichSerializer on the console
+      --llm-output                      -> CsvSerializer on the console (replaces Rich)
+      --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
+      --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
+    """
+    from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
+
+    console_sink = ConsoleSink(console)
+    serializers: list[Any] = []
+
+    if args["--llm-output"]:
+        serializers.append(CsvSerializer(console_sink, get_verbose_level))
+    else:
+        serializers.append(RichSerializer(console_sink, utils, get_verbose_level))
+
+    csv_path = utils.safe_path(args["--llm-output-path"])
+    if csv_path:
+        try:
+            file_sink = FileSink(csv_path)
+            serializers.append(CsvSerializer(file_sink, get_verbose_level))
+        except OSError as e:
+            utils.WARN(f"Failed to open --llm-output-path={csv_path!r}: {e}. File output will be skipped.")
+
+    set_output_serializer(serializers[0] if len(serializers) == 1 else MultiSerializer(serializers))
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
-    from dataclasses import fields, is_dataclass
-
-    if script is not None:
-        print()
-        utils.INFO(f"{script.name}{execution_time}:")
-
     global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
     with FAILURE_CHECKS_LOCK:
         failures = FAILURE_CHECKS
@@ -631,87 +676,17 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     with WARNING_CHECKS_LOCK:
         warnings = WARNING_CHECKS
         WARNING_CHECKS = []
-    if result is None:
-        if len(failures) > 0 or script.failed:
-            utils.ERROR("  fail")
-            for failure in failures:
-                utils.ERROR(f"    {failure}")
-            if script.failed:
-                utils.ERROR(f"    {script.failure_message}")
 
-                import textwrap
-
-                docstring_indented = textwrap.indent(script.documentation.strip(), "    ")
-                utils.ERROR(f"  Script help:\n{docstring_indented}")
-        else:
-            utils.INFO("  pass")
-            for warning in warnings:
-                utils.WARN(f"    {warning}")
-        return
-
-    for failure in failures:
-        utils.ERROR(f"  {failure}")
-
-    for warning in warnings:
-        utils.WARN(f"  {warning}")
-
-    if isinstance(result, list) and len(result) == 0:
-        utils.ERROR("  No results found.")
-
-    if not (is_dataclass(result) or (isinstance(result, list) and all(is_dataclass(item) for item in result))):
-        utils.INFO(f"  {result}")
-    else:
-        if not isinstance(result, list):
-            result = [result]
-
-        def generate_header(table: Table, obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_header(table, value, fields(value))
-                elif "serialized_name" in metadata:
-                    justify = metadata.get("justify", "left")
-                    table.add_column(metadata.get("serialized_name", field.name), justify=justify)
-
-        def generate_row(row: list[str], obj, flds):
-            for field in flds:
-                metadata = field.metadata
-                # Skip field if it requires higher verbosity level
-                if metadata.get("verbose", 0) > _verbose_level:
-                    continue
-                if "dont_serialize" in metadata and metadata["dont_serialize"]:
-                    continue
-                elif "recurse" in metadata and metadata["recurse"]:
-                    value = getattr(obj, field.name)
-                    assert is_dataclass(value)
-                    generate_row(row, value, fields(value))
-                elif "additional_fields" in metadata:
-                    assert all(hasattr(obj, additional_field) for additional_field in metadata["additional_fields"])
-                    all_values = [getattr(obj, field.name)]
-                    all_values.extend(
-                        [getattr(obj, additional_field) for additional_field in metadata["additional_fields"]]
-                    )
-                    assert "serializer" in metadata, "Serializer must be provided for combined field."
-                    row.append(metadata["serializer"](all_values))
-                elif "serializer" in metadata:
-                    row.append(metadata["serializer"](getattr(obj, field.name)))
-
-        table = Table()
-
-        # Create table header
-        generate_header(table, result[0], fields(result[0]))
-        for item in result:
-            row: list[str] = []
-            generate_row(row, item, fields(item))
-            table.add_row(*row)
-        console.print(table)
+    get_output_serializer().emit(
+        script_name=script.name if script is not None else None,
+        execution_time=execution_time,
+        result=result,
+        failures=failures,
+        warnings=warnings,
+        script_failed=script.failed if script is not None else False,
+        failure_message=script.failure_message if script is not None else None,
+        documentation=script.documentation if script is not None else None,
+    )
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
@@ -904,9 +879,11 @@ def run_script(
     script = scripts[script_path] if script_path in scripts else None
     if return_result:
         return result
+    init_output_serializer(args)
     serialize_result(script, result)
 
     if force_exit:
+        get_output_serializer().close()
         # Remove nanobind leak check to avoid false positives on exit
         os._exit(0)
 
@@ -960,6 +937,8 @@ def main():
 
     # Parse common command line arguments
     args = parse_arguments(scripts)
+
+    init_output_serializer(args)
 
     # Enforce debugger dependencies, then initialize
     _enforce_dependencies(args)
@@ -1022,7 +1001,7 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    triage_summary_path = args["--triage-summary-path"]
+    triage_summary_path = utils.safe_path(args["--triage-summary-path"])
     if triage_summary_path:
         try:
             os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
@@ -1035,6 +1014,8 @@ def main():
     from elfs_cache import run as get_elfs_cache
 
     get_elfs_cache(args, context).log_stats()
+
+    get_output_serializer().close()
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

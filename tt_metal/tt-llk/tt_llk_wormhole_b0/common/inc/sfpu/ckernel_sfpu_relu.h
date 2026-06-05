@@ -103,7 +103,7 @@ inline void _relu_max_(T threshold)
 }
 
 template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, int sfpload_instr_mod)
+inline void _relu_min_impl_(const int iterations, [[maybe_unused]] VecType threshold, InstrModLoadStore sfpload_instr_mod)
 {
     for (int d = 0; d < iterations; d++)
     {
@@ -133,7 +133,7 @@ inline void _relu_min_(T threshold)
         int res = 0x80000000 | (scalar & 0x7FFFFFFF);
         scalar  = res;
     }
-    int sfpload_instr_mod = DEFAULT;
+    InstrModLoadStore sfpload_instr_mod = InstrModLoadStore::DEFAULT;
     if constexpr (std::is_same_v<T, float>)
     {
         v_threshold = threshold;
@@ -143,7 +143,7 @@ inline void _relu_min_(T threshold)
         if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
         {
             _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
-            sfpload_instr_mod = INT32_2S_COMP;
+            sfpload_instr_mod = InstrModLoadStore::INT32_2S_COMP;
         }
         else
         {

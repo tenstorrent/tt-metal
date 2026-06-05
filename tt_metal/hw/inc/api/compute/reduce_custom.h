@@ -59,7 +59,7 @@ template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_init() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 
 // clang-format off
@@ -132,7 +132,7 @@ template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_short() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>()));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 #endif
 
@@ -145,7 +145,7 @@ template <uint32_t block_ct_dim, bool respect_trigger = false>
 ALWI void reduce_block_max_row_reinit_minimal() {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_reinit_minimal()));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 
 /**
@@ -156,7 +156,7 @@ ALWI void reduce_block_max_row_reinit_minimal() {
 ALWI void reduce_block_max_row_reinit_minimal_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 
 /**
@@ -166,7 +166,7 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(uint32_t block_ct_dim, boo
 ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim)));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 #endif
 
@@ -221,7 +221,7 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 ALWI void reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
-    PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
+    PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>()));
 }
 
 ALWI void reduce_block_max_row_runtime(

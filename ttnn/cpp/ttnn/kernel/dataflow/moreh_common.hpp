@@ -68,7 +68,7 @@ template <typename AddrGen>
 FORCE_INLINE void noc_async_read_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_reserve_back(cb, num_tiles);
     uint32_t addr = get_write_ptr(cb);
-    noc_async_read_tile(tile_idx, addr_gen, addr);
+    noc_async_read_page(tile_idx, addr_gen, addr);
     noc_async_read_barrier();
     cb_push_back(cb, num_tiles);
 }
@@ -77,7 +77,7 @@ template <typename AddrGen>
 FORCE_INLINE void noc_async_write_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_wait_front(cb, num_tiles);
     uint32_t l1_read_addr = get_read_ptr(cb);
-    noc_async_write_tile(tile_idx, addr_gen, l1_read_addr);
+    noc_async_write_page(tile_idx, addr_gen, l1_read_addr);
     noc_async_write_barrier();
     cb_pop_front(cb, num_tiles);
 }
@@ -727,7 +727,7 @@ void read_tile(
     }
 
     auto l1_write_addr = get_write_ptr(cb_id);
-    auto noc_addr = get_noc_addr(noc_id, addrgen, offset);
+    auto noc_addr = addrgen.get_noc_addr(noc_id, offset);
     noc_async_read(noc_addr, l1_write_addr, size);
 
     noc_async_read_barrier();
@@ -754,7 +754,7 @@ void read_value(
     uint32_t size = get_tile_size(cb_id) / 1024;
 
     auto l1_write_addr = get_write_ptr(cb_id);
-    auto noc_addr = get_noc_addr(noc_id, addrgen);
+    auto noc_addr = addrgen.get_noc_addr(noc_id);
     noc_async_read(noc_addr + tilized_idx * size, l1_write_addr + tilized_idx * size, size);
     noc_async_read_barrier();
 
@@ -808,7 +808,7 @@ void read_line(
         if (noc_id * 2 != i) {
             noc_offset += (FACE_HEIGHT * FACE_WIDTH) * element_bytes;
         }
-        auto src_noc_addr = get_noc_addr(noc_id, addrgen, noc_offset);
+        auto src_noc_addr = addrgen.get_noc_addr(noc_id, noc_offset);
 
         if (noc_read_size_bytes == valid_elements_bytes) {
             // DRAM and L1 read sizes are aligned, so we can read directly into the destination CB.

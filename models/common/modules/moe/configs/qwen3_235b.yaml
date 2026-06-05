@@ -1,0 +1,19 @@
+# qwen3_235b
+mesh_shape: [8, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 4096
+select_experts_k: 8
+num_routed_experts: 128
+num_shared_experts: 0
+has_bias: false
+
+compute:
+  intermediate_size: 1536
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential

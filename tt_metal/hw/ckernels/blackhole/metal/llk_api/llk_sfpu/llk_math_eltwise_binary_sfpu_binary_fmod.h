@@ -17,7 +17,7 @@ inline void llk_math_eltwise_binary_sfpu_fmod_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_fmod_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         sfpu::calculate_fmod_int32<APPROXIMATE, 8>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -29,7 +29,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_fmod_init() {
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binary_fmod(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         sfpu::calculate_sfpu_binary_fmod<APPROXIMATE, 8, is_fp32_dest_acc_en>,
         dst_index0,

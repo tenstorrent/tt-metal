@@ -30,7 +30,7 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Type trait tests verifying MeshTensor's semantic constraints
 
-TEST(MeshTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_TRUE(std::is_default_constructible_v<MeshTensor>); }
+TEST(MeshTensorTypeTraitsTest, IsDefaultConstructible) { EXPECT_FALSE(std::is_default_constructible_v<MeshTensor>); }
 
 TEST(MeshTensorTypeTraitsTest, IsDestructible) { EXPECT_TRUE(std::is_destructible_v<MeshTensor>); }
 
@@ -47,41 +47,6 @@ TEST(MeshTensorTypeTraitsTest, IsNothrowMoveConstructible) {
 }
 
 TEST(MeshTensorTypeTraitsTest, IsNothrowMoveAssignable) { EXPECT_TRUE(std::is_nothrow_move_assignable_v<MeshTensor>); }
-
-// Runtime tests for default construction and move semantics
-
-TEST(MeshTensorTest, DefaultConstruction) {
-    MeshTensor tensor;
-    // Default constructed tensor is in valueless state
-    // Accessing members would trigger TT_ASSERT in debug builds
-    (void)tensor;
-}
-
-TEST(MeshTensorTest, MoveConstruction) {
-    MeshTensor tensor;
-    MeshTensor moved(std::move(tensor));
-    (void)moved;
-}
-
-TEST(MeshTensorTest, MoveAssignment) {
-    MeshTensor tensor;
-    MeshTensor other;
-    other = std::move(tensor);
-    (void)other;
-}
-
-TEST(MeshTensorTest, DefaultConstructedIsNotInitialized) {
-    MeshTensor tensor;
-    EXPECT_FALSE(tensor.is_initialized());
-}
-
-TEST(MeshTensorTest, MovedFromIsNotInitialized) {
-    MeshTensor source;
-    MeshTensor dest;
-    dest = std::move(source);
-    EXPECT_FALSE(source.is_initialized());  // NOLINT(bugprone-use-after-move)
-    EXPECT_FALSE(dest.is_initialized());
-}
 
 TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -135,42 +100,6 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(tensor.logical_shape(), Shape({1, 32}));
-}
-
-TEST_F(MeshTensorDeviceTest, ConstructedWithMeshBufferIsInitialized) {
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
-
-    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
-    ASSERT_NE(mesh_buffer, nullptr);
-    ASSERT_TRUE(mesh_buffer->is_allocated());
-
-    auto topology = TensorTopology();
-
-    MeshTensor tensor(mesh_buffer, std::move(spec), std::move(topology));
-
-    EXPECT_TRUE(tensor.is_initialized());
-}
-
-TEST_F(MeshTensorDeviceTest, IsNotInitializedAfterMoveFrom) {
-    auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
-    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
-
-    auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
-    auto topology = TensorTopology();
-
-    MeshTensor original(mesh_buffer, std::move(spec), std::move(topology));
-
-    EXPECT_TRUE(original.is_initialized());
-
-    MeshTensor moved(std::move(original));
-
-    EXPECT_FALSE(original.is_initialized());  // NOLINT(bugprone-use-after-move)
-    EXPECT_TRUE(moved.is_initialized());
 }
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
@@ -231,6 +160,48 @@ TEST_F(MeshTensorDeviceTest, TensorProperties) {
     EXPECT_EQ(tensor.element_size(), sizeof(float));
     EXPECT_FALSE(tensor.is_sharded());
     EXPECT_EQ(tensor.memory_config().buffer_type(), BufferType::DRAM);
+}
+
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsFalse) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    // A freshly constructed tensor is not valueless.
+    auto tensor = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    EXPECT_FALSE(tensor.is_valueless_after_move());
+}
+
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveConstruction) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    auto original = MeshTensor::allocate_on_device(*mesh_device_, spec, TensorTopology());
+    MeshTensor moved(std::move(original));
+
+    // Intentional use-after-move: verifying valueless-after-move semantics.
+    EXPECT_TRUE(original.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(moved.is_valueless_after_move());    // NOLINT(bugprone-use-after-move)
+}
+
+TEST_F(MeshTensorDeviceTest, IsValuelessAfterMoveReturnsTrueAfterMoveAssignment) {
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto spec1 = TensorSpec(Shape{1, 32}, tensor_layout);
+    auto spec2 = TensorSpec(Shape{2, 64}, tensor_layout);
+
+    auto source = MeshTensor::allocate_on_device(*mesh_device_, spec1, TensorTopology());
+    auto target = MeshTensor::allocate_on_device(*mesh_device_, spec2, TensorTopology());
+
+    target = std::move(source);
+
+    // Intentional use-after-move: verifying valueless-after-move semantics.
+    EXPECT_TRUE(source.is_valueless_after_move());   // NOLINT(bugprone-use-after-move)
+    EXPECT_FALSE(target.is_valueless_after_move());  // NOLINT(bugprone-use-after-move)
 }
 
 TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {

@@ -42,22 +42,17 @@ def _assert_euler_matches_scheduler(
     expected_timesteps: torch.Tensor | None = None,
     expected_sigmas: torch.Tensor | None = None,
 ) -> None:
-    solver = EulerSolver()
     ref_scheduler = FlowMatchEulerDiscreteScheduler()
-
-    solver.set_schedule(**schedule_kwargs)
     ref_scheduler.set_timesteps(**schedule_kwargs)
 
-    assert solver.timesteps is not None
-    assert torch.allclose(solver.timesteps, ref_scheduler.timesteps)
-    assert solver.sigmas == ref_scheduler.sigmas.tolist()
-    assert solver.alphas == (1.0 - ref_scheduler.sigmas).tolist()
+    solver = EulerSolver()
+    solver.set_schedule(ref_scheduler.sigmas.tolist())
 
     if expected_timesteps is not None:
-        assert torch.allclose(solver.timesteps, expected_timesteps)
+        assert torch.allclose(ref_scheduler.timesteps, expected_timesteps)
 
     if expected_sigmas is not None:
-        assert solver.sigmas == expected_sigmas.tolist()
+        assert ref_scheduler.sigmas.tolist() == expected_sigmas.tolist()
 
     torch.manual_seed(0)
     torch_latent = torch.randn(1, 1, 32, 32)
@@ -73,20 +68,6 @@ def _assert_euler_matches_scheduler(
 
         result_ours = ttnn.to_torch(latent)
         assert_quality(result_ours, ref, pcc=0.999_999, relative_rmse=1e-5)
-
-
-def test_solver_set_schedule_caches_scheduler_outputs() -> None:
-    """set_schedule should forward scheduler kwargs and cache schedule outputs."""
-    scheduler = FlowMatchEulerDiscreteScheduler()
-    solver = EulerSolver(scheduler=scheduler)
-
-    sigmas = torch.linspace(1.0, 1 / _NUM_STEPS, _NUM_STEPS)
-    mu = 0.75
-    solver.set_schedule(sigmas=sigmas, mu=mu)
-
-    assert solver.timesteps is scheduler.timesteps
-    assert solver.sigmas == scheduler.sigmas.tolist()
-    assert solver.alphas == (1.0 - scheduler.sigmas).tolist()
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -123,9 +104,11 @@ def test_euler_matches_diffusers(mesh_device: ttnn.MeshDevice) -> None:
 
     torch_latent = torch.randn(1, 1, 32, 32)
 
+    scheduler = FlowMatchEulerDiscreteScheduler()
+    scheduler.set_timesteps(_NUM_STEPS)
+
     solver = EulerSolver()
-    solver.set_schedule(_NUM_STEPS)
-    scheduler = solver.scheduler
+    solver.set_schedule(scheduler.sigmas.tolist())
 
     ref = torch_latent.clone()
     latent = tensor.from_torch(torch_latent, device=mesh_device, dtype=ttnn.float32)
@@ -146,35 +129,23 @@ def test_euler_matches_diffusers(mesh_device: ttnn.MeshDevice) -> None:
 
 
 def test_unipc_constructor_validation() -> None:
-    """UniPCSolver should reject incompatible scheduler configurations."""
-    with pytest.raises(ValueError, match="UniPCMultistepScheduler"):
-        UniPCSolver(scheduler=FlowMatchEulerDiscreteScheduler())  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="use_flow_sigmas=True"):
-        UniPCSolver(scheduler=UniPCMultistepScheduler())
-
+    """UniPCSolver should reject unsupported orders."""
     with pytest.raises(ValueError, match="only order 1 and 2 are supported"):
-        UniPCSolver(
-            scheduler=UniPCMultistepScheduler(
-                use_flow_sigmas=True,
-                prediction_type="flow_prediction",
-                solver_order=3,
-            )
-        )
+        UniPCSolver(order=3, variant=UniPCVariant.BH2)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 def test_unipc_set_schedule_resets_state(mesh_device: ttnn.MeshDevice) -> None:
     """set_schedule should reset logical history without reallocating state buffers."""
-    solver = UniPCSolver(
-        scheduler=UniPCMultistepScheduler(
-            use_flow_sigmas=True,
-            prediction_type="flow_prediction",
-            solver_order=2,
-            solver_type=UniPCVariant.BH2.value,
-        )
+    scheduler = UniPCMultistepScheduler(
+        use_flow_sigmas=True,
+        prediction_type="flow_prediction",
+        solver_order=2,
+        solver_type=UniPCVariant.BH2.value,
     )
-    solver.set_schedule(_NUM_STEPS)
+    scheduler.set_timesteps(_NUM_STEPS)
+    solver = UniPCSolver(order=2, variant=UniPCVariant.BH2)
+    solver.set_schedule(scheduler.sigmas.tolist())
 
     latent = tensor.from_torch(torch.randn(1, 1, 32, 32), device=mesh_device, dtype=ttnn.float32)
     velocity = tensor.from_torch(torch.randn(1, 1, 32, 32), device=mesh_device, dtype=ttnn.float32)
@@ -185,7 +156,7 @@ def test_unipc_set_schedule_resets_state(mesh_device: ttnn.MeshDevice) -> None:
     corrected = solver._state.corrected
     assert solver._state.oldest_idx == 1
 
-    solver.set_schedule(_NUM_STEPS)
+    solver.set_schedule(scheduler.sigmas.tolist())
 
     assert solver._state is not None
     assert solver._state.clean_preds == clean_preds
@@ -209,8 +180,9 @@ def test_unipc_matches_diffusers(mesh_device: ttnn.MeshDevice, variant: UniPCVar
         solver_order=2,
         solver_type=variant.value,
     )
-    solver = UniPCSolver(scheduler=scheduler)
-    solver.set_schedule(_NUM_STEPS)
+    scheduler.set_timesteps(_NUM_STEPS)
+    solver = UniPCSolver(order=2, variant=variant)
+    solver.set_schedule(scheduler.sigmas.tolist())
 
     ref = torch_latent.clone()
     latent = tensor.from_torch(torch_latent, device=mesh_device, dtype=ttnn.float32)

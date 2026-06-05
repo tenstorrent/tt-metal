@@ -73,7 +73,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         params.num_faces, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -126,9 +126,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_BLACKHOLE
     // --- Phase 1: Init for standard 32x32 tiles ---
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4, FACE_R_DIM, TILE_C_DIM, 4);
 
-    _llk_pack_init_with_src_wrapper_<false, false, false>(formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4, false, false, 1);
+    _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     reconfigure_packer_l1_acc(params.L1_ACC);
@@ -136,18 +137,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // --- Phase 2: Full re-init for the actual tiny tile dims ---
     // This overwrites the 32x32 config established in Phase 1, testing
     // that the transition from one tile shape to another is correct.
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces);
 
-    _llk_pack_init_<false, false, false>(formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1);
+    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
+        formats.pack_src, params.TEST_FACE_R_DIM, params.in0_tile_c_dim, params.num_faces, 1 /* num_tiles */);
 
     // Replace MOP with the block-contiguous version (REPLAY + W-per-tile).
     _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
 #else
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_init_wrapper_<false, false>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.TEST_FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 #endif
 
     for (int block = 0; block < num_blocks; block++)
@@ -160,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (int tile = 0; tile < num_tiles_in_block; ++tile)
         {
             int res_idx = block * num_tiles_in_block + tile;
-            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_idx]));
         }
 #endif
 

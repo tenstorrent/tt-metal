@@ -89,6 +89,8 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -111,7 +113,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -126,14 +128,18 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
             MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+        const auto& service_claims = MetalContext::instance().get_service_core_manager().impl();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
-
+                // Claimed service cores are permitted to run user kernels in FD mode.
+                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                    return false;
+                }
                 return kernel->is_on_logical_core(dispatch_core);
             });
 
@@ -471,6 +477,40 @@ void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHa
     TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
 }
 
+void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
+    TT_FATAL(
+        primary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: primary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        primary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(
+        secondary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: secondary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        secondary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+
+    auto& primary_dfb = dataflow_buffers_[primary_id];
+    auto& secondary_dfb = dataflow_buffers_[secondary_id];
+
+    TT_FATAL(
+        !primary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: primary DFB id {} is already a secondary of DFB id {}. Alias chains are not allowed.",
+        primary_id,
+        primary_dfb->alias_primary_id.value());
+    TT_FATAL(
+        !secondary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
+        secondary_id,
+        secondary_dfb->alias_primary_id.value());
+
+
+    dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
+    dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
+}
+
 void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
@@ -538,11 +578,13 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
     return names;
 }
 
-void ProgramImpl::register_tensor_parameter(const std::string& name, const TensorSpec& spec) {
+void ProgramImpl::register_tensor_parameter(
+    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(name, spec);
+    auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
+        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -554,18 +596,55 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     if (it == metal2_registry_->tensor_parameter_layouts.end()) {
         return nullptr;
     }
-    return &it->second;
+    return &it->second.spec;
+}
+
+bool ProgramImpl::get_tensor_parameter_dynamic_tensor_shape(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.dynamic_tensor_shape;
+}
+
+bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.match_padded_shape_only;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
     std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->tensor_parameter_layouts.size());
-        for (const auto& [name, spec] : metal2_registry_->tensor_parameter_layouts) {
+        for (const auto& [name, entry] : metal2_registry_->tensor_parameter_layouts) {
             names.push_back(name);
         }
     }
     return names;
+}
+
+void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+}
+
+const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<std::pair<uint32_t, std::string>> empty;
+    if (!metal2_registry_) {
+        return empty;
+    }
+    return metal2_registry_->dfb_borrowed_bindings;
 }
 // ============================================================================
 
@@ -1363,6 +1442,20 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::vector<const IDevice*> devices_for_svc_check;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                devices_for_svc_check.push_back(dev);
+            }
+        } else {
+            devices_for_svc_check.push_back(device);
+        }
+    }
+
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
@@ -1376,6 +1469,37 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_region_end,
                 max_l1_size);
         }
+
+        // Service cores allocate L1 independently per core (not lock-step like workers), growing down
+        // from L1_END. CBs grow up from DEFAULT_UNRESERVED. Min frontier across the CB range catches
+        // the most constrained core - collision if any frontier sits below the CB region end
+        const bool on_service_core =
+            std::any_of(devices_for_svc_check.begin(), devices_for_svc_check.end(), [&](const IDevice* dev) {
+                return svc.is_service_core(dev->id(), cb_allocator.core_range.start_coord);
+            });
+
+        if (on_service_core) {
+            std::optional<DeviceAddr> svc_lowest;
+            for (const IDevice* dev : devices_for_svc_check) {
+                for (const auto& core : cb_allocator.core_range) {
+                    auto a = svc.lowest_allocated_address(dev->id(), core);
+                    if (a.has_value()) {
+                        svc_lowest = svc_lowest.has_value() ? std::make_optional(std::min(*svc_lowest, *a)) : a;
+                    }
+                }
+            }
+            if (svc_lowest.has_value() && svc_lowest.value() < cb_region_end) {
+                TT_THROW(
+                    "Circular buffers on service-core range {} in program {} clash with ServiceCoreManager-allocated "
+                    "L1 (lowest service allocation at {}, CB region ends at {})",
+                    cb_allocator.core_range.str(),
+                    this->id,
+                    svc_lowest.value(),
+                    cb_region_end);
+            }
+            continue;  // Worker-grid checks below are irrelevant for service cores.
+        }
+
         if (hybrid_mode) {
             // Per-core allocations (experimental_set_per_core_allocation) can land at different
             // addresses per core, so query only the banks this CB covers on each physical allocator.
@@ -1407,11 +1531,40 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core. Mirrors validate_circular_buffer_region.
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> claimed;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                auto chip_claimed = svc.claimed_cores(dev->id());
+                claimed.insert(chip_claimed.begin(), chip_claimed.end());
+            }
+        } else {
+            claimed = svc.claimed_cores(device->id());
+        }
+    }
+    auto entirely_on_service_cores = [&](const CoreRange& cr) {
+        if (claimed.empty()) {
+            return false;
+        }
+        for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+            for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                if (!claimed.contains(CoreCoord{x, y})) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
+            const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
-                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                in_worker_grid || entirely_on_service_cores(cr),
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
+                "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),
                 this->id,
                 grid_size.x,
@@ -1576,10 +1729,11 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_data_fmt_and_tile(
-                    static_cast<CBIndex>(buffer_index),
-                    circular_buffer->data_format(buffer_index),
-                    circular_buffer->tile(buffer_index));
+                const CBIndex cb_index = static_cast<CBIndex>(buffer_index);
+                const DataFormat data_format = circular_buffer->data_format(buffer_index);
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
     }
@@ -1952,6 +2106,25 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
+        // Blackhole-only: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated compute
+        // kernel. This is due to FP8/LF8 being considered "A" exp width formats, instead of "B" exp width
+        // formats that are supported mostly in tt-metal. This conservative check fires whenever a compute
+        // kernel shares a core with any FP8 CB — the old Program API has no way to know which CB
+        // a given kernel actually reads, so we err on the side of catching the misconfiguration.
+        if (build_options.build_env.get_arch() == tt::ARCH::BLACKHOLE &&
+            kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
+            std::any_of(
+                build_options.hlk_desc.buf_dataformat_arr.begin(),
+                build_options.hlk_desc.buf_dataformat_arr.end(),
+                is_fp8_format)) {
+            TT_FATAL(
+                build_options.fp32_dest_acc_en,
+                "Blackhole: Fp8_e4m3 / Lf8 require fp32_dest_acc_en=true in ComputeConfig. The DEST "
+                "register must be in 32-bit (family-agnostic) mode when any CB on the same core uses "
+                "an 8-bit float format. Kernel: {}",
+                kernel->name());
+        }
+
         auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
@@ -1976,7 +2149,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 coordinator.submit(kernel_hash, [&]() {
                     generate_kernel_source_files(device, build_options, kernel);
@@ -1998,7 +2171,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
@@ -2333,6 +2506,15 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
             [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }
     sync_build_steps(events);
+}
+
+void detail::ProgramCompileGroup::finalize_offsets() {
+    std::lock_guard lock(mutex_);
+    for (auto& [device, program] : program_device_map_) {
+        if (!program->impl().is_finalized()) {
+            program->impl().finalize_offsets(device);
+        }
+    }
 }
 
 void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {

@@ -28,7 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import StimuliSpec, generate_stimuli_v2
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test, tolerances
+from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
 matmul_dimensions_dest_sync = [
@@ -66,31 +66,11 @@ MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
         DataFormat.Float16_b,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp4,
     ],
 )
-
-
-def _mismatch_ratio_allows_pass(
-    golden_tensor: torch.Tensor,
-    res_tensor: torch.Tensor,
-    output_format: DataFormat,
-    max_mismatch_ratio: float = 0.01,
-) -> tuple[bool, int, int]:
-    tolerance = tolerances[output_format]
-    golden = golden_tensor.type(format_dict[output_format])
-    res = res_tensor.type(format_dict[output_format])
-    is_close = torch.isclose(golden, res, rtol=tolerance.rtol, atol=tolerance.atol)
-    is_nan = torch.isnan(golden) & torch.isnan(res)
-    diff_mask = ~(is_close | is_nan)
-
-    diff_count = int(diff_mask.sum().item())
-    total = int(golden.numel())
-
-    if total == 0:
-        return False, diff_count, total
-
-    return (diff_count / total) <= max_mismatch_ratio, diff_count, total
 
 
 @pytest.mark.quasar
@@ -126,7 +106,7 @@ def test_matmul(
     torch_format = format_dict[format.output_format]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
@@ -249,25 +229,17 @@ def test_matmul(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
+    # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
+    # math/pack_src format the result was produced in) so the comparison validates the
+    # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-
+    # aware compare in passed_test then supplies the small HW-vs-reference rounding slack.
     if format.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
             golden_tensor.to(format_dict[pack_src_format]), format.output_format
         ).to(torch_format)
 
-    # Don't print errors for mx formats as they are expected to be higher due to quantization,
-    # and we will check them against a relaxed tolerance instead
-    test_passed = passed_test(
+    assert passed_test(
         golden_tensor,
         res_tensor,
         format.output_format,
-        print_errors=not format.output_format.is_mx_format(),
-    )
-
-    if not test_passed and format.output_format.is_mx_format():
-        mismatch_ok, _, _ = _mismatch_ratio_allows_pass(
-            golden_tensor, res_tensor, format.output_format
-        )
-        if mismatch_ok:
-            test_passed = True
-
-    assert test_passed, "Assert against golden failed"
+    ), "Assert against golden failed"

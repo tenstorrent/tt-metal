@@ -114,6 +114,7 @@ enum class EnvVarID {
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
 
     // ========================================
@@ -141,6 +142,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE,  // Terminal command to execute on dispatch timeout.
     TT_METAL_NOC_DEBUG_DUMP,                       // Enable experimental NOC debug dump to detect missing barriers
     TT_METAL_DISPATCH_PROGRESS_UPDATE_MS,          // Dispatch kernel progress update period in milliseconds
+    TT_METAL_DISPATCH_TELEMETRY_DISABLE,           // Dispatch telemetry
 
     // ========================================
     // WATCHER SYSTEM
@@ -182,17 +184,19 @@ enum class EnvVarID {
     // ========================================
     // DEBUG PRINTING (DPRINT)
     // ========================================
-    TT_METAL_DPRINT_CORES,                     // Worker cores for debug printing
-    TT_METAL_DPRINT_ETH_CORES,                 // Ethernet cores for debug printing
-    TT_METAL_DPRINT_DRAM_CORES,                // DRAM cores for debug printing
-    TT_METAL_DPRINT_CHIPS,                     // Chip IDs for debug printing
-    TT_METAL_DPRINT_NODES,                     // Fabric node IDs for debug printing
-    TT_METAL_DPRINT_MESH_COORDS,               // Global system mesh (row,col) coordinates for debug printing
-    TT_METAL_DPRINT_RISCVS,                    // RISC-V processors for debug printing
-    TT_METAL_DPRINT_FILE,                      // Debug print output file
-    TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
-    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
-    TT_METAL_DEVICE_PRINT,                     // Use new DEVICE_PRINT instead of legacy DPRINT
+    TT_METAL_DPRINT_CORES,                          // Worker cores for debug printing
+    TT_METAL_DPRINT_ETH_CORES,                      // Ethernet cores for debug printing
+    TT_METAL_DPRINT_DRAM_CORES,                     // DRAM cores for debug printing
+    TT_METAL_DPRINT_CHIPS,                          // Chip IDs for debug printing
+    TT_METAL_DPRINT_NODES,                          // Fabric node IDs for debug printing
+    TT_METAL_DPRINT_MESH_COORDS,                    // Global system mesh (row,col) coordinates for debug printing
+    TT_METAL_DPRINT_RISCVS,                         // RISC-V processors for debug printing
+    TT_METAL_DPRINT_FILE,                           // Debug print output file
+    TT_METAL_DPRINT_ONE_FILE_PER_RISC,              // Separate file per RISC-V processor
+    TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,       // Prepend device/core/RISC info
+    TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
+    TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
+    TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -777,6 +781,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DRAM_BACKED_CQ=1
         case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
 
+        // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
+        // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.
+        // Default: false
+        // Usage: export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
+        case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
+            this->simulator_direct_tensor_writes = is_env_enabled(value);
+            break;
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -1020,6 +1032,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISPATCH_PROGRESS_UPDATE_MS=200
         case EnvVarID::TT_METAL_DISPATCH_PROGRESS_UPDATE_MS:
             this->dispatch_progress_update_ms = std::stoul(value);
+            break;
+
+        // TT_METAL_DISPATCH_TELEMETRY_DISABLE
+        // Disable dispatch telemetry.
+        // Default: false (dispatch telemetry enabled)
+        // Usage: export TT_METAL_DISPATCH_TELEMETRY_DISABLE=1
+        case EnvVarID::TT_METAL_DISPATCH_TELEMETRY_DISABLE:
+            this->dispatch_telemetry_disabled = is_env_enabled(value);
             break;
 
         // ========================================
@@ -1493,11 +1513,27 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
-        // TT_METAL_DEVICE_PRINT
-        // Use new DEVICE_PRINT system instead of legacy DPRINT.
-        // Default: false (legacy DPRINT is used)
-        // Usage: export TT_METAL_DEVICE_PRINT=1
-        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+        // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
+        // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.
+        // Default: 50
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US:
+            this->device_print_dispatch_stall_us = std::stoul(value);
+            break;
+
+        // TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US
+        // Period in microseconds between dispatch_s DEVICE_PRINT full-dispatch passes.
+        // Default: 100000 (100 ms)
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US:
+            this->device_print_dispatch_full_us = std::stoul(value);
+            break;
+
+        // TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES
+        // Override the dispatch_s DEVICE_PRINT dispatch L1 cache buffer size (bytes).
+        // 0 (default) means use the per-arch HAL default. Set this if dispatch_s logs
+        // that aggregation self-disabled because the cache was too small.
+        case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES:
+            this->device_print_dispatch_l1_cache_bytes = std::stoul(value);
+            break;
 
         // TT_METAL_ALLOCATOR_MODE_HYBRID
         // Enable hybrid lockstep + per-core L1 allocator mode.

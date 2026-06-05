@@ -51,14 +51,20 @@ class ModelPipeline:
         top_k: int = 1,
         top_p: float = 1.0,
         temperature: float = 0.6,
+        enable_speculative_decode: bool = True,
         enable_sram_hot_experts: bool = False,
         sram_hot_experts_ceiling: int = 64,
+        bspm_dir: Path | None = None,
+        bspm_variant: str = "B",
+        bspm_budget: float = 3.5,
+        enable_sram_bspm: bool = False,
     ):
         logger.info(
-            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
+            "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
             weights_mode,
             lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode,
+            enable_speculative_decode,
         )
         if not is_slow_dispatch():
             raise RuntimeError(
@@ -72,7 +78,10 @@ class ModelPipeline:
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
+        if not enable_speculative_decode and num_procs not in (16, 64):
+            raise RuntimeError("Base decode is currently supported only for the 16- and 64-process pipelines")
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
+        self.enable_speculative_decode = enable_speculative_decode
 
         # Each host loads/creates only the weights for its stage via the provider.
         if weights_mode == "real":
@@ -81,7 +90,6 @@ class ModelPipeline:
             if model_path is None:
                 raise ValueError("weights_mode='real' requires model_path")
             if enable_sram_hot_experts:
-                from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
                 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
                     SramExpertCoreGrids,
                     _load_routing_frequencies,
@@ -104,17 +112,41 @@ class ModelPipeline:
                     model_path,
                     sram_hot_experts=sram_hot_experts,
                     sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
-                    sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
-                    worker_l1_size=_worker_l1_size_for_rank(num_procs),
+                    worker_l1_size=_worker_l1_size_for_rank(
+                        num_procs,
+                        enable_speculative_decode=enable_speculative_decode,
+                    ),
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
+                    enable_sram_bspm=enable_sram_bspm,
                 )
             else:
-                provider = CacheWeightProvider(cache_path, model_path)
+                provider = CacheWeightProvider(
+                    cache_path,
+                    model_path,
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
+                    enable_sram_bspm=enable_sram_bspm,
+                )
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
-            provider = StateDictWeightProvider(model_path)
+            provider = StateDictWeightProvider(
+                model_path,
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                enable_sram_bspm=enable_sram_bspm,
+            )
         elif weights_mode == "synthetic":
-            provider = SyntheticWeightProvider()
+            provider = SyntheticWeightProvider(
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                enable_sram_bspm=enable_sram_bspm,
+            )
         else:
             raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
         config = create_pipeline_configuration_from_num_procs(
@@ -124,8 +156,10 @@ class ModelPipeline:
             persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
-            enable_mtp=True,
+            enable_mtp=enable_speculative_decode,
+            enable_speculative_decode=enable_speculative_decode,
             num_slots=num_slots,
+            enable_sram_bspm=enable_sram_bspm,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
@@ -204,6 +238,9 @@ class ModelPipeline:
             user_id=0,
             position_id=self.position_id,
             token_type=TokenType.BASE,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            probability_mass_threshold=self.top_p,
         )
         result = self.model.read_result()
         self.position_id += 1
@@ -258,6 +295,106 @@ class ModelPipeline:
             probability_mass_threshold=probability_mass_threshold,
         )
 
+    def run_inference_base_decode(
+        self,
+        prompt_token_ids: list[int],
+        max_new_tokens: int,
+        on_token: Callable[[int], None] | None = None,
+        eos_token_id: int | None = None,
+        return_generated_tokens: bool = False,
+    ) -> list[int] | None:
+        """Run base decode without the speculative acceptance/rejection state machine."""
+        if self.pipeline.my_stage_idx != 0:
+            raise RuntimeError("run_inference_base_decode() should only be called on stage 0")
+        assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
+        assert self.model is not None
+
+        generated_tokens: list[int] = []
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
+
+        def is_eos(token_id: int) -> bool:
+            return eos_token_id is not None and token_id == eos_token_id
+
+        def emit(token_id: int) -> None:
+            nonlocal first_emit_time, last_emit_time
+            if on_token is not None:
+                on_token(token_id)
+            generated_tokens.append(token_id)
+            now = time.time()
+            if first_emit_time is None:
+                first_emit_time = now
+            last_emit_time = now
+
+        prefill_start = time.time()
+        pending: deque[DecodeResult] = deque(self.prefill_forward(prompt_token_ids))
+        prefill_end = time.time()
+
+        decode_start = time.time()
+        num_reads = 0
+        num_writes = 0
+        while len(generated_tokens) < max_new_tokens:
+            if pending:
+                result = pending.popleft()
+            else:
+                result = self.model.read_result()
+                num_reads += 1
+
+            if result.token_1 is None or result.token_1_pos is None:
+                raise RuntimeError("Base decode requires token_1 output from the spec LM head")
+
+            next_token = result.token_1
+            next_pos = result.token_1_pos - 1
+            if next_pos != result.token_0_pos:
+                raise RuntimeError(
+                    f"Base decode position mismatch: token_1_pos - 1 = {next_pos}, "
+                    f"but token_0_pos = {result.token_0_pos}"
+                )
+            emit(next_token)
+            if is_eos(next_token) or len(generated_tokens) >= max_new_tokens:
+                break
+
+            self.model.write_input(
+                next_token,
+                -1,
+                0,
+                next_pos,
+                token_type=TokenType.BASE,
+                temperature=self.temperature,
+                top_k=self.top_k,
+                probability_mass_threshold=self.top_p,
+            )
+            num_writes += 1
+
+        decode_end = time.time()
+
+        while num_reads < num_writes:
+            self.model.read_result()
+            num_reads += 1
+
+        n_emitted = len(generated_tokens)
+        decode_elapsed = decode_end - decode_start
+        prefill_elapsed = prefill_end - prefill_start
+        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
+        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
+            tpot_elapsed = last_emit_time - first_emit_time
+            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
+        else:
+            tps_steady = float("nan")
+        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
+        logger.debug(
+            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
+            prefill_elapsed,
+            len(prompt_token_ids),
+            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
+        )
+        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
+        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
+        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
+        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
+        logger.debug("Base decode generation complete ({} tokens generated)", n_emitted)
+        return generated_tokens if return_generated_tokens else None
+
     def run_inference(
         self,
         prompt_token_ids: list[int],
@@ -279,6 +416,15 @@ class ModelPipeline:
           - REJECT:   emit base output, write tokens at device-supplied positions.
           - STALE:    discard and re-read.
         """
+        if not self.enable_speculative_decode:
+            return self.run_inference_base_decode(
+                prompt_token_ids=prompt_token_ids,
+                max_new_tokens=max_new_tokens,
+                on_token=on_token,
+                eos_token_id=eos_token_id,
+                return_generated_tokens=return_generated_tokens,
+            )
+
         if self.pipeline.my_stage_idx != 0:
             raise RuntimeError("run_inference() should only be called on stage 0")
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
@@ -292,22 +438,32 @@ class ModelPipeline:
         else:
             think_open_id, think_close_id = None, None
 
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
+
         def is_eos(token_id: int) -> bool:
             """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
         def emit(token_id: int) -> None:
             """Emit a token to the caller and update thinking-phase state."""
+            nonlocal first_emit_time, last_emit_time
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
+            now = time.time()
+            if first_emit_time is None:
+                first_emit_time = now
+            last_emit_time = now
             if token_id == think_open_id:
                 self._in_thinking_phase = True
             elif token_id == think_close_id:
                 self._in_thinking_phase = False
 
         # --- Prefill --------------------------------------------------------
+        prefill_start = time.time()
         prefill_results = self.prefill_forward(prompt_token_ids)
+        prefill_end = time.time()
 
         # Seed the state machine with both pages from the last prefill write,
         # then read from the pipeline for all subsequent results.
@@ -317,14 +473,11 @@ class ModelPipeline:
         base_reject = 0
         spec_reject = 0
         # --- Speculative decode state machine --------------------------------
-        iteration = 0
-        start_time = time.time()
-        num_emits = 0
+        decode_start = time.time()
         num_writes = 0
         num_reads = 0
         signal_to_exit = False
         while len(generated_tokens) < max_new_tokens or signal_to_exit:
-            iteration += 1
             if pending:
                 result = pending.popleft()
             else:
@@ -334,14 +487,12 @@ class ModelPipeline:
             if not unverified_spec_tokens and not verified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
-                num_emits += 1
             else:
                 if result.token_0_type == TokenType.BASE:
                     if self.check_acceptance(unverified_spec_tokens[-1], result):
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
                         base_accept += 1
-                        num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                         continue
                     else:
@@ -349,7 +500,6 @@ class ModelPipeline:
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
                         base_reject += 1
-                        num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
 
                 if result.token_0_type == TokenType.SPEC:
@@ -362,7 +512,6 @@ class ModelPipeline:
 
                         emit(result.token_0)
                         spec_accept += 1
-                        num_emits += 1
                     else:
                         if signal_to_exit:
                             break
@@ -383,17 +532,38 @@ class ModelPipeline:
             )
             num_writes += 2
 
+        decode_end = time.time()
+
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        end_time = time.time()
-        logger.debug(f"Time taken: {end_time - start_time} seconds")
-        logger.debug(f"Tokens per second: {num_emits / (end_time - start_time)}")
+        n_emitted = len(generated_tokens)
+        decode_elapsed = decode_end - decode_start
+        # TTFT = prefill + time to first emitted decode token.
+        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
+        # Steady-state inter-token throughput excludes the first emission.
+        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
+            tpot_elapsed = last_emit_time - first_emit_time
+            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
+        else:
+            tps_steady = float("nan")
+        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
+        prefill_elapsed = prefill_end - prefill_start
+        logger.debug(
+            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
+            prefill_elapsed,
+            len(prompt_token_ids),
+            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
+        )
+        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
+        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
+        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
+        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
         logger.debug(
             f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
         )
-        logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+        logger.debug("Generation complete ({} tokens generated)", n_emitted)
         return generated_tokens if return_generated_tokens else None
 
     def barrier(self) -> None:

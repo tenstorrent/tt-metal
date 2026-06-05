@@ -17,9 +17,10 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     const MoeParams& operation_attributes, const MoeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& expert_mask_tensor = tensor_args.expert_mask;
-    const auto& topk_mask_tensor = tensor_args.topk_mask;
+    const auto& input_tensor = tensor_args.input.mesh_tensor();
+    const auto& expert_mask_tensor = tensor_args.expert_mask.mesh_tensor();
+    const auto& topk_mask_tensor = tensor_args.topk_mask.mesh_tensor();
+    const auto& out_tensor = output_tensor.mesh_tensor();
 
     const auto k = operation_attributes.k;
 
@@ -30,7 +31,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     tt::DataFormat topk_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.dtype());
     tt::DataFormat expert_mask_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(expert_mask_tensor.dtype());
-    tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(out_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
@@ -44,15 +45,10 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     uint32_t index_tile_size = tile_size(index_cb_data_format);
     uint32_t value_tile_size = tile_size(value_cb_data_format);
 
-    auto* input_buffer = input_tensor.buffer();
-    auto* topk_mask_buffer = topk_mask_tensor.buffer();
-    auto* expert_mask_buffer = expert_mask_tensor.buffer();
-    auto* out_buffer = output_tensor.buffer();
-
     const uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     const uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
     const uint32_t tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
-    uint32_t num_out_tiles = output_tensor.physical_volume() / tile_hw;
+    uint32_t num_out_tiles = out_tensor.physical_volume() / tile_hw;
     uint32_t scale_tiles = 1;
 
     auto input_shape = input_tensor.padded_shape();
@@ -216,9 +212,9 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index, index_cb_index, topk_mask_cb_index, expert_mask_cb_index, Ht, Wt, k};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(topk_mask_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(expert_mask_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(topk_mask_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_mask_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -230,13 +226,13 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     reader_desc.emplace_runtime_args(
         core.start_coord,
         {
-            input_buffer,
-            topk_mask_buffer,
-            expert_mask_buffer,
+            input_tensor,
+            topk_mask_tensor,
+            expert_mask_tensor,
         });
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k};
-    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -248,7 +244,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
     writer_desc.emplace_runtime_args(
         core.start_coord,
         {
-            out_buffer,
+            out_tensor,
         });
 
     std::vector<uint32_t> compute_args = {

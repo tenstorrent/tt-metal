@@ -9,13 +9,16 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
+from ....models.transformers.transformer_motif import (
+    MotifTransformer,
+    MotifTransformerConfig,
+    convert_motif_transformer_state,
+)
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.motif import configuration_motifimage, modeling_dit
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
-from ....utils.padding import PaddingConfig
 from ....utils.substate import substate
 from ....utils.tensor import bf16_tensor
 
@@ -118,30 +121,28 @@ def test_transformer_motif(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    if num_heads % tp_factor != 0:
-        padding_config = PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
-    else:
-        padding_config = None
-
     latents_height = height // vae_scale_factor
     latents_width = width // vae_scale_factor
 
-    tt_model = MotifTransformer(
+    config = MotifTransformerConfig(
         patch_size=patch_size,
         num_layers=num_layers,
-        attention_head_dim=head_dim,
-        num_attention_heads=num_heads,
+        num_heads=num_heads,
+        head_dim=head_dim,
         pooled_projection_dim=pooled_text_dim,
         pos_embed_max_size=pos_emb_size,
         modulation_dim=modulation_dim,
         time_embed_dim=time_embed_dim,
         register_token_num=register_token_num,
+    )
+
+    tt_model = MotifTransformer(
+        config=config,
         latents_height=latents_height,
         latents_width=latents_width,
         mesh_device=submesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
-        padding_config=padding_config,
     )
 
     logger.info("loading state dict from file...")

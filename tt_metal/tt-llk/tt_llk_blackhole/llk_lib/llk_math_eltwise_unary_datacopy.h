@@ -383,10 +383,19 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
 }
 
 // If using 8bit datums for unpack src, skip_bh_tilize_workaround should be set to true because blackhole tilize workaround is not done for 8 bit datum formats.
-template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
+template <
+    DataCopyType type,
+    bool is_fp32_dest_acc_en,
+    BroadcastType src_b_bcast_type = BroadcastType::NONE,
+    bool is_int_fpu_en             = false,
+    PackMode pack_mode             = PackMode::Default>
 inline void _llk_math_eltwise_unary_datacopy_init_(
     const std::uint32_t num_faces = 4, const std::uint32_t dst_format = 255, const bool skip_bh_tilize_workaround = false)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
+        "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
+    constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
@@ -411,7 +420,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     }
 
     // Workaround for HW bug (budabackend#1948): tilize with UInt32/Int32 needs debug feature bit 11 disabled
-    if constexpr (tilize)
+    if constexpr (pack_mode == PackMode::Tilize)
     {
         if ((dst_format == static_cast<std::uint32_t>(DataFormat::UInt32)) || (dst_format == static_cast<std::uint32_t>(DataFormat::Int32)))
         {

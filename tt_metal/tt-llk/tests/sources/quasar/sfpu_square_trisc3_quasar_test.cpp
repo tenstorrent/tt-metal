@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const int num_sfpu_iterations = params.TEST_FACE_R_DIM >> 1; // SFP_ROWS == 2
 
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {

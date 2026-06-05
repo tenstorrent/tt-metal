@@ -7,7 +7,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include "impl/host_api/temp_quasar_api.hpp"
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {

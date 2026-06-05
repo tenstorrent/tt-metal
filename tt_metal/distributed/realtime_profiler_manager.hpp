@@ -16,6 +16,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "context/context_types.hpp"
+
 namespace tt::tt_metal {
 
 class IDevice;
@@ -117,6 +119,12 @@ private:
 
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
 
+    // ContextId of the owning MeshDevice, captured in the constructor. All MetalContext
+    // accesses inside this manager must go through MetalContext::instance(context_id_)
+    // so a non-default (mock / coexistence) context routes through its own HAL, cluster
+    // and dispatch_mem_map instead of leaking to the silicon DEFAULT_CONTEXT_ID via the
+    // bare instance() inline fallback. See #38445 / #39849 for the broader migration.
+    ContextId context_id_;
     std::vector<DeviceState> devices_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};

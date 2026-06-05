@@ -17,7 +17,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min<true>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -28,7 +28,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min_int32<true, false>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -39,7 +39,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_max_uint32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_uint32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min_int32<true, true>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -51,7 +51,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_min_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min<false>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -62,7 +62,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_min_int32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_int32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min_int32<false, false>, dst_index0, dst_index1, odst, vector_mode);
 }
@@ -73,7 +73,7 @@ inline void llk_math_eltwise_binary_sfpu_binary_min_uint32_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_min_uint32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_max_min_int32<false, true>, dst_index0, dst_index1, odst, vector_mode);
 }

@@ -9,9 +9,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
-#include "api/dataflow/circular_buffer.h"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 
@@ -22,21 +21,21 @@ namespace compute_kernel_lib {
 constexpr ckernel::MathFidelity REDUCE_MATMUL_FIDELITY = ckernel::MathFidelity::HiFi4;
 
 // Matmul wrappers that use REDUCE_MATMUL_FIDELITY instead of MATH_FIDELITY
-ALWI void reduce_with_matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id) {
-    state_configure(in1_cb_id, in0_cb_id);
-    MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, 0)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, 0)));
+ALWI void reduce_with_matmul_init(uint32_t in0_dfb_id, uint32_t in1_dfb_id) {
+    state_configure(in1_dfb_id, in0_dfb_id);
+    MATH((llk_math_matmul_init<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(in0_dfb_id, in1_dfb_id, 0)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_dfb_id, in1_dfb_id, 0)));
 }
 
-ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
-    reduce_with_matmul_init(in0_cb_id, in1_cb_id);
+ALWI void reduce_with_matmul_init_with_dt(uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t c_in_old_srca) {
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_dfb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_dfb_id)));
+    reduce_with_matmul_init(in0_dfb_id, in1_dfb_id);
 }
 
 ALWI void reduce_matmul_tiles(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
+    uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t in0_tile_index, uint32_t in1_tile_index, uint32_t idst) {
+    UNPACK((llk_unpack_AB_matmul(in0_dfb_id, in1_dfb_id, in0_tile_index, in1_tile_index)));
     MATH((llk_math_matmul<REDUCE_MATMUL_FIDELITY, MM_THROTTLE>(idst)));
 }
 
@@ -73,13 +72,13 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 // =============================================================================
 
 template <PoolType reduce_type, ReduceDim reduce_dim>
-ALWI void reduce_init_short_with_dt(uint32_t old_cb_id, uint32_t input_cb_id, uint32_t scaler_cb_id) {
-    // Reconfigure SRCA data format from old_cb_id to input_cb_id (similar to copy_tile_to_dst_init_short_with_dt)
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cb_id, input_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cb_id, input_cb_id)));
+ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, uint32_t scaler_dfb_id) {
+    // Reconfigure SRCA data format from old_dfb_id to input_dfb_id (similar to copy_tile_to_dst_init_short_with_dt)
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, input_dfb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, input_dfb_id)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
-    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id)));
+    UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
 
     // Reconfigure math for reduce operation
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
@@ -102,49 +101,65 @@ template <
     typename AccumulateT,
     bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(
-    CircularBuffer& accum_cb, uint32_t input_cb_id, uint32_t scaler_cb_id, const AccumulateT& accumulate) {
+    DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
-            accum_cb.wait_front(onetile);
-            const uint32_t prev_srca_cb = use_matmul ? scaler_cb_id : input_cb_id;
-            copy_tile_to_dst_init_short_with_dt(prev_srca_cb, accumulate.config.cb_accumulator);
+            accum_dfb.wait_front(onetile);
+            const uint32_t prev_srca_cb = use_matmul ? scaler_dfb_id : input_dfb_id;
+
+            // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
+            // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
+            // are never read. The LLK's reduce_row_perform_transpose then rotates those
+            // row-0 accumulators into col 0 of face 0 and col 0 of face 2 for packing.
+            // A vanilla copy_tile reload would leave the running max at col 0, but the
+            // next GMPOOL iteration only reads row 0 — so it would be silently dropped.
+            // Within-face-16x16-transpose on reload puts col 0 of each face back at row 0
+            // of that face, restoring the exact layout GMPOOL expects.
+            constexpr bool reload_within_face_transpose =
+                (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW);
+
+            reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
+            copy_tile_to_dst_init_short(
+                accumulate.config.cb_accumulator,
+                /*transpose_of_faces=*/0,
+                /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
-            accum_cb.pop_front(onetile);
+            accum_dfb.pop_front(onetile);
 
             // CRITICAL: Re-init after copy_tile corrupts SRCA config
             // Use short version since packer config is still valid from initial init
-            // Pass accumulator CB as old_cb_id to reconfigure data format from accumulator to input CB
+            // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (use_matmul) {
-                reduce_with_matmul_init_with_dt(input_cb_id, scaler_cb_id, accumulate.config.cb_accumulator);
+                reduce_with_matmul_init_with_dt(input_dfb_id, scaler_dfb_id, accumulate.config.cb_accumulator);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
-                    accumulate.config.cb_accumulator, input_cb_id, scaler_cb_id);
+                    accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
             }
         }
     }
 }
 
 template <ReduceInputPolicy input_policy>
-ALWI void assert_input_cb_size(uint32_t input_cb_id, uint32_t tiles_per_bulk, uint32_t total_tiles) {
+ALWI void assert_input_dfb_size(uint32_t input_dfb_id, uint32_t tiles_per_bulk, uint32_t total_tiles) {
     if constexpr (waits_per_tile(input_policy)) {
-        ASSERT(get_cb_num_pages(input_cb_id) >= 1);
+        ASSERT(get_dfb_num_pages(input_dfb_id) >= 1);
     } else if constexpr (waits_bulk(input_policy)) {
-        ASSERT(get_cb_num_pages(input_cb_id) >= tiles_per_bulk);
-        ASSERT(get_cb_num_pages(input_cb_id) % tiles_per_bulk == 0);
+        ASSERT(get_dfb_num_pages(input_dfb_id) >= tiles_per_bulk);
+        ASSERT(get_dfb_num_pages(input_dfb_id) % tiles_per_bulk == 0);
     } else {  // waits_upfront or no_wait
-        ASSERT(get_cb_num_pages(input_cb_id) >= total_tiles);
+        ASSERT(get_dfb_num_pages(input_dfb_id) >= total_tiles);
     }
 }
 
 template <ReduceInputPolicy input_policy>
-ALWI void assert_output_cb_size(uint32_t output_cb_id, uint32_t total_outputs) {
+ALWI void assert_output_dfb_size(uint32_t output_dfb_id, uint32_t total_outputs) {
     if constexpr (should_pop(input_policy)) {
         // Per-tile reserve/push: only needs 1 page
-        ASSERT(get_cb_num_pages(output_cb_id) >= 1);
+        ASSERT(get_dfb_num_pages(output_dfb_id) >= 1);
     } else {
         // Bulk reserve upfront: needs all outputs
-        ASSERT(get_cb_num_pages(output_cb_id) >= total_outputs);
+        ASSERT(get_dfb_num_pages(output_dfb_id) >= total_outputs);
     }
 }
 
@@ -160,9 +175,9 @@ template <
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
-    uint32_t input_cb_id,
-    uint32_t scaler_cb_id,
-    uint32_t output_cb_id,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
@@ -177,31 +192,38 @@ ALWI void reduce(
         is_post_reduce_op_v<PostReduceOp>,
         "PostReduceOp must be callable with a uint32_t argument");
     static_assert(
-        !is_accumulate_v<AccumulateT> || reduce_type != PoolType::MAX || reduce_dim == ReduceDim::REDUCE_COL,
-        "Accumulate::at with PoolType::MAX only works for REDUCE_COL. For REDUCE_ROW / REDUCE_SCALAR "
-        "the pack reduce edge mask drops the face-row-0 spread that GMPOOL needs as its running "
-        "accumulator on the reload pass, so the previous MAX is lost.");
+        !is_accumulate_v<AccumulateT> ||
+            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_SCALAR),
+        "Accumulate with PoolType::MAX + REDUCE_SCALAR is not supported: the pack edge mask "
+        "keeps only DST(0,0), but GMPOOL needs that running max broadcast across face-0 row 4 "
+        "on the reload pass, which the current copy_tile reload cannot reproduce.");
+#ifdef ARCH_QUASAR
+    // The MAX + REDUCE_ROW accumulator reload relies on a within-16x16-face transpose during
+    // copy_tile_to_dst_init_short (see reload_accumulator_if_needed). That transpose is rejected
+    // by copy_tile_to_dst_init_short on Quasar ("Transpose within face not supported on Quasar"),
+    // and there is no Quasar-compatible reload that restores the layout GMPOOL expects.
+    static_assert(
+        !is_accumulate_v<AccumulateT> ||
+            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
+        "Accumulate with PoolType::MAX + REDUCE_ROW is not supported on Quasar: the accumulator "
+        "reload requires a within-16x16-face transpose, which copy_tile_to_dst_init_short asserts "
+        "against on Quasar.");
+#endif
 
     // =============================================================================
     // Runtime Assertions (parameter validation)
     // =============================================================================
-    ASSERT(input_cb_id < NUM_CIRCULAR_BUFFERS);
-    ASSERT(scaler_cb_id < NUM_CIRCULAR_BUFFERS);
-    ASSERT(output_cb_id < NUM_CIRCULAR_BUFFERS);
-    ASSERT(input_cb_id != output_cb_id);
-    ASSERT(input_cb_id != scaler_cb_id);
-    ASSERT(output_cb_id != scaler_cb_id);
-    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb_id, (DataFormat)unpack_src_format[input_cb_id])));
-    UNPACK(ASSERT(is_valid_cb_tile_page_size(scaler_cb_id, (DataFormat)unpack_src_format[scaler_cb_id])));
-    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb_id, (DataFormat)pack_dst_format[output_cb_id])));
+    ASSERT(input_dfb_id != output_dfb_id);
+    ASSERT(input_dfb_id != scaler_dfb_id);
+    ASSERT(output_dfb_id != scaler_dfb_id);
+    UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
+    UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
+    PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
     ASSERT(input_block_shape.rows > 0);
     ASSERT(input_block_shape.cols > 0);
     ASSERT(input_block_shape.batches > 0);
     if (input_memory_layout.row_stride != 0) {
         ASSERT(input_memory_layout.row_stride >= input_block_shape.cols);
-    }
-    if constexpr (is_accumulate_v<AccumulateT>) {
-        ASSERT(accumulate.config.cb_accumulator < NUM_CIRCULAR_BUFFERS);
     }
 
     // Compile-time flag: true when Accumulate type is passed, false otherwise
@@ -213,10 +235,10 @@ ALWI void reduce(
 
     constexpr bool use_matmul = reduce_uses_matmul<reduce_type, reduce_dim>();
 
-    CircularBuffer input_cb(input_cb_id);
-    CircularBuffer scaler_cb(scaler_cb_id);
-    CircularBuffer output_cb(output_cb_id);
-    CircularBuffer accum_cb([&]() -> uint32_t {
+    DataflowBuffer input_dfb(input_dfb_id);
+    DataflowBuffer scaler_dfb(scaler_dfb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer accum_dfb([&]() -> uint32_t {
         if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
         else { return 0; }
     }());
@@ -224,21 +246,21 @@ ALWI void reduce(
     // Apply reconfig based on mode
     if constexpr (reconfig_input(reconfig_mode)) {
         if constexpr (use_matmul) {
-            reconfig_data_format(scaler_cb_id, input_cb_id);
+            reconfig_data_format(scaler_dfb_id, input_dfb_id);
         } else {
-            reconfig_data_format(input_cb_id, scaler_cb_id);
+            reconfig_data_format(input_dfb_id, scaler_dfb_id);
         }
     }
     if constexpr (reconfig_output(reconfig_mode)) {
-        pack_reconfig_data_format(output_cb_id);
+        pack_reconfig_data_format(output_dfb_id);
     }
     // Initialization
     if constexpr (use_matmul) {
-        reduce_with_matmul_init(input_cb_id, scaler_cb_id);
+        reduce_with_matmul_init(input_dfb_id, scaler_dfb_id);
     } else {
-        reduce_init<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, output_cb_id);
+        reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
-    scaler_cb.wait_front(1);  // Wait for scaler tile
+    scaler_dfb.wait_front(1);  // Wait for scaler tile
 
     constexpr uint32_t onetile = 1;
 
@@ -251,49 +273,49 @@ ALWI void reduce(
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
         const uint32_t total_output_tiles = num_batches;
-        UNPACK((assert_input_cb_size<input_policy>(input_cb_id, tiles_per_bulk, total_input_tiles)));
-        PACK((assert_output_cb_size<input_policy>(output_cb_id, total_output_tiles)));
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, tiles_per_bulk, total_input_tiles)));
+        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
 
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
-            output_cb.reserve_back(total_output_tiles);
+            output_dfb.reserve_back(total_output_tiles);
         }
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
-            input_cb.wait_front(total_input_tiles);
+            input_dfb.wait_front(total_input_tiles);
         }
 
         uint32_t batch_offset = 0;
         for (uint32_t nc = 0; nc < num_batches; ++nc) {
             // BulkWaitBulkPop: wait for all Ht×Wt tiles in bulk
             if constexpr (waits_bulk(input_policy)) {
-                input_cb.wait_front(tiles_per_bulk);
+                input_dfb.wait_front(tiles_per_bulk);
             }
 
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
             reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
-                accum_cb, input_cb_id, scaler_cb_id, accumulate);
+                accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
-                        input_cb.wait_front(onetile);
-                        reduce_tile<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
-                        input_cb.pop_front(onetile);
+                        input_dfb.wait_front(onetile);
+                        reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                        input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         uint32_t tile_idx = ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_cb_id, scaler_cb_id, tile_idx, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         uint32_t tile_idx = batch_offset + ht * stride + wt;
                         reduce_tile<reduce_type, reduce_dim>(
-                            input_cb_id, scaler_cb_id, tile_idx, 0, dst_idx);
+                            input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
                     }
                 }
             }
@@ -304,19 +326,19 @@ ALWI void reduce(
 
             // Pop modes: reserve per-batch
             if constexpr (should_pop(input_policy)) {
-                output_cb.reserve_back(onetile);
+                output_dfb.reserve_back(onetile);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(get_dst_index(accumulate), output_cb_id);
+            pack_tile(get_dst_index(accumulate), output_dfb_id);
             tile_regs_release();
             if constexpr (should_pop(input_policy)) {
-                output_cb.push_back(onetile);
+                output_dfb.push_back(onetile);
             }
 
             // BulkWaitBulkPop: pop all tiles after processing
             if constexpr (waits_bulk(input_policy)) {
-                input_cb.pop_front(tiles_per_bulk);
+                input_dfb.pop_front(tiles_per_bulk);
             }
 
             // PreloadedPolicy or PersistentPolicy: update batch offset
@@ -327,7 +349,7 @@ ALWI void reduce(
 
         // No-pop modes: bulk push output at end
         if constexpr (!should_pop(input_policy)) {
-            output_cb.push_back(total_output_tiles);
+            output_dfb.push_back(total_output_tiles);
         }
     } else if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
         // =================================================================
@@ -336,17 +358,17 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t total_output_tiles = Ht * num_batches;
         const uint32_t total_input_tiles = Ht * stride * num_batches;
-        UNPACK((assert_input_cb_size<input_policy>(input_cb_id, Wt, total_input_tiles)));
-        PACK((assert_output_cb_size<input_policy>(output_cb_id, total_output_tiles)));
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Wt, total_input_tiles)));
+        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
 
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
-            output_cb.reserve_back(total_output_tiles);
+            output_dfb.reserve_back(total_output_tiles);
         }
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
-            input_cb.wait_front(total_input_tiles);
+            input_dfb.wait_front(total_input_tiles);
         }
 
         uint32_t index_offset = 0;
@@ -354,40 +376,40 @@ ALWI void reduce(
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 // BulkWaitBulkPop: wait for entire row upfront
                 if constexpr (waits_bulk(input_policy)) {
-                    input_cb.wait_front(Wt);
+                    input_dfb.wait_front(Wt);
                 }
 
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, use_matmul>(
-                    accum_cb, input_cb_id, scaler_cb_id, accumulate);
+                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
                 for (uint32_t wt = 0; wt < Wt; ++wt) {
                     if constexpr (waits_per_tile(input_policy)) {
                         // One-at-a-time: wait/pop per tile
-                        input_cb.wait_front(onetile);
+                        input_dfb.wait_front(onetile);
                         if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
+                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
                         } else {
-                            reduce_tile<reduce_type, reduce_dim>(input_cb_id, scaler_cb_id, 0, 0, dst_idx);
+                            reduce_tile<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
                         }
-                        input_cb.pop_front(onetile);
+                        input_dfb.pop_front(onetile);
                     } else if constexpr (waits_bulk(input_policy)) {
                         // BulkWaitBulkPop: use indexed access
                         if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_cb_id, scaler_cb_id, wt, 0, dst_idx);
+                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, wt, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, wt, 0, dst_idx);
                         }
                     } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                         if constexpr (use_matmul) {
-                            reduce_matmul_tiles(input_cb_id, scaler_cb_id, wt + index_offset, 0, dst_idx);
+                            reduce_matmul_tiles(input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                         } else {
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, wt + index_offset, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, wt + index_offset, 0, dst_idx);
                         }
                     }
                 }
@@ -398,19 +420,19 @@ ALWI void reduce(
 
                 // Pop modes: reserve per-row to avoid deadlock
                 if constexpr (should_pop(input_policy)) {
-                    output_cb.reserve_back(onetile);
+                    output_dfb.reserve_back(onetile);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst_idx, output_cb_id);
+                pack_tile(dst_idx, output_dfb_id);
                 tile_regs_release();
                 if constexpr (should_pop(input_policy)) {
-                    output_cb.push_back(onetile);
+                    output_dfb.push_back(onetile);
                 }
 
                 // BulkWaitBulkPop: pop all tiles after processing
                 if constexpr (waits_bulk(input_policy)) {
-                    input_cb.pop_front(Wt);
+                    input_dfb.pop_front(Wt);
                 }
 
                 // PreloadedPolicy or PersistentPolicy: update index offset
@@ -422,7 +444,7 @@ ALWI void reduce(
 
         // No-pop modes: bulk push output at end
         if constexpr (!should_pop(input_policy)) {
-            output_cb.push_back(total_output_tiles);
+            output_dfb.push_back(total_output_tiles);
         }
     } else {
         // =================================================================
@@ -439,17 +461,17 @@ ALWI void reduce(
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_output_tiles = Wt * num_batches;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        UNPACK((assert_input_cb_size<input_policy>(input_cb_id, Ht * chunk_size, total_input_tiles)));
-        PACK((assert_output_cb_size<input_policy>(output_cb_id, total_output_tiles)));
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
+        PACK((assert_output_dfb_size<input_policy>(output_dfb_id, total_output_tiles)));
 
         // No-pop modes: bulk reserve output upfront
         if constexpr (!should_pop(input_policy)) {
-            output_cb.reserve_back(total_output_tiles);
+            output_dfb.reserve_back(total_output_tiles);
         }
 
         // PersistentPolicy: wait for all tiles upfront
         if constexpr (waits_upfront(input_policy)) {
-            input_cb.wait_front(total_input_tiles);
+            input_dfb.wait_front(total_input_tiles);
         }
 
         uint32_t batch_offset = 0;
@@ -461,14 +483,14 @@ ALWI void reduce(
 
                 // BulkWaitBulkPop: wait for entire chunk upfront
                 if constexpr (waits_bulk(input_policy)) {
-                    input_cb.wait_front(tiles_in_chunk);
+                    input_dfb.wait_front(tiles_in_chunk);
                 }
 
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT>(
-                    accum_cb, input_cb_id, scaler_cb_id, accumulate);
+                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     // Base dst_index: from accumulation config or 0 for multi-column output
@@ -476,19 +498,19 @@ ALWI void reduce(
                     for (uint32_t i = wt; i < chunk_end; ++i) {
                         if constexpr (waits_per_tile(input_policy)) {
                             // One-at-a-time: wait/pop per tile
-                            input_cb.wait_front(onetile);
+                            input_dfb.wait_front(onetile);
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, 0, 0, dst_idx);
-                            input_cb.pop_front(onetile);
+                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
+                            input_dfb.pop_front(onetile);
                         } else if constexpr (waits_bulk(input_policy)) {
                             // BulkWaitBulkPop: use indexed access
                             uint32_t tile_idx = ht * current_chunk + (i - wt);
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, tile_idx, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
                         } else {  // PreloadedPolicy or PersistentPolicy: indexed access
                             uint32_t tile_idx = batch_offset + ht * stride + i;
                             reduce_tile<reduce_type, reduce_dim>(
-                                input_cb_id, scaler_cb_id, tile_idx, 0, dst_idx);
+                                input_dfb_id, scaler_dfb_id, tile_idx, 0, dst_idx);
                         }
                         ++dst_idx;
                     }
@@ -505,18 +527,18 @@ ALWI void reduce(
                 for (uint32_t i = 0; i < current_chunk; ++i) {
                     // Pop modes: reserve/push per output tile
                     if constexpr (should_pop(input_policy)) {
-                        output_cb.reserve_back(onetile);
+                        output_dfb.reserve_back(onetile);
                     }
-                    pack_tile(base_dst + i, output_cb_id);
+                    pack_tile(base_dst + i, output_dfb_id);
                     if constexpr (should_pop(input_policy)) {
-                        output_cb.push_back(onetile);
+                        output_dfb.push_back(onetile);
                     }
                 }
                 tile_regs_release();
 
                 // BulkWaitBulkPop: pop all tiles after processing
                 if constexpr (waits_bulk(input_policy)) {
-                    input_cb.pop_front(tiles_in_chunk);
+                    input_dfb.pop_front(tiles_in_chunk);
                 }
             }
             // Update batch_offset for indexed modes (PreloadedPolicy and PersistentPolicy)
@@ -527,7 +549,7 @@ ALWI void reduce(
 
         // No-pop modes: bulk push output at end
         if constexpr (!should_pop(input_policy)) {
-            output_cb.push_back(total_output_tiles);
+            output_dfb.push_back(total_output_tiles);
         }
     }
 

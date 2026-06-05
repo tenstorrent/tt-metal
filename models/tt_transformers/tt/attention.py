@@ -1068,15 +1068,27 @@ class Attention(LightweightModule):
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_1QSD_8b,
-                input_tensor_k=keys_BKSD,
-                input_tensor_v=values_BKSD,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
-            )
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=None,
+                    chunk_start_idx_tensor=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
+                )
+            else:
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
+                )
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
             # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]

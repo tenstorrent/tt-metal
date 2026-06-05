@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
@@ -21,6 +22,11 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
 namespace tt::tt_fabric::detail {
+
+// Full definition of the opaque session type forward-declared in topology_solver.hpp.
+struct TopologySatSession {
+    TopologySatSolver solver;
+};
 
 // ── Adjacency and Edge Helpers ────────────────────────────────────────────────
 namespace {
@@ -237,7 +243,113 @@ size_t topology_sat_preferred_greedy_lower_bound(
     return best;
 }
 
+// Returns false if the clause would be empty (no literal can be true to map outside shape_set).
+bool topology_sat_build_shape_blocking_clause(
+    const TopologySatHardEncoding& enc, const std::vector<int>& shape_sorted, std::vector<int>& clause_out) {
+    clause_out.clear();
+    const size_t nt = enc.assign_lit.size();
+    for (size_t t = 0; t < nt; ++t) {
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        for (size_t k = 0; k < globs.size(); ++k) {
+            const int g = static_cast<int>(globs[k]);
+            if (!std::binary_search(shape_sorted.begin(), shape_sorted.end(), g)) {
+                clause_out.push_back(lits[k]);
+            }
+        }
+    }
+    return !clause_out.empty();
+}
+
+void topology_sat_add_shape_clause_or_unsat(
+    TopologySatSolver& solver, const TopologySatHardEncoding& enc, std::vector<int>& clause_working) {
+    if (clause_working.empty()) {
+        if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
+            const int lit = enc.assign_lit[0][0];
+            solver.add(lit);
+            solver.add(0);
+            solver.add(-lit);
+            solver.add(0);
+        } else {
+            // No variables were ever declared — declare one now so CaDiCaL's strict variable check
+            // (factor=1, enabled by default in CaDiCaL 3.0.0) accepts the literal.
+            const int v = solver.declare_one_more_variable();
+            solver.add(v);
+            solver.add(0);
+            solver.add(-v);
+            solver.add(0);
+        }
+        return;
+    }
+    for (int lit : clause_working) {
+        solver.add(lit);
+    }
+    solver.add(0);
+}
+
+// Exclude one complete assignment (or its image-set shape when unique_shapes) — same logic as topology_sat_search_n.
+bool topology_sat_add_blocking_clause_for_mapping_impl(
+    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes) {
+    if (unique_shapes) {
+        const auto shape_key = topology_mapping_shape_key(raw_mapping);
+        std::vector<int> shape_clause;
+        if (!topology_sat_build_shape_blocking_clause(enc, shape_key, shape_clause)) {
+            if (!enc.assign_lit.empty() && !enc.assign_lit[0].empty()) {
+                const int lit = enc.assign_lit[0][0];
+                solver.add(lit);
+                solver.add(0);
+                solver.add(-lit);
+                solver.add(0);
+            } else {
+                const int v = solver.declare_one_more_variable();
+                solver.add(v);
+                solver.add(0);
+                solver.add(-v);
+                solver.add(0);
+            }
+        } else {
+            for (int lit : shape_clause) {
+                solver.add(lit);
+            }
+            solver.add(0);
+        }
+        return true;
+    }
+    const size_t nt = enc.assign_lit.size();
+    std::vector<int> new_blocking;
+    new_blocking.reserve(nt);
+    for (size_t t = 0; t < nt; ++t) {
+        const int chosen_global = raw_mapping[t];
+        if (chosen_global < 0) {
+            return false;
+        }
+        const auto& globs = enc.allowed_global_idx[t];
+        const auto& lits = enc.assign_lit[t];
+        bool found_k = false;
+        for (size_t k = 0; k < globs.size(); ++k) {
+            if (static_cast<int>(globs[k]) == chosen_global) {
+                new_blocking.push_back(-lits[k]);
+                found_k = true;
+                break;
+            }
+        }
+        if (!found_k) {
+            return false;
+        }
+    }
+    for (int lit : new_blocking) {
+        solver.add(lit);
+    }
+    solver.add(0);
+    return true;
+}
+
 }  // namespace
+
+bool topology_sat_add_blocking_clause_for_mapping(
+    TopologySatSolver& solver, TopologySatHardEncoding& enc, const std::vector<int>& raw_mapping, bool unique_shapes) {
+    return topology_sat_add_blocking_clause_for_mapping_impl(solver, enc, raw_mapping, unique_shapes);
+}
 
 // ── Cardinality Encoding Primitives ──────────────────────────────────────────
 
@@ -464,7 +576,7 @@ bool topology_sat_build_initial_domains(
 // WHY AC-3: After degree/constraint filtering the domains can still contain globals that
 // have no feasible partner for some adjacent target.  AC-3 iteratively removes such
 // "unsupported" values.  Smaller domains mean fewer SAT variables and shorter support
-// clauses in Step 6, which substantially speeds up Kissat on dense instances.
+// clauses in Step 6, which substantially speeds up the SAT solver on dense instances.
 //
 // The worklist starts with every arc (t, t_neigh).  Whenever a domain shrinks, all arcs
 // pointing INTO t are re-added so their support can be re-checked.  The iteration cap of
@@ -562,7 +674,7 @@ bool topology_sat_apply_arc_consistency(
 
 // Step 3: Allocate one SAT Boolean variable per (target, domain-global) pair and record
 // them in enc.assign_lit / enc.allowed_global_idx.  Preferred globals for a target are
-// listed first in the row so that Kissat's internal variable-order heuristic naturally
+// listed first in the row so that the solver's internal variable-order heuristic naturally
 // tries preferred assignments first under a single solve (no MaxSAT needed).
 void topology_sat_create_assignment_variables(
     TopologySatSolver& solver,
@@ -892,7 +1004,7 @@ bool topology_sat_encode_hard_constraints(
 //   Backward (x -> p):  for each pi:  not x_{t,g_{pi}}  v  p
 //
 // The resulting p_t literals are collected into pref_hit_literals_out and later
-// fed into topology_sat_add_at_least_k_literals to force Kissat toward the
+// fed into topology_sat_add_at_least_k_literals to force the solver toward the
 // maximum simultaneously achievable preferred-hit count.
 void topology_sat_append_preferred_hit_indicators(
     TopologySatSolver& solver,
@@ -1146,7 +1258,7 @@ bool topology_sat_search(
     const TopologySatGraphView& graph_data,
     const TopologySatConstraintView& constraint_data,
     ConnectionValidationMode validation_mode,
-    bool quiet_mode,
+    [[maybe_unused]] bool quiet_mode,
     TopologySearchState& state) {
     state = TopologySearchState{};
     state.mapping.assign(graph_data.n_target, -1);
@@ -1312,6 +1424,133 @@ bool topology_sat_search(
         return false;
     }
     return finalize_success(solver, enc);
+}
+
+// ── topology_sat_search_n — enumerate up to max_solutions with blocking clauses ─────────────────
+
+bool topology_sat_search_n(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    ConnectionValidationMode validation_mode,
+    size_t max_solutions,
+    std::vector<std::vector<int>>& all_mappings_out,
+    bool quiet_mode,
+    bool unique_shapes,
+    const std::vector<std::vector<int>>& initial_forbidden_shape_keys,
+    TopologySearchState& state) {
+    state = TopologySearchState{};
+    state.mapping.assign(graph_data.n_target, -1);
+    state.used.assign(graph_data.n_global, false);
+    all_mappings_out.clear();
+
+    if (max_solutions == 0) {
+        return false;
+    }
+
+    if (graph_data.n_target == 0) {
+        all_mappings_out.push_back({});
+        return true;
+    }
+
+    if (graph_data.n_global < graph_data.n_target) {
+        return false;
+    }
+
+    // One CaDiCaL::Solver for the whole enumeration: encode once, then add blocking clauses and solve() in a loop.
+    // (No full re-encode / new solver per model.)
+    TopologySatSolver solver;
+    solver.configure_for_blocking_clause_enumeration();
+    TopologySatHardEncoding enc;
+    if (!topology_sat_encode_hard_constraints(solver, graph_data, constraint_data, enc, validation_mode)) {
+        return false;
+    }
+
+    for (const auto& shape_key : initial_forbidden_shape_keys) {
+        std::vector<int> forbid_clause;
+        topology_sat_build_shape_blocking_clause(enc, shape_key, forbid_clause);
+        topology_sat_add_shape_clause_or_unsat(solver, enc, forbid_clause);
+    }
+
+    using enum_clock = std::chrono::steady_clock;
+    constexpr auto kEnumProgressLogInterval = std::chrono::seconds(5);
+    // Eligible for an immediate first progress line, then at most once per kEnumProgressLogInterval.
+    auto last_enum_progress_log = enum_clock::now() - kEnumProgressLogInterval;
+
+    while (all_mappings_out.size() < max_solutions) {
+        const int status = solver.solve();
+        if (status != TopologySatSolver::kSat) {
+            break;
+        }
+
+        std::vector<int> current_mapping;
+        if (!topology_sat_decode_hard_solution(solver, enc, current_mapping)) {
+            break;
+        }
+        all_mappings_out.push_back(std::move(current_mapping));
+
+        if (!quiet_mode) {
+            const auto now = enum_clock::now();
+            const bool reached_cap = all_mappings_out.size() >= max_solutions;
+            if (reached_cap || now - last_enum_progress_log >= kEnumProgressLogInterval) {
+                log_info(
+                    tt::LogFabric,
+                    "topology_sat_search_n: found {} / {} solution(s) so far",
+                    all_mappings_out.size(),
+                    max_solutions);
+                last_enum_progress_log = now;
+            }
+        }
+
+        if (!topology_sat_add_blocking_clause_for_mapping(solver, enc, all_mappings_out.back(), unique_shapes)) {
+            break;
+        }
+    }
+
+    if (!all_mappings_out.empty()) {
+        state.mapping = all_mappings_out.back();
+        std::fill(state.used.begin(), state.used.end(), false);
+        for (int gi : state.mapping) {
+            if (gi >= 0 && static_cast<size_t>(gi) < state.used.size()) {
+                state.used[static_cast<size_t>(gi)] = true;
+            }
+        }
+    }
+
+    return !all_mappings_out.empty();
+}
+
+// ── Session bridge functions (public API — declared in topology_solver.hpp) ────
+
+void topology_sat_session_destroy(TopologySatSession* p) noexcept { delete p; }
+
+std::unique_ptr<TopologySatSession, TopologySatSessionDeleter> topology_sat_session_create_and_encode(
+    const TopologySatGraphView& graph_data,
+    const TopologySatConstraintView& constraint_data,
+    TopologySatHardEncoding& enc,
+    ConnectionValidationMode validation_mode) {
+    auto session = std::unique_ptr<TopologySatSession, TopologySatSessionDeleter>(new TopologySatSession{});
+    session->solver.configure_for_blocking_clause_enumeration();
+    enc = {};
+    if (!topology_sat_encode_hard_constraints(session->solver, graph_data, constraint_data, enc, validation_mode)) {
+        return nullptr;
+    }
+    return session;
+}
+
+bool topology_sat_session_add_blocking_clause(
+    TopologySatSession* session,
+    TopologySatHardEncoding& enc,
+    const std::vector<int>& raw_mapping,
+    bool unique_shapes) {
+    return topology_sat_add_blocking_clause_for_mapping(session->solver, enc, raw_mapping, unique_shapes);
+}
+
+bool topology_sat_session_solve_and_decode(
+    TopologySatSession* session, const TopologySatHardEncoding& enc, std::vector<int>& raw_out) {
+    if (session->solver.solve() != TopologySatSolver::kSat) {
+        return false;
+    }
+    return topology_sat_decode_hard_solution(session->solver, enc, raw_out);
 }
 
 }  // namespace tt::tt_fabric::detail

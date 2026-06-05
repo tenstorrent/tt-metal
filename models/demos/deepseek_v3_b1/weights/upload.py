@@ -9,6 +9,7 @@ from types import UnionType
 from typing import Protocol, Union, get_args, get_origin, get_type_hints
 
 import ttnn
+from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.weights.overlap.packing import OverlappedTensor
 
 TensorKey = tuple[str, int]
@@ -68,10 +69,16 @@ class UploadableMixin:
                     raise TypeError(
                         f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
                     )
-                for tensor in value:
-                    if _tensor_is_on_device(tensor):
+                for item in value:
+                    if isinstance(item, CompressedTensor):
+                        # CompressedTensor wraps 1-2 inner ttnn.Tensors (data + assignment in
+                        # lockstep mode); per-core CTs return [] from backing_tensors().
+                        for tensor in item.backing_tensors():
+                            _append_unique_tensor(out, seen_ids, tensor, field.name)
                         continue
-                    _append_unique_tensor(out, seen_ids, tensor, field.name)
+                    if _tensor_is_on_device(item):
+                        continue
+                    _append_unique_tensor(out, seen_ids, item, field.name)
             elif kind == "passthrough":
                 continue
             else:
@@ -121,9 +128,15 @@ class UploadableMixin:
                     raise TypeError(
                         f"Field {type(self).__name__}.{field.name} must be list[ttnn.Tensor], got {type(value)}"
                     )
-                rebuilt_fields[field.name] = [
-                    _resolve_tensor(t, tensor_map, allow_unmapped, type(self).__name__, field.name) for t in value
-                ]
+                rebuilt = []
+                for item in value:
+                    if isinstance(item, CompressedTensor):
+                        rebuilt.append(item.with_device_tensors(tensor_map))
+                    else:
+                        rebuilt.append(
+                            _resolve_tensor(item, tensor_map, allow_unmapped, type(self).__name__, field.name)
+                        )
+                rebuilt_fields[field.name] = rebuilt
             elif kind == "passthrough":
                 rebuilt_fields[field.name] = value
             else:
@@ -223,6 +236,8 @@ def split_core_ranges(
 
 def _upload_tensors(device: ttnn.MeshDevice, host_tensors: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
     """Upload host tensors by writing FD shards first, then SD-only shards."""
+    if not host_tensors:
+        return []
     fd_grid = get_fd_grid(device)
     full_fd_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []
     fd_partial_jobs: list[tuple[ttnn.Tensor, ttnn.Tensor, ttnn.CoreRangeSet]] = []

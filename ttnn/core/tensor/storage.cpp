@@ -79,10 +79,9 @@ struct DeviceStorage::MeshTensorHolder {
     States state_;
 
     MeshTensorHolder() : state_(DeallocatedDefaultConstructed{}) {}
-    MeshTensorHolder(MeshTensor mesh_tensor) : state_(Allocated{std::move(mesh_tensor)}) {
-        TT_FATAL(
-            std::get<Allocated>(state_).mesh_tensor_.is_initialized(),
-            "MeshTensor must not be in default constructed state.");
+    MeshTensorHolder(MeshTensor mesh_tensor) {
+        TT_FATAL(!mesh_tensor.is_valueless_after_move(), "MeshTensor must not be in a moved-from state.");
+        state_ = Allocated{std::move(mesh_tensor)};
     }
 
     bool is_allocated() const { return std::holds_alternative<Allocated>(state_); }
@@ -218,8 +217,12 @@ bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_alloca
 distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
     return std::visit(
         ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) { return &allocated.mesh_tensor_.device(); },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) { return tombstone.mesh_buffer_->device(); },
+            [](const MeshTensorHolder::Allocated& allocated) -> distributed::MeshDevice* {
+                return &allocated.mesh_tensor_.mutable_device();
+            },
+            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> distributed::MeshDevice* {
+                return tombstone.mesh_buffer_->device();
+            },
             [](const auto&) -> distributed::MeshDevice* { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
 }

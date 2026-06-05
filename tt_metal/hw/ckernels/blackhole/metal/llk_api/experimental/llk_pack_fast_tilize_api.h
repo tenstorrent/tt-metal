@@ -42,7 +42,7 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t unit_dim) {
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
-    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
     _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_faces);
 }
 
@@ -50,7 +50,7 @@ inline void llk_pack_fast_tilize_block(
 // stream chunks without reprogramming (row_chunk), cleanup (row_end).
 inline void llk_pack_fast_tilize_row_begin(const std::uint32_t output, const std::uint32_t output_tile_index) {
     const std::uint8_t output_id = get_output_id(output);
-    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_tile_index);
     _llk_pack_fast_tilize_row_begin_(pack_tile_addr);
 }
 

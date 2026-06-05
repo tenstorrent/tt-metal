@@ -30,12 +30,12 @@
 #include "experimental/kernel_args.h"
 #include "api/kernel_thread_globals.h"
 
-// The implicit_sync=true branch uses Noc::TxnIdMode::ENABLED, which is declared
+// The implicit_sync=true branch uses NocOptions::TXN_ID, which is declared
 // only under #ifdef ARCH_QUASAR in api/dataflow/noc.h. This kernel is only used
 // by Quasar-only sequential-DFB harnesses, so the branch is unreachable on Gen1.
 #ifdef ARCH_QUASAR
 #define DFB_SEQ_CONSUME_IMPLICIT_SYNC(dfb_, tensor_accessor_, page_id_) \
-    noc.async_write<Noc::TxnIdMode::ENABLED>((dfb_), (tensor_accessor_), {}, {.page_id = (page_id_)})
+    noc.async_write<NocOptions::TXN_ID>((dfb_), (tensor_accessor_), {}, {.page_id = (page_id_)})
 #else
 #define DFB_SEQ_CONSUME_IMPLICIT_SYNC(dfb_, tensor_accessor_, page_id_) ((void)0)
 #endif

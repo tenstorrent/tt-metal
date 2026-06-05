@@ -56,7 +56,7 @@ using namespace ckernel::sfpu;
 void run_kernel(RUNTIME_PARAMETERS /*params*/)
 {
     // Initialize datacopy operation (copy src A to dest)
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         4 /* num_faces */, formats.math);
 
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
@@ -87,16 +87,17 @@ void run_kernel(RUNTIME_PARAMETERS /*params*/)
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Configure packer hardware for standard pack (no untilize)
-    const bool UNTILIZE = false;
-    const bool TILIZE   = false; // Input to pack is already in tile format
+    static constexpr bool UNTILIZE = false;
+    static constexpr bool TILIZE   = false; // Input to pack is already in tile format
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-    _llk_pack_init_wrapper_<UNTILIZE, false /* zero_output */, TILIZE>(formats.pack_dst);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, TILIZE>>(
+        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_init_wrapper_<llk_test_pack_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats.pack_dst);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // Pack the single result tile from destination register to output buffer
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, UNTILIZE>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 

@@ -25,6 +25,14 @@ from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
 
 
+def round_up(n, m):
+    return ((n + m - 1) // m) * m
+
+
+def bytes_per_tile(dtype) -> int:
+    return {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
+
+
 def run_prefetcher_mm(
     device,
     num_tensors,

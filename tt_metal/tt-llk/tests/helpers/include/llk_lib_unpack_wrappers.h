@@ -12,17 +12,17 @@
 
 #include "llk_unpack_tilize.h"
 
-#ifdef ARCH_WORMHOLE // ARCH_WORMHOLE version of the wrappers
+#ifdef ARCH_WORMHOLE
 
 inline void _llk_unpack_tilize_init_wrapper_(
-    const std::uint32_t unpack_src_format          = 0,
-    const std::uint32_t unpack_dst_format          = 0,
-    const std::uint32_t ct_dim                     = 0,
-    const std::uint32_t face_r_dim                 = ckernel::FACE_R_DIM,
-    const bool narrow_tile                         = false,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    const std::uint32_t unpack_src_format = 0,
+    const std::uint32_t unpack_dst_format = 0,
+    const std::uint32_t ct_dim            = 0,
+    const std::uint32_t face_r_dim        = ckernel::FACE_R_DIM,
+    const bool narrow_tile                = false,
+    const std::uint32_t num_faces         = 4)
 {
-    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, face_r_dim, narrow_tile);
+    _llk_unpack_tilize_init_(unpack_src_format, unpack_dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
 inline std::uint32_t _llk_unpack_tilize_block_ct_dim_wrapper_(const std::uint32_t block_ct_dim)

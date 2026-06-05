@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24...4.2)
 
+# CI: trigger merge-gate ASan 24.04 validation
+
 # Forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -40,7 +42,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
 # discarding toolchain-file settings and CMake defaults.  add_compile_options() with
-# config generators appends cleanly and composes correctly with toolchain files.
+# config generators appends cleanly and composes correctly with toolchain files
 #
 # Flags already provided by CMake defaults and therefore omitted here:
 #   Debug:          -O0 -g
@@ -184,13 +186,17 @@ target_link_libraries(
         numa
 )
 
+# Enable all warnings and treat them as errors by default
+if(NOT DEFINED CMAKE_COMPILE_WARNING_AS_ERROR)
+    set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+endif()
+
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -pipe # use pipes instead of tmp files
     -fvisibility-inlines-hidden
     -Wall
-    -Werror
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
