@@ -1,10 +1,10 @@
-# Blitz Superpod Automapper — Test Results
+# Blitz Superpod Mapping Determinism — Test Results
 
 Recorded: 2026-06-05
 
 ## Overview
 
-End-to-end validation that the Blitz superpod automapper produces a stable ASIC→fabric mapping under input perturbations (mock cluster shuffles, hardware launch-host rotation, and `--hosts` order changes).
+Mapping determinism testing: end-to-end validation that the Blitz superpod automapper produces a stable ASIC→fabric mapping under input perturbations (mock cluster shuffles, hardware launch-host rotation, and `--hosts` order changes).
 
 | Layer | Test | Status |
 |-------|------|--------|

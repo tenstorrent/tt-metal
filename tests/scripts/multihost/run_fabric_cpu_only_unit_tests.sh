@@ -486,7 +486,7 @@ run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/t
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SP4_GLX_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestTriplePod32x4QuadBHGalaxyFabric2DSanity"
 
 ######################################
-# Blitz superpod automapper tests (mock cluster / CPU sim — canonical + 5 variations)
+# Blitz superpod mapping determinism tests (mock cluster / CPU sim — canonical + 5 variations)
 # Variations: shuffled mock rank binding, relabeled MGD descriptors, permuted mesh_id in instances/connections.
 ######################################
 AUTOMAPPER_DEFAULT_ARGS=(

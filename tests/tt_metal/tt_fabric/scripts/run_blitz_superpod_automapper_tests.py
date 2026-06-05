@@ -2,11 +2,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Blitz superpod automapper tests.
+"""Blitz superpod mapping determinism tests.
 
 Mock / CPU sim (--mock-cluster-rank-binding): canonical run + randomized variations (mock mapping shuffle + MGD relabel + mesh_id permutation).
   Variation MGDs rename mesh/graph descriptors and permute mesh_id values consistently in instances and connections;
-  connection graph structure is unchanged (topology-invariant automapper check).
+  connection graph structure is unchanged (topology-invariant determinism check).
   With --golden: mock canonical uses exact gtest compare; all variation mappings use topology-invariant Python compare vs golden.
   Without --golden: variations compare against the mapping captured from the canonical run.
   Real hardware: gtest skips YAML golden compare (real devices); Python compares every run to ``--golden``
@@ -15,13 +15,13 @@ Mock / CPU sim (--mock-cluster-rank-binding): canonical run + randomized variati
 
   **Canonical** — first run with the original mock binding / ``--hosts`` order and canonical MGD.
   **Variation** — later runs that shuffle inputs (mock: rank-binding + permuted MGD mesh_ids;
-  hardware: shuffled ``--hosts`` order plus a rotated tt-run launch host) to verify automapper output stays identical.
+  hardware: shuffled ``--hosts`` order plus a rotated tt-run launch host) to verify mapping output stays identical.
 
 Mock and hardware tt-run invocations always pass ``--force-rediscovery`` so Phase 1 rank bindings are regenerated
   (avoids stale cache from a prior run with different hosts or mock mapping).
 Real hardware (--hosts): canonical run + optional variations (same MGD and new-mode tt-run as canonical).
   Each variation passes a random ``--hosts`` order (seeded) to tt-run and launches tt-run from a different
-  cluster node (rotated by variation index) to verify automapper output is invariant to launch host and
+  cluster node (rotated by variation index) to verify mapping output is invariant to launch host and
   host-list order.
 
   When launching from a login/jump host, use ``ssh-add`` and ``--ssh-bootstrap`` once. Variation runs SSH
@@ -94,7 +94,7 @@ class AutomapperTestLog:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fh: TextIO = self.path.open("w", encoding="utf-8")
-        self._write(f"Blitz superpod automapper test log")
+        self._write(f"Blitz superpod mapping determinism test log")
         self._write(f"Started (UTC): {datetime.now(timezone.utc).isoformat()}")
         self._write(f"Log file: {self.path}")
         self._write(f"Script host: {socket.gethostname()}")
@@ -1135,7 +1135,7 @@ def run_superpod_control_plane(
     cmd.extend([str(executable), f"--gtest_filter={GTEST_FILTER}"])
 
     mode = "mock" if mock_mapping is not None else "hardware"
-    print(f"\n=== Blitz superpod automapper tests ({mode}, {run_label}) ===", flush=True)
+    print(f"\n=== Blitz superpod mapping determinism tests ({mode}, {run_label}) ===", flush=True)
     print(" ".join(cmd), flush=True)
 
     if log is not None:
@@ -1173,7 +1173,9 @@ def run_superpod_control_plane(
             remote_launch=remote_launch,
         )
     if result.returncode != 0:
-        raise RuntimeError(f"Blitz superpod automapper ({mode}, {run_label}) run failed (exit {result.returncode})")
+        raise RuntimeError(
+            f"Blitz superpod mapping determinism ({mode}, {run_label}) run failed (exit {result.returncode})"
+        )
 
 
 def sync_and_save_mapping_artifact(
@@ -1390,7 +1392,7 @@ def run_automapper_tests(
         )
 
     if num_variations <= 0:
-        print("\nAutomapper tests complete: canonical run passed.", flush=True)
+        print("\nMapping determinism tests complete: canonical run passed.", flush=True)
         return
 
     if hardware_mode:
@@ -1489,7 +1491,7 @@ def run_automapper_tests(
                 log=log,
             )
 
-    print(f"\nAutomapper tests complete: canonical + {num_variations} variation(s) passed.", flush=True)
+    print(f"\nMapping determinism tests complete: canonical + {num_variations} variation(s) passed.", flush=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
