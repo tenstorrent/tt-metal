@@ -1148,7 +1148,6 @@ def test_moe(device, tensor_shape, dtype, layout):
         # drives inactive expert probabilities to zero.
         expert_mask = torch.zeros([1, 1, 1, W], dtype=dtype)
         expert_mask[:, :, :, E:] = float("-inf")
-        torch_input = torch_input + expert_mask
         # topE_mask has width k (matching topk output width) and keeps only the
         # first e entries; positions [e:] are -inf so softmax zeroes them out,
         # implementing top-e expert selection after topk.
@@ -1158,7 +1157,7 @@ def test_moe(device, tensor_shape, dtype, layout):
     # Run on both ttnn and torch and flag exceptions
     torch_errored = False
     try:
-        pyt_topk_values, pyt_topk_indices = torch.topk(torch_input, k, dim=-1)
+        pyt_topk_values, pyt_topk_indices = torch.topk(torch_input + expert_mask, k, dim=-1)
         # Reference MOE pipeline: apply topE_mask before softmax to zero out
         # all but the top-e experts, multiply by an indicator for expert 0
         # (pyt_topk_indices == 0) to isolate its contribution, slice to [:e],
