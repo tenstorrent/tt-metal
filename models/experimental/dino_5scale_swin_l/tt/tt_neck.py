@@ -140,11 +140,16 @@ class TtDINONeck:
             else:
                 self.reciprocals_sharded[lvl] = None
 
-    def _group_norm_dram(self, x_nhwc, level_idx, out_h, out_w):
+    def _group_norm_dram(self, x_nhwc, level_idx, out_h, out_w, flatten=False):
         """
         Apply GroupNorm via DRAM multi-core (optionally Welford).
         Input: x_nhwc — conv2d output, shape [N, 1, H*W_padded, C] in TILE on device.
-        Output: NCHW tensor on device.
+        Output: NCHW tensor on device, or — when flatten=True — a flattened
+        [N, H*W, C] ROW_MAJOR tensor (channel-last) ready for the transformer.
+
+        The flatten path avoids the costly NCHW reshape+permute (the GN output is
+        already channel-last & spatial-flattened) which the pre-transformer would
+        otherwise immediately undo.
 
         Key: untilize first, then re-tilize with zero padding to ensure GN
         statistics are not corrupted by tile padding garbage values.
@@ -189,11 +194,18 @@ class TtDINONeck:
         x = ttnn.group_norm(x, **gn_kwargs)
 
         x = x[:, :, :spatial, :C]
+        if flatten:
+            # GN output is already channel-last & spatial-flattened: dropping the
+            # singleton dim gives (N, H*W, C) directly — no reshape/permute round-trip.
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.reshape(x, (N, spatial, C))
+            return x
+
         x = ttnn.reshape(x, (N, out_h, out_w, C))
         x = ttnn.permute(x, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
 
-    def _conv1x1_gn(self, x, conv_params, in_ch, level_idx):
+    def _conv1x1_gn(self, x, conv_params, in_ch, level_idx, flatten=False):
         """1x1 Conv2d (HEIGHT_SHARDED) + GroupNorm (DRAM Welford). NCHW in/out."""
         N, H, W, C = x.shape
 
@@ -229,9 +241,9 @@ class TtDINONeck:
         )
         output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
 
-        return self._group_norm_dram(output, level_idx, out_h, out_w)
+        return self._group_norm_dram(output, level_idx, out_h, out_w, flatten=flatten), out_h, out_w
 
-    def _conv3x3_s2_gn(self, x, conv_params, in_ch, level_idx):
+    def _conv3x3_s2_gn(self, x, conv_params, in_ch, level_idx, flatten=False):
         """3x3 stride-2 Conv2d (BLOCK_SHARDED) + GroupNorm (DRAM). NCHW in/out."""
         N, H, W, C = x.shape
 
@@ -265,34 +277,45 @@ class TtDINONeck:
         )
         output = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
 
-        return self._group_norm_dram(output, level_idx, out_h, out_w)
+        return self._group_norm_dram(output, level_idx, out_h, out_w, flatten=flatten), out_h, out_w
 
-    def __call__(self, features):
+    def __call__(self, features, flatten=False):
         """
         features: list of 4 NCHW tensors from backbone.
-        Returns: list of 5 NCHW tensors with out_channels=256.
+        Returns:
+            - flatten=False (default): list of 5 NCHW tensors with out_channels=256.
+            - flatten=True: (outputs, shapes) where outputs is a list of 5
+              [N, H*W, C] ROW_MAJOR tensors and shapes is a list of (out_h, out_w).
+              This skips the NCHW reshape+permute that the pre-transformer undoes.
         """
         assert len(features) == 4, f"Expected 4 backbone features, got {len(features)}"
 
         feat3_copy = ttnn.clone(features[3], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         outputs = []
+        shapes = []
 
         for i in range(4):
-            out = self._conv1x1_gn(
+            out, oh, ow = self._conv1x1_gn(
                 features[i],
                 conv_params=self.parameters["convs"][i]["conv"],
                 in_ch=self.in_channels[i],
                 level_idx=i,
+                flatten=flatten,
             )
             outputs.append(out)
+            shapes.append((oh, ow))
 
-        p6 = self._conv3x3_s2_gn(
+        p6, oh, ow = self._conv3x3_s2_gn(
             feat3_copy,
             conv_params=self.parameters["extra_convs"][0]["conv"],
             in_ch=self.in_channels[3],
             level_idx=4,
+            flatten=flatten,
         )
         outputs.append(p6)
+        shapes.append((oh, ow))
 
+        if flatten:
+            return outputs, shapes
         return outputs

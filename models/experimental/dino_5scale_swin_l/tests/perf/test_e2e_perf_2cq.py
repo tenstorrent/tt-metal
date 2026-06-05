@@ -157,10 +157,10 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
             ttnn.deallocate(nchw)
             nchw = nchw_sliced
         backbone_feats_tt = tt_model.backbone(nchw)
-        neck_feats_tt = tt_model.neck(backbone_feats_tt)
+        neck_feats_tt, neck_shapes = tt_model.neck(backbone_feats_tt, flatten=True)
         for bf in backbone_feats_tt:
             ttnn.deallocate(bf)
-        pre_trans = tt_model.pre_transformer_tt(neck_feats_tt)
+        pre_trans = tt_model.pre_transformer_tt(neck_feats_tt, neck_shapes)
         for nf in neck_feats_tt:
             ttnn.deallocate(nf)
         feat_tt = pre_trans["feat_flatten"]

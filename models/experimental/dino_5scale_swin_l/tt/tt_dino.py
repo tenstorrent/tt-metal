@@ -13,6 +13,7 @@ Usage:
 """
 
 import math
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -351,46 +352,58 @@ class TtDINO:
     def pre_transformer_tt(
         self,
         mlvl_feats_tt: List[ttnn.Tensor],
+        mlvl_shapes: Optional[List] = None,
     ) -> Dict[str, Any]:
         """
         Flatten and positional encoding on device; concat on device with padding
         so that each level's H*W is tile-aligned (ttnn.concat requires TILE).
         Slices out valid [B, N, 256] before returning so encoder/pre_decoder see unpadded sequence.
 
+        When mlvl_shapes is provided, mlvl_feats_tt are already flattened, channel-last
+        [B, H*W, C] ROW_MAJOR tensors (the neck's flatten=True output), so the per-level
+        to_layout/permute/reshape are skipped; mlvl_shapes supplies (H, W) per level.
+
         Returns feat_flatten, feat_pos as ttnn tensors [B, N, 256]; level_start_index is unpadded.
         """
-        logger.info("Pre-transformer (TT): flatten + pad + PE + concat on device...")
+        logger.info("Pre-transformer (TT): flatten + PE + concat on device...")
+        flatten_mode = mlvl_shapes is not None
         sh0 = tuple(mlvl_feats_tt[0].shape)
-        B, C = int(sh0[0]), int(sh0[1])
+        if flatten_mode:
+            B, C = int(sh0[0]), int(sh0[2])
+        else:
+            B, C = int(sh0[0]), int(sh0[1])
         feat_padded_list: List[ttnn.Tensor] = []
         pos_padded_list: List[ttnn.Tensor] = []
+        feat_rm_list: List[ttnn.Tensor] = []
+        pos_rm_list: List[ttnn.Tensor] = []
+        # Row-major concat of the per-level sequences (default). Avoids the
+        # pad -> tilize -> TILE-concat -> slice -> concat round-trip that TILE-layout
+        # concat would require for non-tile-aligned per-level H*W. Set DINO_RM_CONCAT=0
+        # to fall back to the legacy padded-concat path.
+        rm_concat = os.environ.get("DINO_RM_CONCAT", "1") != "0"
         spatial_shapes_list: List[List[int]] = []
         padded_hw_list: List[int] = []
         hw_list: List[int] = []
 
         for lvl, feat_tt in enumerate(mlvl_feats_tt):
-            sh = tuple(feat_tt.shape)
-            H, W = int(sh[2]), int(sh[3])
+            if flatten_mode:
+                H, W = int(mlvl_shapes[lvl][0]), int(mlvl_shapes[lvl][1])
+            else:
+                sh = tuple(feat_tt.shape)
+                H, W = int(sh[2]), int(sh[3])
             hw = H * W
             padded_hw = _tile_aligned_hw(H, W)
             spatial_shapes_list.append([H, W])
             padded_hw_list.append(padded_hw)
             hw_list.append(hw)
 
-            feat_tt = ttnn.to_layout(feat_tt, ttnn.ROW_MAJOR_LAYOUT)
-            feat_tt = ttnn.permute(feat_tt, (0, 2, 3, 1))
-            feat_flat_tt = ttnn.reshape(feat_tt, (B, hw, C))
-            if padded_hw > hw:
-                pad_count = padded_hw - hw
-                feat_flat_tt = ttnn.pad(
-                    feat_flat_tt,
-                    padding=[(0, 0), (0, pad_count), (0, 0)],
-                    value=0.0,
-                    memory_config=self._dram_cfg,
-                )
-            feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
-            feat_padded_list.append(feat_flat_tt)
-
+            if flatten_mode:
+                # Already [B, H*W, C] ROW_MAJOR from neck(flatten=True).
+                feat_flat_tt = feat_tt
+            else:
+                feat_tt = ttnn.to_layout(feat_tt, ttnn.ROW_MAJOR_LAYOUT)
+                feat_tt = ttnn.permute(feat_tt, (0, 2, 3, 1))
+                feat_flat_tt = ttnn.reshape(feat_tt, (B, hw, C))
             if self.trace_mode and self._pe_cache:
                 pos_tt = self._pe_cache[lvl]
             else:
@@ -404,6 +417,31 @@ class TtDINO:
                 )
             level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
             pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
+
+            if rm_concat:
+                # Row-major concat path: keep each level ROW_MAJOR [B, hw, C] and
+                # concat over dim=1 below, then a single tilize on the full sequence.
+                # Avoids the per-level pad + tilize and the pad-concat-slice-concat
+                # round-trip that TILE-layout concat would otherwise require.
+                # ttnn.add promotes pos to TILE, so force it back to ROW_MAJOR for the
+                # unpadded (non-tile-aligned) concat.
+                pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
+                pos_tt = ttnn.to_layout(pos_tt, ttnn.ROW_MAJOR_LAYOUT)
+                feat_rm_list.append(feat_flat_tt)
+                pos_rm_list.append(pos_tt)
+                continue
+
+            if padded_hw > hw:
+                pad_count = padded_hw - hw
+                feat_flat_tt = ttnn.pad(
+                    feat_flat_tt,
+                    padding=[(0, 0), (0, pad_count), (0, 0)],
+                    value=0.0,
+                    memory_config=self._dram_cfg,
+                )
+            feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
+            feat_padded_list.append(feat_flat_tt)
+
             if padded_hw > hw:
                 pad_count = padded_hw - hw
                 pos_tt = ttnn.pad(
@@ -416,32 +454,42 @@ class TtDINO:
             pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
             pos_padded_list.append(pos_tt)
 
-        feat_flatten_padded = ttnn.concat(feat_padded_list, dim=1)
-        feat_pos_padded = ttnn.concat(pos_padded_list, dim=1)
-        for t in feat_padded_list + pos_padded_list:
-            ttnn.deallocate(t)
-
         N = sum(hw_list)
         N_padded = sum(padded_hw_list)
         spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
-        padded_starts = [0] + list(torch.tensor(padded_hw_list, dtype=torch.long).cumsum(0)[:-1].tolist())
-        if N_padded > N:
-            feat_segments = []
-            pos_segments = []
-            for lvl in range(len(hw_list)):
-                start = padded_starts[lvl]
-                end = start + hw_list[lvl]
-                feat_segments.append(ttnn.slice(feat_flatten_padded, [0, start, 0], [B, end, C]))
-                pos_segments.append(ttnn.slice(feat_pos_padded, [0, start, 0], [B, end, C]))
-            feat_flatten_tt = ttnn.concat(feat_segments, dim=1)
-            feat_pos_tt = ttnn.concat(pos_segments, dim=1)
-            ttnn.deallocate(feat_flatten_padded)
-            ttnn.deallocate(feat_pos_padded)
-            for t in feat_segments + pos_segments:
+
+        if rm_concat:
+            feat_flatten_rm = ttnn.concat(feat_rm_list, dim=1)
+            feat_pos_rm = ttnn.concat(pos_rm_list, dim=1)
+            for t in pos_rm_list:
                 ttnn.deallocate(t)
+            feat_flatten_tt = ttnn.to_layout(feat_flatten_rm, ttnn.TILE_LAYOUT)
+            feat_pos_tt = ttnn.to_layout(feat_pos_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(feat_flatten_rm)
+            ttnn.deallocate(feat_pos_rm)
         else:
-            feat_flatten_tt = feat_flatten_padded
-            feat_pos_tt = feat_pos_padded
+            feat_flatten_padded = ttnn.concat(feat_padded_list, dim=1)
+            feat_pos_padded = ttnn.concat(pos_padded_list, dim=1)
+            for t in feat_padded_list + pos_padded_list:
+                ttnn.deallocate(t)
+            padded_starts = [0] + list(torch.tensor(padded_hw_list, dtype=torch.long).cumsum(0)[:-1].tolist())
+            if N_padded > N:
+                feat_segments = []
+                pos_segments = []
+                for lvl in range(len(hw_list)):
+                    start = padded_starts[lvl]
+                    end = start + hw_list[lvl]
+                    feat_segments.append(ttnn.slice(feat_flatten_padded, [0, start, 0], [B, end, C]))
+                    pos_segments.append(ttnn.slice(feat_pos_padded, [0, start, 0], [B, end, C]))
+                feat_flatten_tt = ttnn.concat(feat_segments, dim=1)
+                feat_pos_tt = ttnn.concat(pos_segments, dim=1)
+                ttnn.deallocate(feat_flatten_padded)
+                ttnn.deallocate(feat_pos_padded)
+                for t in feat_segments + pos_segments:
+                    ttnn.deallocate(t)
+            else:
+                feat_flatten_tt = feat_flatten_padded
+                feat_pos_tt = feat_pos_padded
 
         level_start_index = torch.cat(
             [
@@ -789,7 +837,7 @@ class TtDINO:
 
         # --- Neck ---
         logger.info("Neck: ChannelMapper...")
-        neck_feats_tt = self.neck(backbone_feats_tt)
+        neck_feats_tt, neck_shapes = self.neck(backbone_feats_tt, flatten=True)
         ttnn.synchronize_device(self.device)
         if profile_mode:
             ttnn.ReadDeviceProfiler(self.device)
@@ -797,12 +845,17 @@ class TtDINO:
 
         neck_feats_torch = None
         if return_intermediates:
-            neck_feats_torch = [ttnn.to_torch(ttnn.from_device(nf)).float() for nf in neck_feats_tt]
+            # Neck output is flattened [B, H*W, C]; rebuild NCHW for intermediate comparison.
+            neck_feats_torch = []
+            for nf, (oh, ow) in zip(neck_feats_tt, neck_shapes):
+                t = ttnn.to_torch(ttnn.from_device(nf)).float()
+                Bn, _, Cn = t.shape
+                neck_feats_torch.append(t.reshape(Bn, oh, ow, Cn).permute(0, 3, 1, 2).contiguous())
         for bf in backbone_feats_tt:
             ttnn.deallocate(bf)
 
         # --- Pre-transformer---
-        pre_trans = self.pre_transformer_tt(neck_feats_tt)
+        pre_trans = self.pre_transformer_tt(neck_feats_tt, neck_shapes)
         for nf in neck_feats_tt:
             ttnn.deallocate(nf)
 
