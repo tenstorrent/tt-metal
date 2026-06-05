@@ -10,7 +10,6 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import ttnn
 
-from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
@@ -230,7 +229,19 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
     ) -> None:
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
-        LightweightModule.__init__(self)
+        rope_theta = float(config.rope_parameters["rope_theta"])
+        super().__init__(
+            device=device,
+            batch_size=batch_size,
+            head_dim=head_dim,
+            max_seq_len=max_seq_len,
+            rope_theta=rope_theta,
+            rope_scaling=None,
+            use_qk_fused=use_qk_fused,
+            datatype=datatype,
+            shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+            prefetcher=prefetcher,
+        )
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len

@@ -24,6 +24,8 @@ def _ff1_shard_n(args) -> int:
 _TILE = 32
 _FF1_1D_GRID_X = 8
 _FF1_1D_GRID_Y = 4
+_FF2_1D_GRID_X = 10
+_FF2_1D_GRID_Y = 4
 
 
 def _padded_seq_len(seq_len: int) -> int:
@@ -89,6 +91,11 @@ def _ff1_linear_sweep_fits_device(mesh_device) -> bool:
     return int(grid.x) >= 8 and int(grid.y) >= 4
 
 
+def _ff2_linear_sweep_fits_device(mesh_device) -> bool:
+    grid = mesh_device.compute_with_storage_grid_size()
+    return int(grid.x) >= _FF2_1D_GRID_X and int(grid.y) >= _FF2_1D_GRID_Y
+
+
 def _ff1_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device) -> bool:
     """Sweep winner for 128×5120×8192 prefill FF1/FF3 (test_linear_128x5120x8192_sweep)."""
     default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
@@ -124,20 +131,20 @@ def _ff2_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device
         return False
     if int(full_seq_len) != int(seq_len):
         return False
-    if not _ff1_linear_sweep_fits_device(mesh_device):
+    if not _ff2_linear_sweep_fits_device(mesh_device):
         return False
     return int(seq_len) <= 128 and int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
 
 
 def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    # mcast1d_8x4_pcn5_ibw8 l1/dram/l1: ~145us vs Tracy 128×8192×5120 ~154us (test_matmul_128x8192x5120_sweep).
+    # mcast1d_10x4_pcn4_ibw8 l1/dram/l1: ~124us vs Tracy 128×8192×5120 ~154us (test_matmul_128x8192x5120_sweep if present).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
+        compute_with_storage_grid_size=ttnn.CoreCoord(_FF2_1D_GRID_X, _FF2_1D_GRID_Y),
         in0_block_w=8,
-        out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_h=2,
+        out_subblock_w=2,
         per_core_M=4,
-        per_core_N=5,
+        per_core_N=4,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -145,13 +152,85 @@ def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DPr
 
 
 def _ff2_linear_sweep_compute_kernel_config():
-    # Must match test_matmul_128x8192x5120_sweep (HiFi2, approx=True, no fp32 acc).
-    # Model default LI_FF2 uses HIFI2_FP16 (approx=False) and runs ~154us vs sweep ~145us.
+    # Must match matmul sweep tests (HiFi2, approx=True, no fp32 acc).
+    # Model default LI_FF2 uses HIFI2_FP16 (approx=False) and runs ~154us vs sweep ~124us.
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
+    )
+
+
+def _ff13_decode_matmul_enabled(args, mesh_device) -> bool:
+    """Sweep winner for 32×5120×8192 decode FF1/FF3 (test_matmul_32x5120x8192_sweep)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_FF13_DECODE_MM", default).strip().lower() in ("0", "false", "no"):
+        return False
+    if not _use_1d_mlp_dram_weights(args):
+        return False
+    if not _ff1_linear_sweep_fits_device(mesh_device):
+        return False
+    return int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
+
+
+def _ff13_decode_matmul_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    # mcast1d_8x4_pcn8_ibw2 l1/dram/l1: ~125us vs Tracy 32×5120×8192 ~306us (minimal_matmul).
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=1,
+        per_core_N=8,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _ff2_decode_matmul_enabled(args, mesh_device) -> bool:
+    """Sweep winner for 32×8192×5120 decode FF2 (test_ministral3_decoder_layer Tracy)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_FF2_DECODE_MM", default).strip().lower() in ("0", "false", "no"):
+        return False
+    if not _use_1d_mlp_dram_weights(args):
+        return False
+    if not _ff2_linear_sweep_fits_device(mesh_device):
+        return False
+    return int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
+
+
+def _ff2_decode_matmul_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    # mcast1d_10x4_pcn4_ibw4 l1/dram/l1: ~116us vs Tracy 32×8192×5120 ~152us.
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(_FF2_1D_GRID_X, _FF2_1D_GRID_Y),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=1,
+        per_core_N=4,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _prepare_ff2_l1_input(x: ttnn.Tensor) -> ttnn.Tensor:
+    mc = x.memory_config()
+    if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return x
+    return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+
+def _ff2_decode_ws_output_mem_cfg(args) -> ttnn.MemoryConfig:
+    """Width-sharded L1 FF2 decode output (L1_WIDTH_SHARDED_MEMORY_CONFIG has no shard_spec)."""
+    return ttnn.create_sharded_memory_config(
+        (args.tile_padded_batch_rows, args.dim // args.mlp2_core_grid.num_cores),
+        args.mlp2_core_grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
 
@@ -320,6 +399,19 @@ class TtMinistralMLP(LightweightModule):
             and cfg_seq <= 128
             and _ff2_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device)
         )
+        use_ff2_decode_mm = (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and _ff2_decode_matmul_enabled(self.args, self.mesh_device)
+        )
+        use_ff13_decode_mm = (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and _ff13_decode_matmul_enabled(self.args, self.mesh_device)
+        )
+        use_ff2_l1_sweep = use_ff2_sweep or use_ff2_decode_mm or use_ff13_decode_mm
         pc_2 = (
             _ff2_linear_sweep_program_config()
             if use_ff2_sweep
@@ -339,9 +431,9 @@ class TtMinistralMLP(LightweightModule):
         if mode == Mode.PREFILL and not TG:
             if _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device):
                 pc_ff13 = _ff1_linear_sweep_program_config()
-                # FF2 mcast1d sweep needs native L1 interleaved SiLU input (~145us). ws→L1 via
+                # FF2 mcast1d sweep needs native L1 interleaved SiLU input (~124us). ws→L1 via
                 # sharded_to_interleaved only reaches the ~153us width-sharded-equivalent path.
-                mem_ff13 = ttnn.L1_MEMORY_CONFIG if use_ff2_sweep else _ff1_ws_output_mem_cfg(self.args, cfg_seq)
+                mem_ff13 = ttnn.L1_MEMORY_CONFIG if use_ff2_l1_sweep else _ff1_ws_output_mem_cfg(self.args, cfg_seq)
                 w1_out = ttnn.matmul(
                     ff1_x,
                     self.w1,
@@ -380,12 +472,30 @@ class TtMinistralMLP(LightweightModule):
                     config=mmc_ff13,
                     dtype=ttnn.bfloat8_b,
                 )
+        elif mode == Mode.DECODE and not TG and self.prefetcher is None and use_ff13_decode_mm:
+            ff1_x = _prepare_ff2_l1_input(x)
+            pc_ff13 = _ff13_decode_matmul_program_config()
+            ff13_ck = _ff2_linear_sweep_compute_kernel_config()
+            w1_out = ttnn.matmul(
+                ff1_x,
+                self.w1,
+                program_config=pc_ff13,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=ff13_ck,
+                dtype=ttnn.bfloat8_b,
+            )
+            w3_out = ttnn.matmul(
+                ff1_x,
+                self.w3,
+                program_config=pc_ff13,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=ff13_ck,
+                dtype=ttnn.bfloat8_b,
+            )
+            if ff1_x is not x:
+                ttnn.deallocate(ff1_x)
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
-            # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights).
-            # Config tuned by tests/matmul/test_decode_ff13_matmul_sweep.py: at
-            # decode M=32 (1 tile) the M axis maps to grid.y, so the old 8x8 grid
-            # padded M across 8 core-rows and wasted 7/8 of them. grid 8x2 +
-            # M_block_size=1 + a larger K chunk recover ~1.12x (382us -> ~342us).
+            # Fallback: minimal_matmul decode FF1/FF3 (8×2 grid).
             x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             mmc_ff13 = ttnn.MinimalMatmulConfig(
                 M_block_size=1,
@@ -505,11 +615,17 @@ class TtMinistralMLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=ttnn.bfloat8_b if use_ff2_sweep else (activation_dtype or ttnn.bfloat8_b),
-            memory_config=ttnn.L1_MEMORY_CONFIG if use_ff2_sweep else w1_out.memory_config(),
+            dtype=ttnn.bfloat8_b if use_ff2_l1_sweep else (activation_dtype or ttnn.bfloat8_b),
+            memory_config=ttnn.L1_MEMORY_CONFIG if use_ff2_l1_sweep else w1_out.memory_config(),
         )
 
-        if mode == Mode.DECODE and not TG and self.prefetcher is None:
+        if (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and not use_ff2_decode_mm
+            and not use_ff13_decode_mm
+        ):
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
         ttnn.deallocate(w3_out)
@@ -557,6 +673,17 @@ class TtMinistralMLP(LightweightModule):
                     dtype=ttnn.bfloat8_b,
                 )
                 w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+            elif use_ff2_decode_mm:
+                w2_in = _prepare_ff2_l1_input(w2_in)
+                w2_out = ttnn.matmul(
+                    w2_in,
+                    self.w2_prefill_sweep,
+                    program_config=_ff2_decode_matmul_program_config(),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=_ff2_linear_sweep_compute_kernel_config(),
+                    dtype=ttnn.bfloat8_b,
+                )
+                w2_out = ttnn.interleaved_to_sharded(w2_out, _ff2_decode_ws_output_mem_cfg(self.args))
             else:
                 w2_out = ttnn.linear(
                     w2_in,

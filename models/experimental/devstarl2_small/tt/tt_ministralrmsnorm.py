@@ -213,9 +213,8 @@ class TtMinistralRMSNorm(RMSNorm):
         else:
             # Materialize slice/views; do not deallocate caller tensor (residual is still live).
             x_owned = _owned_dram_interleaved_tile(x)
-            owned_input = x_owned is not x
             x_sharded = _interleaved_tile_to_block_shard(x_owned, sharded_mem_cfg)
-            if owned_input:
+            if x_owned is not x:
                 ttnn.deallocate(x_owned)
         out = ttnn.rms_norm(
             x_sharded,
