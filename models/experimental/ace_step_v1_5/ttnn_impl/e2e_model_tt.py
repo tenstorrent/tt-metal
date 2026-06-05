@@ -972,7 +972,8 @@ def run_ttnn_denoise_loop(
     _trace_each_step = os.environ.get("ACE_STEP_TRACY_EACH_DENOISE_STEP", "").lower() in ("1", "true", "yes")
     # Flush the device-profiler marker buffer every N denoise steps to avoid the per-RISC 12000-entry
     # ring buffer filling up across the loop (which silently drops markers, then trips
-    # ``Device data missing`` asserts in ``tools/tracy/process_ops_logs.py``). No-op when neither
+    # ``Device data missing`` asserts in stock ``tools/tracy/process_ops_logs.py``; use
+    # ``perf/process_ace_tracy_ops_logs.py`` for lenient post-processing. No-op when neither
     # ``TT_METAL_DEVICE_PROFILER`` nor ``TTNN_OP_PROFILER`` is set, so production runs are unaffected.
     try:
         _flush_every = int(os.environ.get("ACE_STEP_PROFILER_FLUSH_EVERY", "1"))
@@ -1717,7 +1718,8 @@ class AceStepE2EModel:
         # during init. Without this, the 12000-marker per-RISC ring buffer is already full before the
         # first ``generate()`` call gets a chance to flush — markers from the first few DiT layers
         # then get silently dropped, and ``cpp_device_perf_report.csv`` ends up missing op rows that
-        # ``tools/tracy/process_ops_logs.py`` later asserts on. No-op when device profiling is off.
+        # Stock ``tools/tracy/process_ops_logs.py`` asserts on missing device rows; use
+        # ``perf/process_ace_tracy_ops_logs.py`` for lenient merge. No-op when device profiling is off.
         _ace_step_flush_device_profiler(self.device)
 
     def _init_qwen_encoder(self) -> None:

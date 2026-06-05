@@ -53,7 +53,7 @@ Alternative mode — full denoise loop (includes ``dit_sampling_ttnn`` Euler/CFG
   ``forward_with_temb_tp``. Still Tracy-friendly when ``ACE_STEP_USE_TRACE`` is unset.
 
 If Tracy's merge step fails with ``Device data missing``, run without ``-p`` for host-only
-timelines, or post-process with ``python tools/tracy/process_ops_logs.py --date``.
+timelines, or post-process with ``python models/experimental/ace_step_v1_5/perf/process_ace_tracy_ops_logs.py --date``.
 """
 
 from __future__ import annotations

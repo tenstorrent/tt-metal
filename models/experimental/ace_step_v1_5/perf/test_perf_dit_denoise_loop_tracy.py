@@ -28,7 +28,7 @@ Analyze with `tt-perf-report <https://github.com/tenstorrent/tt-perf-report>`_:
 
 If Tracy merge reports ``Device data missing``, post-process without ``-p`` or run:
 
-    python tools/tracy/process_ops_logs.py --date generated/profiler/reports/<timestamp>
+    python models/experimental/ace_step_v1_5/perf/process_ace_tracy_ops_logs.py --date generated/profiler/reports/<timestamp>
 
 **Important:** do **not** set ``ACE_STEP_USE_TRACE=1`` (profiler flush and TTNN trace capture conflict).
 
