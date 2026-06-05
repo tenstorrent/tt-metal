@@ -110,7 +110,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
