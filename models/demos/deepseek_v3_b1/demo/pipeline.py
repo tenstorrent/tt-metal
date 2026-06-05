@@ -666,7 +666,7 @@ class Pipeline:
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         self._block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor):
+    def read_output(self, output_tensor: ttnn.Tensor) -> object | None:
         # Returns the block's result. The fabric/D2H path writes into output_tensor and returns
         # None; the host-loopback path returns the MPI-received tensor on the first stage.
         return self._block.read_output(output_tensor)
@@ -715,7 +715,11 @@ class Pipeline:
 
         ttnn.distributed_context_barrier()
 
-        if self._pipeline_block.is_first_pipeline_stage():
+        # Push the wake-up dummy token only from the rank that owns host ingress (the H2D socket).
+        # is_first_pipeline_stage() is keyed on logical stage 0, which on a split stage 0 is true for
+        # both halves — but only the H2D-owning half can push (push_dummy_token asserts on the socket).
+        # h2d_socket is None on every other rank, so this targets the ingress owner precisely.
+        if self._pipeline_block.h2d_socket is not None:
             self._pipeline_block.push_dummy_token()
         # Drain the dummy round-trip on whichever stage owns the D2H socket: stage 0 for fabric
         # loopback, the last stage for host/no loopback. drain_dummy_output no-ops without a D2H

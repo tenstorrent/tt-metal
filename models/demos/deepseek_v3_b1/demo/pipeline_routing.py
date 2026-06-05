@@ -108,18 +108,18 @@ class StageHostIoPlan:
 
     Before projection (``_build_stage_host_io``) both fields are populated regardless of owner;
     after projection (``_project_local_host_io``) only the endpoints this rank owns remain, so
-    ``needs_h2d`` / ``needs_d2h`` answer "does this rank own host I/O here?".
+    ``owns_h2d`` / ``owns_d2h`` answer "does this rank own host I/O here?".
     """
 
     h2d_target: StageEndpointRef | None = None
     d2h_source: StageEndpointRef | None = None
 
     @property
-    def needs_h2d(self) -> bool:
+    def owns_h2d(self) -> bool:
         return self.h2d_target is not None
 
     @property
-    def needs_d2h(self) -> bool:
+    def owns_d2h(self) -> bool:
         return self.d2h_source is not None
 
 
@@ -440,11 +440,11 @@ def _project_local_stage_edge(edge: GlobalStageEdge | None, my_rank: int, edge_k
 def _project_local_host_io(host_io: StageHostIoPlan, my_rank: int) -> StageHostIoPlan:
     """Keep only the H2D/D2H endpoints this rank owns (null the rest)."""
 
-    needs_h2d = host_io.h2d_target is not None and host_io.h2d_target.owner_rank == my_rank
-    needs_d2h = host_io.d2h_source is not None and host_io.d2h_source.owner_rank == my_rank
+    owns_h2d = host_io.h2d_target is not None and host_io.h2d_target.owner_rank == my_rank
+    owns_d2h = host_io.d2h_source is not None and host_io.d2h_source.owner_rank == my_rank
     return StageHostIoPlan(
-        h2d_target=host_io.h2d_target if needs_h2d else None,
-        d2h_source=host_io.d2h_source if needs_d2h else None,
+        h2d_target=host_io.h2d_target if owns_h2d else None,
+        d2h_source=host_io.d2h_source if owns_d2h else None,
     )
 
 

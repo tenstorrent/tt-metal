@@ -515,7 +515,7 @@ class PipelineBlock:
         assert self._stage_plan is not None
         stage_plan = self._stage_plan
 
-        if stage_plan.host_io.needs_h2d:
+        if stage_plan.host_io.owns_h2d:
             assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
             assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
             # Place the H2D kernel on host_io_placement.h2d_core, not pipeline_core_coord:
@@ -530,7 +530,7 @@ class PipelineBlock:
             )
             self._h2d_page_size_bytes = token_size_bytes
 
-        if stage_plan.host_io.needs_d2h:
+        if stage_plan.host_io.owns_d2h:
             assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to host egress stage"
             # Same rationale as H2D: keep the D2H kernel off the upstream forwarder's core
             # (host loopback puts the D2H on the last stage's entry chip, shared with the
@@ -548,20 +548,20 @@ class PipelineBlock:
         if (
             stage_plan.intra_stage_edge is not None
             and stage_plan.intra_stage_edge.transport == EdgeTransport.LOCAL
-            and not stage_plan.host_io.needs_h2d
-            and not stage_plan.host_io.needs_d2h
+            and not stage_plan.host_io.owns_h2d
+            and not stage_plan.host_io.owns_d2h
         ):
             local_intra_socket_pair = self._create_local_socket_pair_for_edge(
                 stage_plan.intra_stage_edge, pipeline_core_coord, downstream_d2d_socket_fifo_size
             )
 
         h2d_downstream_core = None
-        if stage_plan.host_io.needs_h2d:
+        if stage_plan.host_io.owns_h2d:
             assert output_edge is not None, "Host ingress requires a local output edge"
             h2d_downstream_core = self._core_for_endpoint(output_edge.src, pipeline_core_coord)
 
         d2h_upstream_core = None
-        if stage_plan.host_io.needs_d2h:
+        if stage_plan.host_io.owns_d2h:
             assert input_edge is not None, "Host egress requires a local input edge"
             d2h_upstream_core = self._core_for_endpoint(input_edge.dst, pipeline_core_coord)
 
@@ -586,7 +586,7 @@ class PipelineBlock:
 
         def build_input_forwarder():
             # Receiver edge: incoming activation (or split cross-rank intra) -> D2H / local intra pair.
-            if input_edge is not None and (stage_plan.host_io.needs_d2h or local_intra_socket_pair is not None):
+            if input_edge is not None and (stage_plan.host_io.owns_d2h or local_intra_socket_pair is not None):
                 upstream_socket = self._create_socket_resource_for_edge(
                     input_edge,
                     pipeline_core_coord,
@@ -594,7 +594,7 @@ class PipelineBlock:
                     ttnn.SocketEndpoint.RECEIVER,
                 )
                 downstream_socket = (
-                    self.host_io.get_upstream_socket() if stage_plan.host_io.needs_d2h else local_intra_socket_pair[0]
+                    self.host_io.get_upstream_socket() if stage_plan.host_io.owns_d2h else local_intra_socket_pair[0]
                 )
                 forwarders.append(
                     self._build_forwarder_from_existing_sockets(
@@ -609,7 +609,7 @@ class PipelineBlock:
         def build_output_forwarder():
             # Sender edge: H2D / local intra / split-recv -> outgoing activation.
             if output_edge is not None:
-                if stage_plan.host_io.needs_h2d:
+                if stage_plan.host_io.owns_h2d:
                     upstream_socket = self.host_io.get_downstream_socket()
                 elif local_intra_socket_pair is not None:
                     upstream_socket = local_intra_socket_pair[1]
@@ -645,7 +645,7 @@ class PipelineBlock:
         # (last stage -> D2H); building its sender first -- mirroring legacy _init_first_stage --
         # breaks the cycle so the handshakes cascade around the ring. Every other stage keeps
         # receiver-first ordering (relied on by the linear/host-loopback and split cases).
-        if stage_plan.host_io.needs_h2d and stage_plan.host_io.needs_d2h:
+        if stage_plan.host_io.owns_h2d and stage_plan.host_io.owns_d2h:
             build_output_forwarder()
             build_input_forwarder()
         else:

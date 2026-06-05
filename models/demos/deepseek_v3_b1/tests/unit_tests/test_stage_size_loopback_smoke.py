@@ -132,11 +132,11 @@ def _local_output_edge(stage_plan):
 
 
 def _build_host_io(mesh_device, stage_plan, pipeline_core_coord, tensor_size_bytes, fifo_size, h2d_mode):
-    if not (stage_plan.host_io.needs_h2d or stage_plan.host_io.needs_d2h):
+    if not (stage_plan.host_io.owns_h2d or stage_plan.host_io.owns_d2h):
         return None
 
     h2d_socket = None
-    if stage_plan.host_io.needs_h2d:
+    if stage_plan.host_io.owns_h2d:
         h2d_socket = ttnn.H2DSocket(
             mesh_device,
             _core_for_mesh_view_endpoint(stage_plan.host_io.h2d_target, pipeline_core_coord),
@@ -146,7 +146,7 @@ def _build_host_io(mesh_device, stage_plan, pipeline_core_coord, tensor_size_byt
         )
 
     d2h_socket = None
-    if stage_plan.host_io.needs_d2h:
+    if stage_plan.host_io.owns_d2h:
         d2h_socket = ttnn.D2HSocket(
             mesh_device,
             _core_for_mesh_view_endpoint(stage_plan.host_io.d2h_source, pipeline_core_coord),
@@ -154,13 +154,13 @@ def _build_host_io(mesh_device, stage_plan, pipeline_core_coord, tensor_size_byt
         )
 
     h2d_downstream_core = None
-    if stage_plan.host_io.needs_h2d:
+    if stage_plan.host_io.owns_h2d:
         output_edge = _local_output_edge(stage_plan)
         assert output_edge is not None, "Host ingress requires a local stage output edge"
         h2d_downstream_core = _core_for_mesh_view_endpoint(output_edge.src, pipeline_core_coord)
 
     d2h_upstream_core = None
-    if stage_plan.host_io.needs_d2h:
+    if stage_plan.host_io.owns_d2h:
         input_edge = _local_input_edge(stage_plan)
         assert input_edge is not None, "Host egress requires a local stage input edge"
         d2h_upstream_core = _core_for_mesh_view_endpoint(input_edge.dst, pipeline_core_coord)
@@ -249,8 +249,8 @@ def _build_local_stage_runtime(mesh_device, stage_plan: LocalStageSocketPlan, te
     if (
         stage_plan.intra_stage_edge is not None
         and stage_plan.intra_stage_edge.transport == EdgeTransport.LOCAL
-        and not stage_plan.host_io.needs_h2d
-        and not stage_plan.host_io.needs_d2h
+        and not stage_plan.host_io.owns_h2d
+        and not stage_plan.host_io.owns_d2h
     ):
         local_intra_socket_pair = _create_local_socket_pair_for_edge(
             mesh_device, stage_plan.intra_stage_edge, pipeline_core_coord, fifo_size
@@ -259,7 +259,7 @@ def _build_local_stage_runtime(mesh_device, stage_plan: LocalStageSocketPlan, te
     forwarders = []
 
     def _append_input_forwarder():
-        if input_edge is None or not (stage_plan.host_io.needs_d2h or local_intra_socket_pair is not None):
+        if input_edge is None or not (stage_plan.host_io.owns_d2h or local_intra_socket_pair is not None):
             return
 
         upstream_socket = _create_socket_resource_for_edge(
@@ -270,9 +270,7 @@ def _build_local_stage_runtime(mesh_device, stage_plan: LocalStageSocketPlan, te
             stage_plan.my_rank,
             local_endpoint_type=ttnn.SocketEndpoint.RECEIVER,
         )
-        downstream_socket = (
-            host_io.get_upstream_socket() if stage_plan.host_io.needs_d2h else local_intra_socket_pair[0]
-        )
+        downstream_socket = host_io.get_upstream_socket() if stage_plan.host_io.owns_d2h else local_intra_socket_pair[0]
         forwarders.append(
             _build_forwarder(
                 mesh_device,
@@ -288,7 +286,7 @@ def _build_local_stage_runtime(mesh_device, stage_plan: LocalStageSocketPlan, te
         if output_edge is None:
             return
 
-        if stage_plan.host_io.needs_h2d:
+        if stage_plan.host_io.owns_h2d:
             assert host_io is not None, "Expected host I/O for host ingress path"
             upstream_socket = host_io.get_downstream_socket()
         elif local_intra_socket_pair is not None:
@@ -330,7 +328,7 @@ def _build_local_stage_runtime(mesh_device, stage_plan: LocalStageSocketPlan, te
     # hop and the return hop. Seed the ring with the outgoing sender first so
     # rank 0 does not block waiting on the return edge before any peer can
     # create its matching sender.
-    build_output_first = stage_plan.host_io.needs_h2d and input_edge is not None and output_edge is not None
+    build_output_first = stage_plan.host_io.owns_h2d and input_edge is not None and output_edge is not None
     if build_output_first:
         _append_output_forwarder()
 
@@ -431,7 +429,7 @@ def test_generic_stage_size_loopback_smoke(
     host_io, forwarders = _build_local_stage_runtime(mesh_device, stage_plan, tensor_size_bytes, fifo_size, h2d_mode)
     _dispatch_merged_programs(mesh_device, host_io, forwarders)
 
-    if stage_plan.host_io.needs_h2d:
+    if stage_plan.host_io.owns_h2d:
         assert host_io is not None
         token_size_datums = tensor_size_bytes // 4
         h2d_socket = host_io.h2d_socket
@@ -573,7 +571,9 @@ def test_pipeline_level_passthrough_transport_loopback(topology_config, mesh_dev
         pipeline.setup_and_run()
         last_stage_idx = num_stages - 1
 
-        if pipeline.my_stage_idx == 0:
+        # Gate on H2D ownership, not my_stage_idx == 0: a split stage 0 puts logical stage 0 on
+        # two ranks, but only the H2D owner can write_token() / read back the looped embedding.
+        if stage_plan.host_io.owns_h2d:
             input_tensor, expected = _build_first_stage_input()
             output_tensor = _make_readback_tensor()
             pipeline.write_token(input_tensor)
