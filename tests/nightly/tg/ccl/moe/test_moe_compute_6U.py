@@ -1943,12 +1943,6 @@ def _run_moe_compute_impl(
     # CREATE DEVICE INPUT TENSORS
     #########################################
 
-    # Drain tilize core: per-arch coordinate where indices/scores are L1-sharded so the
-    # op kernel can read them via NOC. Must match the op's drain tilize core (tilize_cores[0]
-    # in moe_compute_program_factory.cpp's get_layout()), or non-drain tilize cores will
-    # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
-    #   WH (max_tilize_cores[0]): (6, 9)
-    #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
     drain_core_coord = get_tilize_drain_core()
     tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
