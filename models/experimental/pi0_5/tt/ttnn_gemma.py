@@ -851,6 +851,86 @@ class GemmaMLPTTNN:
         self.hidden_size = config.width
         self.intermediate_size = config.mlp_dim
 
+        # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
+        # down_proj. Per PERF_PLAYBOOKS/05 §3b + 08 §2 (decode matmul recipe).
+        # Scoped to expert MLP (mlp_dim ≤ 4096) — VLM (mlp_dim=16384) doesn't
+        # benefit from this pattern at its larger M.
+        import os as _os
+        from .ttnn_common import build_dram_width_sharded_memcfg
+
+        self.down_proj_dram_sharded = None
+        self.down_proj_dram_sharded_padded_n = None
+        self.down_proj_dram_sharded_dram_cores = None
+        # =====================================================================
+        # ⚠ DO NOT ENABLE FOR PRODUCTION ⚠
+        # The DRAM-width-sharded mlp_down path was empirically VERIFIED to
+        # regress total kernel time on the pi0.5 denoise expert shape
+        # (M=32 K=4096 N=1024) at every compute-core count tested. See
+        # [[pi05-dram-sharded-mlp-down-attempt]] memory for the full data.
+        #
+        # Quick summary of why this is parked, not deleted:
+        #   - The matmul itself does win (~-0.3 ms over 180 calls at 8c).
+        #   - But the per-call activation I2S reshard costs ~+1.88 ms.
+        #   - BH has only 8 DRAM banks (not 12 — that's Wormhole), so the
+        #     bandwidth ceiling is half of what the reference benchmark had.
+        #   - Our shape is too small for the L1-handoff workaround
+        #     (gate/up matmuls would need to drop to 8 compute cores, which
+        #     adds more time than mlp_down saves).
+        #
+        # KEPT AS SCAFFOLDING because the infrastructure (helper, runtime
+        # branch, isolated test) is reusable for any future experiment on
+        # larger shapes (e.g. VLM mlp_down on Wormhole, or pi0.5 if shape
+        # changes). Default OFF; the flag is intentionally opt-in only.
+        # =====================================================================
+        # PI0_DRAM_SHARDED_MLP_DOWN values: 1|true|yes|on|8 → 8 banks (no N-pad);
+        # 12 → 12 banks (N-padded to 1152, only works on hardware with ≥12 banks).
+        # Empty/0/false → disabled.
+        _flag = _os.environ.get("PI0_DRAM_SHARDED_MLP_DOWN", "")
+        _enabled = _flag.lower() in ("1", "true", "yes", "on", "8", "12")
+        if _enabled:
+            if self.intermediate_size <= 4096:
+                # K = mlp_dim, N = hidden_size for down_proj (after transpose).
+                # PI0_DRAM_SHARDED_MLP_DOWN value selects bank count:
+                #   "1" / "8"  → dram_cores=8 (no N-padding, 67% BW; compute=8)
+                #   "12"       → dram_cores=12 (N=1024→1152 padding, 100% BW; compute=4)
+                # Both keep clean K/N divisibility for our shape.
+                _banks = 12 if _flag == "12" else 8
+                k_dim = self.intermediate_size
+                n_dim = self.hidden_size
+                memcfg, padded_n, dram_cores_used = build_dram_width_sharded_memcfg(
+                    device, k_dim, n_dim, dram_cores=_banks
+                )
+                w_raw = weights["mlp.down_proj.weight"]
+                if isinstance(w_raw, torch.Tensor):
+                    # VLM path: weight is host torch tensor. Pad + upload sharded.
+                    w_torch = w_raw.T.contiguous()
+                    if padded_n > n_dim:
+                        pad_cols = padded_n - n_dim
+                        w_torch = torch.nn.functional.pad(w_torch, (0, pad_cols), mode="constant", value=0.0)
+                    self.down_proj_dram_sharded = ttnn.from_torch(
+                        w_torch,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=memcfg,
+                    )
+                else:
+                    # Expert path: weight already on-device (DRAM interleaved).
+                    # For dram_cores=12 + N=1024, need to pad on-device first.
+                    w_to_shard = self.down_proj
+                    if padded_n > n_dim:
+                        # self.down_proj shape: [..., K, N]; pad last dim
+                        # ttnn.pad takes per-dim (low, high) tuples
+                        pad_low = (0,) * len(self.down_proj.shape)
+                        pad_high = tuple(
+                            (padded_n - n_dim) if i == len(self.down_proj.shape) - 1 else 0
+                            for i in range(len(self.down_proj.shape))
+                        )
+                        w_to_shard = ttnn.pad(self.down_proj, padding=list(zip(pad_low, pad_high)), value=0.0)
+                    self.down_proj_dram_sharded = ttnn.to_memory_config(w_to_shard, memcfg)
+                self.down_proj_dram_sharded_padded_n = padded_n
+                self.down_proj_dram_sharded_dram_cores = dram_cores_used
+
         # Query device grid to size chunks for available cores
         device_grid = device.compute_with_storage_grid_size()
         self.grid_size = (device_grid.x, device_grid.y)
@@ -999,12 +1079,93 @@ class GemmaMLPTTNN:
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection
-            if down_pcfg is not None:
+            # Down projection — PI0_DRAM_SHARDED_MLP_DOWN=1 takes the
+            # DRAM-width-sharded weight + L1-width-sharded activation path
+            # (PERF_PLAYBOOKS/05 §3b decode recipe). Only fires for tiny M
+            # (denoise expert m_tiles=1), VLM stays on existing path.
+            if self.down_proj_dram_sharded is not None and m_tiles == 1:
+                # Activation: L1 interleaved → L1 width-sharded across compute cores.
+                # Compute cores are INDEPENDENT of DRAM banks (BH: 120 cores, 8 banks).
+                # PI0_DRAM_SHARDED_MLP_COMPUTE_CORES overrides default (8). Must divide
+                # both K_tiles (activation shard) and N_tiles_padded (output shard).
+                # For our shape: K_t=128, N_t=32 → clean divisors {1,2,4,8,16,32}.
+                # 32 cores gives K=4/core, N=1/core, 8×4 grid (uses 27% of BH grid).
+                k_tiles_local = k_to_hidden  # mlp_dim // 32
+                padded_n_tiles = self.down_proj_dram_sharded_padded_n // 32
+                import os as _os_inner
+
+                _cores_env = _os_inner.environ.get("PI0_DRAM_SHARDED_MLP_COMPUTE_CORES", "")
+                if _cores_env in ("16", "32"):
+                    num_compute_cores = int(_cores_env)
+                elif self.down_proj_dram_sharded_dram_cores == 12:
+                    num_compute_cores = 4
+                else:
+                    num_compute_cores = 8
+                act_shard_k = (k_tiles_local // num_compute_cores) * 32  # K-cols per core
+                # Construct grid: for ≤12 cores use 1-row strip; for 16/32 use a 2D grid
+                if num_compute_cores <= 12:
+                    act_grid = ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_compute_cores - 1, 0))}
+                    )
+                elif num_compute_cores == 16:
+                    # 8 × 2 grid
+                    act_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
+                elif num_compute_cores == 32:
+                    # 8 × 4 grid
+                    act_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+                else:
+                    raise ValueError(f"unsupported num_compute_cores={num_compute_cores}")
+                act_memcfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        act_grid,
+                        (padded_chunk_size, act_shard_k),
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                hidden_out_sh = ttnn.to_memory_config(hidden_out, act_memcfg)
+                ttnn.deallocate(hidden_out)
+
+                # DRAM-sharded matmul program config.
+                # in0_block_w capped at 8 (the helper's `_find_largest_divisor(N, max=8)`
+                # convention); larger ibw would inflate L1 CB pressure.
+                _kpc = k_tiles_local // num_compute_cores
+                _ibw = min(_kpc, 8)
+                # Walk down to a divisor of K-per-core if needed
+                while _kpc % _ibw != 0 and _ibw > 1:
+                    _ibw -= 1
+                ds_pcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=_ibw,
+                    per_core_M=padded_chunk_size // 32,
+                    per_core_N=padded_n_tiles // num_compute_cores,
+                    fused_activation=None,
+                )
+                # Output stays L1 width-sharded; convert back to interleaved + slice padding.
+                # No compute_kernel_config — match existing MLP matmuls (which use ttnn default).
+                output_sh = ttnn.linear(
+                    hidden_out_sh,
+                    self.down_proj_dram_sharded,
+                    program_config=ds_pcfg,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(hidden_out_sh)
+                output_chunk = ttnn.sharded_to_interleaved(output_sh, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(output_sh)
+                # Slice off N-padding if applied (e.g. N=1024 → padded 1152 → slice back)
+                if self.down_proj_dram_sharded_padded_n > hidden:
+                    output_chunk = ttnn.slice(
+                        output_chunk,
+                        [0, 0, 0, 0],
+                        [batch_size, 1, padded_chunk_size, hidden],
+                    )
+            elif down_pcfg is not None:
                 output_chunk = ttnn.linear(hidden_out, self.down_proj, program_config=down_pcfg, **common_kwargs)
+                ttnn.deallocate(hidden_out)
             else:
                 output_chunk = ttnn.linear(hidden_out, self.down_proj, core_grid=self.core_grid, **common_kwargs)
-            ttnn.deallocate(hidden_out)
+                ttnn.deallocate(hidden_out)
 
             # Slice back to actual size if padded
             if needs_chunk_padding:

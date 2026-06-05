@@ -104,6 +104,41 @@ def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.Wo
     )
 
 
+def build_dram_width_sharded_memcfg(device, k: int, n: int, tile_size: int = 32, dram_cores: Optional[int] = None):
+    """Build a DRAM width-sharded memory config for a weight tensor of shape (K, N).
+
+    Per playbook 05 §3b + 08 §2 the decode-mode matmul recipe is:
+      - weights in DRAM width-sharded (one tile-aligned slice per DRAM bank)
+      - activations in L1 width-sharded
+      - program config = MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+
+    `dram_cores` defaults to `device.dram_grid_size().x` (full DRAM grid;
+    12 on BH). Caller can override to a smaller power-of-2 to avoid N
+    padding when `n` doesn't divide cleanly into 12. For example, pi0.5
+    denoise mlp_down has N=1024 — 1024 % 12 ≠ 0 (would pad to 1152), but
+    1024 % 8 == 0 (no padding). Using dram_cores=8 constructs a
+    sub-range CoreRange((0,0)→(7,0)) of the full DRAM grid.
+
+    Returns (memcfg, padded_n, dram_cores_used). `padded_n` ≥ `n` — the
+    caller must pad the host weight tensor along N to `padded_n` before
+    upload.
+    """
+    import math as _math
+
+    dram_size = device.dram_grid_size()
+    if dram_cores is None:
+        dram_cores = dram_size.x
+    assert dram_cores <= dram_size.x, f"dram_cores={dram_cores} exceeds BH limit {dram_size.x}"
+    # CoreRange((0,0) → (dram_cores-1, dram_size.y-1)) — first `dram_cores` banks.
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, dram_size.y - 1))}
+    )
+    padded_n = _math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
+    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    return memcfg, padded_n, dram_cores
+
+
 def get_ln_weight_memory_config() -> "ttnn.MemoryConfig":
     """Memory config for LN/RMSNorm weights (γ/β tensors).
 
