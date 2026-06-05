@@ -106,7 +106,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         output_core_range_set.num_cores());
 
     // A is multicast onto every B core; senders are the A-holding cores.
-    log_info(
+    log_debug(
         tt::LogOp,
         "num_B_cores: {}, num_B_cores_along_N: {}, num_B_cores_along_K: {}, K_blocks: {}, N_blocks: {}",
         num_B_cores,
@@ -114,7 +114,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         num_B_cores_along_K,
         K_blocks,
         N_blocks);
-    log_info(
+    log_debug(
         tt::LogOp,
         "inputA_num_cores: {}, inputB_num_cores: {}, output_num_cores: {}",
         inputA_core_range_set.num_cores(),
@@ -123,7 +123,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set).merge(output_core_range_set);
     const auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "MatmulDecode(partial): M_tiles={}, K_tiles={}, Kc_tiles={}, Nc_tiles={}, K_blocks={}, N_blocks={}",
         M_tiles,
@@ -326,10 +326,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // core's reduce CB and bumps that core's reduce semaphore. Base cores additionally
     // wait for all K_blocks partials and publish the reduce CB to the compute kernel.
     const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
-    log_info(tt::LogOp, "b_cores: {}", b_cores);
-    log_info(tt::LogOp, "output_core_range_set: {}", output_core_range_set);
-    log_info(tt::LogOp, "inputB_core_range_set: {}", inputB_core_range_set);
-    log_info(tt::LogOp, "inputA_core_range_set: {}", inputA_core_range_set);
+    log_debug(tt::LogOp, "b_cores: {}", b_cores);
+    log_debug(tt::LogOp, "output_core_range_set: {}", output_core_range_set);
+    log_debug(tt::LogOp, "inputB_core_range_set: {}", inputB_core_range_set);
+    log_debug(tt::LogOp, "inputA_core_range_set: {}", inputA_core_range_set);
     std::vector<CoreRange> b_core_ranges;
     b_core_ranges.reserve(b_cores.size());
     for (const auto& core : b_cores) {
@@ -366,7 +366,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             const CoreCoord base_logical = b_cores[n_idx];  // k_idx == 0 core for this n_idx
             const CoreCoord base_phys = device->worker_core_from_logical_core(base_logical);
             const bool is_base = (k_idx == 0);
-            log_info(
+            log_trace(
                 tt::LogOp,
                 "Writer core {}, idx {}, k_idx: {}, n_idx: {}, base_logical: {}, base_phys: {}, is_base: {}",
                 b_cores[idx],
@@ -399,7 +399,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         if (it != reader_noc_by_core.end()) {
             reader_noc = it->second;
         }
-        log_info(tt::LogOp, "core {}, idx: {}, reader_noc: {}", b_cores[idx], idx, reader_noc);
+        log_trace(tt::LogOp, "core {}, idx: {}, reader_noc: {}", b_cores[idx], idx, reader_noc);
         if (reader_noc == NOC::NOC_0) {
             writer_noc1_indices.push_back(idx);
         } else {
@@ -426,7 +426,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
     };
-    log_info(
+    log_debug(
         tt::LogOp,
         "M_tiles: {}, K_tiles: {}, Kc_tiles: {}, Nc_tiles: {}, K_blocks: {}",
         M_tiles,
@@ -448,7 +448,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
                 "Base core {} is not in output core range set",
                 b_cores[idx]);
         }
-        log_info(
+        log_trace(
             tt::LogOp,
             "core {}, idx {}, k_idx: {}, is_base: {}",
             b_cores[idx],
