@@ -63,8 +63,14 @@ from tests.ttnn.utils_for_testing import comp_pcc
     [
         # fmt: off
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        # PCC gate on the production 256-expert / 32-per-chip path. The unified
+        # routed-expert MoE op switches into the unfused extract -> FFN -> insert
+        # chain whenever num_routed_experts > 64; without this variant that
+        # branch ships PCC-untested on Blackhole. Lighter dispatch capacity (5
+        # vs 8) keeps the soak time bounded.
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.DEVICE, True, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="pcc-device-256"),
         pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 5, GateComputeMode.HOST_ALL, True, marks=pytest.mark.timeout(900)),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
         # fmt: on
@@ -272,14 +278,17 @@ def test_ttnn_moe(
 
     # currently cannot use ttnn.empty on x; because indices become ND beyond max dispatch token limit.
     x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
-    tt_x = ttnn.from_torch(
-        x,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-    )
     profiler.end("input_creation")
+
+    # TtMoe.forward deallocates its input (tt_moe.py:522), so tt_x must be re-uploaded each iter.
+    def upload_tt_x():
+        return ttnn.from_torch(
+            x,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
 
     # ========================================
     # Step 3: Run TorchMoe reference with intermediates
@@ -346,9 +355,14 @@ def test_ttnn_moe(
     profiler.start("tt_forward")
     logger.debug("Running TtMoe forward pass...")
 
-    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=True)
+    tt_x = upload_tt_x()
+    signpost(header="tt_forward_START")
+    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=run_pcc_check)
     ttnn.synchronize_device(mesh_device)
+    signpost(header="tt_forward_END")
+
     profiler.end("tt_forward")
+    logger.debug(f"  tt_forward: {profiler.get('tt_forward') * 1000:.2f} ms")
 
     # Early return when run_pcc_check=False (profiling mode)
     if not run_pcc_check:
