@@ -1,0 +1,47 @@
+Traceback (most recent call last):
+  File "/data/nolenzhao/tt-blaze/tt-metal/tools/tracy/__init__.py", line 16, in <module>
+    from .process_ops_logs import process_ops
+  File "/data/nolenzhao/tt-blaze/tt-metal/tools/tracy/process_ops_logs.py", line 26, in <module>
+    from tracy.process_device_log import import_log_run_stats
+  File "/data/nolenzhao/tt-blaze/tt-metal/tools/tracy/process_device_log.py", line 16, in <module>
+    import seaborn as sns
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/seaborn/__init__.py", line 2, in <module>
+    from .rcmod import *  # noqa: F401,F403
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/seaborn/rcmod.py", line 5, in <module>
+    from . import palettes
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/seaborn/palettes.py", line 9, in <module>
+    from .utils import desaturate, get_color_cycle
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/seaborn/utils.py", line 14, in <module>
+    import matplotlib.pyplot as plt
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/pyplot.py", line 69, in <module>
+    from matplotlib.figure import Figure, FigureBase, figaspect
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/figure.py", line 40, in <module>
+    from matplotlib import _blocking_input, backend_bases, _docstring, projections
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/projections/__init__.py", line 55, in <module>
+    from .. import axes, _docstring
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/axes/__init__.py", line 1, in <module>
+    from . import _base
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/axes/_base.py", line 14, in <module>
+    from matplotlib import _api, cbook, _docstring, offsetbox
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/offsetbox.py", line 907, in <module>
+    class AnchoredOffsetbox(OffsetBox):
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/artist.py", line 149, in __init_subclass__
+    cls._update_set_signature_and_docstring()
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/artist.py", line 177, in _update_set_signature_and_docstring
+    + kwdoc(cls))
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/artist.py", line 1853, in kwdoc
+    'Properties:\n' + '\n'.join(ai.pprint_setters(leadingspace=4)))
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/artist.py", line 1614, in pprint_setters
+    accepts = self.get_valid_values(prop)
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/lib/python3.10/site-packages/matplotlib/artist.py", line 1487, in get_valid_values
+    match = self._get_valid_values_regex.search(docstring)
+KeyboardInterrupt
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/data/nolenzhao/tt-blaze/tt-metal/python_env/bin/tt-run", line 6, in <module>
+    from ttnn.distributed.ttrun import main
+  File "/data/nolenzhao/tt-blaze/tt-metal/ttnn/ttnn/__init__.py", line 17, in <module>
+    import ttnn._ttnn
+ImportError: Encountered an error while initializing the extension.

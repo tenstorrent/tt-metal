@@ -21,6 +21,7 @@ DEFAULT_WORKER_L1_SIZE = 1431568
 LM_HEAD_WORKER_L1_SIZE = 1453716
 LM_HEAD_RANK_64_PROCS = 62
 LM_HEAD_RANK_16_PROCS = 14
+LM_HEAD_RANK_4_PROCS = 1
 
 
 def _fabric_config_for_num_procs(num_procs: int):
@@ -43,11 +44,13 @@ def _needs_extended_worker_l1(num_procs: int) -> bool:
         target_rank = LM_HEAD_RANK_64_PROCS
     elif num_procs == 16:
         target_rank = LM_HEAD_RANK_16_PROCS
+    elif num_procs == 4:
+        target_rank = LM_HEAD_RANK_4_PROCS
     else:
         return False
 
     if mesh_id is None:
-        raise RuntimeError("TT_MESH_ID must be set for 16/64-process runs to select worker_l1_size")
+        raise RuntimeError("TT_MESH_ID must be set for 4/16/64-process runs to select worker_l1_size")
 
     try:
         return int(mesh_id) == target_rank
