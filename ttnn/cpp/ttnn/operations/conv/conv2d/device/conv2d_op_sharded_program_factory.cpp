@@ -645,9 +645,9 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    const bool packer_l1_acc_en = ttnn::operations::conv::conv2d_bench_active()
-                                      ? false  // conv_bench forces l1_acc off in every mode (fair + bug-free)
-                                      : determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // conv_bench uses each conv's real packer_l1_acc (passed via the harness CONFIG) so baselines match how
+    // the model runs the conv; kept in lockstep with get_cb_info (which uses the same real value).
+    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -946,11 +946,12 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             !is_conv_1d_depthwise_conv,
             "conv_bench (TT_CONV_BENCH_MODE) does not support 1D-depthwise conv (different compute kernel). "
             "Use a non-depthwise height/block-sharded conv.");
-        TT_FATAL(
-            untilize_out,
-            "conv_bench expects ROW_MAJOR output (untilize_out=true) — it is forced in conv2d.cpp::invoke; got "
-            "tiled output. Did the config take a non-standard path (e.g. slicing)?");
         if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor) {
+            TT_FATAL(
+                untilize_out,
+                "conv_bench helper_trm (the TileRowMajor subblock relaxation) only applies to ROW_MAJOR output "
+                "(untilize_out=true); got tiled output. main/helper_sbm DO support tiled output — use those for "
+                "real tile-output baselines, or set CB_OUT_LAYOUT=row_major for the relaxation study.");
             TT_FATAL(
                 weight_num_subblocks > 1,
                 "conv_bench helper_trm is a NO-OP for this shape: out_subblock_w == per_core_N "
@@ -964,7 +965,7 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         log_info(
             tt::LogOp,
             "CONV_BENCH[{}] height_sharded={} untilize_out={} per_core_N={} out_subblock={}x{} "
-            "weight_num_subblocks={} in0_num_blocks_w={} packer_l1_acc_en={} (bench forces l1_acc OFF)",
+            "weight_num_subblocks={} in0_num_blocks_w={} packer_l1_acc_en={} (real per-conv settings)",
             ttnn::operations::conv::conv2d_bench_mode_name(conv_bench_mode),
             height_sharded,
             untilize_out,
