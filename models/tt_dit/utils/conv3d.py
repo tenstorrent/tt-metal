@@ -430,6 +430,32 @@ _BLOCKINGS = {
     (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
     (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
     # ===================================================================
+    # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8)
+    # 1080p production target: 1088x1920, 145 frames. Per-device (T, H, W) =
+    # 2x4 geometry re-sharded with per-stage ceil-pad (only s0 padded: 34x60 -> 9x8).
+    # Trace-timed HiFi2 sweep on 1x1; regenerate via
+    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h4w8_1080p`.
+    # ===================================================================
+    (4, 8, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_res — 1974us
+    (4, 8, 1024, 4096, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_up — 5448us
+    (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 1, 4, 8),  # ltx_s1_res — 1912us
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 4, 8),  # ltx_s1_up — 16547us
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us
+    (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
+    # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
+    # Input latent (17,30) -> per-device pre = ceil(17/4)xceil(30/8) = 5x4; post-D2S 10x8.
+    # Tiny stages swept ungated (h*w==32 unsatisfiable at 5x4); regenerate via
+    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_ups_h4w8_1080p`.
+    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
+    (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
+    (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4)
     # 2K production target: 1088x2048. Per-device (T, H, W) from
     # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_2k`.

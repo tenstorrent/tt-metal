@@ -123,7 +123,9 @@ class LTXCausalConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4 if is_blackhole() else ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if (is_blackhole() and dtype == ttnn.float32)
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -520,20 +522,20 @@ def _compute_ltx_decoder_dims(
     if num_frames is None or height is None or width is None:
         return None
 
-    # Latent geometry must divide evenly across H/W shards, else punt to channel-only fallback.
+    # H/W that don't divide the mesh factor are zero-padded up to the next multiple at
+    # runtime (conv_pad_height/width), per stage, so the per-device shard is ceil(full/factor).
     spatial_compression = 32
-    full_lat_h = height // spatial_compression
-    full_lat_w = width // spatial_compression
-    if full_lat_h % h_factor != 0 or full_lat_w % w_factor != 0:
-        return None
-    cur_H = full_lat_h // h_factor
-    cur_W = full_lat_w // w_factor
+    full_H = height // spatial_compression
+    full_W = width // spatial_compression
+
+    def _dev(full: int, factor: int) -> int:
+        return (full + factor - 1) // factor
 
     # Latent T = (num_frames - 1) // 8 + 1 (temporal compression factor 8 in the decoder).
     cur_T = (num_frames - 1) // 8 + 1
 
     def k3_dims() -> ConvDims:
-        return ConvDims(T=cur_T + 2, H=cur_H, W=cur_W)
+        return ConvDims(T=cur_T + 2, H=_dev(full_H, h_factor), W=_dev(full_W, w_factor))
 
     stride_map = {"compress_all": (2, 2, 2), "compress_space": (1, 2, 2), "compress_time": (2, 1, 1)}
     dims: list[ConvDims] = [k3_dims()]  # conv_in
@@ -542,8 +544,8 @@ def _compute_ltx_decoder_dims(
             dims.append(k3_dims())  # conv runs at the PRE-upsample shape
             # Post-upsample: depth-to-space expands H,W by p2,p3 and T by p1 (first frame dropped if p1==2).
             p1, p2, p3 = stride_map[block_name]
-            cur_H = cur_H * p2
-            cur_W = cur_W * p3
+            full_H = full_H * p2
+            full_W = full_W * p3
             cur_T = cur_T * p1 - (1 if p1 == 2 else 0)
         elif block_name in ("res_x_y", "res_x"):
             dims.append(k3_dims())
