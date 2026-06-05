@@ -4,6 +4,7 @@
 
 #include "binary_op_utils.hpp"
 
+#include "binary_op_dtype_policy.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -33,6 +34,10 @@ bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
            (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32) ||
            (input == UINT16 && output == INT32) || (input == INT32 && output == UINT16) ||
            (input == UINT32 && output == UINT16);
+}
+
+bool is_input_dtype_supported(BinaryOpType op, tt::tt_metal::DataType dtype) {
+    return dtype_policy::is_supported(op, dtype);
 }
 
 std::map<std::string, std::string> get_defines(

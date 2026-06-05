@@ -5,6 +5,7 @@
 #include "binary_ng_device_operation.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -282,6 +283,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
     }
 
+    TT_FATAL(
+        ttnn::operations::binary::utils::is_input_dtype_supported(attributes.binary_op_type, input_tensor_a.dtype()),
+        "Input tensor A dtype {} is not supported for binary operation {}",
+        input_tensor_a.dtype(),
+        attributes.binary_op_type);
+
+    if (input_tensor_b.has_value()) {
+        TT_FATAL(
+            ttnn::operations::binary::utils::is_input_dtype_supported(
+                attributes.binary_op_type, input_tensor_b->dtype()),
+            "Input tensor B dtype {} is not supported for binary operation {}",
+            input_tensor_b->dtype(),
+            attributes.binary_op_type);
+    }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
