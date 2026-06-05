@@ -13,6 +13,7 @@
 
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include "internal/tt-2xx/quasar/noc_nonblocking_api.h"
+#include "internal/debug/noc_zero_guard.h"
 
 template <typename Dst>
 inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
@@ -64,6 +65,10 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // the NOC transaction debug tool flags zeroing a locked buffer (WRITE_TO_LOCKED_*). Not
     // wired up here yet: the RECORD_NOC_EVENT_WITH_ADDR machinery is currently only enabled for
     // COMPILE_FOR_NCRISC/BRISC, not Quasar's COMPILE_FOR_DM.
+
+    // WATCHER: mark cmd buffer 0 borrowed for zeroing; write_zeros_l1_barrier() clears it. Lets
+    // watcher builds catch any NoC write issued before the barrier (the zero->barrier->reuse rule).
+    NOC_ZERO_MODE_ENTER();
 }
 
 inline void Noc::write_zeros_l1_barrier() const {
@@ -82,4 +87,5 @@ inline void Noc::write_zeros_l1_barrier() const {
     // TODO: Quasar has architecture different enough that we may want to get out of using
     // noc_nonblocking_api. Refactor this when we move away from it.
     init_wr_cmd_buf(noc_local_xy());
+    NOC_ZERO_MODE_EXIT();  // cmd buffer 0 restored; NoC writes are safe again
 }

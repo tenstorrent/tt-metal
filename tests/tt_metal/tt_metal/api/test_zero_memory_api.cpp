@@ -138,9 +138,9 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     // Consumer: wait_fronts on the L1-zeroed DFB entry, uses it as DRAM scratch for overload (2).
     experimental::KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
-        .source =
-            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_consumer.cpp"},
         .num_threads = 1,
+        .compiler_options = {.defines = {{"ZERO_DRAM", "1"}}},
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
@@ -248,9 +248,9 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
 
     experimental::KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
-        .source =
-            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
+        .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_consumer.cpp"},
         .num_threads = 1,
+        .compiler_options = {.defines = {{"ZERO_DRAM", "1"}}},
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",

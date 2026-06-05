@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "internal/debug/noc_zero_guard.h"
 
 template <typename DSpecT>
 class TensorAccessor;
@@ -310,6 +311,7 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+        NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
 
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
@@ -394,6 +396,7 @@ public:
             !has_flag(opts, NocOptions::POSTED),
             "Mcasts with posted transactions are not supported");  // TODO: Make this an arch specific assertion
 
+        NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
         auto dst_noc_addr = get_dst_ptr_mcast<AddressType::NOC>(dst, dst_args);
         if constexpr (has_flag(opts, NocOptions::MCAST_INCL_SRC)) {
@@ -434,6 +437,7 @@ public:
             "NocOptions::TXN_ID is not supported for set_async_write_state; "
             "use async_write<NocOptions::TXN_ID> for non-stateful writes with a transaction ID");
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
+        NOC_ASSERT_NOT_ZERO_MODE();  // no cmd-buffer-0 op between async_write_zeros and write_zeros_l1_barrier
         DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc_id_, DEBUG_SANITIZE_NOC_UNICAST);
         auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
         RECORD_NOC_EVENT_WITH_ADDR(
@@ -485,6 +489,7 @@ public:
             "NocOptions::TXN_ID is not supported for async_write_with_state; "
             "use async_write<NocOptions::TXN_ID> for non-stateful writes with a transaction ID");
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
+        NOC_ASSERT_NOT_ZERO_MODE();  // no cmd-buffer-0 op between async_write_zeros and write_zeros_l1_barrier
 
         if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
             noc_async_write_one_packet_with_state<posted>(
