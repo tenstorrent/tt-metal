@@ -1,15 +1,15 @@
 dest_acc: true
 operands:
   - name: "input_A"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float32"
-    const_value: 0.335
+    # const_value: 0.335
   - name: "input_B"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float32"
     const_value: 1.0
   - name: "reduced_output"
-    dims: [64, 64]
+    dims: [256, 256]
     format: "Float32"
 
 operations:
@@ -25,4 +25,4 @@ operations:
         math_fidelity: "HiFi4"
         enforce_fp32_accumulation: true
     packer: "Packer"
-    block_size: [64, 64]
+    block_size: [32, 128]

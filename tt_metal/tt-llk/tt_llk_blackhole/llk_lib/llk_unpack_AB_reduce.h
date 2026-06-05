@@ -52,17 +52,9 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     static constexpr std::uint32_t clear_zero_srca =
         TT_OP_UNPACR_NOP(Srcs::SrcA, 0, 0, 0 /* dvalid */, 0, 0 /* Stall_Clr_Cntrl */, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
 
-    constexpr std::uint32_t REPLAY_BUF_LEN = 2;
-
-    load_replay_buf(
-        0,
-        REPLAY_BUF_LEN,
-        []
-        {
-            // Configure unpacker instruction for Src{A,B}. These instructions always increment L1 by 1 face.
-            TTI_UNPACR(Srcs::SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Unpack SrcA
-            TTI_UNPACR(Srcs::SrcB, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Unpack SrcB
-        });
+    // Unpack instructions for SrcA and SrcB. These always increment L1 by 1 face.
+    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(Srcs::SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(Srcs::SrcB, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 
     // MOP constants
     constexpr std::uint32_t outerloop = 1;
@@ -71,8 +63,10 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     // Padding should only be done when using tiny tiles otherwise the entire face overwrites the data read in Math
     if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces
     {
-        // Fill SrcA with pool-type dependent padding value for tiny tiles before unpacking a face
-        ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
+        // Fill SrcA with pool-type dependent padding value for tiny tiles before unpacking a face.
+        // Use outer loop per face so start_op (clear) runs before each face's unpacks.
+        ckernel_template tmp(innerloop, outerloop, unpack_srca, unpack_srcb);
+        tmp.set_start_op(clear_pool_dep_srca);
         tmp.program();
     }
     else // Using standard faces (face_r_dim = FACE_R_DIM)
@@ -80,13 +74,15 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
         if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
         {
             // For scalar reduction, clear SrcA to zero before unpacking. SrcA is clobbered in Math kernel.
-            ckernel_template tmp(outerloop, innerloop, clear_zero_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
+            // Use outer loop per face so start_op (clear) runs before each face's unpacks.
+            ckernel_template tmp(innerloop, outerloop, unpack_srca, unpack_srcb);
+            tmp.set_start_op(clear_zero_srca);
             tmp.program();
         }
         else
         {
             // For row/column reduction, no clearing needed
-            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(0, REPLAY_BUF_LEN));
+            ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
             tmp.program();
         }
     }
