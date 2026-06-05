@@ -1364,6 +1364,48 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         check_block_size_validity(endpoints.producers, "PRODUCER");
         check_block_size_validity(endpoints.consumers, "CONSUMER");
 
+        // Cross-role BLOCKED consistency. BLOCKED is symmetric by construction: each thread owns a
+        // contiguous sub-ring and producer t pairs 1:1 with consumer t. So if either endpoint is
+        // BLOCKED, both must be BLOCKED, share the same block_size, and have equal thread counts.
+        // (Within-role agreement of access_pattern/block_size/num_threads is enforced above, so the
+        // first record of each role is representative.) This catches mixed/asymmetric BLOCKED at the
+        // API layer with a clear message, rather than later at device-side capacity computation.
+        if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
+            const auto& prod = endpoints.producers.front();
+            const auto& cons = endpoints.consumers.front();
+            const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            if (prod_blocked || cons_blocked) {
+                TT_FATAL(
+                    prod_blocked && cons_blocked,
+                    "DFB '{}': BLOCKED must be set on both producer and consumer (producer '{}' is {}, "
+                    "consumer '{}' is {}); mixed BLOCKED/non-BLOCKED endpoints are not supported.",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod_blocked ? "BLOCKED" : "non-BLOCKED",
+                    cons.kernel->unique_id,
+                    cons_blocked ? "BLOCKED" : "non-BLOCKED");
+                TT_FATAL(
+                    prod.binding->block_size == cons.binding->block_size,
+                    "DFB '{}': BLOCKED producer and consumer must share the same block_size "
+                    "(producer '{}' = {}, consumer '{}' = {}).",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod.binding->block_size,
+                    cons.kernel->unique_id,
+                    cons.binding->block_size);
+                TT_FATAL(
+                    prod.kernel->num_threads == cons.kernel->num_threads,
+                    "DFB '{}': BLOCKED requires equal producer and consumer thread counts "
+                    "(producer '{}' = {}, consumer '{}' = {}); each thread owns one contiguous sub-ring.",
+                    dfb.unique_id,
+                    prod.kernel->unique_id,
+                    prod.kernel->num_threads,
+                    cons.kernel->unique_id,
+                    cons.kernel->num_threads);
+            }
+        }
+
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
         // every node it is instantiated on must run exactly one producer instance and exactly one
         // consumer instance. Tally instances per node directly from the bindings: this subsumes the

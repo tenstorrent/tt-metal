@@ -2756,6 +2756,10 @@ static void populate_dfb_interface_slots(
     } else {
         proc_bit = static_cast<uint16_t>(1u << proc_id);
     }
+    // NOTE: this functional emulator models only STRIDED (interleaved, stride = M*entry_size) and
+    // ALL. The BLOCKED access pattern (stride_in_entries=1, per-thread contiguous sub-rings) is
+    // NOT modeled here and would get the STRIDED layout below; BLOCKED is exercised on the RTL
+    // simulator instead. Add a BLOCKED branch here if tt_emule ever needs to run BLOCKED DFBs.
     bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
     uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
     uint32_t stride_size = M * cfg.entry_size;
