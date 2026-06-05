@@ -8,7 +8,7 @@
 
 This port targets **Blackhole QB** hosts with **four** Tenstorrent devices. Mesh shape and `device_params` come from [`tt/mesh_helpers.py`](tt/mesh_helpers.py) (`open_seamless_mesh_device()` for the demo; pytest fixtures use `MeshShape(1, 4)`). There is no Wormhole, Grayskull, or single-chip path in the supported/tested configuration.
 
-All performance / E2E pipeline tests are gated with `@run_for_blackhole()`. PCC and generate perf tests use `l1_small_size=65536` (speech-generation paths) on the four-device mesh.
+PCC tests and the Tracy device-perf driver use `l1_small_size=65536` on speech-generation paths where required.
 
 ---
 
@@ -107,7 +107,7 @@ Limits below are what the TT port exercises on **BH QB `MeshShape(1, 4)`**. HF c
 | **Input unit** | Tokenized source tokens (`processor(text=..., src_lang=...)`) | Log-mel frames from 16 kHz audio (`processor(audios=..., sampling_rate=16000)`) |
 | **Design / HF maximum** | **4096** source tokens (`max_position_embeddings`) | **4096** mel frames |
 | **Longest shape validated (PCC)** | Text encoder forward @ **4096** tokens ([`test_text_encoder.py`](tests/pcc/test_text_encoder.py)); text-decoder cross-attention prefill @ **512** encoder frames ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)) | Speech encoder forward @ **4096** mel frames ([`test_speech_encoder.py`](tests/pcc/test_speech_encoder.py)); text-decoder cross-attention prefill @ **512** subsampled encoder frames (same decoder test, S2TT path) |
-| **Typical demo input** | Joyce-style English paragraph (~64 generated tokens in timed demo) | Preamble WAV resampled to 16 kHz: **~479** mel frames (~9.6 s) |
+| **Typical demo input** | Joyce-style English paragraph | Preamble WAV resampled to 16 kHz: **~479** mel frames (~9.6 s) |
 
 Notes:
 
@@ -183,7 +183,7 @@ export SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large
 python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
 
-The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device, runs untimed warmup `generate()` calls (two warmups for speech paths), then times one steady-state iteration — so reported runtimes are not affected by prior tasks' program-cache clears or L1 pressure. A throwaway T2TT preflight warms the global JIT cache before the timed tasks.
+The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device and runs warmup `generate()` calls (two warmups for speech paths) before printing outputs.
 
 **Text input (tasks 1–2):** a long English paragraph hardcoded in [`demo/demo.py`](demo/demo.py) — a Joyce-style passage (`src_lang=eng`):
 
@@ -198,39 +198,6 @@ Task order:
 3. **S2TT** — preamble speech (`eng`) → Hindi text
 4. **S2ST** — preamble speech (`eng`) → Spanish speech (saved to `demo/outputs/s2st_spanish_speech.wav`)
 5. **ASR** — preamble speech (`eng`) → English text
-
----
-
-## Performance (Blackhole BH QB, 2CQ + decode trace)
-
-End-to-end `generate()` timings measured by running [`demo/demo.py`](demo/demo.py) on a four-chip Blackhole QB host, using the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Inputs are **replicated** on all four devices (batch-1, TP=4), not data-parallel batched. Reported numbers exclude host pre/post-processing (token decode, WAV I/O). Each task opens its own mesh device with warmup before the timed iteration.
-
-**Per-unit latency** (`ms/tok`, `μs/sample`) is more stable than throughput when output length varies run-to-run.
-
-### BH QB — `MeshShape(1, 4)`, replicated batch-1
-
-| Task | Runtime | Throughput | Workload | Per-unit |
-|------|--------:|-----------:|----------|----------|
-| T2TT | 669.5 ms | 95.59 tokens/s | 64 tokens | 10.5 ms/tok |
-| T2ST | 4106.7 ms | 56492.72 samples/s | 232000 samples | 17.70 μs/smp |
-| S2TT | 1201.9 ms | 21.63 tokens/s | 26 tokens | 46.2 ms/tok |
-| S2ST | 4042.2 ms | 36336.83 samples/s | 146880 samples | 27.52 μs/smp |
-| ASR | 1495.0 ms | 19.40 tokens/s | 29 tokens | 51.6 ms/tok |
-
-Task notes:
-- **T2TT** — text encoder + traced text-decoder loop.
-- **T2ST** — text path + T2U + vocoder; vocoder dominates wall-clock but yields high samples/s.
-- **S2TT / ASR** — speech encoder prefill + text decoder; dominated by encoder prefill amortized over short outputs on the ~9.6 s preamble clip (~479 mel frames).
-- **S2ST** — speech encoder + decoder + T2U + vocoder.
-
-**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task, so the first speech-synthesis task in a run may still pay one-time compile cost if the disk cache is cold; the table above reflects a warm JIT cache.
-
-### Reproducing
-
-```bash
-python models/experimental/seamless_m4t_v2_large/demo/demo.py
-```
-
 
 ---
 
@@ -256,14 +223,6 @@ pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_code_hifigan.py 
 
 All PCC tests pass at `PCC_THRESHOLD = 0.99` ([`tests/pcc/test_seamless_m4t_v2_model.py`](tests/pcc/test_seamless_m4t_v2_model.py)).
 
-### E2E performance tests (Blackhole)
-
-Full autoregressive `generate()` pipeline (TP=4 + 2CQ + decode trace), one parametrized test per task:
-
-```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_generate_perf -v
-```
-
 ### Device-level performance (kernel-only)
 
 ```bash
@@ -271,7 +230,7 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
     -v -m models_device_performance_bare_metal
 ```
 
-The outer driver spawns eager forward-only inner tests in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy (`use_decode_trace=False`, `use_2cq=False`) and reports per-device kernel throughput. This is the device-bound floor that E2E perf approaches but cannot beat.
+The outer driver spawns eager forward-only inner tests in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy (`use_decode_trace=False`, `use_2cq=False`) and reports per-device kernel throughput.
 
 ---
 
@@ -300,7 +259,6 @@ models/experimental/seamless_m4t_v2_large/
 │   │   ├── test_code_hifigan.py
 │   │   └── decoder_pcc_fixtures.py      # Shared decoder PCC inputs / helpers
 │   └── perf/
-│       ├── test_e2e_perf_2cq.py         # generate() perf (2CQ + decode trace)
 │       ├── test_seamless_device_perf.py # Tracy outer driver (kernel-only)
 │       └── test_device_perf_forwards.py # Inner eager forwards for device perf
 ├── tt/                                  # TTNN implementation
@@ -345,7 +303,6 @@ SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or*
 The TT `generate()` output **varies run-to-run even on a byte-identical input** on `MeshShape(1, 4)`. Tiny per-step floating-point differences in multi-device (TP) compute can flip the greedy `argmax` at near-tie decode steps and the T2U duration-predictor `round()`. Consequences:
 
 - S2TT / ASR **text content and length** can vary between runs; T2ST / S2ST **audio sample counts** vary with T2U duration rounding.
-- Demo **performance numbers vary** run-to-run because throughput divides by nondeterministic output length. Per-unit latency (`ms/tok`, `μs/smp`) is more stable.
 
 The right correctness metric is the **TT-vs-HF faithfulness gate** (chrF / CER), not exact reproducibility.
 
