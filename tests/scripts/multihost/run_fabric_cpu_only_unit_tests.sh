@@ -32,11 +32,20 @@ GROUP="all"
 PARALLEL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --group) GROUP="$2"; shift 2 ;;
+    --group)
+      if [[ $# -lt 2 ]]; then
+        echo "--group requires a value" >&2; exit 1
+      fi
+      GROUP="$2"; shift 2 ;;
     --parallel) PARALLEL=1; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
+
+VALID_GROUPS="all unit phys-grouping control-plane t3k wh-galaxy bh-galaxy"
+if ! echo "$VALID_GROUPS" | tr ' ' '\n' | grep -qx "$GROUP"; then
+  echo "Invalid --group value '$GROUP'. Valid groups: $VALID_GROUPS" >&2; exit 1
+fi
 
 run_group() { [[ "$GROUP" == "all" || "$GROUP" == "$1" ]]; }
 
