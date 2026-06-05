@@ -12,7 +12,7 @@
 #   Skips flock, device resets, and triage (these require real hardware).
 #   No hang protection — sim runs at kHz, so wall-clock timeouts are meaningless.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--precompile] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -20,6 +20,13 @@
 #               on hang with full triage + watcher log dump.
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
+#   --precompile  Before the real run, transparently warm the JIT cache hardware-free
+#               and in parallel (no device, no env vars, no second command), so kernels
+#               compile up-front in parallel instead of inline & serial. ALWAYS falls
+#               back to a normal cold run if anything goes wrong — it can only make a
+#               run slower, never broken or wrong. Prints a one-line diagnostic saying
+#               whether the warm cache was hit, and if not, exactly why. Hardware only.
+#               Tune parallelism with --precompile-workers N (default: nproc).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -52,6 +59,8 @@ fi
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+PRECOMPILE=false
+PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -61,6 +70,18 @@ while [[ $# -gt 0 ]]; do
         --run-all)
             FAIL_FAST=false
             shift
+            ;;
+        --precompile)
+            # Opt-in: transparently warm the JIT cache (hardware-free, parallel) before the
+            # real run, so kernels compile up-front in parallel instead of inline & serial.
+            # Everything is internal — no env vars, no second command. Always falls back to a
+            # normal cold run if anything goes wrong (see precompile_warm). Hardware only.
+            PRECOMPILE=true
+            shift
+            ;;
+        --precompile-workers)
+            PRECOMPILE_WORKERS="$2"
+            shift 2
             ;;
         *)
             break
@@ -77,6 +98,118 @@ fi
 
 TEST_PATH="$1"
 shift
+# Remaining args are extra pytest args — the precompile collect must use the SAME selection.
+EXTRA_ARGS=("$@")
+
+# Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
+# default) — both the warm-collect and the real run inherit the same value, so they share it and a
+# pre-warmed cache is transparently reused. We never override it. The cluster descriptor (HW-stable)
+# is cached in /tmp; the build_key is recomputed each run (it depends on source, not just HW).
+PRECOMPILE_DESC="/tmp/tt_precompile_cluster_desc.yaml"
+PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
+
+# ============================================================================
+# Precompile (opt-in --precompile): warm the JIT cache hardware-free & parallel,
+# then let the normal run below hit it. A definitive build_key PRE-FLIGHT decides
+# whether warming can help BEFORE doing any work; every failure path degrades to
+# a normal cold run — it can make a run slower, never broken or wrong.
+# ============================================================================
+_precompile_descriptor() {
+    # Cluster descriptor from UMD topology (HW-stable -> cache it per container). 0 ok / 1 fail.
+    [[ -f "$PRECOMPILE_DESC" ]] && return 0
+    timeout 120 python3 - "$PRECOMPILE_DESC" >"/tmp/precompile_desc_$$.log" 2>&1 <<'PY'
+import sys, tt_umd
+tt_umd.TopologyDiscovery.create_cluster_descriptor().serialize_to_file(sys.argv[1])
+PY
+}
+
+_precompile_realkey() {
+    # Brief REAL device open -> prints "RKEY <2erisc> <build_key>". build_key depends on source,
+    # so this is recomputed every run (not cached). MUST open the device the same way the tests do
+    # (open_mesh_device) — the build_key differs between the single-device and mesh open paths.
+    timeout 180 env PYTHONPATH="$REPO_DIR" python3 - >"/tmp/precompile_real_$$.log" 2>&1 <<'PY'
+import ttnn
+md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+try:
+    f = 1 if ttnn.cluster.get_enable_2_erisc_mode() else 0
+    k = ttnn.cluster.get_build_key()
+finally:
+    ttnn.close_mesh_device(md)
+print(f"RKEY {f} {k}")
+PY
+    grep '^RKEY ' "/tmp/precompile_real_$$.log" 2>/dev/null | tail -1
+}
+
+_precompile_mockkey() {
+    # $1=2erisc. Hardware-free mock open with the captured fingerprint -> prints "MKEY <build_key>".
+    timeout 120 env \
+        TT_METAL_FORCE_2_ERISC_MODE="$1" TT_METAL_SLOW_DISPATCH_MODE=1 \
+        TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" PYTHONPATH="$REPO_DIR" \
+        python3 - >"/tmp/precompile_mock_$$.log" 2>&1 <<'PY'
+import ttnn
+md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+try:
+    print("MKEY", ttnn.cluster.get_build_key())
+finally:
+    ttnn.close_mesh_device(md)
+PY
+    grep '^MKEY ' "/tmp/precompile_mock_$$.log" 2>/dev/null | tail -1
+}
+
+precompile_warm() {
+    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
+    echo "PRECOMPILE: ===== warming JIT cache (hardware-free, ${PRECOMPILE_WORKERS}-way) =====" >&2
+
+    # 1. cluster descriptor (HW-stable, cached per container)
+    if ! _precompile_descriptor; then
+        echo "PRECOMPILE: ✗ cluster-descriptor capture failed/timed out -> COLD (real run UNAFFECTED). See /tmp/precompile_desc_$$.log" >&2
+        return 0
+    fi
+
+    # 2. real device fingerprint: resolved 2-erisc + the build_key your run will actually use
+    local probe force2 realkey
+    probe="$(_precompile_realkey | sed -n 's/^RKEY //p' | tail -1)"
+    if [[ -z "$probe" ]]; then
+        echo "PRECOMPILE: ✗ couldn't read your device's build_key -> COLD. Either the device is unhealthy, or" >&2
+        echo "PRECOMPILE:   the build predates the get_build_key/get_enable_2_erisc_mode bindings (re-run ./build_metal.sh)." >&2
+        echo "PRECOMPILE:   See /tmp/precompile_real_$$.log" >&2
+        return 0
+    fi
+    force2="${probe%% *}"; realkey="${probe##* }"
+
+    # 3. mock fingerprint build_key (hardware-free)
+    local mockkey
+    mockkey="$(_precompile_mockkey "$force2" | sed -n 's/^MKEY //p' | tail -1)"
+    if [[ -z "$mockkey" ]]; then
+        echo "PRECOMPILE: ✗ couldn't compute the hardware-free build_key -> COLD. See /tmp/precompile_mock_$$.log" >&2
+        return 0
+    fi
+
+    # 4. PRE-FLIGHT: will a warm pass actually be reused by your run?
+    if [[ "$mockkey" != "$realkey" ]]; then
+        echo "PRECOMPILE: ✗ build_key MISMATCH — your device uses ${realkey}, the hardware-free fingerprint produces ${mockkey}." >&2
+        echo "PRECOMPILE:   => a warm pass would NOT be reused by your run, so it is SKIPPED (no wasted work); running COLD." >&2
+        echo "PRECOMPILE:   Results stay CORRECT — you just don't get the speedup. Cause (mock fingerprint != real device):" >&2
+        echo "PRECOMPILE:     • stale descriptor from another machine/docker -> rm -f $PRECOMPILE_DESC ; re-run" >&2
+        echo "PRECOMPILE:     • a multi-device / Blackhole config the (1,1) hardware-free fingerprint didn't reproduce" >&2
+        echo "PRECOMPILE:       (harvesting / dispatch_core / 2-erisc / arch)." >&2
+        return 0
+    fi
+    echo "PRECOMPILE: ✓ fingerprint matches your device (build_key ${realkey}) — the warm cache WILL be reused." >&2
+
+    # 5. hardware-free meta-collect over the SAME selection -> warms the shared cache in parallel
+    echo "PRECOMPILE: warming over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    local clog="/tmp/precompile_collect_$$.log" t0 t1
+    t0=$(date +%s)
+    TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" \
+    UP_FRONT_COLLECT=1 UP_FRONT_META_COLLECT=1 UP_FRONT_COLLECT_WORKERS=1 \
+    LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
+        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p up_front_collect_plugin -n "$PRECOMPILE_WORKERS" \
+        > "$clog" 2>&1 || true
+    t1=$(date +%s)
+    echo "PRECOMPILE: ✓ warm pass complete in $((t1-t0))s (build_key ${realkey}) — the real run below reuses it. Log: $clog" >&2
+}
 
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
@@ -106,6 +239,15 @@ if [[ -f python_env/bin/activate ]]; then
     fi
 else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
+fi
+
+# --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
+if [[ "$PRECOMPILE" == true ]]; then
+    if [[ "$SIM_MODE" == true ]]; then
+        echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
+    else
+        precompile_warm
+    fi
 fi
 
 # --- Hang detection setup (hardware only) ---
