@@ -312,19 +312,23 @@ def run_model(
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
 
         # MLA reference check. Returns None when the variant has no reference.
-        position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-        ref_out = run_reference_mla(
-            variant,
-            config=config,
-            weights=weights,
-            hidden_states=hidden_states,
-            position_ids=position_ids_ref,
-        )
-        if ref_out is not None:
+        # Only run reference for shorter sequence lengths so we don't go OOM on host.
+        if seq_len <= 5 * 1024:
+            position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
             logger.info(f"Running MLA reference (model={variant.name})")
-            _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
-            logger.info(f"[reference_output] PCC: {ref_pcc_message}")
-            del ref_out
+            ref_out = run_reference_mla(
+                variant,
+                config=config,
+                weights=weights,
+                hidden_states=hidden_states,
+                position_ids=position_ids_ref,
+            )
+            if ref_out is not None:
+                _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
+                logger.info(f"[reference_output] PCC: {ref_pcc_message}")
+                del ref_out
+        else:
+            logger.info(f"Skipping MLA reference comparison for seq_len={seq_len}")
     else:
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
