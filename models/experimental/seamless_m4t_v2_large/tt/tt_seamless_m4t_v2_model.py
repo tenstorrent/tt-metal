@@ -2443,6 +2443,10 @@ class TTSeamlessM4Tv2Model:
                 ttnn.deallocate(enc_attn_tt)
             return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt)
 
+        # Text decode may leave a captured Metal trace active; T2U / full-decoder forwards must
+        # not allocate while it is live (corrupt buffers → "Tensor is not allocated").
+        self.release_text_decoder_decode_trace()
+
         # ---- Speech generation: re-encode for speech modality (HF parity), then T2U + vocoder ----
         gc = self.generation_config
         pad_token_id = int(gc.pad_token_id)
