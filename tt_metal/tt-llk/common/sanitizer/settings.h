@@ -56,6 +56,11 @@
 #endif
 #define LLK_SAN_SETTING_FAULT 0
 
+#if defined(LLK_SAN_SETTING_INTERNAL)
+#error "LLK_SAN_SETTING_INTERNAL is set but LLK_SAN_ENABLE is not defined"
+#endif
+#define LLK_SAN_SETTING_INTERNAL 0
+
 #else
 
 #if defined(LLK_SAN_SETTING_ASSERT) && defined(LLK_SAN_SETTING_PRINT)
@@ -68,7 +73,6 @@
 #endif
 
 #if !defined(LLK_SAN_SETTING_PEDANTIC)
-// If override is not provided, default to pedantic
 #define LLK_SAN_SETTING_PEDANTIC 0
 #endif
 
@@ -93,3 +97,38 @@
 #endif
 
 #endif
+
+namespace llk::san
+{
+
+enum class Trigger
+{
+    PEDANTIC,
+    WARN,
+    ERROR,
+    FAULT,
+    INFO,
+    INTERNAL
+};
+
+constexpr bool enabled_trigger(Trigger level)
+{
+    switch (level)
+    {
+        case Trigger::PEDANTIC:
+            return LLK_SAN_SETTING_PEDANTIC;
+        case Trigger::WARN:
+            return LLK_SAN_SETTING_WARN;
+        case Trigger::ERROR:
+            return LLK_SAN_SETTING_ERROR;
+        case Trigger::FAULT:
+            return LLK_SAN_SETTING_FAULT;
+        case Trigger::INFO:
+            return LLK_SAN_SETTING_INFO;
+        case Trigger::INTERNAL:
+            return LLK_SAN_SETTING_INTERNAL;
+    }
+    __builtin_unreachable();
+}
+
+}; // namespace llk::san

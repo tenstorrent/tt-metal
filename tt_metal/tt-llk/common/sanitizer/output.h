@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
 #pragma once
 
+#include <cstring>
+
+#include "ckernel.h"
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
@@ -13,13 +12,9 @@
 
 #ifndef LLK_SAN_ENABLE
 
-#define LLK_SAN_ASSERT(condition, ...)
-
 #elif defined(LLK_SAN_SETTING_ASSERT)
 
 #include "llk_assert.h"
-
-#define LLK_SAN_ASSERT(condition, fmt, ...) LLK_ASSERT((condition), fmt)
 
 #elif defined(LLK_SAN_SETTING_PRINT)
 
@@ -29,84 +24,264 @@
 
 #include "api/debug/device_print.h"
 
-#define LLK_SAN_ASSERT(condition, fmt, ...)        \
-    do                                             \
-    {                                              \
-        if (!(condition))                          \
-        {                                          \
-            DEVICE_PRINT(fmt "\n", ##__VA_ARGS__); \
-        }                                          \
-    } while (0)
-
 #else
-// todo(sstanisic): better message
-#error "llk_san: fault: What a Terrible Failure"
+#error "llk_san: fault: terrible failure :D"
 #endif
 
-#define LLK_SAN_PANIC(condition, fmt, ...) LLK_SAN_ASSERT(!(condition), fmt, ##__VA_ARGS__)
+namespace llk::san
+{
 
-#if LLK_SAN_SETTING_PEDANTIC == 0
-#define LLK_SAN_PEDANTIC_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_PEDANTIC == 1
-#define LLK_SAN_PEDANTIC_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_PEDANTIC"
-#endif
+NOINLINE NOCLONE ct_string _trigger_name(const Trigger trigger)
+{
+    switch (trigger)
+    {
+        case Trigger::PEDANTIC:
+            return CTSTR("pedantic");
+        case Trigger::WARN:
+            return CTSTR("warn    ");
+        case Trigger::ERROR:
+            return CTSTR("error   ");
+        case Trigger::FAULT:
+            return CTSTR("fault   ");
+        case Trigger::INFO:
+            return CTSTR("info    ");
+        case Trigger::INTERNAL:
+            return CTSTR("internal");
+    }
+    __builtin_unreachable();
+}
 
-#define LLK_SAN_PEDANTIC_PANIC(condition, fmt, ...) LLK_SAN_PEDANTIC_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_PEDANTIC_MSG(fmt, ...)              LLK_SAN_PEDANTIC_ASSERT(false, fmt, ##__VA_ARGS__)
+NOINLINE NOCLONE void _print_full_kernel()
+{
+    const ct_string kernel = CTSTR(FULL_KERNEL_NAME);
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Current Kernel ]─\r"
+        "│  └── {}\r",
+        kernel);
+}
 
-#if LLK_SAN_SETTING_WARN == 0
-#define LLK_SAN_WARN_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_WARN == 1
-#define LLK_SAN_WARN_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_WARN"
-#endif
+template <typename T>
+NOINLINE NOCLONE void _print_operand_expected(const State<T> expected)
+{
+    if (expected.is_known())
+    {
+        DEVICE_PRINT(
+            "│\r"
+            "│  ┌[ Last time state was modified ]─\r"
+            "│  ├── New state value ── {}\r",
+            expected.get_underlying());
+    }
+    else if (expected.is_unknown())
+    {
+        DEVICE_PRINT(
+            "│\r"
+            "│  ┌[ Last time state was modified ]─\r"
+            "│  ├── New state value ── UNKNOWN (value never configured?)\r");
+    }
+    else
+    {
+        __builtin_unreachable();
+    }
+}
 
-#define LLK_SAN_WARN_PANIC(condition, fmt, ...) LLK_SAN_WARN_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_WARN_MSG(fmt, ...)              LLK_SAN_WARN_ASSERT(false, fmt, ##__VA_ARGS__)
+template <typename T>
+NOINLINE NOCLONE void _print_operand_actual(const State<T> actual)
+{
+    if (actual.is_known())
+    {
+        DEVICE_PRINT(
+            "│\r"
+            "│  ┌[ Failed operand state check ]─\r"
+            "│  ├── Provided state value ── {}\r",
+            actual.get_underlying());
+    }
+    else
+    {
+        __builtin_unreachable();
+    }
+}
 
-#if LLK_SAN_SETTING_ERROR == 0
-#define LLK_SAN_ERROR_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_ERROR == 1
-#define LLK_SAN_ERROR_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_ERROR"
-#endif
+NOINLINE NOCLONE void _print_compute_info(const UnwindContext context)
+{
+    const ct_string unknown = CTSTR("<unknown>");
+    const ct_string file    = CTSTR("<file>");
+    const ct_string line    = CTSTR("<line>");
 
-#define LLK_SAN_ERROR_PANIC(condition, fmt, ...) LLK_SAN_ERROR_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_ERROR_MSG(fmt, ...)              LLK_SAN_ERROR_ASSERT(false, fmt, ##__VA_ARGS__)
+    DEVICE_PRINT(
+        "│  ├── Compute API ─┬ {:#x}\r"
+        "│  │                └ {}:{}\r"
+        "│  └── Callsite ────┬ {:#x}\r"
+        "│                   └ {}:{}\r",
+        context.pc,
+        context.pc != UINTPTR_MAX ? file : unknown,
+        context.pc != UINTPTR_MAX ? line : unknown,
+        context.ra,
+        context.ra != UINTPTR_MAX ? file : unknown,
+        context.ra != UINTPTR_MAX ? line : unknown);
+}
 
-#if LLK_SAN_SETTING_FAULT == 0
-#define LLK_SAN_FAULT_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_FAULT == 1
-#define LLK_SAN_FAULT_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_FAULT"
-#endif
+template <Trigger level, typename T>
+TT_ALWAYS_INLINE void operand_assert(const State<T> expected, const State<T> actual, ct_string message, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(level) || expected.assert_cond(actual))
+    {
+        return;
+    }
 
-#define LLK_SAN_FAULT_PANIC(condition, fmt, ...) LLK_SAN_FAULT_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_FAULT_MSG(fmt, ...)              LLK_SAN_FAULT_ASSERT(false, fmt, ##__VA_ARGS__)
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  {}\r",
+        _trigger_name(level),
+        message);
 
-#if LLK_SAN_SETTING_INFO == 0
-#define LLK_SAN_INFO_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_INFO == 1
-#define LLK_SAN_INFO_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_INFO"
-#endif
+    _print_full_kernel();
+    _print_operand_expected(expected);
+    _print_compute_info(update);
+    _print_operand_actual(actual);
+    _print_compute_info(current);
 
-#define LLK_SAN_INFO_PANIC(condition, fmt, ...) LLK_SAN_INFO_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_INFO_MSG(fmt, ...)              LLK_SAN_INFO_ASSERT(false, fmt, ##__VA_ARGS__)
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
 
-#if LLK_SAN_SETTING_INTERNAL == 0
-#define LLK_SAN_INTERNAL_ASSERT(condition, ...)
-#elif LLK_SAN_SETTING_INTERNAL == 1
-#define LLK_SAN_INTERNAL_ASSERT(condition, fmt, ...) LLK_SAN_ASSERT((condition), fmt, ##__VA_ARGS__)
-#else
-#error "llk_san: fault: invalid value for LLK_SAN_SETTING_INTERNAL"
-#endif
+template <Trigger level>
+NOINLINE NOCLONE bool operation_assert(const Operation expected, const Operation actual, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(level) || expected == actual)
+    {
+        // If check is enabled and passed, return true.
+        return enabled_trigger(level) && expected == actual;
+    }
 
-#define LLK_SAN_INTERNAL_PANIC(condition, fmt, ...) LLK_SAN_INTERNAL_ASSERT(!(condition), fmt, ##__VA_ARGS__)
-#define LLK_SAN_INTERNAL_MSG(fmt, ...)              LLK_SAN_INTERNAL_ASSERT(false, fmt, ##__VA_ARGS__)
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  Called execute or uninit for operation that is not initialized\r",
+        _trigger_name(level));
+
+    _print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Last init call ]─\r"
+        "│  ├── Operation ── {}\r",
+        expected);
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Violating execute / uninit call ]─\r"
+        "│  ├── Operation ── {}\r",
+        actual);
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+
+    return false;
+}
+
+template <Trigger level>
+NOINLINE NOCLONE void operation_argument_assert(
+    const void* lhs, const void* rhs, size_t size, size_t idx, const UnwindContext update, const UnwindContext current)
+{
+    if constexpr (!enabled_trigger(level))
+    {
+        return;
+    }
+
+    if (std::memcmp(lhs, rhs, size) == 0)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  Argument {} of llk::san::operation_init and llk::san::operation_check is mismatched\r",
+        _trigger_name(level),
+        idx);
+
+    _print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ llk::san::operation_init called from ]─\r");
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ llk::san::operation_check called from ]─\r");
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
+
+static inline ct_string fsm_state_name(const FsmState state)
+{
+    switch (state)
+    {
+        case FsmState::INITIAL:
+            return CTSTR("INITIAL");
+        case FsmState::CONFIGURED:
+            return CTSTR("CONFIGURED");
+        case FsmState::INITIALIZED:
+            return CTSTR("INITIALIZED");
+        case FsmState::EXECUTED:
+            return CTSTR("EXECUTED");
+        case FsmState::UNINITIALIZED:
+            return CTSTR("UNINITIALIZED");
+        case FsmState::RECONFIGURED:
+            return CTSTR("RECONFIGURED");
+    }
+    __builtin_unreachable();
+}
+
+NOINLINE NOCLONE void _print_fsm_transition(const FsmState current_state, const FsmState next_state, const ct_string allowed)
+{
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ State machine ]─\r"
+        "│  ├── Current state ───── {}\r"
+        "│  ├── Attempted transition ─ {}\r"
+        "│  └── Allowed transitions  ─ [{}]\r",
+        fsm_state_name(current_state),
+        fsm_state_name(next_state),
+        allowed);
+}
+
+template <Trigger level>
+NOINLINE NOCLONE void fsm_assert(
+    bool success,
+    ct_string message,
+    FsmState transition_from,
+    FsmState transition_to,
+    ct_string transition_allowed,
+    const UnwindContext update,
+    const UnwindContext current)
+{
+    if (!enabled_trigger(level) || success)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  {}\r",
+        _trigger_name(level),
+        message);
+
+    _print_full_kernel();
+    _print_fsm_transition(transition_from, transition_to, transition_allowed);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Last successful transition ]─\r");
+    _print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Violating transition ]─\r");
+    _print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+}
+
+} // namespace llk::san
