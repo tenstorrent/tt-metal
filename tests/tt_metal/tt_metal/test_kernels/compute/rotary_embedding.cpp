@@ -10,9 +10,6 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 // Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
 constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
     const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
