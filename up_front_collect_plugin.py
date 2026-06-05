@@ -60,6 +60,14 @@ _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
 # under NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT
 # change what is collected — it stops pass 1 paying for the golden reference + PCC + RNG.
 _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
+# UP_FRONT_META_COLLECT=1 (opt-in): the GENERIC version of fast-collect. Instead of per-op torch
+# swaps (randn/conv2d/layer_norm/...), run the throwaway body on the torch META device: tensors
+# carry shape+dtype but NO storage, and the dispatcher propagates shapes through ANY torch op with
+# no compute and no allocation. This is the host-side analogue of the mock ttnn device — it removes
+# the host memory + compute that OOM'd full-suite collects. The one ttnn<->torch boundary is bridged
+# by allocate_tensor_on_device (from_torch) + a meta stand-in (to_torch), valid because program
+# capture depends only on shapes/layout, not values. Falls back to real per-input on any edge case.
+_META_COLLECT = os.environ.get("UP_FRONT_META_COLLECT") == "1"
 
 # Bodies that drive trace/graph capture can't run under NO_DISPATCH (it blocks the
 # dispatch + alloc that recording needs). Heuristic: scan the test function source.
@@ -150,6 +158,138 @@ def _cheap_host_ops():
             _mod.comp_pcc = _orig
 
 
+_meta_stats = {"from_torch_alloc": 0, "from_torch_fallback": 0, "to_torch_meta": 0}
+
+
+@contextlib.contextmanager
+def _meta_host_ops():
+    """Generic fake-torch collect: run the throwaway body on META tensors (no storage, no compute).
+
+    Replaces the per-op swap list in _cheap_host_ops. Forces torch tensor creation onto the meta
+    device so inputs AND every torch reference op become storage-less shape propagation (the
+    dispatcher handles all ops generically — no per-op patching, no allocation -> no OOM). Bridges
+    the ttnn boundary: from_torch(meta) -> allocate_tensor_on_device (shape-only, no host copy),
+    to_torch -> meta stand-in. comp_pcc is a no-op. Any path that can't be meta'd falls back to a
+    real shape-correct zeros for that one tensor, so the body still reaches the ttnn op to capture it.
+    """
+    import sys
+
+    import torch
+    import ttnn
+
+    real = {
+        n: getattr(torch, n)
+        for n in (
+            "randn",
+            "rand",
+            "zeros",
+            "ones",
+            "empty",
+            "full",
+            "arange",
+            "randint",
+            "tensor",
+            "as_tensor",
+            "eye",
+            "linspace",
+            "zeros_like",
+            "ones_like",
+            "empty_like",
+            "randn_like",
+            "rand_like",
+        )
+        if hasattr(torch, n)
+    }
+    real_from_torch = ttnn.from_torch
+    real_to_torch = ttnn.to_torch
+
+    _T2T = {
+        torch.float32: ttnn.float32,
+        torch.float64: ttnn.float32,
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float16: ttnn.bfloat16,
+        torch.int32: ttnn.uint32,
+        torch.int64: ttnn.uint32,
+        torch.int16: ttnn.uint16,
+        torch.uint8: ttnn.uint8,
+        torch.bool: ttnn.uint8,
+    }
+
+    def _mk(orig):
+        def wrapped(*a, **kw):
+            kw.setdefault("device", "meta")
+            kw.pop("generator", None)
+            try:
+                return orig(*a, **kw)
+            except (TypeError, RuntimeError):
+                kw.pop("device", None)  # creator doesn't accept device= (rare) -> real
+                return orig(*a, **kw)
+
+        return wrapped
+
+    def _meta_from_torch(
+        tensor, dtype=None, *, spec=None, layout=None, device=None, memory_config=None, mesh_mapper=None, **kw
+    ):
+        is_meta = tensor is not None and getattr(tensor, "is_meta", False)
+        if is_meta and device is not None:
+            try:
+                if spec is not None:
+                    dt, lay, mc = spec.dtype, spec.layout, spec.memory_config
+                    shp = ttnn.Shape(tuple(spec.shape))
+                else:
+                    dt = dtype or _T2T.get(tensor.dtype, ttnn.bfloat16)
+                    lay = layout or ttnn.ROW_MAJOR_LAYOUT
+                    mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
+                    shp = ttnn.Shape(tuple(tensor.shape))
+                t = ttnn.allocate_tensor_on_device(shp, dt, lay, device, mc)
+                _meta_stats["from_torch_alloc"] += 1
+                return t
+            except Exception:
+                pass  # fall through to materialize
+        if is_meta:
+            # device=None (host tensor) or alloc failed -> materialize a real shape-correct zeros
+            _meta_stats["from_torch_fallback"] += 1
+            tensor = real["zeros"](tuple(tensor.shape), dtype=tensor.dtype)
+        return real_from_torch(
+            tensor,
+            dtype,
+            spec=spec,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+            mesh_mapper=mesh_mapper,
+            **kw,
+        )
+
+    def _meta_to_torch(tensor, *a, **kw):
+        try:
+            _meta_stats["to_torch_meta"] += 1
+            return real["zeros"](tuple(tensor.shape), device="meta")
+        except Exception:
+            return real_to_torch(tensor, *a, **kw)
+
+    pcc_saved = []
+    for _modname in ("tests.ttnn.utils_for_testing", "models.common.utility_functions"):
+        _mod = sys.modules.get(_modname)
+        if _mod is not None and hasattr(_mod, "comp_pcc"):
+            pcc_saved.append((_mod, _mod.comp_pcc))
+            _mod.comp_pcc = lambda *a, **k: (True, 0.999999)
+
+    for name, orig in real.items():
+        setattr(torch, name, _mk(orig))
+    ttnn.from_torch = _meta_from_torch
+    ttnn.to_torch = _meta_to_torch
+    try:
+        yield
+    finally:
+        for name, orig in real.items():
+            setattr(torch, name, orig)
+        ttnn.from_torch = real_from_torch
+        ttnn.to_torch = real_to_torch
+        for _mod, _orig in pcc_saved:
+            _mod.comp_pcc = _orig
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     """Run each body under one NO_DISPATCH collect window (call phase only)."""
@@ -165,6 +305,9 @@ def pytest_runtest_call(item):
     _stats["bodies"] += 1
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
+        if _META_COLLECT:
+            with _meta_host_ops():
+                return (yield)  # body runs on meta (no storage/compute); ttnn ops still stash
         if _FAST_COLLECT:
             with _cheap_host_ops():
                 return (yield)  # body runs with cheap host stand-ins; ttnn ops still stash
@@ -200,6 +343,12 @@ def pytest_sessionfinish(session, exitstatus):
         f"(swallowed {_stats['swallowed']}, skipped-capture {_stats['skipped_capture']})",
         flush=True,
     )
+    if _META_COLLECT:
+        print(
+            f"UP_FRONT_COLLECT: meta-collect boundary — from_torch alloc={_meta_stats['from_torch_alloc']} "
+            f"fallback={_meta_stats['from_torch_fallback']}, to_torch meta={_meta_stats['to_torch_meta']}",
+            flush=True,
+        )
     if n_unique == 0:
         print("UP_FRONT_COLLECT: nothing to compile", flush=True)
         return
