@@ -350,9 +350,7 @@ pytest models/experimental/ace_step_v1_5/tests \
 | **DiT output head** | `test_output_head.py` | Output head vs torch | `pytest models/experimental/ace_step_v1_5/tests/test_output_head.py -q` |
 | **DiT HF parity** | `test_hf_parity_patch_output_head.py` | HF base patch embed + output head | `pytest models/experimental/ace_step_v1_5/tests/test_hf_parity_patch_output_head.py -q` |
 | **DiT denoise loop** | `test_dit_denoise_loop_pcc.py` | Full Euler loop vs torch (750/1500 frames) | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py -q` |
-| **DiT denoise + CFG** | `test_dit_denoise_loop_pcc_cfg.py` | APG + DCW vs torch with CFG | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc_cfg.py -q` |
 | **VAE Snake1D** | `test_vae_decoder_pcc.py` | Snake, residual, decoder block, tiny decoder | `pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py -q` |
-| **VAE trace equiv** | `test_vae_chunk_trace_equiv.py` | Tiled/trace vs eager VAE decode | `pytest models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py -q` |
 | **Condition encoder** | `test_condition_embedding_ttnn.py` | Text embed, Qwen3 TTT prefill, ctx latents | `pytest models/experimental/ace_step_v1_5/tests/test_condition_embedding_ttnn.py -q` |
 | **5 Hz LM logits** | `test_llm_handler_logits_pcc.py` | LM postprocess, CFG combine, prefill/decode | `pytest models/experimental/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py -q` |
 | **LM memory patches** | `test_qwen_lm_mem_patches.py` | Prefill L1 / decode shard patches (unit) | `pytest models/experimental/ace_step_v1_5/tests/test_qwen_lm_mem_patches.py -q` |
@@ -375,10 +373,17 @@ pytest models/experimental/ace_step_v1_5/tests/test_pcc_adaln.py \
 
 ```bash
 pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py \
-  models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py \
   models/experimental/ace_step_v1_5/tests/test_vae_matmul_program_config.py \
   models/experimental/ace_step_v1_5/tests/test_vae_tile_passthrough.py \
   --confcutdir=models/experimental/ace_step_v1_5/tests -q
+```
+
+### VAE trace diagnostics (opt-in, not production validation)
+
+Production `decode_tiled` is always eager. To investigate `decode_chunk_traced` replay vs eager:
+
+```bash
+ACE_STEP_RUN_VAE_TRACE_DIAG=1 pytest models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py -s
 ```
 
 ### CPU-only / host tests (no device)
@@ -386,7 +391,6 @@ pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py \
 ```bash
 pytest models/experimental/ace_step_v1_5/tests/test_apg_guidance_host.py \
   models/experimental/ace_step_v1_5/tests/test_safetensors_loader.py \
-  models/experimental/ace_step_v1_5/tests/test_dcw_sampler.py \
   models/experimental/ace_step_v1_5/tests/test_tt_device_mesh.py -q
 ```
 
