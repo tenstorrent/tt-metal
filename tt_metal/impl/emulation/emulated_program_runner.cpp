@@ -493,6 +493,10 @@ struct CoreSetup {
     bool has_dfbs = false;
     uint32_t sem_base;
     uint32_t sem_size;
+    // L1 start offsets of globally-allocated (persistent) CB backing buffers on
+    // this core. These are legitimate kernel write targets (the CB *is* the
+    // tensor), so the Object-Intent check must not flag writes to them.
+    std::vector<uint32_t> persistent_cb_starts;
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
@@ -1632,10 +1636,20 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
 // Initialize CB-sync state on a core from the program's circular buffer list.
-static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, const CoreCoord& logical_core) {
+static void init_core_cb_sync(
+    tt_emule::Core* core,
+    detail::ProgramImpl& impl,
+    const CoreCoord& logical_core,
+    std::vector<uint32_t>& persistent_cb_starts) {
     core->reset_cb_sync();
     auto cb_impls = impl.circular_buffers_on_core(logical_core);
     for (auto& cb_impl : cb_impls) {
+        // A globally-allocated CB is bound to a persistent L1 buffer (its
+        // address() == that buffer's address()). Record it so Object-Intent
+        // exempts the kernel's legitimate writes to it.
+        if (cb_impl->globally_allocated()) {
+            persistent_cb_starts.push_back(cb_impl->address());
+        }
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
             if (idx >= EMULE_NUM_CBS) {
                 continue;
@@ -1796,7 +1810,8 @@ static void setup_core_state(
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
-        init_core_cb_sync(core, impl, logical_core);
+        std::vector<uint32_t> persistent_cb_starts;
+        init_core_cb_sync(core, impl, logical_core, persistent_cb_starts);
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
@@ -1813,7 +1828,8 @@ static void setup_core_state(
              std::move(dfb_allocs),
              has_dfbs,
              emule_sem_base,
-             sem_region_size});
+             sem_region_size,
+             std::move(persistent_cb_starts)});
     }
 }
 
@@ -1969,6 +1985,7 @@ public:
         const EmuleOobTensorState& oob,
         const std::vector<KernelInfo>& ki_list,
         const uint8_t* l1_data,
+        const std::vector<uint32_t>& persistent_cb_starts,
         [[maybe_unused]] uint32_t lx,
         [[maybe_unused]] uint32_t ly) {
         if (!oob.object_intent_strict || oob.tensor_ranges == nullptr) {
@@ -1989,6 +2006,13 @@ public:
             uint32_t r_start = static_cast<uint32_t>(packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(packed);
             if (r_end <= r_start) {
+                continue;
+            }
+            // Skip persistent (globally-allocated CB) buffers: the kernel is
+            // allowed to write to them, so they must not
+            // be compared. Their address() == the buffer's start offset.
+            if (std::find(persistent_cb_starts.begin(), persistent_cb_starts.end(), r_start) !=
+                persistent_cb_starts.end()) {
                 continue;
             }
             Snap snap;
@@ -2266,6 +2290,7 @@ static void launch_cores(
                         oob_state,
                         *cs.ki_list,
                         l1_data,
+                        cs.persistent_cb_starts,
                         static_cast<uint32_t>(cs.logical_core.x),
                         static_cast<uint32_t>(cs.logical_core.y));
 
