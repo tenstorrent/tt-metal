@@ -265,10 +265,10 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * @tparam EN_DI: Enable the direct-indexing instruction variant
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
- * @pre On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
- *      @ref _llk_unpack_unary_operand_init_ (the dummy-dvalid path that lets MOVD2A/B fill the reused source register). On the pack thread, pair with
- *      @ref _llk_pack_init_ (T2).
- * @post @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
+ * @note On the unpack thread (T0): for reuse_dest == NONE pair with @ref _llk_unpack_binary_operands_init_; for DEST_TO_SRCA/DEST_TO_SRCB pair with
+ *       @ref _llk_unpack_unary_operand_init_ (the dummy-dvalid path that lets MOVD2A/B fill the reused source register). On the pack thread, pair with
+ *       @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType ELTWISE_BINARY_TYPE,
@@ -305,11 +305,11 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB. The MOVD2A/B instruction copies a face from dest to the source register
  * before each MOP run, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full
- * mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param clear_in_fp32_mode: When true, clears the dest face in Float32 mode during dest reuse
- * @pre @ref _llk_math_eltwise_binary_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, EltwiseBinaryReuseDestType reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const std::uint32_t tile_idx, const ckernel::TensorShape& tensor_shape, const bool clear_in_fp32_mode = false)

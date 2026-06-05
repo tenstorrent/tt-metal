@@ -117,8 +117,8 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @tparam is_fp32_dest_acc_en: Forwarded to mop_config; must be false when unpack_to_dest is true, values = <true/false>
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
  * @param num_tiles: Number of tiles in the outer unpack loop.
- * @pre On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching BROADCAST_TYPE/unpack_to_dest.
- * @post @ref _llk_unpack_unary_broadcast_operands_ is the matching execute call on this thread.
+ * @note On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching BROADCAST_TYPE/unpack_to_dest.
+ * @note @ref _llk_unpack_unary_broadcast_operands_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -132,7 +132,7 @@ inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_d
  * @tparam UNP_SEL: Logical unpack select for static checks; counter uses UNP_A when unpack_to_dest, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam unpack_to_dest: Use the UNP_A dest path vs the UNP_B SrcB path, values = <true/false>
  * @param start_l1_tile_idx: Starting source tile index for face/row counters.
- * @pre @ref _llk_unpack_unary_broadcast_operands_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_unpack_unary_broadcast_operands_init_ with matching template args before this function.
  */
 template <std::uint32_t UNP_SEL, bool unpack_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_(const std::uint32_t start_l1_tile_idx)

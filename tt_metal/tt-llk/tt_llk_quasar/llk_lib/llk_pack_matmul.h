@@ -46,7 +46,7 @@ inline void _llk_pack_matmul_mop_config_(
  * @param subblock_r_dim: Number of tiles in the row dimension of a matrix block.
  * @param subblock_c_dim: Number of tiles in the column dimension of a matrix block.
  * @param num_subblocks_c_dim: Number of subblocks in the column dimension of a matrix block.
- * @post @ref _llk_pack_matmul_ is the matching execute call on this thread.
+ * @note @ref _llk_pack_matmul_ is the matching execute call on this thread.
  */
 inline void _llk_pack_matmul_init_(
     const std::uint32_t buf_desc_id, const std::uint32_t subblock_r_dim, const std::uint32_t subblock_c_dim, const std::uint32_t num_subblocks_c_dim)
@@ -59,7 +59,7 @@ inline void _llk_pack_matmul_init_(
  *
  * @param start_math_dest_tile_idx: The tile index into the math destination register that the packer starts packing from.
  * @param start_l1_tile_idx: The tile index into the L1 output buffer that the packer starts packing into.
- * @pre @ref _llk_pack_matmul_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_pack_matmul_init_ with matching template args before this function.
  */
 inline void _llk_pack_matmul_(const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx)
 {

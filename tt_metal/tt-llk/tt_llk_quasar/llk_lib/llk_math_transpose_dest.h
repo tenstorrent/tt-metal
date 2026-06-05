@@ -190,7 +190,7 @@ inline void _llk_math_transpose_dest_mop_config_()
  *
  * @tparam TRANSPOSE_OF_FACES: Set to true to transpose the faces of the tile, not only to transpose within the faces
  * @tparam EN_32BIT_DEST: Set to true if the destination register is in 32-bit mode
- * @post @ref _llk_math_transpose_dest_ runs the configured transpose with matching template args.
+ * @note @ref _llk_math_transpose_dest_ runs the configured transpose with matching template args.
  */
 template <bool TRANSPOSE_OF_FACES, bool EN_32BIT_DEST>
 inline void _llk_math_transpose_dest_init_()
@@ -206,8 +206,8 @@ inline void _llk_math_transpose_dest_init_()
  * @brief Performs a 32x32 in place transpose operation on a tile in the destination register at tile_idx.
  *
  * @param tile_idx: Tile index into the destination register
- * @pre @ref _llk_math_transpose_dest_init_ must be called with matching template args.
- * @pre On the unpack thread, @ref _llk_unpack_set_srcB_dummy_valid_ (T0) must set a dummy SrcB dvalid, since the MOVD2B reads here stall on SrcB validity.
+ * @note Call @ref _llk_math_transpose_dest_init_ with matching template args before this function.
+ * @note On the unpack thread, @ref _llk_unpack_set_srcB_dummy_valid_ (T0) must set a dummy SrcB dvalid, since the MOVD2B reads here stall on SrcB validity.
  */
 inline void _llk_math_transpose_dest_(const std::uint32_t tile_idx)
 {

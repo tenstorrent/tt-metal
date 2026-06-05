@@ -45,7 +45,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param num_tiles: Number of tiles to pack at a time.
  * @param relu_config: ReLU config (mode + threshold).
- * @post @ref _llk_pack_ is the matching execute call on this thread.
+ * @note @ref _llk_pack_ is the matching execute call on this thread.
  */
 template <bool EN_32B_DEST = false>
 inline void _llk_pack_init_(
@@ -60,7 +60,7 @@ inline void _llk_pack_init_(
  *
  * @param start_math_dest_tile_idx: The tile index into the math destination register that the packer starts packing from.
  * @param start_l1_tile_idx: The tile index into the L1 output buffer that the packer starts packing into.
- * @pre @ref _llk_pack_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_pack_init_ with matching template args before this function.
  */
 inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::uint32_t start_l1_tile_idx)
 {

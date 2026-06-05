@@ -59,8 +59,8 @@ inline void _llk_unpack_reduce_mop_config_(
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @param num_tiles: Number of tiles to unpack at a time for SrcA; SrcB will only have its first face unpacked.
- * @pre On the math thread, pair with @ref _llk_math_reduce_init_ (T1); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
- * @post @ref _llk_unpack_reduce_ is the matching execute call on this thread.
+ * @note On the math thread, pair with @ref _llk_math_reduce_init_ (T1); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
+ * @note @ref _llk_unpack_reduce_ is the matching execute call on this thread.
  */
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
@@ -76,7 +76,7 @@ inline void _llk_unpack_reduce_init_(
  *
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
- * @pre @ref _llk_unpack_reduce_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  */
 inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {

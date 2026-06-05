@@ -40,8 +40,8 @@ inline void _llk_unpack_binary_operands_mop_config_(const std::uint32_t buf_desc
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
  * @param num_tiles: Number of tiles to unpack at a time for both inputs.
- * @pre On the math thread, pair with @ref _llk_math_eltwise_binary_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
- * @post @ref _llk_unpack_binary_operands_ is the matching execute call on this thread.
+ * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_unpack_binary_operands_ is the matching execute call on this thread.
  */
 inline void _llk_unpack_binary_operands_init_(const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t num_tiles = NUM_TILES)
 {
@@ -53,7 +53,7 @@ inline void _llk_unpack_binary_operands_init_(const std::uint32_t buf_desc_id_0,
  *
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
- * @pre @ref _llk_unpack_binary_operands_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_unpack_binary_operands_init_ with matching template args before this function.
  */
 inline void _llk_unpack_binary_operands_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)
 {

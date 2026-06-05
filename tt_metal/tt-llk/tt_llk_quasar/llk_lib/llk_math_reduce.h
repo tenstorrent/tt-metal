@@ -346,8 +346,8 @@ inline void _llk_math_reduce_addrmod_()
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
- * @pre On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
- * @post @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
@@ -377,7 +377,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
  *
  * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
- * @pre @ref _llk_math_reduce_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
 inline void _llk_math_reduce_(const std::uint32_t tile_idx)
 {

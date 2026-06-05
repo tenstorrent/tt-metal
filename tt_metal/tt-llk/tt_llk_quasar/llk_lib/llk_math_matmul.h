@@ -281,8 +281,8 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
- * @pre On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
- * @post @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_matmul_init_ (T0); on the pack thread, pair with @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_matmul_tile_ or @ref _llk_math_matmul_block_ runs the configured matmul with matching template args.
  */
 
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI = false, bool EN_X2 = false>
@@ -309,7 +309,7 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
  *
  * @param dst_index: Tile index in destination register. For DstSync::SyncHalf: values = [0-7] for Float16b, values = [0-3] for Float32. For DstSync::SyncFull:
  * values = [0-15] for Float16b, values = [0-7] for Float32
- * @pre @ref _llk_math_matmul_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_matmul_init_ with matching template args before this function.
  */
 inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
 {
@@ -333,7 +333,7 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
  *
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
- * @pre @ref _llk_math_matmul_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_matmul_init_ with matching template args before this function.
  */
 inline void _llk_math_matmul_block_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {

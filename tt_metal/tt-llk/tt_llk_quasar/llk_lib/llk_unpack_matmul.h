@@ -66,8 +66,8 @@ inline void _llk_unpack_matmul_mop_config_(
  * @param ct_dim: Number of tiles in the column dimension for input1 of the matrix multiply.
  * @param rt_dim: Number of tiles in the row dimension for input0 of the matrix multiply.
  * @param kt_dim: Number of tiles in the common dimension between input0 and input1 of the matrix multiply.
- * @pre On the math thread, pair with @ref _llk_math_matmul_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
- * @post @ref _llk_unpack_matmul_ is the matching execute call on this thread.
+ * @note On the math thread, pair with @ref _llk_math_matmul_init_ (T1); on the pack thread, pair with @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_unpack_matmul_ is the matching execute call on this thread.
  */
 template <bool TRANSPOSE_EN>
 inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t buf_desc_id_1, std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim)
@@ -91,7 +91,7 @@ inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t 
  * @param kt_dim: Number of tiles in the common dimension between input0 and input1 of the matrix multiply.
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER1 -> SRCB, start_l1_tile_idx_1 -> UNPACKER0 -> SRCA.
- * @pre @ref _llk_unpack_matmul_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_unpack_matmul_init_ with matching template args before this function.
  */
 inline void _llk_unpack_matmul_(
     std::uint8_t ct_dim, std::uint8_t rt_dim, std::uint32_t kt_dim, const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1)

@@ -50,9 +50,9 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
- * @pre The dst register is produced by the datacopy trio: on the unpack thread pair with @ref _llk_unpack_unary_operand_init_ (T0) and on the math thread with
- *      @ref _llk_math_eltwise_unary_datacopy_init_ (T1, A2D).
- * @post @ref _llk_pack_untilize_ is the matching execute call on this thread.
+ * @note The dst register is produced by the datacopy trio: on the unpack thread pair with @ref _llk_unpack_unary_operand_init_ (T0) and on the math thread with
+ *       @ref _llk_math_eltwise_unary_datacopy_init_ (T1, A2D).
+ * @note @ref _llk_pack_untilize_ is the matching execute call on this thread.
  */
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
@@ -74,7 +74,7 @@ inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const Tenso
  *
  * @param dest_idx: Index into the DEST register for a tile.
  * @param l1_tile_idx: Index into the L1 buffer for a tile.
- * @pre @ref _llk_pack_untilize_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_pack_untilize_init_ with matching template args before this function.
  */
 inline void _llk_pack_untilize_(const std::uint32_t dest_idx, const std::uint32_t l1_tile_idx)
 {
@@ -208,7 +208,7 @@ inline void _llk_pack_untilize_strided_1x32_mop_config_(const std::uint8_t buf_d
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 16 - 31
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
- * @post @ref _llk_pack_untilize_strided_ is the matching execute call on this thread.
+ * @note @ref _llk_pack_untilize_strided_ is the matching execute call on this thread.
  */
 template <std::uint32_t FULL_CT_DIM, std::uint32_t FACE_R_DIM, std::uint32_t NUM_TILES_PER_BLOCK>
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TensorShape& tensor_shape)
@@ -253,7 +253,7 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc.
  * @param l1_tile_idx: Index into the L1 output buffer for the tile.
  * @param src_tile_idx: Tile index into the source (math destination) register.
- * @pre @ref _llk_pack_untilize_strided_init_ must be called first to program the MOP.
+ * @note Call @ref _llk_pack_untilize_strided_init_ with matching template args before this function.
  */
 template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_(
@@ -302,7 +302,7 @@ inline void _llk_pack_untilize_strided_(
 /**
  * @brief Runs one strided pack untilize MOP invocation for 4x32 tiles.
  *
- * @pre @ref _llk_pack_untilize_strided_init_ (with FACE_R_DIM = 4) must be called first to program the MOP.
+ * @note Call @ref _llk_pack_untilize_strided_init_ (with FACE_R_DIM = 4) with matching template args before this function.
  */
 inline void _llk_pack_untilize_strided_4x32_()
 {

@@ -153,9 +153,9 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
- * @pre On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
- *      @ref _llk_pack_init_ (T2).
- * @post @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
+ *       @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
@@ -175,7 +175,7 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
  *
  * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
- * @pre @ref _llk_math_eltwise_binary_broadcast_init_ must be called with matching template args.
+ * @note Call @ref _llk_math_eltwise_binary_broadcast_init_ with matching template args before this function.
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {

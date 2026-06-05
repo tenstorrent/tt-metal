@@ -297,7 +297,7 @@ inline void _llk_math_pack_sync_init_()
 /**
  * @brief Block the math thread until the destination register is available for writing.
  *
- * @pre @ref _llk_math_pack_sync_init_ must have seeded the MATH_PACK semaphore.
+ * @note @ref _llk_math_pack_sync_init_ must have seeded the MATH_PACK semaphore before this function.
  */
 inline void _llk_math_wait_for_dest_available_()
 {

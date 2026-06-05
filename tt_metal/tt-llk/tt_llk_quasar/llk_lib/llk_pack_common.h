@@ -115,8 +115,8 @@ inline void _llk_pack_dest_dvalid_section_done_()
  * @brief Configures Packer 0 edge-mask programming for reduce operations.
  *
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
- * @pre On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the math thread, pair with @ref _llk_math_reduce_init_ (T1).
- * @post Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the math thread, pair with @ref _llk_math_reduce_init_ (T1).
+ * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <ReduceDim REDUCE_DIMENSION>
 inline void _llk_pack_reduce_mask_config_()
@@ -174,7 +174,7 @@ inline void _llk_pack_reduce_mask_config_()
 /**
  * @brief Restores the default Packer 0 edge masks (pass-through) after a reduce operation.
  *
- * @pre Pairs with @ref _llk_pack_reduce_mask_config_.
+ * @note Pairs with @ref _llk_pack_reduce_mask_config_.
  */
 inline void _llk_pack_reduce_mask_clear_()
 {
