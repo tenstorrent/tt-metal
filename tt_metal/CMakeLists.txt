@@ -202,12 +202,15 @@ if(TT_INSTALL)
     # 3rd party dependencies we export in our public API.
     # We must ship not only these libraries, but their public headers as well
     # ... or refactor our public API.
+    set(METALIUM_THIRDPARTY_TARGETS "")
+    foreach(THIRDPARTY_TARGET IN ITEMS reflect enchantum TracyClient tt-logger)
+        if(TARGET ${THIRDPARTY_TARGET})
+            list(APPEND METALIUM_THIRDPARTY_TARGETS ${THIRDPARTY_TARGET})
+        endif()
+    endforeach()
     install(
         TARGETS
-            reflect
-            enchantum
-            TracyClient
-            tt-logger
+            ${METALIUM_THIRDPARTY_TARGETS}
         EXPORT Metalium
         FILE_SET
         api
