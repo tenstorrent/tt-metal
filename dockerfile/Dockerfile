@@ -276,8 +276,9 @@ RUN apt update && apt install -y --no-install-recommends \
 
 # Configure SSH for MPI multihost jobs readiness
 # To be safe, keep this **after** the apt install to avoid openssh-server mangling configs
-RUN adduser --uid 1001 --shell /bin/bash user && \
+RUN adduser --uid 1001 --shell /bin/bash --disabled-password --gecos "" user && \
     usermod -aG sudo user && \
+    usermod -p 'NP' user && \
     echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
     mkdir -p /run/sshd && \
     echo "StrictModes no" >> /etc/ssh/sshd_config
