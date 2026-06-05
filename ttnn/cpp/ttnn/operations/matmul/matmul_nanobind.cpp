@@ -807,7 +807,8 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none(),
             nb::arg("global_cb") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none(),
+            nb::arg("global_semaphore") = nb::none()));
 
     ttnn::bind_function<"linear">(
         mod,

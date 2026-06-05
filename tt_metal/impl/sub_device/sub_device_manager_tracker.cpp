@@ -32,6 +32,7 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include <tracy/Tracy.hpp>
 
 namespace tt::tt_metal {
 
@@ -62,6 +63,7 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 }
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
+    ZoneScopedN("load_sub_device_manager::reset_sub_device_state");
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
@@ -82,6 +84,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 }
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    ZoneScopedN("SubDeviceManagerTracker::load_sub_device_manager");
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
@@ -96,15 +99,19 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
     this->reset_sub_device_state(sub_device_manager->second);
-    const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
-    default_allocator->reset_allocator_size(BufferType::L1);
-    // Shrink the global allocator size to make room for sub-device allocators
-    auto local_l1_size = sub_device_manager->second->local_l1_size();
-    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    {
+        ZoneScopedN("load_sub_device_manager::shrink_l1_allocator");
+        const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
+        default_allocator->reset_allocator_size(BufferType::L1);
+        // Shrink the global allocator size to make room for sub-device allocators
+        auto local_l1_size = sub_device_manager->second->local_l1_size();
+        default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    }
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
 void SubDeviceManagerTracker::clear_loaded_sub_device_manager() {
+    ZoneScopedN("SubDeviceManagerTracker::clear_loaded_sub_device_manager");
     this->load_sub_device_manager(default_sub_device_manager_->id());
 }
 

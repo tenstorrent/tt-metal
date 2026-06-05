@@ -266,6 +266,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
+        TTNN::Ops::Experimental::DeepSeekPrefill::DummyOp
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
@@ -522,6 +523,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dummy_op)
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)

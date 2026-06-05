@@ -42,6 +42,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
+#if defined(TRACY_ENABLE)
+#include <tracy/Tracy.hpp>
+#endif
+
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
 // std::unique_ptr<T, nb::deleter<T>> in your code. Without the latter type
@@ -53,6 +57,20 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
+
+#if defined(TRACY_ENABLE)
+namespace {
+void mesh_device_load_sub_device_manager(MeshDevice& self, SubDeviceManagerId sub_device_manager_id) {
+    ZoneScopedN("pybind::MeshDevice.load_sub_device_manager");
+    self.load_sub_device_manager(sub_device_manager_id);
+}
+
+void mesh_device_clear_loaded_sub_device_manager(MeshDevice& self) {
+    ZoneScopedN("pybind::MeshDevice.clear_loaded_sub_device_manager");
+    self.clear_loaded_sub_device_manager();
+}
+}  // namespace
+#endif
 
 class SystemMeshDescriptor {
 private:
@@ -425,7 +443,11 @@ void py_module(nb::module_& mod) {
            )doc")
         .def(
             "load_sub_device_manager",
+#if defined(TRACY_ENABLE)
+            &mesh_device_load_sub_device_manager,
+#else
             &MeshDevice::load_sub_device_manager,
+#endif
             nb::arg("sub_device_manager_id"),
             R"doc(
                Loads the sub-device manager with the given ID.
@@ -436,7 +458,11 @@ void py_module(nb::module_& mod) {
            )doc")
         .def(
             "clear_loaded_sub_device_manager",
+#if defined(TRACY_ENABLE)
+            &mesh_device_clear_loaded_sub_device_manager,
+#else
             &MeshDevice::clear_loaded_sub_device_manager,
+#endif
             R"doc(
                Clears the loaded sub-device manager for the given mesh device.
            )doc")

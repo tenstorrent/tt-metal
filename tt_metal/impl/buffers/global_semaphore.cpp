@@ -101,6 +101,26 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     }
 }
 
+std::vector<uint32_t> GlobalSemaphore::read_semaphore_values() const {
+    // Blocking read of the sharded sem buffer; one uint32 per core in cores_.
+    std::vector<uint32_t> host_buffer;
+    auto mesh_buffer = buffer_.get_mesh_buffer();
+    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
+    if (using_fast_dispatch) {
+        distributed::EnqueueReadMeshBuffer(
+            mesh_buffer->device()->mesh_command_queue(), host_buffer, mesh_buffer, /*blocking=*/true);
+    } else {
+        // Slow-dispatch path: read from each device shard and concatenate.
+        host_buffer.reserve(cores_.num_cores() * mesh_buffer->device()->shape().mesh_size());
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
+            std::vector<uint32_t> shard_buffer;
+            tt::tt_metal::detail::ReadFromBuffer(*mesh_buffer->get_device_buffer(coord), shard_buffer);
+            host_buffer.insert(host_buffer.end(), shard_buffer.begin(), shard_buffer.end());
+        }
+    }
+    return host_buffer;
+}
+
 }  // namespace tt::tt_metal
 
 namespace std {

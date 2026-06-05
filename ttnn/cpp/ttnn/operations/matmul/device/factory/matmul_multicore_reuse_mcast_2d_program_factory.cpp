@@ -76,7 +76,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    [[maybe_unused]] const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -320,11 +321,15 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
     }
 
-    // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
+    // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3).
+    // id=4 reserved for the leader-completion sync: non-leader cores increment
+    // this sem on the leader; the leader waits for num_non_leader signals at
+    // the end of its writer kernel so it's guaranteed to be the last to finish.
     uint32_t in0_mcast_sender_semaphore_id = 0;
     uint32_t in0_mcast_receiver_semaphore_id = 1;
     uint32_t in1_mcast_sender_semaphore_id = 2;
     uint32_t in1_mcast_receiver_semaphore_id = 3;
+    uint32_t leader_sync_semaphore_id = 4;
 
     bool in1_is_dram = in1_tensor.mesh_buffer().device_local_config().buffer_type == tt_metal::BufferType::DRAM;
 
@@ -1103,6 +1108,57 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         .id = in1_mcast_sender_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in1_mcast_receiver_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = INVALID});
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = leader_sync_semaphore_id, .core_ranges = CoreRangeSet(all_cores), .initial_value = 0});
+
+    // Leader = first scheduled core; the other (num_cores - 1) cores will inc
+    // its leader_sync sem at the end of their writer kernels.
+    const CoreCoord leader_logical = cores.empty() ? CoreCoord{0, 0} : cores.front();
+    const auto leader_phys = device->worker_core_from_logical_core(leader_logical);
+    const uint32_t leader_noc_x = leader_phys.x;
+    const uint32_t leader_noc_y = leader_phys.y;
+    const uint32_t num_non_leader_cores = cores.empty() ? 0u : static_cast<uint32_t>(cores.size() - 1);
+
+    // Optional global semaphore: after the leader has confirmed every non-leader
+    // is finished, it issues noc_semaphore_inc_multicast across every core that
+    // holds an instance of the global semaphore. NOC bounding box is computed
+    // as min/max over each individual core's NOC coords (logical→NOC is not
+    // monotonic under harvesting).
+    uint32_t has_global_sem = 0;
+    uint32_t global_sem_mcast_start_x = 0;
+    uint32_t global_sem_mcast_start_y = 0;
+    uint32_t global_sem_mcast_end_x = 0;
+    uint32_t global_sem_mcast_end_y = 0;
+    uint32_t global_sem_num_dests = 0;
+    uint32_t global_sem_l1_addr = 0;
+    if (global_semaphore.has_value()) {
+        const auto& gsem = global_semaphore.value();
+        // attribute_values() returns a tuple by value — must keep the tuple alive
+        // before referencing its elements.
+        const auto gsem_attrs = gsem.attribute_values();
+        const auto& gsem_cores = std::get<0>(gsem_attrs);
+        bool first_phys = true;
+        for (const auto& range : gsem_cores.ranges()) {
+            for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; ++x) {
+                for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; ++y) {
+                    const auto phys = device->worker_core_from_logical_core({x, y});
+                    if (first_phys) {
+                        global_sem_mcast_start_x = global_sem_mcast_end_x = phys.x;
+                        global_sem_mcast_start_y = global_sem_mcast_end_y = phys.y;
+                        first_phys = false;
+                    } else {
+                        global_sem_mcast_start_x = std::min(global_sem_mcast_start_x, (uint32_t)phys.x);
+                        global_sem_mcast_end_x = std::max(global_sem_mcast_end_x, (uint32_t)phys.x);
+                        global_sem_mcast_start_y = std::min(global_sem_mcast_start_y, (uint32_t)phys.y);
+                        global_sem_mcast_end_y = std::max(global_sem_mcast_end_y, (uint32_t)phys.y);
+                    }
+                }
+            }
+        }
+        has_global_sem = 1;
+        global_sem_num_dests = gsem_cores.num_cores();
+        global_sem_l1_addr = static_cast<uint32_t>(gsem.address());
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -1407,6 +1463,24 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     if (bias_mesh.has_value()) {
                         in1_sender_variant[18] = *bias_mesh;
                     }
+                    // Leader-sync trailing args (read at the end of the kernel):
+                    // is_leader, leader_noc_x, leader_noc_y, leader_sem_id, num_non_leader_cores.
+                    const uint32_t is_leader = (core == leader_logical) ? 1u : 0u;
+                    in1_sender_variant.emplace_back(is_leader);
+                    in1_sender_variant.emplace_back(leader_noc_x);
+                    in1_sender_variant.emplace_back(leader_noc_y);
+                    in1_sender_variant.emplace_back(leader_sync_semaphore_id);
+                    in1_sender_variant.emplace_back(num_non_leader_cores);
+                    // Global-sem trailing args (only used on the leader path):
+                    // has_global_sem, mcast_start_x, mcast_start_y, mcast_end_x,
+                    // mcast_end_y, num_dests, global_sem_l1_addr.
+                    in1_sender_variant.emplace_back(has_global_sem);
+                    in1_sender_variant.emplace_back(global_sem_mcast_start_x);
+                    in1_sender_variant.emplace_back(global_sem_mcast_start_y);
+                    in1_sender_variant.emplace_back(global_sem_mcast_end_x);
+                    in1_sender_variant.emplace_back(global_sem_mcast_end_y);
+                    in1_sender_variant.emplace_back(global_sem_num_dests);
+                    in1_sender_variant.emplace_back(global_sem_l1_addr);
                     in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_sender_variant);
                 }
 
@@ -1494,6 +1568,24 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>>
                         in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
                     in1_recv_variant[2] = out_tensor;
+                    // Leader-sync trailing args (same layout as in1_sender_variant).
+                    const uint32_t is_leader = (core == leader_logical) ? 1u : 0u;
+                    in1_recv_variant.emplace_back(is_leader);
+                    in1_recv_variant.emplace_back(leader_noc_x);
+                    in1_recv_variant.emplace_back(leader_noc_y);
+                    in1_recv_variant.emplace_back(leader_sync_semaphore_id);
+                    in1_recv_variant.emplace_back(num_non_leader_cores);
+                    // Global-sem trailing args (placeholder for receiver cores; only
+                    // the leader actually issues the inc, and the leader runs the
+                    // sender writer, not this kernel). Kept so both writer kernels
+                    // share an identical trailing-arg layout.
+                    in1_recv_variant.emplace_back(has_global_sem);
+                    in1_recv_variant.emplace_back(global_sem_mcast_start_x);
+                    in1_recv_variant.emplace_back(global_sem_mcast_start_y);
+                    in1_recv_variant.emplace_back(global_sem_mcast_end_x);
+                    in1_recv_variant.emplace_back(global_sem_mcast_end_y);
+                    in1_recv_variant.emplace_back(global_sem_num_dests);
+                    in1_recv_variant.emplace_back(global_sem_l1_addr);
                     // left half
                     if (core.x <= half_core || (transpose_mcast and core.y == start_core_y)) {
                         in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
@@ -1577,7 +1669,8 @@ create_program_mcast_in0_in1(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    [[maybe_unused]] const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
@@ -3309,7 +3402,8 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        operation_attributes.global_semaphore);
 }
 
 void MatmulMultiCoreReuseMcast2DProgramFactory::override_runtime_arguments(
@@ -3454,7 +3548,8 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
         untilize_out,
         fused_op_signaler,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        operation_attributes.global_semaphore);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

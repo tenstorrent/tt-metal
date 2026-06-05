@@ -1079,11 +1079,13 @@ void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_man
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    ZoneScopedN("MeshDeviceImpl::load_sub_device_manager");
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
+    ZoneScopedN("MeshDeviceImpl::clear_loaded_sub_device_manager");
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
@@ -1787,9 +1789,13 @@ void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager
     pimpl_->remove_sub_device_manager(sub_device_manager_id);
 }
 void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    ZoneScopedN("MeshDevice::load_sub_device_manager");
     pimpl_->load_sub_device_manager(sub_device_manager_id);
 }
-void MeshDevice::clear_loaded_sub_device_manager() { pimpl_->clear_loaded_sub_device_manager(); }
+void MeshDevice::clear_loaded_sub_device_manager() {
+    ZoneScopedN("MeshDevice::clear_loaded_sub_device_manager");
+    pimpl_->clear_loaded_sub_device_manager();
+}
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     return pimpl_->virtual_program_dispatch_core(cq_id);
 }
