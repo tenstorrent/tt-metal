@@ -1562,10 +1562,33 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32, false)
 //   2Bx2B blk4: 16-entry ring → capacity 8/thread → 2 blocks of 4 per thread.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16, false)
 
+// 3Bx3B blk4: 6 DM cores (at the Gen2 user-DM cap), 24-entry ring → capacity 8/thread.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4, DM, DM, 3, 3, 4, 24, false)
+// Non-power-of-2 block: blk3, 12-entry ring → 4 blocks of 3 (guards against pow2 assumptions).
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk3, DM, DM, 1, 1, 3, 12, false)
+
 // --- BLOCKED→BLOCKED (DM-DM, IMPLICIT sync: one TXN_ID transfer per tile, ISR-batched credits) ---
 // Same layout/page-mapping as the explicit variants; only the sync mode differs.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_impl, DM, DM, 1, 1, 4, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4_impl, DM, DM, 2, 2, 4, 16, true)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
+
+// Bigger entry size (2048 vs the 1024 default) — exercises larger per-block NoC bursts.
+TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->devices_.at(0), params);
+}
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
