@@ -64,9 +64,10 @@ import ttnn  # noqa: E402
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
 from _completer_utils import (  # noqa: E402
-    TTML_DEVICE_CONFIG_REL,
     build_completer,
-    teardown_completer,
+    close_device,
+    load_device_config,
+    open_device,
 )
 
 BASE_MODEL_ID = "meta-llama/Llama-3.2-1B"
@@ -88,25 +89,12 @@ TEMPERATURE = 0.7
 TOP_P = 1.0
 
 
-def _build_ttml_completer_reusing_device(model_source: str) -> Any:
-    """Build a ttml ``LlamaCompleterTtml`` that reuses the open device.
-
-    Same workaround as ``test_ttml_to_ttt_weight_transfer.py``: the TTT
-    completer opens the device first; ttml subclass overrides
-    ``setup_device`` to return the existing ``AutoContext`` mesh.
-    """
-    import ttml
-    from ttml.common.config import DeviceConfig, get_model_config, load_config
+def _build_ttml_completer(mesh_device: Any, *, enable_ddp: bool, raw: dict, model_source: str) -> Any:
+    """Build a :class:`LlamaCompleterTtml` on the already-open ``mesh_device``."""
+    from ttml.common.config import get_model_config
 
     from utils.llama_completer_ttml import LlamaCompleterTtml, LlamaCompletionCtx
-    from utils.llama_completer_ttt import LlamaGRPOCompleter  # noqa: F401  (force import order)
 
-    class _LlamaCompleterTtmlReusingDevice(LlamaCompleterTtml):
-        def setup_device(self, device_config):
-            return ttml.autograd.AutoContext.get_instance().get_device()
-
-    raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
-    device_config = DeviceConfig(raw)
     tf_config = get_model_config(raw["training_config"]["model_config"])
 
     ctx = LlamaCompletionCtx(
@@ -114,11 +102,12 @@ def _build_ttml_completer_reusing_device(model_source: str) -> Any:
         temperature=TEMPERATURE,
     )
 
-    return _LlamaCompleterTtmlReusingDevice(
+    return LlamaCompleterTtml(
         ctx=ctx,
         transformer_config=tf_config,
-        device_config=device_config,
+        mesh_device=mesh_device,
         model_source=model_source,
+        enable_ddp=enable_ddp,
     )
 
 
@@ -182,64 +171,72 @@ def main() -> None:
     print(f"[manual] max_new_tokens : {MAX_NEW_TOKENS}")
     print("")
 
-    print("[manual] building TTT completer (base) ...")
-    ttt = build_completer(
-        dummy_weights=False,
-        max_batch_size=BATCH_SIZE,
-        model_source=BASE_MODEL_ID,
-        instruct=False,
-    )
+    device_config, raw = load_device_config()
+    mesh_device = open_device(device_config)
+    ttt = ttml_completer = None
     try:
-        print("[manual] building ttml completer (instruct, reusing device) ...")
-        ttml_completer = _build_ttml_completer_reusing_device(INSTRUCT_MODEL_ID)
-        try:
-            # Use ttml_completer's tokenizer: it was loaded from the
-            # -Instruct repo, which is the only one of the two that ships
-            # a chat_template. Vocab is byte-identical to the base
-            # tokenizer, so the resulting IDs are valid for TTT too.
-            prompt_ids = _build_chat_prompt_ids(ttml_completer.tokenizer)
-            print(f"[manual] chat-templated prompt tokens: {len(prompt_ids)}")
+        print("[manual] building TTT completer (base) ...")
+        ttt = build_completer(
+            mesh_device,
+            dummy_weights=False,
+            max_batch_size=BATCH_SIZE,
+            model_source=BASE_MODEL_ID,
+            instruct=False,
+        )
 
-            print(f"[manual] generating {BATCH_SIZE} completions from BASE TTT " "weights (pre-transfer) ...")
-            base_completions = ttt.generate(
-                [list(prompt_ids) for _ in range(BATCH_SIZE)],
-                max_new_tokens=MAX_NEW_TOKENS,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-            )
-            _print_completions_block(
-                "TTT (Llama-3.2-1B BASE weights, pre-transfer)",
-                base_completions,
-                ttt.tokenizer,
-            )
+        print("[manual] building ttml completer (instruct, shared device) ...")
+        ttml_completer = _build_ttml_completer(
+            mesh_device,
+            enable_ddp=device_config.enable_ddp,
+            raw=raw,
+            model_source=INSTRUCT_MODEL_ID,
+        )
 
-            print("[manual] exporting ttml weights -> HF-keyed on-device dict ...")
-            hf_dict = ttml_completer.model.export_to_hf_dict()
-            try:
-                print("[manual] running ttt.model.update_weights(...) in place ...")
-                ttt.model.update_weights(hf_dict, hf_rope=False)
-            finally:
-                del hf_dict
-                gc.collect()
-            print("[manual] weight transfer done")
+        # Use ttml_completer's tokenizer: it was loaded from the
+        # -Instruct repo, which is the only one of the two that ships
+        # a chat_template. Vocab is byte-identical to the base
+        # tokenizer, so the IDs are valid for TTT too.
+        prompt_ids = _build_chat_prompt_ids(ttml_completer.tokenizer)
+        print(f"[manual] chat-templated prompt tokens: {len(prompt_ids)}")
 
-            print(f"[manual] generating {BATCH_SIZE} completions from " "INSTRUCT TTT weights (post-transfer) ...")
-            instr_completions = ttt.generate(
-                [list(prompt_ids) for _ in range(BATCH_SIZE)],
-                max_new_tokens=MAX_NEW_TOKENS,
-                temperature=TEMPERATURE,
-                top_p=TOP_P,
-            )
-            _print_completions_block(
-                "TTT (Llama-3.2-1B-Instruct weights via ttml, post-transfer)",
-                instr_completions,
-                ttt.tokenizer,
-            )
-        finally:
-            del ttml_completer
-            gc.collect()
+        print(f"[manual] generating {BATCH_SIZE} completions from BASE TTT weights (pre-transfer) ...")
+        base_completions = ttt.generate(
+            [list(prompt_ids) for _ in range(BATCH_SIZE)],
+            max_new_tokens=MAX_NEW_TOKENS,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+        )
+        _print_completions_block(
+            "TTT (Llama-3.2-1B BASE weights, pre-transfer)",
+            base_completions,
+            ttt.tokenizer,
+        )
+
+        print("[manual] exporting ttml weights -> HF-keyed on-device dict ...")
+        hf_dict = ttml_completer.model.export_to_hf_dict()
+        print("[manual] running ttt.model.update_weights(...) in place ...")
+        ttt.model.update_weights(hf_dict, hf_rope=False)
+        del hf_dict
+        gc.collect()
+        print("[manual] weight transfer done")
+
+        print(f"[manual] generating {BATCH_SIZE} completions from INSTRUCT TTT weights (post-transfer) ...")
+        instr_completions = ttt.generate(
+            [list(prompt_ids) for _ in range(BATCH_SIZE)],
+            max_new_tokens=MAX_NEW_TOKENS,
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+        )
+        _print_completions_block(
+            "TTT (Llama-3.2-1B-Instruct weights via ttml, post-transfer)",
+            instr_completions,
+            ttt.tokenizer,
+        )
     finally:
-        teardown_completer(ttt)
+        ttml_completer = None
+        ttt = None
+        gc.collect()
+        close_device()
 
 
 if __name__ == "__main__":

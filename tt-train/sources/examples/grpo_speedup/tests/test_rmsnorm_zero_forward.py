@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, build_completer, teardown_completer
+from _completer_utils import as_update_input, open_completer
 
 SEQ_LEN = 32  # one decode tile
 
@@ -31,12 +31,9 @@ SMALL_EPS = 1e-12
 
 @pytest.fixture(scope="module")
 def completer_and_norm():
-    completer = build_completer(dummy_weights=True)
-    try:
+    with open_completer(dummy_weights=True) as completer:
         dn = completer.model.layers[0].attention_norm
         yield completer, dn, dn.norm
-    finally:
-        teardown_completer(completer)
 
 
 def _build_random_rms_input(completer):

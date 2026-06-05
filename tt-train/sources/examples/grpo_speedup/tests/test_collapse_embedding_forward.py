@@ -21,7 +21,6 @@ import os
 
 os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
 
-import gc
 import sys
 from pathlib import Path
 from typing import List
@@ -32,7 +31,6 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT))
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
 MAX_SEQ_LEN = 2048
 
 TARGET_TOKEN_ID = 16000
@@ -85,58 +83,47 @@ def _embed(completer, ids: List[int]):
 def main() -> None:
     import torch
     import ttnn
-    from ttml.common.config import DeviceConfig, load_config
 
-    from utils.llama_completer_ttt import LlamaGRPOCompleter
+    from _completer_utils import open_completer
 
     print(">>> set_fabric_config(FABRIC_2D)")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
-    raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
-    device_config = DeviceConfig(raw)
-
-    print(f">>> building LlamaGRPOCompleter ({MODEL_ID}, max_seq_len={MAX_SEQ_LEN})")
-    completer = LlamaGRPOCompleter(
-        device_config=device_config,
-        model_source=MODEL_ID,
+    print(f">>> building LlamaCompleterTtt ({MODEL_ID}, max_seq_len={MAX_SEQ_LEN})")
+    with open_completer(
+        dummy_weights=False,
         max_batch_size=1,
         max_seq_len=MAX_SEQ_LEN,
-    )
+        model_source=MODEL_ID,
+    ) as completer:
+        prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
+        all_16000_ids = [TARGET_TOKEN_ID] * len(prompt_ids)
+        print(f">>> prompt_ids    = {prompt_ids}")
+        print(f">>> all_16000_ids = {all_16000_ids}")
 
-    prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
-    all_16000_ids = [TARGET_TOKEN_ID] * len(prompt_ids)
-    print(f">>> prompt_ids    = {prompt_ids}")
-    print(f">>> all_16000_ids = {all_16000_ids}")
+        print(">>> A: original embeddings  x  all-16000 ids")
+        a_orig_16000 = _embed(completer, all_16000_ids)
 
-    print(">>> A: original embeddings  x  all-16000 ids")
-    a_orig_16000 = _embed(completer, all_16000_ids)
+        target_str = completer.tokenizer.decode([TARGET_TOKEN_ID], skip_special_tokens=False)
+        print(f">>> collapsing embedding table: every row -> row {TARGET_TOKEN_ID} ({target_str!r})")
+        new_weights = _build_collapsed_embedding(completer)
+        completer.model.embd.update(embed_tokens=new_weights)
 
-    target_str = completer.tokenizer.decode([TARGET_TOKEN_ID], skip_special_tokens=False)
-    print(f">>> collapsing embedding table: every row -> row {TARGET_TOKEN_ID} ({target_str!r})")
-    new_weights = _build_collapsed_embedding(completer)
-    completer.model.embd.update(embed_tokens=new_weights)
+        print(">>> C: collapsed embeddings x  real prompt ids")
+        c_coll_real = _embed(completer, prompt_ids)
 
-    print(">>> C: collapsed embeddings x  real prompt ids")
-    c_coll_real = _embed(completer, prompt_ids)
+        a_eq_c = torch.equal(a_orig_16000, c_coll_real)
 
-    a_eq_c = torch.equal(a_orig_16000, c_coll_real)
+        print()
+        print(f"=== Embedding.forward() output shape: {tuple(a_orig_16000.shape)} ===")
+        print(f"  A (orig x 16000s) == C (collapsed x real):  {a_eq_c}   [must be True]")
 
-    print()
-    print(f"=== Embedding.forward() output shape: {tuple(a_orig_16000.shape)} ===")
-    print(f"  A (orig x 16000s) == C (collapsed x real):  {a_eq_c}   [must be True]")
+        if not a_eq_c:
+            diff = (a_orig_16000.float() - c_coll_real.float()).abs()
+            print(f"  max |A - C| = {float(diff.max()):.6g}, mean |A - C| = {float(diff.mean()):.6g}")
 
-    if not a_eq_c:
-        diff = (a_orig_16000.float() - c_coll_real.float()).abs()
-        print(f"  max |A - C| = {float(diff.max()):.6g}, mean |A - C| = {float(diff.mean()):.6g}")
-
-    print()
-    print(f"  RESULT: {'PASS' if a_eq_c else 'FAIL'}")
-
-    import ttml
-
-    del completer
-    gc.collect()
-    ttml.autograd.AutoContext.get_instance().close_device()
+        print()
+        print(f"  RESULT: {'PASS' if a_eq_c else 'FAIL'}")
 
 
 if __name__ == "__main__":

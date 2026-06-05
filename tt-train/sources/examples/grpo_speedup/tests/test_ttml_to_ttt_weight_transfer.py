@@ -52,16 +52,15 @@ gated.
 from __future__ import annotations
 
 import gc
-import os
 from typing import Any
 
 import pytest
 
 from _completer_utils import (
-    TTML_DEVICE_CONFIG_REL,
-    REPO_ROOT,
     build_completer,
-    teardown_completer,
+    close_device,
+    load_device_config,
+    open_device,
 )
 
 BASE_MODEL_ID = "meta-llama/Llama-3.2-1B"
@@ -71,31 +70,17 @@ MAX_NEW_TOKENS = 32
 TEMPERATURE = 0.0  # greedy -> deterministic, exact-equality comparable
 
 
-def _build_ttml_completer_reusing_device(model_source: str) -> Any:
-    """Build a ttml ``LlamaCompleterTtml`` that reuses the already-open device.
+def _build_ttml_completer(mesh_device: Any, *, enable_ddp: bool, raw: dict, model_source: str) -> Any:
+    """Build a :class:`LlamaCompleterTtml` on ``mesh_device``.
 
-    The TTT completer opens the device first; calling ``open_device`` a
-    second time fails. We subclass and override ``setup_device`` to
-    return the existing ``AutoContext`` mesh, which is the workflow the
-    base class documents for tests that co-host multiple completers on
-    one device.
+    Uses the same ``TransformerConfig`` the standard ttml completer would
+    build for this training yaml so RoPE scaling, vocab, and block count
+    match what HF Llama-3.2-1B-Instruct expects.
     """
-    import ttml
-    from ttml.common.config import DeviceConfig, get_model_config, load_config
+    from ttml.common.config import get_model_config
 
     from utils.llama_completer_ttml import LlamaCompleterTtml, LlamaCompletionCtx
-    from utils.llama_completer_ttt import LlamaGRPOCompleter  # noqa: F401  (force import order)
 
-    class _LlamaCompleterTtmlReusingDevice(LlamaCompleterTtml):
-        def setup_device(self, device_config):
-            return ttml.autograd.AutoContext.get_instance().get_device()
-
-    raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
-    device_config = DeviceConfig(raw)
-
-    # Use the same TransformerConfig the standard ttml completer would
-    # build for this training yaml so RoPE scaling, vocab, and block
-    # count match what HF Llama-3.2-1B-Instruct expects.
     tf_config = get_model_config(raw["training_config"]["model_config"])
 
     ctx = LlamaCompletionCtx(
@@ -103,11 +88,12 @@ def _build_ttml_completer_reusing_device(model_source: str) -> Any:
         temperature=TEMPERATURE,
     )
 
-    return _LlamaCompleterTtmlReusingDevice(
+    return LlamaCompleterTtml(
         ctx=ctx,
         transformer_config=tf_config,
-        device_config=device_config,
+        mesh_device=mesh_device,
         model_source=model_source,
+        enable_ddp=enable_ddp,
     )
 
 
@@ -117,28 +103,36 @@ def _decode(completer: Any, ids: list[int]) -> str:
 
 @pytest.fixture(scope="module")
 def completers():
-    """Open the device, build TTT(base) and ttml(instruct), tear down on exit.
+    """Open one mesh, host TTT(base) + ttml(instruct) on it, tear down on exit.
 
-    ``LlamaGRPOCompleter`` opens the mesh device in its constructor;
-    ``_LlamaCompleterTtmlReusingDevice`` reuses it. We tear down by
-    dropping ttml first (no device close), then ``teardown_completer``
-    on TTT which releases the device.
+    Both completers take an already-open ``mesh_device`` kwarg, so a
+    single :func:`open_device` call serves both. The finally clause
+    drops ttml first, then TTT, then closes the AutoContext mesh, so
+    every on-device tensor is freed before the mesh goes away.
     """
-    ttt = build_completer(
-        dummy_weights=False,
-        max_batch_size=1,
-        model_source=BASE_MODEL_ID,
-        instruct=False,
-    )
+    device_config, raw = load_device_config()
+    mesh_device = open_device(device_config)
+    ttt = ttml_completer = None
     try:
-        ttml_completer = _build_ttml_completer_reusing_device(INSTRUCT_MODEL_ID)
-        try:
-            yield ttt, ttml_completer
-        finally:
-            del ttml_completer
-            gc.collect()
+        ttt = build_completer(
+            mesh_device,
+            dummy_weights=False,
+            max_batch_size=1,
+            model_source=BASE_MODEL_ID,
+            instruct=False,
+        )
+        ttml_completer = _build_ttml_completer(
+            mesh_device,
+            enable_ddp=device_config.enable_ddp,
+            raw=raw,
+            model_source=INSTRUCT_MODEL_ID,
+        )
+        yield ttt, ttml_completer
     finally:
-        teardown_completer(ttt)
+        ttml_completer = None
+        ttt = None
+        gc.collect()
+        close_device()
 
 
 def _generate_ttt(completer: Any, prompt_ids: list[int], *, enable_trace: bool = True) -> list[int]:
