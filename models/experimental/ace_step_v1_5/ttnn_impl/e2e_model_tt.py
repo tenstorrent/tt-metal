@@ -53,7 +53,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.experimental.ace_step_v1_5.ace_step_perf_log import AceStepPerfRecorder, ace_step_perf_logging_enabled
+from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import AceStepPerfRecorder, ace_step_perf_logging_enabled
 
 from .condition_encoder import TtAceStepInstrumentalConditionEncoder
 from .denoise_trace_full_step import (
@@ -836,7 +836,7 @@ def run_ttnn_denoise_loop(
 
     frames_i = int(frames)
     c_lat = 64
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_dit_pipe_batch_size
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_dit_pipe_batch_size
 
     _pipe_batch_for_dram = ace_step_dit_pipe_batch_size(device, do_cfg=bool(do_cfg))
     try:
@@ -950,7 +950,7 @@ def run_ttnn_denoise_loop(
     from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
         MomentumBuffer,
     )
-    from models.experimental.ace_step_v1_5.tt_device import (
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
         ace_step_dit_pipe_batch_size,
         ace_step_mesh_use_host_cfg_euler,
         ace_step_mesh_use_host_temb_precompute,
@@ -1613,7 +1613,7 @@ def run_ttnn_denoise_loop(
         return xt_tt
 
     # Single device→Torch copy of latents for host VAE or other CPU consumers.
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_ttnn_to_torch
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_ttnn_to_torch
 
     pred_latents = ace_step_ttnn_to_torch(xt_tt, dtype=torch.float32, mesh_device=device).contiguous()
     try:
@@ -1908,7 +1908,7 @@ class AceStepE2EModel:
             pass
         if return_waveform_ttnn:
             return wav_tt
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_ttnn_to_torch
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_ttnn_to_torch
 
         wav_bt_c = ace_step_ttnn_to_torch(wav_tt, dtype=torch.float32, mesh_device=self.device).contiguous().numpy()
         wav_bct = np.ascontiguousarray(np.swapaxes(wav_bt_c, 1, 2))
@@ -1987,7 +1987,7 @@ class AceStepE2EModel:
             _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding")
             with perf.timed("condition_encoder", device=self.device):
                 if self._trace_state is not None:
-                    from models.experimental.ace_step_v1_5.official_lm_preprocess import condition_encode_tt
+                    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import condition_encode_tt
 
                     enc_hs_tt_one, enc_mask_np, null_emb_tt = condition_encode_tt(
                         self._condition_encoder,

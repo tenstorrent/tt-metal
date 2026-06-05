@@ -35,7 +35,7 @@ def load_safetensors_state_dict(path: str, *, prefix: Optional[str] = None) -> S
         prefix: If provided, only keys that start with `prefix` are kept, and
             the prefix is stripped from returned keys.
     """
-    from models.experimental.ace_step_v1_5.weight_cache import get_torch_state_dict
+    from models.experimental.ace_step_v1_5.utils.weight_cache import get_torch_state_dict
 
     component = f"safetensors{':' + prefix if prefix else ''}"
     raw = get_torch_state_dict(path, component=component)

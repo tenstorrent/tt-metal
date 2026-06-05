@@ -52,7 +52,7 @@ class AceStepDemoSession:
 
     def __post_init__(self) -> None:
         if self.session_perf is None:
-            from models.experimental.ace_step_v1_5.ace_step_perf_log import SessionPerfState
+            from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import SessionPerfState
 
             self.session_perf = SessionPerfState()
 
@@ -84,7 +84,7 @@ class AceStepDemoSession:
         )
 
     def clear_preprocess_device(self, ttnn_mod: Any) -> None:
-        from models.experimental.ace_step_v1_5.tt_device import close_ace_step_device
+        from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
 
         if self.preprocess_dev is not None:
             try:
@@ -97,7 +97,7 @@ class AceStepDemoSession:
         self.condition_encoder = None
 
     def release(self, ttnn_mod: Any) -> None:
-        from models.experimental.ace_step_v1_5.tt_device import close_ace_step_device
+        from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
 
         if self.trace_state is not None:
             dev = self.dit_dev or self.preprocess_dev

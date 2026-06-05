@@ -123,7 +123,7 @@ def ace_step_resolve_vae_tiling(
 def ace_step_mesh_perf_log_default(*, mesh_sku: str | None) -> bool:
     """Wall-clock perf logging default (same as :func:`ace_step_perf_logging_enabled`)."""
     del mesh_sku  # kept for call-site compatibility
-    from models.experimental.ace_step_v1_5.ace_step_perf_log import ace_step_perf_logging_enabled
+    from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import ace_step_perf_logging_enabled
 
     return ace_step_perf_logging_enabled()
 

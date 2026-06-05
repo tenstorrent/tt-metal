@@ -184,7 +184,7 @@ class AceStepV15TTNNPipeline:
         num_kv_heads = int(kv_w.shape[0]) // head_dim
         num_layers = sum(1 for k in sd.keys() if k.startswith("layers.") and k.endswith(".self_attn.q_proj.weight"))
 
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_dit_rope_max_seq_len
+        from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_dit_rope_max_seq_len
 
         rope_max_seq = ace_step_dit_rope_max_seq_len(
             expected_input_length=expected_input_length,
@@ -241,7 +241,10 @@ class AceStepV15TTNNPipeline:
             f"[ace_step_v1_5] DiT: uploading {num_layers} decoder layers to device …",
             flush=True,
         )
-        from models.experimental.ace_step_v1_5.tt_device import ace_step_device_num_chips, ace_step_synchronize_device
+        from models.experimental.ace_step_v1_5.utils.tt_device import (
+            ace_step_device_num_chips,
+            ace_step_synchronize_device,
+        )
 
         if ace_step_device_num_chips(device) > 1:
             ace_step_synchronize_device(ttnn, device)

@@ -10,7 +10,7 @@ import time
 import numpy as np
 import pytest
 
-from models.experimental.ace_step_v1_5.tt_device import (
+from models.experimental.ace_step_v1_5.utils.tt_device import (
     ace_step_dit_rope_max_seq_len,
     ace_step_mesh_is_2d,
     ace_step_mesh_perf_log_default,
@@ -98,7 +98,7 @@ def test_sequential_cfg_on_multi_device_only():
 
 def test_dit_body_trace_safe_30s_with_sequential_cfg():
     """P300 mesh uses B=1 sequential CFG; trace must stay enabled at 30 s (fused_M=12, not 24)."""
-    from models.experimental.ace_step_v1_5.tt_device import ace_step_dit_pipe_batch_size
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_dit_pipe_batch_size
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
         ace_step_dit_body_trace_safe,
         ace_step_dit_fused_m_tiles,
@@ -216,7 +216,7 @@ def test_mesh_perf_log_default():
 
 
 def test_mesh_perf_log_opt_out(monkeypatch):
-    from models.experimental.ace_step_v1_5.ace_step_perf_log import ace_step_perf_logging_enabled
+    from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import ace_step_perf_logging_enabled
 
     monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "0")
     assert not ace_step_mesh_perf_log_default(mesh_sku="P150")
@@ -243,7 +243,7 @@ def test_cached_preprocess_reuse():
 
 def test_emit_session_summary_rollup(monkeypatch):
     monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "1")
-    from models.experimental.ace_step_v1_5.ace_step_perf_log import (
+    from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import (
         SessionPassSnapshot,
         SessionPerfState,
         ace_step_extract_key_metrics,

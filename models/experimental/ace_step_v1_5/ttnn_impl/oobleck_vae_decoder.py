@@ -94,7 +94,7 @@ def _pick_safetensors_file(vae_dir: Path) -> Path:
 
 
 def _load_state_dict_torch(path: Path) -> dict[str, Any]:
-    from models.experimental.ace_step_v1_5.weight_cache import get_torch_state_dict
+    from models.experimental.ace_step_v1_5.utils.weight_cache import get_torch_state_dict
 
     return get_torch_state_dict(str(path), component="vae-safetensors")
 

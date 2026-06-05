@@ -438,9 +438,9 @@ def main() -> None:
     ap.add_argument(
         "--variant",
         type=str,
-        default="acestep-v15-base",
+        default="acestep-v15-turbo",
         choices=["acestep-v15-base", "acestep-v15-sft", "acestep-v15-turbo"],
-        help="DiT model variant (default: acestep-v15-base).",
+        help="DiT model variant (default: acestep-v15-turbo).",
     )
     ap.add_argument(
         "--lm_variant",
@@ -547,7 +547,7 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    from models.experimental.ace_step_v1_5.official_lm_preprocess import configure_acestep_logging
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
 
     configure_acestep_logging(level="INFO")
 
@@ -580,7 +580,7 @@ def main() -> None:
     if infer_steps is None:
         infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
 
-    from models.experimental.ace_step_v1_5.tt_device import (
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
         ace_step_device_num_chips,
         ace_step_dit_pipe_batch_size,
         ace_step_log_mesh_quality_hints,
@@ -689,7 +689,7 @@ def main() -> None:
             use_adg=bool(use_adg),
         )
 
-    from models.experimental.ace_step_v1_5.ace_step_perf_log import (
+    from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import (
         AceStepPerfRecorder,
         make_denoise_progress_fn,
     )
@@ -845,7 +845,7 @@ def main() -> None:
     # --- 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
     ref_root = _ensure_acestep_on_path()
 
-    from models.experimental.ace_step_v1_5.official_lm_preprocess import (
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
         attach_payload_preprocess_ttnn,
         build_filtered_dit_kwargs_for_handler,
         configure_acestep_logging,
@@ -874,7 +874,7 @@ def main() -> None:
             "build from pytorch.org; required for handler preprocessing)."
         ) from e
 
-    from models.experimental.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
+    from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import GenerationConfig, GenerationParams
 
     # Note: weights are already downloaded by ``_ensure_variant`` earlier in main()
     # via ``huggingface_hub.snapshot_download``; the historical
@@ -1076,7 +1076,7 @@ def main() -> None:
         if bool(args.use_trace):
             print("[qwen3] backend=ttnn trace+2cq caption encode (handler infer_text_embeddings)", flush=True)
         try:
-            from models.experimental.ace_step_v1_5.official_lm_preprocess import (
+            from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
                 condition_encode_payload_tt,
                 release_preprocess_device_traces,
             )
