@@ -741,10 +741,9 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              prefill_time_to_first_token: 136
-              decode_t/s/u: 16.30
-              decode_t/s: 521.6
+            # b1/s512 is the token-matching (accuracy) config; perf is validated
+            # only on eval runs, so this entry carries accuracy only.
+            perf: {}
             # Token-matching (b1) accuracy; seeded from run 27016350392.
             accuracy:
               top1: 96
