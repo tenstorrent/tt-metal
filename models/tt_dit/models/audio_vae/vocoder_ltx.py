@@ -108,6 +108,60 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
     return ttnn.concat(pieces, dim=1)
 
 
+def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
+    """Cached sharded validity mask ``(1, T, 1)``: 1.0 for real rows, 0.0 for the trailing
+    ``tpad_image`` rows. Sharded across T so each chip masks its own rows; the zeros land
+    on the last shard, where the tile-align pad image lives."""
+    key = (global_T, tpad_image, dtype)
+    M = cache.get(key)
+    if M is None:
+        m = torch.ones(1, global_T, 1, dtype=torch.float32)
+        m[:, global_T - tpad_image :, :] = 0.0
+        M = ttnn.from_torch(m, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+        M = _partition_t(M, parallel_config)
+        M = ttnn.to_layout(M, ttnn.ROW_MAJOR_LAYOUT)
+        cache[key] = M
+    return M
+
+
+def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
+    """Materialize the tile-align pad image — the trailing ``tpad_image`` rows at the global
+    sequence tail — to what the *next* op's own padding produces on the unsharded path, so the
+    sharded global tail bit-matches unsharded:
+
+    - ``mode="zeros"``: zero the rows. For zeros-pad convs, and the upsamplers (which gather
+      T to full and zero-pad internally, so they must see zeros there).
+    - ``mode="replicate"``: fill with the last real row, for the replicate-pad activations.
+
+    CCL-free: a cached validity mask zeros the pad image (body rows multiply by exactly 1.0,
+    so they stay bit-identical); replicate adds the real-last row, sliced at a uniform local
+    index real only on the last shard. Called ~100x per forward, so a gather here would
+    dominate runtime.
+    """
+    if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
+        return x_BTC
+    local_T = x_BTC.shape[1]
+    M = _tpad_mask(mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache)
+    xm = ttnn.multiply(x_BTC, M)
+    if mode == "zeros":
+        return xm
+    if mode != "replicate":
+        raise ValueError(f"unknown mode {mode!r}")
+    idx = local_T - tpad_image - 1  # real-last row, uniform local index (real only on the last shard)
+    assert idx >= 0, (
+        f"replicate tail fill needs the pad image ({tpad_image}) to fit the last shard "
+        f"(local T {local_T}); only pathological mel lengths (t_pad ≈ T_frames) violate this"
+    )
+    last = ttnn.slice(x_BTC, [0, idx, 0], [x_BTC.shape[0], idx + 1, x_BTC.shape[2]])
+    inv = ttnn.add(ttnn.multiply(M, -1.0), 1.0)
+    fill = ttnn.multiply(last, inv)
+    ttnn.deallocate(last)
+    out = ttnn.add(xm, fill)
+    ttnn.deallocate(xm)
+    ttnn.deallocate(fill)
+    return out
+
+
 def _zero_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
     """Zero-pad along the T axis."""
     if pad_left == 0 and pad_right == 0:
@@ -751,14 +805,28 @@ class LTXAMPBlock1(Module):
             ]
         )
 
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTC: ttnn.Tensor, set_tail=None) -> ttnn.Tensor:
+        # set_tail(xd, mode) materializes the tile-align pad image to each op's boundary when
+        # T-sharded (acts replicate the real boundary, convs zero it); identity when unsharded.
+        st = set_tail if set_tail is not None else (lambda xd, mode: xd)
+
+        def _apply(op, x, mode):
+            xs = st(x, mode)
+            y = op(xs)
+            if xs is not x:
+                ttnn.deallocate(xs)
+            return y
+
         for i in range(self.num_branches):
-            xt = self.acts1[i](x_BTC)
-            xt = self.convs1[i](xt)
-            xt = self.acts2[i](xt)
-            xt = self.convs2[i](xt)
-            x_new = ttnn.add(x_BTC, xt)
+            xt = _apply(self.acts1[i], x_BTC, "replicate")
+            nxt = _apply(self.convs1[i], xt, "zeros")
             ttnn.deallocate(xt)
+            xt = _apply(self.acts2[i], nxt, "replicate")
+            ttnn.deallocate(nxt)
+            nxt = _apply(self.convs2[i], xt, "zeros")
+            ttnn.deallocate(xt)
+            x_new = ttnn.add(x_BTC, nxt)
+            ttnn.deallocate(nxt)
             if i > 0:
                 ttnn.deallocate(x_BTC)
             x_BTC = x_new
@@ -818,6 +886,7 @@ class LTXVocoder(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self._tpad_mask_cache: dict = {}
 
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
@@ -943,15 +1012,37 @@ class LTXVocoder(Module):
         # duplicate it.) conv_post leaves its output full, so no trailing gather.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
+        def _set_tail(xd, cumrate, mode):
+            # The tile-align pad image (t_pad*cumrate rows at the global tail) propagates as
+            # signal. Each non-causal op's kept-boundary output must see what unsharded sees:
+            # the gather-to-full upsamplers and zeros-pad convs want zeros, the replicate-pad
+            # activations want the real last row. Materialize the pad image to the op's own
+            # boundary right before it. No-op when unsharded (t_pad == 0).
+            if t_pad == 0:
+                return xd
+            return _set_tpad_tail(
+                xd,
+                t_pad * cumrate,
+                mode=mode,
+                mesh_device=self.mesh_device,
+                parallel_config=self.parallel_config,
+                cache=self._tpad_mask_cache,
+            )
+
+        cumrate = 1
         x_dev = self.conv_pre(x_dev)
 
         for i in range(self.num_upsamples):
+            x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
             x_dev = self.ups[i](x_dev)
+            cumrate *= self.upsample_rates[i]
+            stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
             start = i * self.num_kernels
-            # Mean over the num_kernels parallel AMP branches.
+            # Mean over the num_kernels parallel AMP branches. Each block sets its own op
+            # boundaries (acts replicate, convs zeros) via stage_set_tail.
             block_outputs = []
             for idx in range(start, start + self.num_kernels):
-                block_outputs.append(self.resblocks[idx](x_dev))
+                block_outputs.append(self.resblocks[idx](x_dev, set_tail=stage_set_tail))
             ttnn.deallocate(x_dev)
             acc = block_outputs[0]
             for k in range(1, self.num_kernels):
@@ -962,7 +1053,9 @@ class LTXVocoder(Module):
             x_dev = ttnn.multiply(acc, 1.0 / self.num_kernels)
             ttnn.deallocate(acc)
 
+        x_dev = _set_tail(x_dev, cumrate, "replicate")  # act_post is a replicate-pad activation
         x_dev = self.act_post(x_dev)
+        x_dev = _set_tail(x_dev, cumrate, "zeros")  # conv_post is zeros-pad
         x_dev = self.conv_post(x_dev)
 
         if self.apply_final_activation:

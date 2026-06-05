@@ -121,6 +121,23 @@ _HOP_LENGTH = 80
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _vocoder_mel(t_frames: int = 120) -> torch.Tensor:
+    """Stereo mel input. t_frames=120 with T-shard factor 4 leaves t_pad=8 (128-aligned),
+    so the tile-align pad fits inside the last shard and the sharded path's per-op tail
+    materialization is exercised — the boundary the click came from."""
+    return torch.randn(1, 2, t_frames, 64, dtype=torch.float32) * 0.5
+
+
+def _assert_sharded_matches_unsharded(unsharded: torch.Tensor, sharded: torch.Tensor, *, name: str) -> None:
+    """The T-sharded vocoder must reproduce the unsharded device path up to the bf16 storage
+    floor. A t_pad boundary regression (the audible click) shows up as a localized tail spike
+    of order 1e-2 — far above the ~1e-4 floor — so a tight max|Δ| catches it where aggregate
+    PCC against the torch reference (with its own fp32-kernel floor) does not."""
+    max_abs = (unsharded - sharded).abs().max().item()
+    logger.info(f"{name}: sharded vs unsharded device max|Δ| = {max_abs:.3e}")
+    assert max_abs < 5e-3, f"{name}: sharded vs unsharded device max|Δ| {max_abs:.3e} — t_pad boundary drift"
+
+
 def _require_diffusers():
     pytest.importorskip("diffusers")
     from diffusers.models.autoencoders.autoencoder_kl_ltx2_audio import AutoencoderKLLTX2Audio
@@ -439,13 +456,20 @@ def test_stage_b_vocoder(
     tt_voc = _build_tt_stage_b(mesh_device, parallel_config=pc, ccl_manager=ccl)
     tt_voc.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
 
-    mel = torch.randn(1, 2, 64, 64, dtype=torch.float32) * 0.5
+    mel = _vocoder_mel()
     with torch.no_grad():
         ref_out = torch_voc(mel)
     tt_out = tt_voc(mel)
 
     assert tt_out.shape == ref_out.shape
     assert_quality(ref_out, tt_out, pcc=0.99)
+
+    # When T-sharded, assert the sharded path reproduces the unsharded device path: the t_pad
+    # boundary click is localized to the tail and slips past aggregate PCC, but breaks this.
+    if pc is not None:
+        tt_voc_un = _build_tt_stage_b(mesh_device, parallel_config=None, ccl_manager=None)
+        tt_voc_un.load_torch_state_dict(_diffusers_vocoder_state_to_tt(torch_voc.state_dict()))
+        _assert_sharded_matches_unsharded(tt_voc_un(mel), tt_out, name="stage_b_vocoder")
 
     # Optional spectral sanity to catch large drifts that waveform PCC may miss.
     try:
@@ -503,7 +527,7 @@ def test_stage_c_vocoder_with_bwe(
     incompatible = tt_full.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
     assert not incompatible.missing_keys, f"missing keys: {incompatible.missing_keys}"
 
-    mel = torch.randn(1, 2, 64, 64, dtype=torch.float32) * 0.5
+    mel = _vocoder_mel()
 
     # Stage B inside Stage C.
     with torch.no_grad():
@@ -511,6 +535,10 @@ def test_stage_c_vocoder_with_bwe(
     tt_main = tt_full.vocoder(mel)
     assert tt_main.shape == ref_main.shape
     assert_quality(ref_main, tt_main, pcc=0.99)
+    if pc is not None:
+        tt_full_un = _build_tt_stage_c(mesh_device, parallel_config=None, ccl_manager=None)
+        tt_full_un.load_torch_state_dict(_diffusers_vocoder_with_bwe_state_to_tt(torch_full.state_dict()))
+        _assert_sharded_matches_unsharded(tt_full_un.vocoder(mel), tt_main, name="stage_c_vocoder")
 
     # Log-mel path (apples-to-apples same waveform).
     remainder = ref_main.shape[-1] % _HOP_LENGTH
@@ -535,8 +563,10 @@ def test_stage_c_vocoder_with_bwe(
     assert_quality(ref_residual, tt_residual, pcc=0.98)
     assert_quality(ref_skip, tt_skip, pcc=0.99)
 
-    # Full Stage C forward shape guard (informational drift tolerated).
+    # Full Stage C forward: the muxed waveform is where the sharded tail click surfaced.
     with torch.no_grad():
         ref_out = torch_full(mel)
     tt_out = tt_full(mel)
     assert tt_out.shape == ref_out.shape
+    if pc is not None:
+        _assert_sharded_matches_unsharded(tt_full_un(mel), tt_out, name="stage_c_full")
