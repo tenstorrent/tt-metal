@@ -129,7 +129,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     std::unordered_set<KernelSpecName> kernels_with_params;
 
     // Validate kernel runtime parameters
-    for (const auto& [kernel_name, kernel_params] : params.kernel_run_args) {
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const auto& kernel_name = kernel_params.kernel;
         kernels_with_params.insert(kernel_name);
 
         // Check that the kernel exists
@@ -278,7 +279,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     }
 
     // Validate DFB runtime parameters
-    for (const auto& [dfb_spec_name, dfb_params] : params.dfb_run_overrides) {
+    for (const auto& dfb_params : params.dfb_run_overrides) {
+        const auto& dfb_spec_name = dfb_params.dfb;
         TT_FATAL(
             !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
             "DFB size overrides are not yet implemented for DFB '{}'.",
@@ -458,7 +460,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     // TensorBinding address section is used by headergen to emit the `ta::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
     // offset, so kernel code indexes varargs from 0.
-    for (const auto& [kernel_name, kernel_params] : params.kernel_run_args) {
+    for (const auto& kernel_params : params.kernel_run_args) {
+        const auto& kernel_name = kernel_params.kernel;
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name.get());
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
