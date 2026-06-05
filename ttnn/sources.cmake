@@ -163,6 +163,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
     cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
+    cpp/ttnn/operations/experimental/conv1d_depthwise/conv1d_depthwise_nanobind.cpp
     cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp

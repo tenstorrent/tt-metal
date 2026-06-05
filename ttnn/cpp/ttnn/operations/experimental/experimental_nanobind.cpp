@@ -9,6 +9,7 @@
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
+#include "ttnn/operations/experimental/conv1d_depthwise/conv1d_depthwise_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
@@ -133,6 +134,7 @@ void py_module(nb::module_& mod) {
     cnn::detail::bind_convert_to_chw(mod);
     cnn::detail::bind_convert_to_hwc(mod);
 
+    ttnn::operations::experimental::conv1d_depthwise::detail::bind_conv1d_depthwise(mod);
     ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
     adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
     adaptive_pool::bind_adaptive_max_pool2d_operation(mod);

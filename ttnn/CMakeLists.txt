@@ -264,6 +264,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::CNN
+        TTNN::Ops::Experimental::Conv1dDepthwise
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::TensorPrefetcher
@@ -528,6 +529,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
 add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
+add_subdirectory(cpp/ttnn/operations/experimental/conv1d_depthwise)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
