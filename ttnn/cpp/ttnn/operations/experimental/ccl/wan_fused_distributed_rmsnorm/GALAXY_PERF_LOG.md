@@ -190,3 +190,28 @@ Perf (fused µs/iter, two runs, vs A+D):
 Small but consistent win on EVERY shape (no regressions) — reader starts input
 ASAP, improving pipeline fill. Biggest on small shapes (startup is a larger
 fraction). KEPT (committed).
+
+## Idea H — chunk-match the reader: cos/sin AFTER the chunk's input (KEPT)
+
+The reader looped per-row (input row -> cos/sin row -> ...), but compute loops
+per-chunk (PRE over all chunk rows -> POST). So each row's cos/sin read sat
+*between* consecutive input rows, stalling the next row's input on the NoC even
+though cos/sin aren't consumed until POST. Fix: read all the chunk's input rows
+first (per-row, finer push from Idea D unchanged), THEN the chunk's cos/sin
+(still pushed per row). Matches compute's loop structure; input flows
+uninterrupted. Distinct from the failed Idea C — input is NOT batched/one-
+barriered, only cos/sin is relocated. No-rope unaffected (compile-time skip).
+
+Correctness: fused-vs-baseline PCC worst 0.999996. PASS.
+
+Perf (fused µs/iter, two runs, vs Idea G):
+
+| config | G | H | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 838.8 | 837.3 / 840.2 | ~flat |
+| N9472 RoPE  | 478.1 | 446.6 / 447.5 | **−6.5%** |
+| N2368 RoPE  | 226.4 | 206.4 / 206.7 | **−8.7%** |
+| no-rope (all) | — | unchanged | 0 |
+
+KEPT (committed). N2368-RoPE now ~0.96x composite (was 0.85x), N9472-RoPE 1.36x
+(was 1.27x). N18944-RoPE flat (most rows/worker → already amortized; input-bound).
