@@ -32,6 +32,18 @@ import torch
 from loguru import logger
 
 import ttnn
+
+# Tracy signpost: marks the pure traced-decode region in a profiling capture so
+# the traced graph can be isolated from compile/warmup/non-traced ops (issue
+# #44946). No-op when the tracy module isn't importable (non-profiling runs).
+try:
+    from tracy import signpost as _tracy_signpost
+except ModuleNotFoundError:
+
+    def _tracy_signpost(*_args, **_kwargs):
+        pass
+
+
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
@@ -800,9 +812,18 @@ def run_generation(
                 inputs_h = _make_decode_inputs(next_token, current_pos)
                 t_make_end = time.perf_counter()
 
+                # Mark the final traced replay with Tracy start/stop signposts so a
+                # profiling capture (python -m tracy ...) isolates exactly one clean
+                # traced decode step — excluding compile (iter 0), trace capture
+                # (iter 1) and host warmup. The "stop" fires after the post-replay
+                # sync below.
+                do_signpost = enable_decode_trace and trace_id is not None and step == (max_new_tokens - 2)
+
                 if enable_decode_trace and trace_id is not None:
                     # ── Traced execution: copy inputs and replay ──
                     _copy_inputs_to_trace(inputs_h)
+                    if do_signpost:
+                        _tracy_signpost("start")
                     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
                     decode_logits = trace_output
                     t_enq_end = time.perf_counter()
@@ -848,6 +869,9 @@ def run_generation(
 
                 next_token = _extract_token(decode_logits)
                 t_sync_end = time.perf_counter()
+                if do_signpost:
+                    # Replay + sync complete: close the traced-graph region.
+                    _tracy_signpost("stop")
                 generated_tokens.append(next_token)
                 current_pos += 1
 
@@ -901,7 +925,10 @@ def run_generation(
     # compile_prefill = first (warmup) prefill call, includes kernel compile.
     # inference_prefill = second prefill call, kernels already cached — drives TTFT.
     compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
+    # compile_decode is only recorded once the decode loop runs (iteration 0). A
+    # report/profiling pass with GEMMA4_MAX_NEW_TOKENS=1 skips the loop entirely,
+    # so guard the lookup to keep the metrics block from KeyError-ing.
+    compile_decode_time = profiler.get_duration("compile_decode") if profiler.contains_step("compile_decode") else 0
     total_inference_prefill_time = profiler.get_duration("inference_prefill")
 
     total_inference_decode_time = 0
@@ -1068,9 +1095,26 @@ def test_demo(mesh_device, model_path, prefill_len, request):
 
     prompt = load_demo_prompt(prefill_len, instruct=True)
 
-    # KV cache must hold the prefill plus the 200 decode tokens. Keep a small
+    # KV cache must hold the prefill plus the decode tokens. Keep a small
     # floor so short-bucket runs still allocate a usable cache.
-    max_new_tokens = 200
+    #
+    # GEMMA4_MAX_NEW_TOKENS / GEMMA4_DECODE_TRACE are demo-only knobs for the
+    # page_block_size audit (issue #44946):
+    #   * Tracy traced-decode pass: keep GEMMA4_DECODE_TRACE=1 and a small
+    #     GEMMA4_MAX_NEW_TOKENS (e.g. 8). The final traced replay is bracketed by
+    #     tracy.signpost("start"/"stop") so the capture isolates one clean traced
+    #     graph from compile (iter 0) + trace-capture (iter 1) + host warmup.
+    #     Run under the device profiler with the program-support count raised so
+    #     metal-trace replay does not trip the "Device data mismatch" assertion:
+    #         TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=20000 \
+    #         GEMMA4_DECODE_TRACE=1 GEMMA4_MAX_NEW_TOKENS=8 \
+    #         python -m tracy -p -r -v -m pytest <this test> -sv
+    #     then filter ops_perf_results_*.csv to ops between the start/stop signposts.
+    #   * ttnn-visualizer report pass wants GEMMA4_MAX_NEW_TOKENS=1 (skip the decode
+    #     loop, whose host ttnn.from_torch is incompatible with graph capture).
+    # The default end-to-end run keeps 200 traced steps for representative tok/s/user.
+    max_new_tokens = int(os.getenv("GEMMA4_MAX_NEW_TOKENS", "200"))
+    enable_decode_trace = os.getenv("GEMMA4_DECODE_TRACE", "1") != "0"
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
     page_block_size = _page_block_size()
     page_params = {
@@ -1085,7 +1129,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
         max_new_tokens=max_new_tokens,
         max_seq_len=max_seq_len,
         page_params=page_params,
-        enable_decode_trace=True,
+        enable_decode_trace=enable_decode_trace,
         target_prefill_len=prefill_len,
     )
     assert len(results) == 1

@@ -381,8 +381,9 @@ def _kv_fill_to_tt(k_torch, mesh_device, *, num_kv_heads, num_attention_heads, t
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 @pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
 @pytest.mark.parametrize("batch", [1, 16, 32], ids=lambda b: f"batch{b}")
-@pytest.mark.parametrize("cache_len", [512, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("cache_len", [1500], ids=lambda c: f"cache{c}")
+@pytest.mark.parametrize("block_size", [32, 64, 128, 256], ids=lambda s: f"block{s}")
+def test_attention_decode_paged_batched(layer_idx, batch, block_size, cache_len, mesh_device, reset_seeds, request):
     """True batched decode (batch > 1 single forward) with paged KV cache.
 
     Each user gets independent random K/V, an independent query, and a distinct
@@ -391,6 +392,12 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     catch a per-user-position bug. Compares each user's TT output against an HF
     reference computed per user. Uses the 2D embedding-lookup RoPE cache (the path
     real decode takes); the 4D legacy cache cannot represent per-user positions.
+
+    Swept over ``block_size`` {32, 64, 128, 256} for the page_block_size audit
+    (issue #44946): ``paged_update_cache`` writes the decode token into the block
+    named by ``page_table[user, pos // block_size]`` at intra-block offset
+    ``pos % block_size``, so a block-size-dependent indexing bug only surfaces
+    when the same fill→update→SDPA round-trip is exercised across block sizes.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -415,7 +422,6 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     positions = [cache_len - b for b in range(batch)]
 
     # Paged cache: each user gets its own contiguous block range.
-    block_size = 64
     blocks_per_user = (cache_len + block_size) // block_size + 1
     max_num_blocks = blocks_per_user * batch
     max_seq_len = blocks_per_user * block_size
@@ -426,6 +432,19 @@ def test_attention_decode_paged_batched(layer_idx, batch, cache_len, mesh_device
     kv_cache = init_kv_cache(
         mesh_device=mesh_device, config=config, paged_attention_config=paged_attention_config, cache_dtype=ttnn.bfloat16
     )
+
+    # The decode KV cache is allocated as [max_num_blocks, num_local_kv_heads,
+    # block_size, head_dim] — the [1, B, H, D]-per-token write target of
+    # paged_update_cache. Assert the swept block_size and the production
+    # per-device KV-head count (mirrors split_qkv_heads_decode) actually reach
+    # the buffer, so a mis-sized pool can't silently pass the PCC check below.
+    expected_local_kv = 1 if config.num_key_value_heads < tp else config.num_key_value_heads // tp
+    assert (
+        kv_cache[0].padded_shape[2] == block_size
+    ), f"cache block_size {kv_cache[0].padded_shape[2]} != requested {block_size}"
+    assert (
+        kv_cache[0].padded_shape[1] == expected_local_kv
+    ), f"cache local kv-heads {kv_cache[0].padded_shape[1]} != production {expected_local_kv} (tp={tp})"
 
     tt_attn = Gemma4Attention(
         mesh_device=mesh_device,

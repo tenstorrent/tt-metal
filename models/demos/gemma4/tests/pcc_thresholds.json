@@ -59,9 +59,18 @@
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_full_model[blackhole-1x4]": 0.97,
-      "test_attention_decode_paged_batched[blackhole-cache1500-batch1-global-1x4]": 0.96,
-      "test_attention_decode_paged_batched[blackhole-cache1500-batch16-global-1x4]": 0.96,
-      "test_attention_decode_paged_batched[blackhole-cache1500-batch32-global-1x4]": 0.96
+      "test_attention_decode_paged_batched[blackhole-block32-cache1500-batch1-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block32-cache1500-batch16-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block32-cache1500-batch32-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block64-cache1500-batch1-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block64-cache1500-batch16-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block64-cache1500-batch32-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block128-cache1500-batch1-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block128-cache1500-batch16-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block128-cache1500-batch32-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block256-cache1500-batch1-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block256-cache1500-batch16-global-1x4]": 0.98,
+      "test_attention_decode_paged_batched[blackhole-block256-cache1500-batch32-global-1x4]": 0.98
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
