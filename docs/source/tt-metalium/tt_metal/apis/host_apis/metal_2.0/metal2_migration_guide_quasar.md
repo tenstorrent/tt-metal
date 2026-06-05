@@ -1,5 +1,7 @@
 # Metal 2.0 Migration Guide — From the Temporary Quasar APIs
 
+> ⚠️ **STALE — DO NOT READ.** This guide has not been updated for the Metal 2.0 API cleanups landed in PRs #45290 (structural), #45598 (naming), #45160 (disable_implicit_sync relocation), and several others. Field names, type names, namespace paths, and feature locations referenced below are out of date. A full rewrite is pending. If you need Quasar migration guidance in the meantime, ask Audrey directly.
+
 This guide is for Quasar developers migrating from the temporary placeholder APIs in `tt_metal/api/tt-metalium/experimental/host_api.hpp` and `tt_metal/api/tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp` to the new Metal 2.0 host APIs in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`. (For WH/BH migration to Metal 2.0, look [here instead](metal2_migration_guide.md).)
 
 > **Audience**: Internal-only. The temporary Quasar APIs were always meant to be short-lived.
