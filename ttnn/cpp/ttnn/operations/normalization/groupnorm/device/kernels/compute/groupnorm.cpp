@@ -313,38 +313,39 @@ void kernel_main() {
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
-                // mask input
-                mul_tiles_init(cb_in0_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            uint32_t index_mask = w + index_subblock_w_offset;
+                // mask input: in * mask -> cb_x. mask is a row of block_w tiles broadcast down the
+                // h rows -> OperandKind::Row + CallerManaged (waited at loop top, popped at group end).
+                // input Block; cb_x Bulk. TILIZE_IN reads cb_in (pre-waited per_core_MN at line 261;
+                // pop actual -> DeferredPop); else cb_in0 (wait/pop normal -> Bulk + slack pop).
+                // mul_tiles_init -> Input; plain pack_tile -> None.
+                compute_kernel_lib::mul<
 #ifdef TILIZE_IN
-                            mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
+                    cb_in_id,
 #else
-                            mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
+                    cb_in0_id,
 #endif
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
+                    cb_input_mask_id,
+                    cb_x_id,
+                    compute_kernel_lib::BroadcastDim::None,
+#ifdef TILIZE_IN
+                    compute_kernel_lib::InputLifecycle::DeferredPop,
+#else
+                    compute_kernel_lib::InputLifecycle::Bulk,
+#endif
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Row>(
+                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+#ifndef TILIZE_IN
+                    cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
+                    cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-#ifdef TILIZE_IN
-                cb_in.pop_front(out_block_hw_actual);
-#else
-                cb_in0.pop_front(out_block_hw_normal);
-#endif
-                cb_x.push_back(out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask_id, cb_scaler_id);
 
                 // Partial/E[x]
@@ -423,59 +424,46 @@ void kernel_main() {
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                cb_xmm.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            uint32_t index_mask = index;
-                            mul_tiles(cb_xmm_id, cb_input_mask_id, index, index_mask, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    cb_xmm.pop_front(block_w);
-                }
+                // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
+                // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
+                // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
+                compute_kernel_lib::mul<
+                    cb_xmm_id,
+                    cb_input_mask_id,
+                    cb_x_id,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Row>(
+                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
+                    cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_x.push_back(out_block_hw_normal);
 
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
-                // (x - E[x])^2
-                index_h_offset = 0;
-                mul_tiles_init(cb_x_id, cb_x_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
-                cb_x.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles(cb_x_id, cb_x_id, index, index, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
+                // (x - E[x])^2 — square over the actual block; slack handles the extra-last block.
+                // cb_x Bulk (wait+pop); cb_xmm Bulk (reserve+push). mul_tiles_init -> Input;
+                // plain pack_tile (cb_x/cb_xmm share format) -> None.
+                compute_kernel_lib::square<
+                    cb_x_id,
+                    cb_xmm_id,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block>(
+                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_x.pop_front(out_block_hw_normal);
-                cb_xmm.push_back(out_block_hw_normal);
 
                 // Partial-Var(x)
                 cb_xmm.wait_front(out_block_hw_normal);
@@ -593,60 +581,52 @@ void kernel_main() {
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-                mul_tiles_init(cb_xmm_id, cb_input_mask_id);
-                cb_x.reserve_back(out_block_hw_normal);
-                cb_xmm.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            uint32_t index_mask = index;
-                            mul_tiles(cb_xmm_id, cb_input_mask_id, index, index_mask, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    cb_xmm.pop_front(block_w);
-                }
+                // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
+                // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
+                // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
+                compute_kernel_lib::mul<
+                    cb_xmm_id,
+                    cb_input_mask_id,
+                    cb_x_id,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Row>(
+                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
+                    cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_x.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_x.push_back(out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
-                // (x - Ex) * 1/[sqrt(Var + eps)]
-                index_h_offset = 0;
-                mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
+                // (x - Ex) * 1/sqrt(Var + eps) — mul scalar-bcast over the actual block.
+                // cb_x Bulk; cb_ex2pe held scalar (wait kept below, popped at group end) ->
+                // CallerManaged + Scalar; cb_xmm Bulk. mul_tiles_bcast_scalar_init_short -> Input;
+                // plain pack_tile -> None.
                 cb_ex2pe.wait_front(1);
-                cb_x.wait_front(out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles_bcast_scalar(cb_x_id, cb_ex2pe_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
+                compute_kernel_lib::mul<
+                    cb_x_id,
+                    cb_ex2pe_id,
+                    cb_xmm_id,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Scalar>(
+                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_x.pop_front(out_block_hw_normal);
-                cb_xmm.push_back(out_block_hw_normal);
                 cb_xmm.wait_front(out_block_hw_normal);
 
                 copy_or_add = start_copy_or_add;

@@ -89,31 +89,96 @@ void kernel_main() {
         cb_max_exp_avg_sq_in_obj.wait_front(onetile);
 #endif
         // param = param - lr * weight_decay * param.
-        // cb_tmp1 : weight_decay * cb_param_in
-        mul_tiles_to_cb(cb_scalar_args, cb_param_in, cb_tmp1, weight_decay_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        // cb_tmp1 = weight_decay * param  (scalar_args held @ weight_decay_tile -> CallerManaged + Set on A;
+        //   param_in CallerManaged). _with_dt -> Input/Output.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_scalar_args,
+                cb_param_in,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{weight_decay_tile, 0u},
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 
-        // cb_tmp1 : lr * cb_tmp1
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp1, cb_tmp1, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        // cb_tmp1 = lr * cb_tmp1  (scalar_args held @ lr_tile==0 -> CallerManaged + Scalar; cb_tmp1 Streaming)
+        compute_kernel_lib::mul<
+            cb_scalar_args,
+            cb_tmp1,
+            cb_tmp1,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
 
-        // tmp_cb_param : cb_param_in - cb_tmp1
-        sub_tiles_to_cb(cb_param_in, cb_tmp1, tmp_cb_param, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        // tmp_cb_param = param - cb_tmp1  (param_in CallerManaged; cb_tmp1 Streaming)
+        compute_kernel_lib::sub<
+            cb_param_in,
+            cb_tmp1,
+            tmp_cb_param,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
         // cb_tmp1 = (1 - beta1)
-        sub_tiles_to_cb(cb_one, cb_scalar_args, cb_tmp1, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_one,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, beta1_tile},
+            compute_kernel_lib::PackTile<cb_tmp1>{});
 
-        // cb_tmp1 = cb_grad_in * cb_tmp1
-        mul_tiles_to_cb(cb_grad_in, cb_tmp1, cb_tmp1, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        // cb_tmp1 = grad * (1 - beta1)  (grad_in held -> CallerManaged; cb_tmp1 Streaming, same-CB out)
+        compute_kernel_lib::mul<
+            cb_grad_in,
+            cb_tmp1,
+            cb_tmp1,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
 
         // tmp_cb_exp_avg = cb_exp_avg_in * beta1
-        mul_tiles_to_cb(cb_exp_avg_in, cb_scalar_args, tmp_cb_exp_avg, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_exp_avg_in,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, beta1_tile},
+            compute_kernel_lib::PackTile<tmp_cb_exp_avg>{});
 
-        // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg, first_tile, first_tile);
+        // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1  (both Streaming, same-CB out)
+        compute_kernel_lib::add<tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg>(onetile);
 
-        // cb_exp_avg_out
-        copy_tile_to_cb(tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/0);
+        // cb_exp_avg_out = tmp_cb_exp_avg  (held -> HeldStream; reused below)
+        compute_kernel_lib::copy<tmp_cb_exp_avg, cb_exp_avg_out, compute_kernel_lib::InputLifecycle::HeldStream>(
+            onetile);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -139,21 +204,36 @@ void kernel_main() {
                 compute_kernel_lib::TileOffset::Set>{0u, beta2_tile},
             compute_kernel_lib::PackTile<cb_tmp1>{});
 
-        // cb_tmp2 = grad * grad
-        mul_tiles_to_cb(cb_grad_in, cb_grad_in, cb_tmp2, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        // cb_tmp2 = grad * grad  (same-buffer -> square; grad_in held -> CallerManaged)
+        compute_kernel_lib::square<cb_grad_in, cb_tmp2, compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
-        // cb_tmp1 = cb_tmp1 * cb_tmp2
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
+        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(onetile);
 
         // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
-        mul_tiles_to_cb(
-            cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_exp_avg_sq_in,
+                cb_scalar_args,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, beta2_tile},
+            compute_kernel_lib::PackTile<tmp_cb_exp_avg_sq>{});
 
-        // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq, first_tile, first_tile);
+        // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1  (both Streaming, same-CB out)
+        compute_kernel_lib::add<tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq>(onetile);
 
-        // cb_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/0);
+        // cb_exp_avg_sq_out = tmp_cb_exp_avg_sq  (held -> HeldStream; reused below)
+        compute_kernel_lib::copy<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream>(
+            onetile);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -191,8 +271,9 @@ void kernel_main() {
             compute_kernel_lib::InputLifecycle::CallerManaged,
             compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
-        // cb_max_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);
+        // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq  (held -> HeldStream; reused below)
+        compute_kernel_lib::
+            copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
@@ -265,17 +346,23 @@ void kernel_main() {
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<cb_tmp2>{});
 
-        // cb_tmp2 = lr * cb_tmp2;
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        // cb_tmp2 = lr * cb_tmp2  (scalar_args held @ lr_tile==0 -> CallerManaged + Scalar; cb_tmp2 Streaming)
+        compute_kernel_lib::mul<
+            cb_scalar_args,
+            cb_tmp2,
+            cb_tmp2,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
 
-        // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg;
-        mul_tiles_to_cb(cb_tmp2, tmp_cb_exp_avg, cb_tmp2, first_tile, first_tile);
+        // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg  (both Streaming; tmp_cb_exp_avg popped here)
+        compute_kernel_lib::mul<cb_tmp2, tmp_cb_exp_avg, cb_tmp2>(onetile);
 
-        // cb_tmp1 = cb_tmp1 * cb_tmp2;
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
+        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(onetile);
 
-        // param = tmp_cb_param - cb_tmp1;
-        sub_tiles_to_cb(tmp_cb_param, cb_tmp1, cb_param_out, first_tile, first_tile);
+        // cb_param_out = tmp_cb_param - cb_tmp1  (both Streaming)
+        compute_kernel_lib::sub<tmp_cb_param, cb_tmp1, cb_param_out>(onetile);
 
         cb_param_in_obj.pop_front(onetile);
         cb_grad_in_obj.pop_front(onetile);

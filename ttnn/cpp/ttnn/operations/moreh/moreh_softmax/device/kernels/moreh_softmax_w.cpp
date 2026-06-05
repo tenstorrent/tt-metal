@@ -50,7 +50,16 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
         if (Wt == 1) {
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
+            // mask cb_in0[0] (held -> HeldStream) with cb_mask (held externally -> CallerManaged).
+            // copy_tile_init_with_dt -> Input; pack_tile_with_dt -> Output.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::
+                    CopyTile<cb_in0, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
+                compute_kernel_lib::
+                    CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_tmp>{});
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
                 cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
@@ -77,7 +86,20 @@ void kernel_main() {
             cb_max_obj.push_back(1);
 
             // Phase 2: merge the masked last tile into cb_max.
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
+            // mask cb_in0[Wt-1] (held -> HeldBulk + TileOffset::Set) with cb_mask (held -> CallerManaged).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_in0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::TileOffset::Set>{Wt - 1},
+                compute_kernel_lib::
+                    CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_tmp>{});
 
             cb_max_obj.wait_front(1);
             cb_tmp_obj.wait_front(1);

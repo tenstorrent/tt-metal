@@ -103,27 +103,19 @@ void kernel_main() {
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-    // X^2
-    mul_tiles_init(cb_in, cb_in);
-    index_h_offset = 0;
-    cb_reserve_back(cb_x2, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            mul_tiles(cb_in, cb_in, index, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_x2);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-    }
-    index_h_offset += block_w;
-    cb_push_back(cb_x2, num_tiles_per_block);
+    // X^2 — square via BinaryFpu reading cb_in for both operands. cb_in is resident/externally
+    // waited (cb_wait_front above in the FUSE path; sharded-resident otherwise) -> CallerManaged.
+    // cb_x2 reserve+push num_tiles_per_block -> Bulk. mul_tiles_init -> BinaryDataFormatReconfig::Input;
+    // plain pack_tile (pack format already programmed above) -> PackTileReconfig::None.
+    compute_kernel_lib::square<
+        cb_in,
+        cb_x2,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::OutputLifecycle::Bulk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::None,
+        compute_kernel_lib::OperandKind::Block>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // E(x^2)
     reconfig_data_format_srca(cb_in, cb_x2);

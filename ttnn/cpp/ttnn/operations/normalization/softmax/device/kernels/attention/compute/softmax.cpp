@@ -22,8 +22,10 @@
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-void calc_numeric_stable(
-    uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
+// Templated on the CBs so the eltwise_chain below can take them as compile-time NTTPs.
+// All call sites pass constexpr CBs.
+template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
+void calc_numeric_stable(uint32_t Wt) {
     auto cb_in_obj = CircularBuffer(cb_in);
     auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
@@ -36,28 +38,33 @@ void calc_numeric_stable(
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-    // calculate x-max(x)
-    exp_tile_init<EXP_APPROX>();
-    reconfig_data_format_srcb(cb_max);
+    // x - max(x) then exp, fused into one chain. cb_in waited upfront by the reduce above
+    // (popped below) -> CallerManaged + Block; cb_max held (wait/pop kept outside) ->
+    // CallerManaged + Scalar; cb_out per-tile reserve+push -> Streaming.
+    // sub_bcast_cols_init_short -> BinaryDataFormatReconfig::Input; plain pack_tile
+    // (pack format already cb_out) -> PackTileReconfig::None.
     cb_max_obj.wait_front(1);
-    sub_bcast_cols_init_short(cb_in, cb_max);
-    for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-        tile_regs_acquire();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            sub_tiles_bcast_cols(cb_in, cb_max, wt + wt8, 0, wt8);
-        }
-        cb_out_obj.reserve_back(ndst);
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-            pack_tile(wt8, cb_out);     // reuse the exps buffer again, this time in a circular manner
-        }
-        tile_regs_release();
-        cb_out_obj.push_back(ndst);
-    }
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::EltwiseShape::tiles(Wt),
+        compute_kernel_lib::BinaryFpu<
+            cb_in,
+            cb_max,
+            compute_kernel_lib::BinaryFpuOp::Sub,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OperandKind::Scalar>{},
+        compute_kernel_lib::Exp<
+            static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+            compute_kernel_lib::Approx::Exact,
+            compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::PackTile<
+            cb_out,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
     cb_in_obj.pop_front(Wt);
     cb_max_obj.pop_front(1);
     cb_out_obj.wait_front(Wt);
@@ -67,7 +74,7 @@ void kernel_main() {
     const uint32_t NCHt = get_arg_val<uint32_t>(0);
     const uint32_t Ht = get_arg_val<uint32_t>(1);
     const uint32_t Wt = get_arg_val<uint32_t>(2);
-    const uint32_t ndst = get_arg_val<uint32_t>(3);
+    [[maybe_unused]] const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
@@ -134,54 +141,51 @@ void kernel_main() {
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
-        reconfig_data_format(cb_scale_mask, cb_fused_attn);
-
-#ifndef NUMERIC_STABLE
-        exp_tile_init<EXP_APPROX>();
-#endif
-
+        // fused mask add (+exp): cb_scale_mask consumed front-per-tile -> Streaming + Scalar;
+        // cb_fused_attn absolute-indexed + held (waited upfront, popped below) -> CallerManaged + Block
+        // (cumulative wait collapsed to one upfront wait_front(Wt) — its CB holds Wt tiles).
+        // cb_x per-tile reserve+push -> Streaming. reconfig_data_format + add init ->
+        // BinaryDataFormatReconfig::Input; plain pack_tile (cb_x/cb_scale_mask share format) ->
+        // PackTileReconfig::None. Exp dropped when NUMERIC_STABLE (done later in calc_numeric_stable).
 #ifdef CAUSAL_MASK
-        add_tiles_init(cb_scale_mask, cb_fused_attn);
+        cb_fused_attn_obj.wait_front(Wt);
 #else
-        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
-#endif
-        for (uint32_t wt = 0; wt < Wt; wt += ndst) {
-            tile_regs_acquire();
-            cb_scale_mask_obj.wait_front(ndst);
-#ifdef CAUSAL_MASK
-            cb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
-            }
-#else
-            if (wait_mask) {
-                cb_fused_attn_obj.wait_front(wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
-            }
-
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
-            }
-#endif
-            cb_scale_mask_obj.pop_front(ndst);
-            cb_x_obj.reserve_back(ndst);
-#ifndef NUMERIC_STABLE
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                exp_tile<EXP_APPROX>(wt8);  // exp on DST[0]
-            }
-#endif
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                pack_tile(wt8, cb_x);  // reuse the exps buffer again, this time in a circular manner
-            }
-            tile_regs_release();
-            cb_x_obj.push_back(ndst);
+        if (wait_mask) {
+            cb_fused_attn_obj.wait_front(Wt);
         }
+#endif
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt),
+            compute_kernel_lib::BinaryFpu<
+                cb_scale_mask,
+                cb_fused_attn,
+                compute_kernel_lib::BinaryFpuOp::Add,
+#ifdef CAUSAL_MASK
+                compute_kernel_lib::BroadcastDim::None,
+#else
+                compute_kernel_lib::BroadcastDim::Row,
+#endif
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Block>{},
+#ifndef NUMERIC_STABLE
+            compute_kernel_lib::Exp<
+                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+#endif
+            compute_kernel_lib::PackTile<
+                cb_x,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+        calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt);
 #endif
 
 #ifdef CAUSAL_MASK
@@ -256,14 +260,14 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_x, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_x, cb_max_scaler, cb_max, cb_exps>(Wt);
 #endif
 
         } else {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-            calc_numeric_stable(Wt, ndst, cb_in0, cb_max_scaler, cb_max, cb_exps);
+            calc_numeric_stable<cb_in0, cb_max_scaler, cb_max, cb_exps>(Wt);
 #else
             // Migrated: streaming copy + exp + pack via eltwise_chain.
             // Per-tile semantics (BlockSize=1) replaces original's per-ndst ACQ window —

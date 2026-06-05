@@ -296,49 +296,83 @@ void kernel_main() {
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     cb_xmm.reserve_back(2);
 
-                    // // Now let us do the actual computation for the current group here
-                    // // a. x-u
-                    reconfig_data_format(cb_in0_id, cb_ex_global_id);
-                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-
-                    tile_regs_acquire();
+                    // a. x - u  -> cb_xmm slot 0. CallerManaged output: no reserve/push (the
+                    //   reserve_back(2) bracket above owns it), sequential pack lands in slot 0.
+                    //   cb_in0/cb_in resident-sharded + cb_ex_global held -> CallerManaged. cb_in at
+                    //   runtime tile_id, cb_ex_global at g<<1 -> Scalar + TileOffset::Set.
+                    //   reconfig(cb_in0,cb_ex_global)+sub_bcast_scalar_init -> Input; plain pack -> None.
+                    compute_kernel_lib::eltwise_chain(
+                        1,
+                        compute_kernel_lib::BinaryFpu<
 #ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(cb_in_id, cb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                            cb_in_id,
 #else
-                    sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                            cb_in0_id,
 #endif
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_xmm_id);
-                    tile_regs_release();
+                            cb_ex_global_id,
+                            compute_kernel_lib::BinaryFpuOp::Sub,
+                            compute_kernel_lib::BroadcastDim::Scalar,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::TileOffset::Set,
+                            compute_kernel_lib::TileOffset::Set>{tile_id, 0u + (g << 1)},
+                        compute_kernel_lib::PackTile<
+                            cb_xmm_id,
+                            compute_kernel_lib::OutputLifecycle::CallerManaged,
+                            compute_kernel_lib::PackTileReconfig::None>{});
 
-                    // // b. 1/[sqrt(Var + eps)] * mask
+                    // b. (1/sqrt(Var+eps)) * mask  -> cb_xmm slot 1 (sequential pack advances).
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
-
-                    reconfig_data_format(cb_in0_id, cb_input_mask_id, cb_ex_global_id, cb_ex2pe_id);
-                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_xmm_id);
-                    tile_regs_release();
+                    compute_kernel_lib::eltwise_chain(
+                        1,
+                        compute_kernel_lib::BinaryFpu<
+                            cb_input_mask_id,
+                            cb_ex2pe_id,
+                            compute_kernel_lib::BinaryFpuOp::Mul,
+                            compute_kernel_lib::BroadcastDim::Scalar,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::TileOffset::Set,
+                            compute_kernel_lib::TileOffset::Set>{mask_index, g},
+                        compute_kernel_lib::PackTile<
+                            cb_xmm_id,
+                            compute_kernel_lib::OutputLifecycle::CallerManaged,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                     cb_xmm.push_back(2);
 
-                    // // c. a * b
+                    // c. a * b (in-place): read cb_xmm[0],[1] (CallerManaged), write 1 tile back via
+                    //   Streaming reserve+push into slot 2 of the 3-tile cb_xmm; external wait(2)/pop(2)
+                    //   bracket the pair. reconfig(...cb_xmm)+mul_tiles_init -> Input; plain pack -> None.
                     cb_xmm.wait_front(2);
-                    reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
-                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
-                    tile_regs_acquire();
-                    mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
-                    tile_regs_commit();
+                    compute_kernel_lib::eltwise_chain(
+                        1,
+                        compute_kernel_lib::BinaryFpu<
+                            cb_xmm_id,
+                            cb_xmm_id,
+                            compute_kernel_lib::BinaryFpuOp::Mul,
+                            compute_kernel_lib::BroadcastDim::None,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::TileOffset::Unset,
+                            compute_kernel_lib::TileOffset::Set>{0u, 1u},
+                        compute_kernel_lib::PackTile<
+                            cb_xmm_id,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                     cb_xmm.pop_front(2);
-                    cb_xmm.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_xmm_id);
-                    tile_regs_release();
-                    cb_xmm.push_back(1);
 
                     // // d. Accumulate cb_xmm into cb_x_id
                     // First group for this tile -> copy; later groups -> add.

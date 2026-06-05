@@ -20,6 +20,7 @@
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
@@ -113,25 +114,24 @@ void kernel_main() {
          * norm x
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
-        reconfig_data_format(input_cb, reduce_result_cb);
-        pack_reconfig_data_format(mul_rms_result_cb);
-        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
         cb_wait_front(reduce_result_cb, 1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_wait_front(input_cb, block_size);
-            cb_reserve_back(mul_rms_result_cb, block_size);
-
-            tile_regs_acquire();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
-                pack_tile(i, mul_rms_result_cb);
-            }
-            tile_regs_commit();
-            tile_regs_release();
-
-            cb_push_back(mul_rms_result_cb, block_size);
-            cb_pop_front(input_cb, block_size);
+            // norm x: input * 1/sqrt(E[x^2]+eps) (col bcast). input_cb Bulk (wait+pop block_size);
+            //   reduce_result_cb held (wait kept above) -> CallerManaged + Scalar; mul_rms_result_cb Bulk.
+            //   block_size = one DEST window. reconfig+mul_bcast_cols_init -> Input; pack_reconfig -> Output.
+            compute_kernel_lib::mul<
+                input_cb,
+                reduce_result_cb,
+                mul_rms_result_cb,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Scalar>(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, block_size));
 
             /**
              * Weight (gamma) fusion
@@ -165,11 +165,7 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 cb_push_back(mul_weight_result_cb, block_size);
-
-                // Reconfigure for mul_bcast_col
-                reconfig_data_format(input_cb, reduce_result_cb);
-                pack_reconfig_data_format(mul_rms_result_cb);
-                mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+                // (next iteration's norm-x is a migrated chain that re-inits its own reconfig.)
             }
 
             /**
@@ -253,28 +249,20 @@ void kernel_main() {
                 tile_regs_release();
                 cb_push_back(rotated_input_cb, block_size);
 
-                /**
-                 * Write cos_interim + sin_interim to output_cb
-                 */
-                reconfig_data_format(intermediate_cb, rotated_input_cb);
-                pack_reconfig_data_format(output_cb);
-                add_tiles_init(intermediate_cb, rotated_input_cb);
-                cb_wait_front(intermediate_cb, block_size);
-                cb_wait_front(rotated_input_cb, block_size);
-                cb_reserve_back(output_cb, block_size);
-
-                tile_regs_acquire();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                    add_tiles(intermediate_cb, rotated_input_cb, i, i, i);
-                    pack_tile(i, output_cb);
-                }
-                tile_regs_commit();
-                tile_regs_release();
-                cb_push_back(output_cb, block_size);
-
-                cb_pop_front(intermediate_cb, block_size);
-                cb_pop_front(rotated_input_cb, block_size);
+                // Write cos_interim + sin_interim to output_cb. Both inputs Bulk (wait+pop block_size),
+                // output_cb Bulk. add_tiles_init + reconfig -> Input; pack_reconfig -> Output.
+                compute_kernel_lib::add<
+                    intermediate_cb,
+                    rotated_input_cb,
+                    output_cb,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block>(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, block_size));
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);

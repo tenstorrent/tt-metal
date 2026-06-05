@@ -70,29 +70,22 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     cb_ex2_obj.push_back(1);
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add
-        reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
-        cb_in_obj.wait_front(block.full_block_size());
-        cb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(cb_in, cb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        cb_in_obj.pop_front(block.full_block_size());
-        cb_inb_obj.pop_front(block.full_block_size());
-
-        // Pack to intermediate CB (needed
-        // to workaround transpose_wh_dest bug)
-        pack_reconfig_data_format(cb_interm_pre_add);
-        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, cb_interm_pre_add);
-        }
-        tile_regs_release();
-        cb_interm_pre_add_obj.push_back(block.full_block_size());
+        // Fused pre-add: cb_in + cb_inb -> cb_interm_pre_add over one padded block (Bulk in/out,
+        // block_size = full_block_size so all tiles run in one DEST window — matches the original
+        // for(i:block.local()) inside one ACQ; padding tiles are processed harmlessly).
+        // add_tiles_init + reconfig -> Input; pack_reconfig(cb_interm_pre_add) -> Output.
+        compute_kernel_lib::add<
+            cb_in,
+            cb_inb,
+            cb_interm_pre_add,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block>(
+            compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -246,7 +239,7 @@ void kernel_main() {
     constexpr auto cb_out = get_named_compile_time_arg_val("cb_out");  // output
     constexpr auto cb_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr auto cb_beta = get_named_compile_time_arg_val("cb_beta");
-    uint32_t cb_xmm = get_named_compile_time_arg_val("cb_xmm");                        // x - E[x]
+    constexpr auto cb_xmm = get_named_compile_time_arg_val("cb_xmm");                  // x - E[x]
     constexpr auto cb_ex = get_named_compile_time_arg_val("cb_ex");                    // E[x]
     constexpr auto cb_ex2 = get_named_compile_time_arg_val("cb_ex2");                  // Var[x] = E[(x-E[x])^2]
     constexpr auto cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");              // Var[x]+ε
@@ -397,113 +390,117 @@ void kernel_main() {
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
-            cb_in_obj.wait_front(block.full_block_size());
-            tile_regs_acquire();
-            reconfig_data_format(cb_in, cb_ex);
-            sub_bcast_cols_init_short(cb_in, cb_ex);
-            // x-E[x]
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
-            }
-            cb_in_obj.pop_front(block.full_block_size());
-
+            // Normalize, fused in DEST: (x - E[x]) [+ b if fuse_pre_add] * 1/sqrt(Var+eps) -> cb_norm_out.
+            //   cb_in Bulk (wait+pop full_block); cb_ex held col-bcast (1 tile) -> CallerManaged + Scalar;
+            //   cb_inb Bulk; cb_ex2pe held (1 tile) -> CallerManaged + Scalar. block_size = full_block_size
+            //   (one DEST window; padding tiles processed harmlessly). sub/dest_reuse inits + reconfigs
+            //   -> Input; pack_reconfig(cb_xmm/cb_out) -> Output.
+            constexpr uint32_t cb_norm_out =
+                (do_gamma == 1 || do_beta == 1) ? get_named_compile_time_arg_val("cb_xmm") : cb_out;
             if constexpr (fuse_pre_add) {
-                // Fuse in = in + b
-                reconfig_data_format_srca(cb_in, cb_inb);
-                binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_inb);
-                cb_inb_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                        cb_inb, i, i);
-                }
-                cb_inb_obj.pop_front(block.full_block_size());
-                reconfig_data_format_srca(cb_inb, cb_ex2pe);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in,
+                        cb_ex,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::DestReuseBinary<
+                        cb_inb,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block>{},
+                    compute_kernel_lib::DestReuseBinary<
+                        cb_ex2pe,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_norm_out,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in,
+                        cb_ex,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::DestReuseBinary<
+                        cb_ex2pe,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::DestReuseReconfig::Input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_norm_out,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
-
-            // Multiply by 1/(√(Var(X) + ε))
-            reconfig_data_format_srca(fuse_pre_add ? cb_inb : cb_in, cb_ex2pe);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
-            for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe, 0, i);
-            }
-            tile_regs_commit();
-
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                cb_xmm = cb_out;
-            }
-
-            pack_reconfig_data_format(cb_xmm);
-            // Sync with writer on full blocks
-            CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_xmm);
-            }
-            CircularBuffer(cb_xmm).push_back(block.full_block_size());
-            tile_regs_release();
 
             if constexpr (do_gamma == 1) {
-                // Multiply by gamma
-                reconfig_data_format(cb_xmm, cb_gamma);
-                tile_regs_acquire();
-                cb_gamma_obj.wait_front(block.full_block_size());
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                mul_bcast_rows_init_short(cb_xmm, cb_gamma);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_xmm, cb_gamma, i, i, i);
-                }
-                tile_regs_commit();
-                cb_gamma_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                if constexpr (!do_beta) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                tile_regs_wait();
-                if constexpr (!do_beta) {
-                    cb_out_obj.reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_out);
-                    }
-                    cb_out_obj.push_back(block.full_block_size());
-                } else {
-                    CircularBuffer(cb_xmm).reserve_back(block.full_block_size());
-                    for (auto i : block.local()) {
-                        pack_tile(i, cb_xmm);
-                    }
-                    CircularBuffer(cb_xmm).push_back(block.full_block_size());
-                }
-                tile_regs_release();
+                // gamma: cb_xmm * gamma (bcast rows) -> cb_out, or in-place cb_xmm when do_beta.
+                //   cb_xmm holds one padded block at a time (sized Wt_padded >= 2*block for large
+                //   tensors), so the in-place chain's reserve+read fits. mul_bcast_rows + reconfig
+                //   -> Input; pack_reconfig -> Output.
+                constexpr uint32_t cb_gamma_out = (do_beta == 1) ? cb_xmm : cb_out;
+                compute_kernel_lib::mul<
+                    cb_xmm,
+                    cb_gamma,
+                    cb_gamma_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Block>(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
             }
 
             if constexpr (do_beta == 1) {
-                // Add beta
-                tile_regs_acquire();
-                reconfig_data_format(cb_xmm, cb_beta);
-                add_bcast_rows_init_short(cb_xmm, cb_beta);
-                CircularBuffer(cb_xmm).wait_front(block.full_block_size());
-                cb_beta_obj.wait_front(block.full_block_size());
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_xmm, cb_beta, i, i, i);
-                }
-                tile_regs_commit();
-                cb_beta_obj.pop_front(block.full_block_size());
-                CircularBuffer(cb_xmm).pop_front(block.full_block_size());
-
-                pack_reconfig_data_format(cb_out);
-                cb_out_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_release();
-                cb_out_obj.push_back(block.full_block_size());
+                // beta: cb_xmm + beta (bcast rows) -> cb_out. add_bcast_rows + reconfig -> Input; pack -> Output.
+                compute_kernel_lib::add<
+                    cb_xmm,
+                    cb_beta,
+                    cb_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::Output,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Block>(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
             }
         }
 
-        cb_xmm = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
         cb_ex2pe_obj.pop_front(onetile);
         cb_ex_obj.pop_front(onetile);
     }  // NCHt loop
