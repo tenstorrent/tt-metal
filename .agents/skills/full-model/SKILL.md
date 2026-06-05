@@ -29,7 +29,7 @@ Read the HuggingFace reference model and the reports for the working TTNN blocks
 
 Keep setup-time work outside the hot runtime path: weight conversion, dtype choices, tensor layout preparation, cache construction, and tokenizer loading should not be hidden inside a measured prefill or decode forward.
 
-Avoid hidden host fallback in a single prefill or decode pass. If host work is still needed between decode steps, make it explicit and measure its impact. Prefer traced decode replay where the project and hardware support it.
+Avoid hidden host fallback in a single prefill or decode pass. If host work is still needed between decode steps, make it explicit and measure its impact. The final decode path must use traced TTNN execution; eager decode is acceptable only as an intermediate bring-up path. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
 
 As you add some new operations beyond the decoder modules you started with use the $multichip and $optimize and skills as necessary to match the any multi-chip sharding and keep the full model optimized. A tip: for this kind of optimization it's ok to run a version of the model that only has one layer of each kind present in the model (e.g. some models have some layers with windowed / full attention, others have some layers with mlp / moe etc). This reduces the running time. Tracy in particular has limited hardware capture buffers and can generally not capture a full model in one pass without extra calls to dump the profiler data anyway, so breaking the model up like this during optimization passes is best practice. Your final report should include a tt-perf-report these reduced-layer-count versions of the model.
 

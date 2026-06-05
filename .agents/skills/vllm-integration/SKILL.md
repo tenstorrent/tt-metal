@@ -41,7 +41,7 @@ vLLM owns KV-cache allocation in serving mode. Preserve the generator's two cach
 - standalone readiness/generator mode, where the generator owns cache allocation and reset;
 - vLLM mode, where `allocate_vllm_kv_cache` creates the cache and the adapter passes that exact cache through the low-level API.
 
-Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generator.py`.
+Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `$tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generator.py`.
 
 ## Plugin Registration
 
