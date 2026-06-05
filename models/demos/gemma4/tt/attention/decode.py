@@ -15,6 +15,7 @@ from .operations import (
     apply_per_head_norm,
     apply_qkv_projection,
     apply_rope,
+    apply_rope_decode_peruser,
     concat_heads,
     effective_block_size,
     split_qkv_heads_decode,
@@ -90,11 +91,24 @@ def decode_forward(
         sin_pos = ttnn.embedding(position_idx, sin_cache, layout=ttnn.TILE_LAYOUT)
         cos_pos = ttnn.unsqueeze_to_4D(cos_pos)  # [1, 1, batch_pad, head_dim]
         sin_pos = ttnn.unsqueeze_to_4D(sin_pos)
-        # rotary_embedding expects cos/sin as [1, 1, *, head_dim] — token_index=0 indexes position 0
-        # which holds the data for the actual current position (gathered by embedding above)
-        tt_q = apply_rope(tt_q, cos_pos, sin_pos, token_index=0)
-        if not is_kv_shared:
-            tt_k = apply_rope(tt_k, cos_pos, sin_pos, token_index=0)
+        # RoPE. batch=1 uses the fused single-position rotary_embedding (one core
+        # but cheap, no slice/tilize churn). batch>1 needs per-user positions,
+        # which that op can't express, so fall back to the manual elementwise
+        # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
+        # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
+        batch = tt_q.shape[1]
+        if batch == 1:
+            tt_q = apply_rope(tt_q, cos_pos, sin_pos, token_index=0)
+            if not is_kv_shared:
+                tt_k = apply_rope(tt_k, cos_pos, sin_pos, token_index=0)
+        else:
+            cos_b = ttnn.transpose(cos_pos, 1, 2)  # [1, batch_pad, 1, head_dim]
+            sin_b = ttnn.transpose(sin_pos, 1, 2)
+            cos_b = cos_b[:, :batch, :, :]
+            sin_b = sin_b[:, :batch, :, :]
+            tt_q = apply_rope_decode_peruser(tt_q, cos_b, sin_b)
+            if not is_kv_shared:
+                tt_k = apply_rope_decode_peruser(tt_k, cos_b, sin_b)
     else:
         # Legacy path: full 4D cache with Python int token_index
         tt_q = apply_rope(tt_q, cos_cache, sin_cache, token_index=token_index)
@@ -209,7 +223,10 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # 7. Concat heads + output projection + allreduce
-    tt_out = concat_heads(tt_sdpa, is_decode_mode=True)
+    num_local_heads = config.num_attention_heads // tp
+    tt_out = concat_heads(
+        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+    )
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 

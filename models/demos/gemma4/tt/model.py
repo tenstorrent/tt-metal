@@ -76,18 +76,24 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         )
         caches_4d[layer_type] = (cos_4d, sin_4d)
 
-        # 2D for decode embedding lookup: [max_seq_len, head_dim]
+        # 2D for decode embedding lookup: [max_seq_len, head_dim].
+        # ROW_MAJOR is the layout ttnn.embedding needs for its weight; storing
+        # these TILE forced an Untilize of the whole [max_seq_len, head_dim]
+        # cache on *every* per-layer RoPE lookup (240 Untilize ops / decode,
+        # ~25 us each). ROW_MAJOR storage drops that conversion entirely — the
+        # embedding op gathers the position rows and tilizes only the small
+        # [1, 32, head_dim] result.
         cos_2d = ttnn.from_torch(
             cos.squeeze(0),
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
         sin_2d = ttnn.from_torch(
             sin.squeeze(0),
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             mesh_mapper=replicate,
         )
@@ -613,9 +619,9 @@ class Gemma4Model:
                 kv_pair[0].deallocate(True)
                 kv_pair[1].deallocate(True)
 
-        # Batched prefill returns per-layer hidden states; Generator applies
-        # norm + lm_head per user after slicing last-token rows.
-        if not is_decode and get_last_token == -1:
+        # Batched prefill (batch_size > 1) returns hidden states; Generator applies
+        # norm + lm_head per user. Single-user prefill runs norm + lm_head here.
+        if not is_decode and get_last_token == -1 and batch_size > 1:
             return hidden_states
 
         # Final norm
@@ -895,15 +901,18 @@ class Gemma4Model:
 
         Called when the captured trace owns the embed step (so the input
         tensor is the raw token tensor staged by ``prepare_inputs_prefill``
-        with ``trace_enabled=True``). Accepts the 4-tuple unpacked by
-        ``Generator`` trace capture even though Gemma4 does not chunk-prefill.
+        with ``trace_enabled=True``).
+
+        ``tt_chunk_start_idx`` is threaded through unchanged so the return
+        tuple lines up with ``Generator``'s traced-prefill unpack
+        (``transformed_inputs[3]`` → ``ttnn_prefill_forward(chunk_start_idx=...)``).
+        Gemma4 doesn't chunk-prefill, so it's always ``None`` in practice.
         """
-        del tt_chunk_start_idx
         tt_embeds = self.embed_tokens(tokens)
         if len(tt_embeds.shape) == 3:
             tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
         tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
-        return tt_embeds, tt_page_table, tt_chunk_page_table, None
+        return tt_embeds, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
     def ttnn_prefill_forward(
         self,
@@ -1033,43 +1042,51 @@ class Gemma4Model:
             ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh and self.mesh_device.get_num_devices() > 1 else None
         )
 
-        # Host embedding + PLI (keeps these off the device trace)
-        token_id = tokens[0].item()
-        embeds, pli = self.compute_host_embeddings(token_id)
+        tok_flat = tokens.reshape(-1)
+        pos_flat = current_pos.reshape(-1)
+        batch = tok_flat.shape[0]
 
-        embeds_tt = ttnn.from_torch(embeds, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
-
-        # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
-        pos = current_pos[0].item() if hasattr(current_pos, "item") else int(current_pos[0])
-        pos_padded = F.pad(torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
-        pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
-
-        # int32 position for KV cache update + SDPA
-        pos_int32_tt = ttnn.from_torch(
-            torch.tensor([pos], dtype=torch.int32),
+        # Stage token IDs (not embeddings): embed_tokens runs on device in
+        # ttnn_decode_forward. One device embedding op handles all B users —
+        # the host-embedding path was hardcoded single-token. [1, batch] uint32.
+        tokens_tt = ttnn.from_torch(
+            tok_flat.to(torch.int32).reshape(1, batch),
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             mesh_mapper=replicate,
         )
 
-        # Page table
+        # Position: [1, 32] uint32 padded — per-user positions in the first
+        # `batch` entries. The decode RoPE embedding lookup gathers one cos/sin
+        # row per user, so different users can sit at different positions.
+        pos_i32 = pos_flat.to(torch.int32).reshape(1, batch)
+        pos_padded = F.pad(pos_i32, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i32
+        pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
+
+        # int32 positions [batch] for KV cache update + SDPA (per user).
+        pos_int32_tt = ttnn.from_torch(
+            pos_flat.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate
+        )
+
+        # Page table [batch, max_blocks] — one row per user.
         page_table_tt = None
         if page_table is not None:
-            page_table_tt = ttnn.from_torch(
-                page_table[0:1] if page_table.dim() > 1 else page_table.unsqueeze(0),
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.int32,
-                mesh_mapper=replicate,
-            )
+            pt = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+            page_table_tt = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=replicate)
 
-        # PLI
+        # PLI (E2B/E4B per-layer inputs). 31B has none. Batched PLI would need
+        # per-user stacking + model-side per-user slicing — not yet wired up.
         pli_tt = None
-        if pli is not None:
-            pli_tt = ttnn.from_torch(
-                pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
-            )
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights:
+            if batch != 1:
+                raise NotImplementedError("Batched decode with per-layer inputs (E2B/E4B) is not yet supported")
+            _, pli = self.compute_host_embeddings(int(tok_flat[0].item()))
+            if pli is not None:
+                pli_tt = ttnn.from_torch(
+                    pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+                )
 
-        return (embeds_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
+        return (tokens_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """Wrapper: prepare_decode_inputs_host + copy to device."""
@@ -1128,8 +1145,18 @@ class Gemma4Model:
                 ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
                 since ``Generator``'s decode path doesn't thread the kwarg).
         """
-        # Convert ROW_MAJOR host data to TILE on device
-        input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # Two input conventions are accepted:
+        #   * uint32/int32 token-id tensor → run embed_tokens on device. This is
+        #     the batched-decode path (one device embedding op handles all B
+        #     users; the host-embedding path is hardcoded single-token).
+        #   * bf16 pre-computed embedding → use directly (legacy / unit tests).
+        if x.dtype in (ttnn.uint32, ttnn.int32):
+            input_embeds = self.embed_tokens(x)
+            if len(input_embeds.shape) == 3:
+                input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
+            input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+        else:
+            input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # RoPE: always use internal 2D caches with on-device embedding lookup
         token_index = None if self.rope_caches_2d else 0

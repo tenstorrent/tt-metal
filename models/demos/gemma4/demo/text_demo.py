@@ -170,7 +170,7 @@ def _is_31b_model(model_path):
 
 
 def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
-    """True for batch-32 prefill lengths that OOM on 31B 1×4 (documented hardware limit)."""
+    """True for batch-32 long prefill on 31B 1×4 (QB2 ~64k batched token budget, e.g. 32×2048)."""
     if batch_size != _BATCH32_DRAM_OOM_SIZE:
         return False
     if prefill_len not in (2048, 4096):
@@ -183,8 +183,8 @@ def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_l
 def _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len):
     if _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
         pytest.xfail(
-            f"Batch-{batch_size} prefill_len={prefill_len} exceeds 31B 1×4 DRAM "
-            f"(weights + KV + long-seq activations); run on 1×8 or a smaller model."
+            f"Batch-{batch_size} prefill_len={prefill_len} exceeds QB2 ~64k batched token budget "
+            f"on 31B 1×4 (32×2048=65536); run on 1×8 or a smaller model."
         )
 
 
@@ -1121,6 +1121,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
     )
 
 
+@pytest.mark.gemma4_pr_44955
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize(
     "prefill_len",
