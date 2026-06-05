@@ -30,9 +30,8 @@ template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
 inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
 {
-    static_assert(
-        (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B/UNP_DEST");
+    // TODO: Implement Unpack to dest for tiny tiles
+    static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B");
 
     const std::uint32_t MOP_OUTER_LOOP = num_tiles;
     const std::uint32_t MOP_INNER_LOOP = tensor_shape.total_num_faces();
@@ -42,8 +41,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
     // For UNP_DEST: Dst Tile Idx Inc = 1 to place faces at consecutive dest positions (no math involved).
     std::uint32_t unpack_tile_instrn;
     std::uint32_t unpack_tile_w_dvalid_instrn;
-    std::uint32_t reset_dest_tile_cnt_instrn =
-        TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL == p_unpacr::UNP_DEST ? p_unpacr::UNP_A : UNP_SEL, 0);
+    std::uint32_t reset_dest_tile_cnt_instrn = TT_OP_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
 
     std::uint32_t dest_tile_idx_inc = (static_cast<std::uint32_t>(tensor_shape.face_r_dim) < (FACE_R_DIM >> 1))
                                           ? (FACE_R_DIM >> (rows_log2(static_cast<std::uint32_t>(tensor_shape.face_r_dim)) + 1))
@@ -59,19 +57,12 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
         unpack_tile_instrn          = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
         unpack_tile_w_dvalid_instrn = TT_OP_UNPACR1_TILE_INC(dest_tile_idx_inc /*Dst Tile Idx*/, 1 /*Src Tile Idx*/, buf_desc_id, 1 /*Set Dvalid*/);
     }
-    else if constexpr (UNP_SEL == p_unpacr::UNP_DEST)
-    {
-        unpack_tile_instrn = TT_OP_UNPACR_DEST_TILE_INC(dest_tile_idx_inc, 1 /*Src Tile Idx*/, buf_desc_id, 0 /*Set Dvalid*/);
-    }
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_tile_instrn);
 
-    if constexpr (UNP_SEL != p_unpacr::UNP_DEST)
-    {
-        // TODO: Figure out why setting unpack_tile_w_dvalid_instrn using set_last_outer_loop_instr did not work
-        temp.set_inner_loop_len(MOP_INNER_LOOP - 1); // Inner loop iterates over num_faces-1 where the dvalid unpacking is done as the END_OP
-        temp.set_end_ops(unpack_tile_w_dvalid_instrn, reset_dest_tile_cnt_instrn);
-    }
+    // TODO: Figure out why setting unpack_tile_w_dvalid_instrn using set_last_outer_loop_instr did not work
+    temp.set_inner_loop_len(MOP_INNER_LOOP - 1); // Inner loop iterates over num_faces-1 where the dvalid unpacking is done as the END_OP
+    temp.set_end_ops(unpack_tile_w_dvalid_instrn, reset_dest_tile_cnt_instrn);
 
     // If IS_32b_DEST_EN and UNP_SEL = UNP_A, zero out the SRCB reg
     // The only test in which there is a unary upk to SRCA with 32b DF is the datacopy kernel, which uses ELWADD
@@ -99,7 +90,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_full_tile_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
+inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B) || (UNP_SEL == p_unpacr::UNP_DEST),
@@ -297,7 +288,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, Ten
     {
         if (tensor_shape.total_num_faces() == NUM_FACES || tensor_shape.total_num_faces() == 1) // Using regular tile dimensions
         {
-            _llk_unpack_unary_operand_full_tile_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
+            _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
         }
         else // Using tiny-tiles
         {
