@@ -21,188 +21,19 @@ import torch
 import ttnn
 
 from ...layers.audio_ops import (
-    Conv1dViaConv3d,
+    ConvTranspose1dViaConv3d,
     Snake,
     SnakeBeta,
+    _AlignedOutConv1d,
     _all_gather_t,
-    _pad_channels_to_aligned,
     _partition_t,
     _set_tpad_tail,
-    _zero_pad_t,
-    _zero_stuff_t,
-    channel_align_unit,
-    channel_axis,
-    gather_channel_to_full,
     partition_channel,
 )
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
-
-
-class _AlignedOutConv1d(Conv1dViaConv3d):
-    """Conv1dViaConv3d variant that rounds ``out_channels`` to a 32-multiple.
-
-    The base ``max(32, out)`` rule lets non-32-multiples (48, 24) reach
-    ``ttnn.experimental.conv3d``, which then produces a buffer whose page size
-    does not divide its length. We round up, zero-pad weight/bias on the ``out``
-    axis, pad input C to aligned in forward, and trim back to the real count.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        *,
-        kernel_size: int,
-        stride: int = 1,
-        dilation: int = 1,
-        padding_mode: str = "zeros",
-        bias: bool = True,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-        channel_shard_output: bool = True,
-    ) -> None:
-        super().__init__(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            dilation=dilation,
-            padding_mode=padding_mode,
-            bias=bias,
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-            channel_shard_output=channel_shard_output,
-        )
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        # Under channel-TP the input is a C-shard; super().forward gathers it to
-        # full in_channels, so skip the (replicated-tensor) local pad here.
-        if channel_axis(self.parallel_config) is None:
-            x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device, channel_align=self.channel_align)
-        y = super().forward(x_BTC)
-        # Column-parallel output is the per-chip C_out slice of the (padded) channels
-        # — can't trim to real C_out per chip; the trim happens once at the output.
-        if not self._is_col_parallel() and self.unpadded_out_channels < self.out_channels:
-            B, T, C = y.shape
-            y = ttnn.slice(y, [0, 0, 0], [B, T, self.unpadded_out_channels])
-        return y
-
-
-class LTXConvTranspose1d(Module):
-    """Substitute for ``torch.nn.ConvTranspose1d`` with ``padding=(k-stride)//2``.
-
-    Equivalent to ``Conv1d`` on the zero-stuffed input with the weight flipped
-    along the kernel axis and transposed. The external pad
-    ``p = k - 1 - (k-s)//2`` is the unique value yielding an exact stride x
-    upsample.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        *,
-        kernel_size: int,
-        stride: int,
-        bias: bool = True,
-        mesh_device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.float32,
-        parallel_config: ParallelFactor | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.external_pad_each = kernel_size - 1 - (kernel_size - stride) // 2
-        self.mesh_device = mesh_device
-        self.dtype = dtype
-        self.parallel_config = parallel_config
-        self.ccl_manager = ccl_manager
-
-        # When sharded the underlying conv stays UNSHARDED: the transposed-conv
-        # math (zero-stuff stride > 1 + asymmetric local zero-pad) is awkward to
-        # halo cleanly on T. Forward gathers across T, runs the unsharded
-        # pipeline, then mesh-partitions the output back. Only 6 per vocoder, so
-        # the gather/partition overhead is small.
-        self.conv = _AlignedOutConv1d(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=1,
-            padding_mode="causal",
-            bias=bias,
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=None,
-            ccl_manager=None,
-        )
-        # We supply our own symmetric padding instead.
-        self.conv.external_pad_front = 0
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Reshape ConvTranspose1d weight ``(in, out, k)`` → Conv1d ``(out, in, k)``.
-
-        The flip-along-k is required because Conv1d is cross-correlation but the
-        zero-stuff equivalent of ConvTranspose1d needs a flipped kernel. Keys are
-        migrated to ``conv.*`` so the base class can pick them up.
-        """
-        if "weight" in state:
-            w = state.pop("weight")
-            assert w.dim() == 3 and tuple(w.shape) == (self.in_channels, self.out_channels, self.kernel_size), (
-                f"expected ConvTranspose1d weight shape ({self.in_channels}, {self.out_channels}, "
-                f"{self.kernel_size}), got {tuple(w.shape)}"
-            )
-            w_flipped = torch.flip(w, dims=[-1])
-            w_conv1d = w_flipped.permute(1, 0, 2).contiguous()
-            state["conv.weight"] = w_conv1d
-        if "bias" in state:
-            state["conv.bias"] = state.pop("bias")
-
-    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
-        assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-
-        # Channel-TP: the inner conv runs UNSHARDED (parallel_config=None), so gather
-        # C_in to full here and scatter C_out back at the end.
-        ch_axis = channel_axis(self.parallel_config)
-        if ch_axis is not None:
-            x_BTC = gather_channel_to_full(self.ccl_manager, x_BTC, self.parallel_config)
-            # Gathered C is unit-aligned (factor*32); drop the pad channels so the
-            # aligned-32 inner conv sees its real C_in.
-            x_BTC = ttnn.slice(x_BTC, [0, 0, 0], [x_BTC.shape[0], x_BTC.shape[1], self.in_channels])
-
-        if sharded:
-            x_BTC = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
-            x_BTC = _all_gather_t(self.ccl_manager, x_BTC, self.parallel_config)
-            x_BTC = ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
-
-        # The runtime input C must match the aligned-C the conv weight was
-        # allocated for.
-        x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device)
-        x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
-        x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
-        y = self.conv(x_padded)
-
-        if sharded:
-            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-            y = _partition_t(y, self.parallel_config)
-            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-
-        if ch_axis is not None:
-            # Re-pad real C_out to unit so the per-chip C-shard is TILE-legal.
-            y = _pad_channels_to_aligned(y, self.mesh_device, channel_align=channel_align_unit(self.parallel_config))
-            y = partition_channel(y, self.parallel_config, dim=2)
-
-        return y
 
 
 class LTXDilatedConv1d(_AlignedOutConv1d):
@@ -432,7 +263,7 @@ class LTXVocoder(Module):
 
         self.ups = ModuleList(
             [
-                LTXConvTranspose1d(
+                ConvTranspose1dViaConv3d(
                     in_channels=upsample_initial_channel // (2**i),
                     out_channels=upsample_initial_channel // (2 ** (i + 1)),
                     kernel_size=upsample_kernel_sizes[i],
