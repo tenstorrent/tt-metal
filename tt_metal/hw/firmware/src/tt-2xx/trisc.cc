@@ -107,8 +107,8 @@ inline void enable_cc_stack() {
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
-    uint32_t neo_id = csr_read<CSR::NEO_ID>();
-    uint32_t trisc_id = csr_read<CSR::TRISC_ID>();
+    uint32_t neo_id = internal_::get_neo_id();
+    uint32_t trisc_id = internal_::get_trisc_id();
     DEVICE_PRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
@@ -137,7 +137,7 @@ extern "C" uint32_t _start1() {
     setup_isr_csrs();
     enable_cc_stack();
     DeviceProfilerInit();
-    DEVICE_PRINT("TRISC-FW: initialized\n");
+    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {

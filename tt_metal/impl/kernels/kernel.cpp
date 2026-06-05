@@ -1025,9 +1025,9 @@ void QuasarComputeKernel::init_trisc_binary_groups() {
             static_cast<size_t>(enchantum::to_underlying(p) % QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE);
         buckets[trisc_slot].push_back(p);
     }
-    for (size_t trisc_slot = 0; trisc_slot < buckets.size(); ++trisc_slot) {
-        if (!buckets[trisc_slot].empty()) {
-            trisc_binary_groups_.push_back(std::move(buckets[trisc_slot]));
+    for (auto & bucket : buckets) {
+        if (!bucket.empty()) {
+            trisc_binary_groups_.push_back(std::move(bucket));
         }
     }
 }
