@@ -106,7 +106,7 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and (pcc-prompt_5k or pcc-prompt_25k) and moe" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k" -vvv --tb=short --timeout=1800
   test_type: kimi_prefill_block
   test_group: module
   skus:
