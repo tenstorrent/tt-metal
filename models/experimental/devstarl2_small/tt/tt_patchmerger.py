@@ -5,18 +5,16 @@ import os
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
-from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul import (
-    TILE,
-    width_sharded_l1_linear_keep_sharded,
-)
-from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_slice_memcfg
 import ttnn
 import torch
 
 apply_fp8_dequantize_compat()
 
+TILE = ttnn.TILE_SIZE
+_DRAM = ttnn.DRAM_MEMORY_CONFIG
 
-def _patch_merge_ws_m_cap() -> int:
+
+def _patch_merge_m_cap() -> int:
     raw = os.environ.get("PIXTRAL_PATCH_MERGE_WS_M_CAP", "512")
     return max(TILE, int(raw))
 
@@ -42,18 +40,15 @@ class TTMistral3PatchMerger(LightweightModule):
             return torch.transpose(state_dict[f"{state_dict_prefix}{name}.weight"], -2, -1)
 
         def as_tensor_data(tensor_data, dtype, inner_h, inner_w):
-            cache_name = None
-            if weight_cache_path is not None:
-                cache_name = weight_cache_path / f"{state_dict_prefix}merging_layer.weight.{inner_h}_{inner_w}.tile"
-            return ttnn.as_tensor(
+            # Tilize on host then upload; device= in from_torch/as_tensor runs Tilize on device trace.
+            host_tt = ttnn.from_torch(
                 tensor_data,
                 dtype=dtype,
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_file_name=cache_name,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                pad_value=0.0,
             )
+            return ttnn.to_device(host_tt, mesh_device, memory_config=_DRAM)
 
         merging_weights = get_weight("merging_layer")
         input_dim, output_dim = merging_weights.shape
@@ -70,82 +65,79 @@ class TTMistral3PatchMerger(LightweightModule):
             for inner_w in range(self.spatial_merge_size)
         ]
 
-    def _ensure_tile(self, tensor: ttnn.Tensor, mem_cfg: ttnn.MemoryConfig) -> ttnn.Tensor:
-        if tensor.get_layout() != ttnn.TILE_LAYOUT:
-            return ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=mem_cfg)
-        if mem_cfg.buffer_type == ttnn.BufferType.L1 and tensor.memory_config().buffer_type != ttnn.BufferType.L1:
-            return ttnn.to_memory_config(tensor, mem_cfg)
-        return tensor
+    def _pad_m_to_tile(
+        self,
+        patch: ttnn.Tensor,
+        m_rows: int,
+    ) -> tuple[ttnn.Tensor, int]:
+        padded = ((m_rows + TILE - 1) // TILE) * TILE
+        if padded == m_rows:
+            return patch, m_rows
+        pad_rows = padded - m_rows
+        zeros = ttnn.zeros(
+            (pad_rows, patch.shape[-1]),
+            dtype=patch.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=_DRAM,
+        )
+        return ttnn.concat([patch, zeros], dim=0, memory_config=_DRAM), padded
 
-    def _merge_linear_ws(
+    def _merge_linear(
         self,
         patch: ttnn.Tensor,
         weight_index: int,
         m_rows: int,
         feature_dim: int,
     ) -> ttnn.Tensor:
-        """Width-sharded merge linear for one M-chunk (m_rows <= ws cap, tile-padded if needed)."""
-        mm_seq = m_rows
-        patch_in = patch
-        if m_rows % TILE != 0:
-            padded = ((m_rows + TILE - 1) // TILE) * TILE
-            patch_in = ttnn.pad(
-                patch,
-                padding=[(0, 0), (0, 0), (0, padded - m_rows), (0, 0)],
-                value=0.0,
-            )
-            mm_seq = padded
+        m_cap = _patch_merge_m_cap()
+        if m_rows <= m_cap:
+            return self._merge_linear_chunk(patch, weight_index, m_rows, feature_dim)
 
-        out = width_sharded_l1_linear_keep_sharded(
-            self.args,
-            patch_in,
-            self.merging_weights[weight_index],
-            m_seq=mm_seq,
-            k_dim=feature_dim,
-            n_dim=feature_dim,
-            fuse_batch=True,
-            compute_kernel_config=self._merge_compute_cfg,
-        )
-        if mm_seq != m_rows:
-            out = ttnn.slice(
-                out,
-                (0, 0, 0, 0),
-                (1, 1, m_rows, out.shape[-1]),
-                memory_config=out.memory_config(),
-            )
-        return out
-
-    def _merge_linear(self, patch: ttnn.Tensor, weight_index: int, m_rows: int, feature_dim: int) -> ttnn.Tensor:
-        ws_cap = _patch_merge_ws_m_cap()
-        if m_rows <= ws_cap:
-            return self._merge_linear_ws(patch, weight_index, m_rows, feature_dim)
-
-        # Large merged grids (e.g. 1540px → 3025 rows): chunk WS matmuls; single DRAM M=3025 hurts PCC.
         parts = []
-        feat = int(patch.shape[-1])
-        for start in range(0, m_rows, ws_cap):
-            end = min(start + ws_cap, m_rows)
+        for start in range(0, m_rows, m_cap):
+            end = min(start + m_cap, m_rows)
             sl = ttnn.slice(
                 patch,
-                (0, 0, start, 0),
-                (1, 1, end, feat),
-                memory_config=patch.memory_config(),
+                (start, 0),
+                (end, feature_dim),
+                memory_config=_DRAM,
             )
-            chunk_out = self._merge_linear_ws(sl, weight_index, end - start, feature_dim)
+            parts.append(self._merge_linear_chunk(sl, weight_index, end - start, feature_dim))
             ttnn.deallocate(sl)
-            if chunk_out.is_sharded():
-                chunk_il = ttnn.sharded_to_interleaved(chunk_out, ttnn.DRAM_MEMORY_CONFIG)
-                chunk_out.deallocate(True)
-            else:
-                chunk_il = chunk_out
-            parts.append(chunk_il)
 
         out = parts[0]
         for part in parts[1:]:
             prev = out
-            out = ttnn.concat([prev, part], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            out = ttnn.concat([prev, part], dim=0, memory_config=_DRAM)
             ttnn.deallocate(prev)
             ttnn.deallocate(part)
+        return out
+
+    def _merge_linear_chunk(
+        self,
+        patch: ttnn.Tensor,
+        weight_index: int,
+        m_rows: int,
+        feature_dim: int,
+    ) -> ttnn.Tensor:
+        patch_in, mm_seq = self._pad_m_to_tile(patch, m_rows)
+        out = ttnn.linear(
+            patch_in,
+            self.merging_weights[weight_index],
+            dtype=ttnn.bfloat16,
+            memory_config=_DRAM,
+            compute_kernel_config=self._merge_compute_cfg,
+        )
+        if patch_in is not patch:
+            ttnn.deallocate(patch_in)
+        if mm_seq != m_rows:
+            out = ttnn.slice(
+                out,
+                (0, 0),
+                (m_rows, feature_dim),
+                memory_config=_DRAM,
+            )
         return out
 
     def forward(self, image_features: ttnn.Tensor, image_sizes) -> ttnn.Tensor:
@@ -156,61 +148,47 @@ class TTMistral3PatchMerger(LightweightModule):
         tokens_per_image = [h * w for h, w in image_sizes]
         d = image_features.shape[-1]
 
-        permuted_tensor = []
+        outputs = []
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
             h, w = image_sizes[image_index]
             merged_h = h // self.spatial_merge_size
             merged_w = w // self.spatial_merge_size
-
-            slice_mem_cfg = vision_slice_memcfg(h * w)
-            image_tokens = self._ensure_tile(image_tokens, slice_mem_cfg)
-
-            grid = ttnn.reshape(
-                image_tokens,
-                (merged_h, self.spatial_merge_size, merged_w, self.spatial_merge_size, d),
-            )
-            if (
-                slice_mem_cfg.buffer_type == ttnn.BufferType.L1
-                and grid.memory_config().buffer_type != ttnn.BufferType.L1
-            ):
-                grid = ttnn.to_memory_config(grid, slice_mem_cfg)
             m_rows = merged_h * merged_w
+
+            if image_tokens.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                image_tokens = ttnn.to_memory_config(image_tokens, _DRAM)
+
+            grid = ttnn.reshape(image_tokens, (1, h, w, d), memory_config=_DRAM)
+
             merged = None
-            merge_mem_cfg = None
             weight_index = 0
             for inner_h in range(self.spatial_merge_size):
                 for inner_w in range(self.spatial_merge_size):
                     patch = ttnn.slice(
                         grid,
-                        (0, inner_h, 0, inner_w, 0),
-                        (merged_h, inner_h + 1, merged_w, inner_w + 1, d),
-                        memory_config=slice_mem_cfg,
+                        (0, inner_h, inner_w, 0),
+                        (1, h, w, d),
+                        (1, self.spatial_merge_size, self.spatial_merge_size, 1),
+                        memory_config=_DRAM,
                     )
-                    patch = ttnn.reshape(patch, (1, 1, m_rows, d))
+                    patch = ttnn.reshape(patch, (m_rows, d), memory_config=_DRAM)
                     projected = self._merge_linear(patch, weight_index, m_rows, d)
                     ttnn.deallocate(patch)
-                    if merge_mem_cfg is None:
-                        merge_mem_cfg = projected.memory_config()
                     if merged is None:
                         merged = projected
                     else:
                         prev_merged = merged
-                        merged = ttnn.add(merged, projected, memory_config=merge_mem_cfg)
+                        merged = ttnn.add(merged, projected, memory_config=_DRAM)
                         ttnn.deallocate(prev_merged)
                         ttnn.deallocate(projected)
                     weight_index += 1
 
             ttnn.deallocate(grid)
-            if merged.is_sharded():
-                merged_out = ttnn.sharded_to_interleaved(merged, ttnn.DRAM_MEMORY_CONFIG)
-                merged.deallocate(True)
-            else:
-                merged_out = merged
-            permuted_tensor.append(ttnn.reshape(merged_out, (m_rows, d)))
+            outputs.append(merged)
 
-        image_features = ttnn.concat(permuted_tensor, dim=0)
-
-        return image_features
+        if len(outputs) == 1:
+            return outputs[0]
+        return ttnn.concat(outputs, dim=0)
 
 
 __all__ = ["TTMistral3PatchMerger"]

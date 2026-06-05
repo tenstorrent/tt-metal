@@ -17,8 +17,8 @@ from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import Mode
 
 _TILE = 32
-_WO_1D_GRID_X = 8
-_WO_1D_GRID_Y = 4
+_WO_1D_GRID_X = 10
+_WO_1D_GRID_Y = 8
 
 
 def ministral_qkv_bf16_activations_enabled() -> bool:
@@ -158,14 +158,14 @@ def _wo_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device)
 
 
 def _wo_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    # mcast1d_8x4_pcn5_ibw8 l1/dram/dram: ~23us vs Tracy 128×1024×5120 ~33us.
+    # mcast1d_10x8_pcn2_ibw4 l1/dram/l1: ~20us vs Tracy 128×1024×5120 ~28us (test_matmul_128x1024x5120_sweep).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(_WO_1D_GRID_X, _WO_1D_GRID_Y),
-        in0_block_w=8,
-        out_subblock_h=1,
-        out_subblock_w=1,
+        in0_block_w=4,
+        out_subblock_h=2,
+        out_subblock_w=2,
         per_core_M=4,
-        per_core_N=5,
+        per_core_N=2,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -283,7 +283,7 @@ def _qkv_block_shard_linear_patch(attn: "TtMinistralAttention", seq_len: int):
 
 @contextmanager
 def _wo_linear_sweep_runtime_patch(attn: "TtMinistralAttention"):
-    """L1 WO in0 + 1D mcast matmul (l1/dram/dram); DRAM out avoids post-WO CopyDevice before all_reduce."""
+    """L1 WO in0 + 1D mcast matmul (l1/dram/l1); matches test_matmul_128x1024x5120_sweep best."""
     orig_linear = ttnn.linear
 
     wo_ids = {id(attn.wo), id(attn.wo_prefill_sweep)}
@@ -293,7 +293,7 @@ def _wo_linear_sweep_runtime_patch(attn: "TtMinistralAttention"):
             return orig_linear(x, weight, **kwargs)
         kwargs = dict(kwargs)
         kwargs["program_config"] = _wo_linear_sweep_program_config()
-        kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
         kwargs["compute_kernel_config"] = _wo_linear_sweep_compute_kernel_config()
         x = _prepare_wo_linear_sweep_input(x)
         return orig_linear(x, attn.wo_prefill_sweep, **kwargs)
