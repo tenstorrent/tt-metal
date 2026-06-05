@@ -307,11 +307,9 @@ jobs:
 
           # Pre-flight: detect self-approval (GitHub rejects reviews where the
           # authenticated user is also the PR author).
-          PR_AUTHOR=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER" \
-            | jq -r '.user.login // empty')
+          # PR author is available from the event payload (issue_comment trigger),
+          # avoiding an extra API call.
+          PR_AUTHOR="${{ github.event.issue.user.login }}"
 
           PAT_USER=$(curl -s \
             -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
@@ -399,8 +397,9 @@ jobs:
               FAIL_DETAIL="GitHub API error: $ERROR_MSG. This might be a temporary issue — try again or contact the infra team."
             fi
 
+            FAIL_BODY=$(printf '❌ **Bypass Approval Failed**\n\n%s' "$FAIL_DETAIL")
             TEMP_FILE=$(mktemp)
-            jq -n --arg body "❌ **Bypass Approval Failed**\n\n$FAIL_DETAIL" '{"body": $body}' > "$TEMP_FILE"
+            jq -n --arg body "$FAIL_BODY" '{"body": $body}' > "$TEMP_FILE"
 
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
