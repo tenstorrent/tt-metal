@@ -289,6 +289,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      non-harbor-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # Test group selection - default to all enabled for scheduled runs
