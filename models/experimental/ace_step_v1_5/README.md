@@ -392,10 +392,12 @@ not interfere with the module tests:
 ```bash
 unset MESH_DEVICE ACE_STEP_MESH_DEVICE
 
+# On single-chip p150, decode_tiled exceeds the default 300 s pytest-timeout —
+# pass --timeout=0 (these device tests are slow but not failing).
 pytest models/experimental/ace_step_v1_5/tests/test_condition_encoder_payload_pcc.py \
   models/experimental/ace_step_v1_5/tests/test_audio_code_detokenizer_pcc.py \
   models/experimental/ace_step_v1_5/tests/test_vae_decode_tiled_pcc.py \
-  --confcutdir=models/experimental/ace_step_v1_5/tests -q -s
+  --confcutdir=models/experimental/ace_step_v1_5/tests --timeout=0 -q -s
 
 export MESH_DEVICE=BH_QB
 pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py \
@@ -413,19 +415,19 @@ Pass ``-s`` so pytest prints every ``[ace_step_v1_5][PCC]`` line to stdout.
 Measured on local **BH_QB** (4× Blackhole, ``acestep-v15-base`` HF checkpoints, May 2026).
 Pearson PCC vs PyTorch/HF reference; thresholds are the test assert floors.
 
-| Module | Test / case | Production shape | PCC | Threshold | Device |
-|--------|-------------|------------------|-----|-----------|--------|
-| Condition encoder | ``condition_enc_15s`` | ``enc [1,187,2048]`` | **0.999882** | 0.97 | 1×1 |
-| Condition encoder | ``condition_ctx_15s`` | ``ctx [1,375,128]`` | **0.999999** | 0.99 | 1×1 |
-| Condition encoder | ``condition_enc_30s`` | ``enc [1,172,2048]`` | **0.999883** | 0.97 | 1×1 |
-| Condition encoder | ``condition_ctx_30s`` | ``ctx [1,750,128]`` | **0.999999** | 0.99 | 1×1 |
-| Audio-code detokenizer | ``audio_detokenizer_15s_75codes`` | ``[1,375,64]`` @ 25 Hz | **0.986272** | 0.97 | 1×1 |
-| Audio-code detokenizer | ``audio_detokenizer_30s_150codes`` | ``[1,750,64]`` @ 25 Hz | **0.986632** | 0.97 | 1×1 |
-| VAE ``decode_tiled`` | ``vae_decode_tiled_15s`` | 375 latent frames → 720k audio samples | **0.994937** | 0.98 | 1×1 |
-| VAE ``decode_tiled`` | ``vae_decode_tiled_30s`` | 750 latent frames (overlap=14) | **0.995019** | 0.98 | 1×1 |
-| DiT denoise loop (no CFG) | ``dit_denoise_loop_15s_no_cfg`` | 375 frames, 20 Euler steps | *run test* | 0.92 | BH_QB mesh |
-| DiT denoise loop (no CFG) | ``dit_denoise_loop_30s_no_cfg`` | 750 frames, 5 Euler steps† | **0.995483** | 0.90 | BH_QB mesh |
-| DiT denoise + CFG + APG | ``dit_denoise_loop_30s_cfg_apg`` | 750 frames, 5 steps, gs=7 | **0.992419** | 0.85 | BH_QB mesh |
+| Module | Test / case | Production shape | BH_QB PCC | p150 PCC | Threshold | Device |
+|--------|-------------|------------------|-----------|----------|-----------|--------|
+| Condition encoder | ``condition_enc_15s`` | ``enc [1,187,2048]`` | **0.999882** | **0.999882** | 0.97 | 1×1 |
+| Condition encoder | ``condition_ctx_15s`` | ``ctx [1,375,128]`` | **0.999999** | **0.999999** | 0.99 | 1×1 |
+| Condition encoder | ``condition_enc_30s`` | ``enc [1,172,2048]`` | **0.999883** | **0.999882** | 0.97 | 1×1 |
+| Condition encoder | ``condition_ctx_30s`` | ``ctx [1,750,128]`` | **0.999999** | **0.999999** | 0.99 | 1×1 |
+| Audio-code detokenizer | ``audio_detokenizer_15s_75codes`` | ``[1,375,64]`` @ 25 Hz | **0.986272** | **0.986272** | 0.97 | 1×1 |
+| Audio-code detokenizer | ``audio_detokenizer_30s_150codes`` | ``[1,750,64]`` @ 25 Hz | **0.986632** | **0.986632** | 0.97 | 1×1 |
+| VAE ``decode_tiled`` | ``vae_decode_tiled_15s`` | 375 latent frames → 720k audio samples | **0.994937** | **0.994761** | 0.98 | 1×1 |
+| VAE ``decode_tiled`` | ``vae_decode_tiled_30s`` | 750 latent frames (overlap=14) | **0.995019** | **0.994956** | 0.98 | 1×1 |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_15s_no_cfg`` | 375 frames, 20 Euler steps | *run test* | _mesh-only_ | 0.92 | BH_QB mesh |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_30s_no_cfg`` | 750 frames, 5 Euler steps† | **0.995483** | _mesh-only_ | 0.90 | BH_QB mesh |
+| DiT denoise + CFG + APG | ``dit_denoise_loop_30s_cfg_apg`` | 750 frames, 5 steps, gs=7 | **0.992419** | _mesh-only_ | 0.85 | BH_QB mesh |
 
 † ``test_dit_denoise_loop_pcc.py`` defaults to 20 steps; the 30 s value above used
 ``ACE_STEP_DIT_DENOISE_PCC_STEPS=5``. ``test_dit_denoise_loop_pcc_cfg.py`` also defaults to 5 steps.
