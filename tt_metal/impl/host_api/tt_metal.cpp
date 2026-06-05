@@ -39,6 +39,7 @@
 #include <filesystem>
 #include "device.hpp"
 #include "context/metal_context.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
@@ -1131,6 +1132,8 @@ std::string SerializeClusterDescriptor() {
 }
 
 bool GetEnable2EriscMode() { return MetalContext::instance().rtoptions().get_enable_2_erisc_mode(); }
+
+uint64_t GetBuildKey() { return BuildEnvManager::get_instance().get_device_build_env(0).build_key(); }
 
 // This function is used to set a default root directory for the tt_metal library.
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }

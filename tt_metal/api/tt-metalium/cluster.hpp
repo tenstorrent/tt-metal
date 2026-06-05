@@ -75,4 +75,17 @@ std::string SerializeClusterDescriptor();
  */
 bool GetEnable2EriscMode();
 
+/**
+ * @brief Get the JIT build_key for an open device (default device 0).
+ *
+ * The build_key is what the on-disk JIT cache is keyed by (compute_build_key: dispatch core
+ * type/axis, num hw cqs, harvesting, and the compile-hash string). Reading it on a real device vs.
+ * under a mock/sim target lets an up-front precompile verify — before doing any work — that its
+ * mock fingerprint produces the SAME key the real run will use; if not, the warmed cache won't be
+ * hit. Requires the device's build env to exist (i.e. a device has been opened).
+ *
+ * @return uint64_t The resolved build_key for the device.
+ */
+uint64_t GetBuildKey();
+
 }  // namespace tt::tt_metal

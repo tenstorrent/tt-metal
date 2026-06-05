@@ -70,6 +70,25 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> import ttnn
                 >>> erisc2 = ttnn.cluster.get_enable_2_erisc_mode()
         )doc");
+
+    mod.def(
+        "get_build_key",
+        &ttnn::cluster::get_build_key,
+        R"doc(
+            Get the JIT build_key for the open device (default device 0).
+
+            The on-disk JIT cache is keyed by this value. Read it on a real device and under a
+            mock/sim target to verify up-front that an up-front precompile's fingerprint produces
+            the SAME key the real run will use (otherwise the warmed cache won't be hit). Requires
+            a device to have been opened.
+
+            Returns:
+                int: The resolved build_key.
+
+            Example:
+                >>> import ttnn
+                >>> key = ttnn.cluster.get_build_key()
+        )doc");
 }
 
 }  // namespace
