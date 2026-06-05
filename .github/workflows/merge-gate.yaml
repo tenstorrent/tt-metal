@@ -250,15 +250,15 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ASan
-      platform: "Ubuntu 22.04"
+      platform: "Ubuntu 24.04"
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       skip-tt-train: false
       publish-artifact: false
-      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
-      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-ci-test-tag }}
-      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
-      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
+      ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
+      ci-test-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-test-tag }}
+      dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
+      basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
       fetch-depth: 1
 
@@ -498,7 +498,7 @@ jobs:
   # the SD-only/Quasar slice from tests/pipeline_reorg/llk_unit_tests.yaml.
   #
   llk-unit-tests:
-    needs: [ build, find-changes, load-llk-unit-test-matrix, check-harbor]
+    needs: [ build, resolve-docker-pull-refs, find-changes, load-llk-unit-test-matrix ]
     if: ${{
         github.event.action != 'destroyed' &&
         github.event_name != 'pull_request' &&
@@ -522,8 +522,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner_label }}
       runs-on-labels: ${{ toJSON(matrix.test-group.runs_on) }}
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       dispatch-mode: ${{ matrix.test-group.dispatch_mode }}
       enable-llk-asserts: true

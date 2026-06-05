@@ -61,8 +61,23 @@ on:
         type: boolean
         default: true
         description: "Run tests on BH-Quietbox-2"
+      run-fabric-cpu-only-unit-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Run fabric CPU-only unit tests (no hardware needed)"
 
 jobs:
+  # CPU-only fabric unit tests (no hardware, runs in parallel on a single CPU runner)
+  fabric-cpu-only-unit-tests:
+    if: ${{ inputs.run-fabric-cpu-only-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: wormhole_b0
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
   # Wormhole N300 - Fabric tests
   wh-n300-fabric-tests:
     if: ${{ inputs.run-wh-n300-fabric-tests }}

@@ -55,7 +55,7 @@ inline void llk_math_eltwise_binary_sfpu_logical_right_shift(
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     _llk_math_eltwise_binary_sfpu_params_(
-        ckernel::sfpu::_calculate_logical_right_shift_<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
+        ckernel::sfpu::calculate_logical_right_shift<APPROXIMATE, 8, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>,
         dst_index0,
         dst_index1,
         odst,

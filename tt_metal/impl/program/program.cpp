@@ -89,6 +89,8 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
+#include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -111,7 +113,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     return MetalContext::instance().hal().get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 
-void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel, tt::ChipId device_id) {
     // Placement rules:
     //  Fast dispatch (tensix):
     //      - tensix kernels cannot be on dispatch cores
@@ -126,14 +128,18 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
             MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+        const auto& service_claims = MetalContext::instance().get_service_core_manager().impl();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
-            [&kernel, &dispatch_core_type](const CoreCoord& dispatch_core) {
+            [&kernel, &dispatch_core_type, &service_claims, device_id](const CoreCoord& dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;
                 }
-
+                // Claimed service cores are permitted to run user kernels in FD mode.
+                if (service_claims.is_service_core(device_id, dispatch_core)) {
+                    return false;
+                }
                 return kernel->is_on_logical_core(dispatch_core);
             });
 
@@ -1436,6 +1442,20 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::vector<const IDevice*> devices_for_svc_check;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                devices_for_svc_check.push_back(dev);
+            }
+        } else {
+            devices_for_svc_check.push_back(device);
+        }
+    }
+
     for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
@@ -1449,6 +1469,37 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_region_end,
                 max_l1_size);
         }
+
+        // Service cores allocate L1 independently per core (not lock-step like workers), growing down
+        // from L1_END. CBs grow up from DEFAULT_UNRESERVED. Min frontier across the CB range catches
+        // the most constrained core - collision if any frontier sits below the CB region end
+        const bool on_service_core =
+            std::any_of(devices_for_svc_check.begin(), devices_for_svc_check.end(), [&](const IDevice* dev) {
+                return svc.is_service_core(dev->id(), cb_allocator.core_range.start_coord);
+            });
+
+        if (on_service_core) {
+            std::optional<DeviceAddr> svc_lowest;
+            for (const IDevice* dev : devices_for_svc_check) {
+                for (const auto& core : cb_allocator.core_range) {
+                    auto a = svc.lowest_allocated_address(dev->id(), core);
+                    if (a.has_value()) {
+                        svc_lowest = svc_lowest.has_value() ? std::make_optional(std::min(*svc_lowest, *a)) : a;
+                    }
+                }
+            }
+            if (svc_lowest.has_value() && svc_lowest.value() < cb_region_end) {
+                TT_THROW(
+                    "Circular buffers on service-core range {} in program {} clash with ServiceCoreManager-allocated "
+                    "L1 (lowest service allocation at {}, CB region ends at {})",
+                    cb_allocator.core_range.str(),
+                    this->id,
+                    svc_lowest.value(),
+                    cb_region_end);
+            }
+            continue;  // Worker-grid checks below are irrelevant for service cores.
+        }
+
         if (hybrid_mode) {
             // Per-core allocations (experimental_set_per_core_allocation) can land at different
             // addresses per core, so query only the banks this CB covers on each physical allocator.
@@ -1480,11 +1531,40 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
+    // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
+    // core. Mirrors validate_circular_buffer_region.
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
+    std::unordered_set<CoreCoord> claimed;
+    if (svc.has_any_claims()) {
+        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+            for (IDevice* dev : mesh->get_devices()) {
+                auto chip_claimed = svc.claimed_cores(dev->id());
+                claimed.insert(chip_claimed.begin(), chip_claimed.end());
+            }
+        } else {
+            claimed = svc.claimed_cores(device->id());
+        }
+    }
+    auto entirely_on_service_cores = [&](const CoreRange& cr) {
+        if (claimed.empty()) {
+            return false;
+        }
+        for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+            for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                if (!claimed.contains(CoreCoord{x, y})) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
+            const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
-                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                in_worker_grid || entirely_on_service_cores(cr),
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
+                "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),
                 this->id,
                 grid_size.x,
@@ -2069,7 +2149,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
                 coordinator.submit(kernel_hash, [&]() {
                     generate_kernel_source_files(device, build_options, kernel);
@@ -2091,7 +2171,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel);
+                validate_kernel_placement(force_slow_dispatch, kernel, device->id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);

@@ -36,7 +36,7 @@ on:
       run-tt-train-cpp-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TT-Train C++ unit tests"
       run-profiler-tests:
         required: false
@@ -145,7 +145,7 @@ on:
         description: "Run model unit tests"
       run-tt-train-cpp-unit-tests:
         required: false
-        default: true
+        default: false
         type: boolean
         description: "Run TT-Train C++ unit tests"
       run-profiler-tests:

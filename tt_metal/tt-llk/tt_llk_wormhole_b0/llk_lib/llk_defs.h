@@ -80,12 +80,79 @@ enum class Transpose : std::uint8_t
     Both      = 3,
 };
 
-enum ReluType
+// Packer ReLU modes; encoding matches RELU_MODE (2 bits) in HW.
+enum class ReluType : std::uint8_t
 {
-    NO_RELU,
+    NO_RELU = 0,
     ZERO_RELU,
     MIN_THRESHOLD_RELU,
     MAX_THRESHOLD_RELU,
+};
+
+/** Packer ReLU config: mode + 16-bit threshold (bits 16-31 in HW). */
+struct ReluConfig
+{
+    static constexpr ReluConfig none()
+    {
+        return {ReluType::NO_RELU};
+    }
+
+    static constexpr ReluConfig zero()
+    {
+        return {ReluType::ZERO_RELU};
+    }
+
+    static constexpr ReluConfig min_threshold(std::uint32_t t)
+    {
+        return {ReluType::MIN_THRESHOLD_RELU, t};
+    }
+
+    static constexpr ReluConfig max_threshold(std::uint32_t t)
+    {
+        return {ReluType::MAX_THRESHOLD_RELU, t};
+    }
+
+    static constexpr ReluConfig from_packed(std::uint32_t packed)
+    {
+        return {static_cast<ReluType>(packed & 0x3), (packed >> 16) & 0xFFFF};
+    }
+
+    constexpr ReluType get_mode() const
+    {
+        return mode;
+    }
+
+    constexpr std::uint32_t get_threshold() const
+    {
+        return threshold;
+    }
+
+    // Encoding written to the HW STACC_RELU_ApplyRelu (RELU_MODE) field.
+    // ZERO_RELU is folded into MIN_THRESHOLD_RELU (HW mode 2) with whatever threshold the
+    // ReluConfig was constructed with (always 0 via the public ::zero() factory). HW does
+    // support apply_relu=1 (sign-bit-exact ZERO_RELU) directly, but tt-sim does not yet
+    // model that path; see tenstorrent/ttsim#9 and tt-metal#45720 for the follow-up to
+    // route ZERO_RELU through HW mode 1 once tt-sim supports it.
+    constexpr std::uint32_t get_hw_mode() const
+    {
+        switch (mode)
+        {
+            case ReluType::NO_RELU:
+                return 0;
+            case ReluType::MAX_THRESHOLD_RELU:
+                return 3;
+            default:
+                return 2;
+        }
+    }
+
+private:
+    constexpr ReluConfig(ReluType m, std::uint32_t t = 0) : mode(m), threshold(t)
+    {
+    }
+
+    ReluType mode           = ReluType::NO_RELU;
+    std::uint32_t threshold = 0;
 };
 
 enum class MathFidelity : std::uint8_t

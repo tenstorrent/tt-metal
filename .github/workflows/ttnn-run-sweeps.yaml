@@ -805,13 +805,6 @@ jobs:
       platform: ${{ needs.resolve-inputs.outputs.platform }}
       enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     needs: [resolve-inputs]
@@ -859,13 +852,13 @@ jobs:
 
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, generate-master-json-from-db]
+    needs: [resolve-inputs, build-artifact, generate-master-json-from-db]
     if: >-
       always() &&
       needs.build-artifact.result == 'success' &&
       (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -988,7 +981,7 @@ jobs:
 
   ttnn-run-single-sweep:
     name: Run single sweep
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-generate-sweeps]
+    needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
     if: |
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
@@ -1002,7 +995,7 @@ jobs:
             arch: ${{ needs.resolve-inputs.outputs.arch }}
             runner_label: ${{ needs.resolve-inputs.outputs.runner-label }}
     container:
-      image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -1132,7 +1125,7 @@ jobs:
 
   ttnn-sweeps-n150:
     name: ttnn sweeps N150
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1144,7 +1137,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n150-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1155,7 +1148,7 @@ jobs:
 
   ttnn-sweeps-n300:
     name: ttnn sweeps N300
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1167,7 +1160,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.n300-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1178,7 +1171,7 @@ jobs:
 
   ttnn-sweeps-p150b:
     name: ttnn sweeps P150b
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1190,7 +1183,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1201,7 +1194,7 @@ jobs:
 
   ttnn-sweeps-t3k:
     name: ttnn sweeps T3K
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1213,7 +1206,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.t3k-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
@@ -1224,7 +1217,7 @@ jobs:
 
   ttnn-sweeps-galaxy:
     name: ttnn sweeps Galaxy
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1236,7 +1229,7 @@ jobs:
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.galaxy-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
-      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
