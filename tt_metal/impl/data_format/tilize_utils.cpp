@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
@@ -434,6 +434,7 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
+    TTZoneScopedD;
     if (inp.size() == 0) {
         return std::vector<T>();
     }
@@ -485,6 +486,7 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
+    TTZoneScopedD;
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
     uint32_t H = shape[shape.size() - 2];
     uint32_t W = shape[shape.size() - 1];
