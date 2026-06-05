@@ -132,7 +132,7 @@ def test_pi0_5_ttnn_perf(device):
     actions_per_sec = chunks_per_sec * cfg.action_horizon
 
     print("\n" + "=" * 72)
-    print("  PI0.5 TTNN PERFORMANCE (action-expert path, real pi05_base weights)")
+    print(f"  PI0.5 TTNN PERFORMANCE (action-expert path, {CHECKPOINT_DIR.name})")
     print("=" * 72)
     print(f"   Expert layers:       {cfg.expert_config.depth}")
     print(f"   Suffix tokens:       {cfg.action_horizon} (no state token)")

@@ -179,9 +179,9 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     actions_per_sec = chunks_per_sec * cfg.action_horizon
 
     print("\n" + "=" * 72)
-    print("  PI0.5 TTNN FULL END-TO-END WITH TRACE (real pi05_base weights)")
+    print(f"  PI0.5 TTNN FULL END-TO-END WITH TRACE ({CHECKPOINT_DIR.name})")
     print("=" * 72)
-    print(f"   Includes:            SigLIP + VLM prefill + 10-step denoise + project")
+    print(f"   Includes:            SigLIP + VLM prefill + {num_denoising_steps}-step denoise + project")
     print(f"   Trace capture:       {capture_ms:7.2f} ms (one-time)")
     print(f"   Iterations:          {NUM_ITERS} traced replays")
     print("-" * 72)

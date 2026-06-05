@@ -134,7 +134,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
         ttnn.deallocate(out)
         print(f"   warmup chunk {i + 1} done")
 
-    print(f"\n📷 Capturing trace of full 10-step denoise loop…")
+    print(f"\n📷 Capturing trace of full {cfg.num_denoising_steps}-step denoise loop…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     out_trace = _run_denoise_loop(model, x_t, prefix_kv)
@@ -153,7 +153,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
         print(f"   chunk {i + 1:2d}: {elapsed_ms:7.2f} ms")
 
     ttnn.release_trace(device, tid)
-    _print_summary("trace, full 10-step denoise loop (1 CQ)", capture_ms, times_ms, cfg)
+    _print_summary(f"trace, full {cfg.num_denoising_steps}-step denoise loop (1 CQ)", capture_ms, times_ms, cfg)
     assert statistics.mean(times_ms) > 0
 
 
@@ -237,5 +237,5 @@ def test_pi0_5_ttnn_perf_trace_2cq(device):
         print(f"   chunk {i + 1:2d}: {elapsed_ms:7.2f} ms")
 
     ttnn.release_trace(device, tid)
-    _print_summary("trace + 2CQ, full 10-step denoise loop", capture_ms, times_ms, cfg)
+    _print_summary(f"trace + 2CQ, full {cfg.num_denoising_steps}-step denoise loop", capture_ms, times_ms, cfg)
     assert statistics.mean(times_ms) > 0

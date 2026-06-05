@@ -186,7 +186,7 @@ def test_pi0_5_denoise_step_accuracy_sweep(device):
     PER_STEP_MS = (142.0 - PREFIX_MS) / 10.0  # 10.8 ms / step
 
     print("\n" + "=" * 84)
-    print("  PI0.5 DENOISE-STEP ACCURACY + PERF SWEEP (real pi05_base weights, Blackhole)")
+    print(f"  PI0.5 DENOISE-STEP ACCURACY + PERF SWEEP ({CHECKPOINT_DIR.name}, Blackhole)")
     print("=" * 84)
     print(
         f"  {'N steps':>8}  {'~latency':>10}  {'~actions/s':>11}  "
