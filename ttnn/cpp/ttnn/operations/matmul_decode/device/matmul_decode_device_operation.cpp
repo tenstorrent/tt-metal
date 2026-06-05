@@ -178,18 +178,33 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
     // last logical dim is no longer N; recover N from the shard spec in that case.
-    int N = input_tensor_b.logical_shape()[-1];
-
+    int M, N, K;
+    if (partial_width_sharded) {
+        M = input_tensor_a.logical_shape()[-2];
+        int K_a = input_tensor_a.logical_shape()[-1];
+        int K_b = input_tensor_b.logical_shape()[-2];
+        N = input_tensor_b.logical_shape()[-1];
+        if (K_a >= K_b) {
+            TT_FATAL(K_a % K_b == 0, "K_a must be divisible by K_b");
+            int K_ratio = K_a / K_b;
+            N = N / K_ratio;
+        }
+        K = K_a;
+    } else {
+        M = input_tensor_a.logical_shape()[-2];
+        N = input_tensor_b.logical_shape()[-1];
+        K = input_tensor_a.logical_shape()[-1];
+    }
+    log_info(tt::LogOp, "matmul_decode partial_width_sharded={} with M={}, N={}, K={}", partial_width_sharded, M, N, K);
     auto operation_attributes = OperationType::operation_attributes_t{
-        input_tensor_a.logical_shape()[-2],
+        M,
         N,
-        input_tensor_a.logical_shape()[-1],
+        K,
         input_tensor_a.memory_config(),
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
-
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
