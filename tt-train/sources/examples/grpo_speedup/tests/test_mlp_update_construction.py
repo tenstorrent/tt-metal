@@ -25,7 +25,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, build_completer, teardown_completer, to_torch_2d
+from _completer_utils import as_update_input, open_completer, to_torch_2d
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 32
@@ -35,11 +35,8 @@ OVERWRITE_VALUE = 0.0
 
 @pytest.fixture(scope="module")
 def completer():
-    c = build_completer(dummy_weights=False)
-    try:
+    with open_completer(dummy_weights=False) as c:
         yield c
-    finally:
-        teardown_completer(c)
 
 
 def _snapshot_mlp_hf(mlp):

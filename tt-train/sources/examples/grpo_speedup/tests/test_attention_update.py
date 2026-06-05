@@ -26,7 +26,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from _completer_utils import as_update_input, build_completer, teardown_completer
+from _completer_utils import as_update_input, open_completer
 
 WQKV_CONST_1 = 0.5
 WO_CONST_1 = 0.25
@@ -36,11 +36,8 @@ WO_CONST_2 = 0.0625
 
 @pytest.fixture(scope="module")
 def attn():
-    completer = build_completer(dummy_weights=True)
-    try:
+    with open_completer(dummy_weights=True) as completer:
         yield completer.model.layers[0].attention
-    finally:
-        teardown_completer(completer)
 
 
 def _push_constants(attn, wqkv_const: float, wo_const: float) -> None:
