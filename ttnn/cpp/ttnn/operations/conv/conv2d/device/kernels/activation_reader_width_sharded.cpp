@@ -5,6 +5,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -110,18 +111,26 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
-    // Experimental API multicast endpoint
-    MulticastEndpoint mcast_ep;
-    // Pre-built mcast destination; .addr is updated per mcast call
-    McastDst mcast_dst = {
-        .noc_x_start = mcast_rect.noc_x_start,
-        .noc_y_start = mcast_rect.noc_y_start,
-        .noc_x_end = mcast_rect.noc_x_end,
-        .noc_y_end = mcast_rect.noc_y_end,
-        .addr = 0};
-
     // Set up remote VALID value
     act_mcast_receiver_sem.set(VALID);
+
+    // mcast_pipe: the round-robin self-mcast SENDER half (data block + S->R VALID flag, INCLUDE_SRC
+    // loopback so the sender lands the block in its own act_cb too). PRE_HANDSHAKE=false: the R->S
+    // readiness counter (act_mcast_sender_sem wait_min/reset) and the receiver-branch ack are left
+    // RAW below — their counts (num_mcast_cores-1 / per-receiver up) diverge from the mcast
+    // population (num_reader_cores), which the single-num_dests Pipe cannot express. The data+flag
+    // broadcast itself uses num_reader_cores consistently, so it maps cleanly to one send().
+    dataflow_kernel_lib::Pipe<Noc::McastMode::INCLUDE_SRC, dataflow_kernel_lib::Staging::Flag, /*PRE_HANDSHAKE=*/false>
+        act_mcast_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect{
+                mcast_rect.noc_x_start,
+                mcast_rect.noc_y_start,
+                mcast_rect.noc_x_end,
+                mcast_rect.noc_y_end,
+                num_reader_cores},
+            act_mcast_receiver_sem,  // data ready (S->R level flag)
+            act_mcast_sender_sem);   // consumed (R->S counter, driven raw below)
 
     // Compute is divided along the width to reduce the size of CBs.
     // Only a part of the width on each core is used in one block.
@@ -218,39 +227,12 @@ void kernel_main() {
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     tilized_in0_cb.wait_front(act_block_num_tiles);
 
-                    // Now we have the block in the CB address, we can mcast to dests!
-                    auto tilized_src =
-                        use<CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
-
-                    // Multicast tilized activations to all reader cores (including self)
-                    mcast_dst.addr = act_cb.get_write_ptr();
-                    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
-                        tilized_src,
-                        mcast_ep,
-                        act_mcast_sender_size_bytes,
-                        num_reader_cores,
-                        {.offset_bytes = 0},
-                        mcast_dst,
-                        true);
-
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
-                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
-                    // (using NOC_CMD_STATIC_VC).
-
-                    // Multicast VALID flag to destinations for receiver semaphore.
-                    // The old code used a separate scratch L1 address as the multicast source
-                    // and wait(VALID) on the loopback as a fence. The new Semaphore::set_multicast
-                    // API uses the semaphore itself as both source and destination, so we can't
-                    // clear the local value and wait for loopback — use write barrier instead.
-                    act_mcast_receiver_sem.set(VALID);
-                    act_mcast_receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
-                        noc,
-                        mcast_rect.noc_x_start,
-                        mcast_rect.noc_y_start,
-                        mcast_rect.noc_x_end,
-                        mcast_rect.noc_y_end,
-                        num_reader_cores);
-                    noc.async_write_barrier();
+                    // mcast_pipe: INCLUDE_SRC loopback broadcast of the tilized block + VALID flag to
+                    // every reader core (incl. self). Replaces the open-coded async_write_multicast +
+                    // set_multicast + write barrier. The flag rides the same NoC/VC after the data, so
+                    // the helper's flush fence is sufficient (flag arrival proves data arrival).
+                    act_mcast_pipe.send(
+                        tilized_in0_cb.get_read_ptr(), act_cb.get_write_ptr(), act_mcast_sender_size_bytes);
                 } else {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
