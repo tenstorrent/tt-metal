@@ -209,17 +209,20 @@ def sdpa_prefill_chunk_sizes(
     # Bands tuned via tests/perf/test_sdpa_all_shapes_sweep.py +
     # tracy device-kernel verification on test_perf_ttnn_full_e2e.py:
     # - longest>=2048: base=256/256 (long context, lots of chunks anyway)
-    # - longest>=512:  base=64/128  (VLM-prefill Sq=Skv=512: wall-clock sweep
-    #                                predicted q=128 best, but tracy showed
-    #                                q=128 REGRESSED by +13 µs/call vs q=64.
-    #                                Wall-clock at this shape is dispatch-
-    #                                dominated and unreliable as a proxy.)
+    # - longest>=512:  base=64/256  (VLM-prefill at bs=2 single-pass Sq=Skv=768:
+    #                                k=256 beats k=128 by -5.64 µs/call tracy-
+    #                                verified (-0.10 ms over 18 calls). Halves
+    #                                the K-chunk loop iterations (3 vs 6 at
+    #                                S=768). q=64 stays — q=128 regressed by
+    #                                +13 µs/call at S=512, kept conservative.
+    #                                See [[pi05-sdpa-bs2-sweep-2026-06-05]].)
     # - longest>=128:  base=64/256  (SigLIP Sq=Skv=256 wants single-chunk K.
     #                                At Skv=256, k=256 means 1 chunk vs 4 with
     #                                the prior k=64. Tracy-verified -8 µs/call
     #                                (-39%, -0.217 ms over 27 calls).)
     # - else:          base=64/64   (very short — preserve original behavior)
-    # PI0_SDPA_LEGACY_BANDS=1 reverts to pre-2026-06-04 bands for A/B.
+    # PI0_SDPA_LEGACY_BANDS=1 reverts to pre-2026-06-04 bands for A/B
+    # (k=128 at the VLM band — the previous default before this commit).
     import os as _os
 
     if _os.environ.get("PI0_SDPA_LEGACY_BANDS", "").lower() in ("1", "true", "yes", "on"):
@@ -233,7 +236,7 @@ def sdpa_prefill_chunk_sizes(
         if longest >= 2048:
             base_q, base_k = 256, 256
         elif longest >= 512:
-            base_q, base_k = 64, 128
+            base_q, base_k = 64, 256
         elif longest >= 128:
             base_q, base_k = 64, 256
         else:
