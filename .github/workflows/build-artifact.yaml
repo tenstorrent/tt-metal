@@ -488,23 +488,33 @@ jobs:
           # Install boto3 into the active Python env (same pattern as ctcache in clang-tidy)
           uv pip install --quiet boto3
 
-          # Start bridge with credentials/proxy scoped to the subprocess only —
-          # NOT exported to GITHUB_ENV so other tools don't get proxy-routed unexpectedly
+          # Start bridge with credentials scoped to the subprocess only.
+          # Garage is cluster-internal — explicitly clear proxy vars so boto3 doesn't
+          # route to it through the restricted proxy (which blocks cluster-internal services).
           AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
           AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
           AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
           AWS_DEFAULT_REGION="us-east-1" \
-          HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
-          HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+          HTTP_PROXY="" \
+          HTTPS_PROXY="" \
+          http_proxy="" \
+          https_proxy="" \
           nohup python3 /tmp/ccache-s3-bridge.py >> /tmp/ccache-s3-bridge.log 2>&1 & disown $!
 
           # Give the bridge a moment to bind and connect to Garage
           sleep 2
 
+          # Health check: verify bridge is alive and reachable
+          if ! curl -sf http://127.0.0.1:8765/ > /dev/null 2>&1; then
+            echo "::warning::ccache S3 bridge failed to start — bridge log:"
+            cat /tmp/ccache-s3-bridge.log || true
+            echo "Continuing without remote ccache"
+            exit 0
+          fi
+
           # Point ccache at the local bridge
           echo "CCACHE_REMOTE_STORAGE=http://127.0.0.1:8765/" >> "$GITHUB_ENV"
-          echo "Bridge PID: $! | log: /tmp/ccache-s3-bridge.log"
-          echo "ccache configured: http://127.0.0.1:8765/ -> garage.garage.svc.cluster.local:3900/ccache"
+          echo "Bridge alive at http://127.0.0.1:8765/ -> garage.garage.svc.cluster.local:3900/ccache"
 
       - name: Set artifact name
         id: set-artifact-name
@@ -655,6 +665,10 @@ jobs:
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '### S3 Bridge Log' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ccache-s3-bridge.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no bridge log)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages
