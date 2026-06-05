@@ -119,13 +119,19 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
         use_height_and_width_as_shard_shape=True,
     )
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_memory_config
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+        dtype=ttnn.bfloat8_b,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b_reshaped, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_memory_config
     )
+    print("input_tensor_a.shape:", input_tensor_a.shape)
+    print("input_tensor_b.shape:", input_tensor_b.shape)
     for x in range(10):
-        output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b)
+        output_tensor = ttnn.matmul_decode(input_tensor_a, input_tensor_b, partial_width_sharded=True)
 
     assert output_tensor.shape == (m, n)
 

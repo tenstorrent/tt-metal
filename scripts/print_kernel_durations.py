@@ -8,7 +8,8 @@ profiler `ops_perf_results_*.csv` report and prints one line per op.
 import argparse
 import csv
 import sys
-
+import glob
+import os
 
 OP_NAME_COL = "OP CODE"
 DURATION_COL = "DEVICE KERNEL DURATION [ns]"
@@ -19,12 +20,20 @@ def main() -> int:
     parser.add_argument(
         "csv_path",
         nargs="?",
-        default=None,
+        default="",
         help="Path to the ops_perf_results CSV (default: %(default)s)",
     )
     args = parser.parse_args()
-
-    with open(args.csv_path, newline="") as f:
+    print(args.csv_path)
+    if args.csv_path == "":
+        base_path = "/home/ttuser/smanoj/metal_2/generated/profiler/reports/decode"
+        files = glob.glob(os.path.join(base_path, "**", "ops_perf_results_*.csv"), recursive=True)
+        files.sort(key=os.path.getmtime)
+        print(files[-1])
+        input_file = files[-1]
+    else:
+        input_file = args.csv_path
+    with open(input_file, newline="") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             print(f"error: empty or invalid CSV: {args.csv_path}", file=sys.stderr)
