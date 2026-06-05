@@ -504,16 +504,21 @@ jobs:
           # Give the bridge a moment to bind and connect to Garage
           sleep 2
 
-          # Health check: verify bridge is alive and reachable
-          if ! curl -sf http://127.0.0.1:8765/ > /dev/null 2>&1; then
+          # Health check: verify bridge is alive and reachable.
+          # Use --noproxy to bypass HTTP_PROXY — the container proxy can't route to 127.0.0.1.
+          if ! curl -sf --noproxy 127.0.0.1 http://127.0.0.1:8765/ > /dev/null 2>&1; then
             echo "::warning::ccache S3 bridge failed to start — bridge log:"
             cat /tmp/ccache-s3-bridge.log || true
             echo "Continuing without remote ccache"
             exit 0
           fi
 
-          # Point ccache at the local bridge
+          # Point ccache at the local bridge.
+          # Also set NO_PROXY so ccache's own HTTP requests to 127.0.0.1:8765 bypass the
+          # container-level HTTP_PROXY (proxy can't route to localhost).
           echo "CCACHE_REMOTE_STORAGE=http://127.0.0.1:8765/" >> "$GITHUB_ENV"
+          echo "NO_PROXY=127.0.0.1,localhost" >> "$GITHUB_ENV"
+          echo "no_proxy=127.0.0.1,localhost" >> "$GITHUB_ENV"
           echo "Bridge alive at http://127.0.0.1:8765/ -> garage.garage.svc.cluster.local:3900/ccache"
 
       - name: Set artifact name
