@@ -850,20 +850,6 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
 
 
-import sys
-
-sys.path.append("/home/maxim-artemov/workspace")
-import debug_import
-import os
-
-
-def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a = a.float().flatten() - a.float().mean()
-    b = b.float().flatten() - b.float().mean()
-    d = (a.pow(2).sum() * b.pow(2).sum()).sqrt()
-    return float((a * b).sum() / d) if d > 0 else 0.0
-
-
 @pytest.mark.parametrize(
     # Conv3d-style dim names. N=batch, D=depth, H=height, W=width, C=channels.
     "N,D,H,W,C",
@@ -878,73 +864,12 @@ def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     ],
 )
 def test_reshape_conv2d(device, N, D, H, W, C):
-    import logging
-
-    os.environ["PY_LOG_ENABLED"] = "0"
     torch.manual_seed(0)
     x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
     ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
 
     t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    logging.info(f"POST from_torch(TILE):  shape={t.shape} padded={t.padded_shape}")
-    t = ttnn.untilize(t)
-    logging.info(f"POST untilize:          shape={t.shape} padded={t.padded_shape}")
-
-    print("")
-    print("RESHAPE CALL START")
-    os.environ["PY_LOG_ENABLED"] = "1"
     t = ttnn.reshape(t, (N, C, D, H, W))
-    print("RESHAPE CALL END")
-    logging.info(f"POST reshape:           shape={t.shape} padded={t.padded_shape}")
-
     out = ttnn.to_torch(t, device=device).to(torch.float32)
 
-    p = pcc(ref, out)
-
-    # debug_import.visualize_tensor_slices(ref - out, f"test_reshape-{N}_{D}_{H}_{W}_{C}.tmp.png")
-    logging.info(f"out  head[16]   : {out.flatten()[:16].tolist()}")
-    logging.info(f"ref  head[16]   : {ref.flatten()[:16].tolist()}")
-    logging.info(f"pcc             : {p:.6f}  ({'PASS' if p > 0.99 else 'FAIL'})")
-    logging.info(f"ref:\n{debug_import.tensor_to_aligned_string(ref)}")
-    logging.info(f"out:\n{debug_import.tensor_to_aligned_string(out)}")
-    assert 0.99 < p
-
-
-@pytest.mark.parametrize(
-    "N,D,H,W,C",
-    [
-        [1, 1, 8, 8, 1],
-    ],
-)
-def test_reshape_view_internal(device, N, D, H, W, C):
-    import logging
-
-    torch.manual_seed(0)
-    x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
-    ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
-
-    os.environ["PY_LOG_ENABLED"] = "0"
-    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    logging.info(f"POST from_torch(TILE):  shape={t.shape} padded={t.padded_shape}")
-
-    t = ttnn.untilize(t)
-    os.environ["PY_LOG_ENABLED"] = "1"
-    logging.info(f"POST untilize:          shape={t.shape} padded={t.padded_shape}")
-
-    print("")
-    print("RESHAPE CALL START")
-    logging.info(f"PRE  VIEW:\n{debug_import.tensor_to_aligned_string(t)}")
-    t = ttnn.view(t, [64, 1])
-    logging.info(f"POST VIEW:\n{debug_import.tensor_to_aligned_string(t)}")
-    print("RESHAPE CALL END")
-    logging.info(f"POST reshape:           shape={t.shape} padded={t.padded_shape}")
-
-    out = ttnn.to_torch(t, device=device).to(torch.float32)
-
-    p = pcc(ref, out)
-
-    # debug_import.visualize_tensor_slices(ref - out, f"test_reshape-{N}_{D}_{H}_{W}_{C}.tmp.png")
-    logging.info(f"out  head[16]   : {out.flatten()[:16].tolist()}")
-    logging.info(f"ref  head[16]   : {ref.flatten()[:16].tolist()}")
-    logging.info(f"pcc             : {p:.6f}  ({'PASS' if p > 0.99 else 'FAIL'})")
-    assert 0.99 < p
+    assert_with_pcc(ref, out, 0.99)
