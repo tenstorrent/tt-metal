@@ -151,6 +151,7 @@ uint32_t force_num_workers() {
 // where kernel time goes. These BREAK correctness — perf attribution only.
 //   1 = skip rope cos/sin reads   2 = skip input read   3 = skip output write
 //   4 = skip fabric mcast+sem inc+sem wait   5 = skip writer gather/scatter
+//   6 = skip weight/bias reads
 std::map<std::string, std::string> ablation_defines() {
     std::map<std::string, std::string> d;
     const char* env = std::getenv("WAN_ABLATION");
@@ -161,6 +162,7 @@ std::map<std::string, std::string> ablation_defines() {
             case 3: d["WAN_ABL_SKIP_OUTPUT_WRITE"] = "1"; break;
             case 4: d["WAN_ABL_SKIP_FABRIC"] = "1"; break;
             case 5: d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1"; break;
+            case 6: d["WAN_ABL_SKIP_WEIGHT_READ"] = "1"; break;
             default: break;
         }
     }
