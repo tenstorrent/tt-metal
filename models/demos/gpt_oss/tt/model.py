@@ -31,6 +31,31 @@ def compute_per_device_vocab(vocab_size, num_tp):
     return 1 << (per_device - 1).bit_length()  # next power of 2
 
 
+# Additive bias applied to the lm_head logits of out-of-vocab (padding) columns so
+# they can never be picked by on-device top-k sampling. A large *finite* negative
+# (not -inf): exp() underflows to 0 — so padding gets exactly zero probability — while
+# avoiding the NaN that -inf * 0 / (-inf) - (-inf) produce in the topk / softmax /
+# log-probs math (matches the -1e9 convention already used in the gpt_oss sampling tests).
+OUT_OF_VOCAB_LOGIT_BIAS = -1e9
+
+
+def build_out_of_vocab_logit_mask(vocab_size, padded_vocab_size, bias=OUT_OF_VOCAB_LOGIT_BIAS):
+    """Build an additive logit mask over the padded vocab dimension.
+
+    Returns a ``[1, 1, 1, padded_vocab_size]`` tensor that is ``0`` on the real
+    vocab range ``[0, vocab_size)`` and ``bias`` on the padding range
+    ``[vocab_size, padded_vocab_size)``, or ``None`` when there is no padding.
+    The mask is derived purely from the two vocab sizes, so the bias lands exactly
+    on the padded columns regardless of vocab_size / TP / power-of-2 rounding.
+    """
+    num_pad_cols = padded_vocab_size - vocab_size
+    if num_pad_cols <= 0:
+        return None
+    mask = torch.zeros(1, 1, 1, padded_vocab_size, dtype=torch.float32)
+    mask[..., vocab_size:] = bias  # only the trailing out-of-vocab padding columns
+    return mask
+
+
 def create_rope_setup(
     mesh_device,
     hf_config,
@@ -218,6 +243,33 @@ class Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
+
+        # Mask the out-of-vocab padded logits so multi-device top-k sampling can never
+        # select them. The lm_head weight is zero-padded above to a power-of-2 per-device
+        # width; zero weights produce logit == 0 for the padded (out-of-vocab) columns.
+        # Greedy/argmax is immune (a real token always has the global max logit), but
+        # top-k sampling on a flat (uncertain) distribution ranks these logit-0 columns
+        # above real negative-logit tokens and can sample an out-of-vocab id — which then
+        # feeds back into the embedding lookup as an out-of-bounds index, derailing
+        # generation and (at iteration 0) hanging the device. The mask is built from the
+        # vocab sizes (bias on [vocab_size, padded_vocab_size)) and column-parallel sharded
+        # to match lm_head, so only the TP device(s) holding the padding are affected.
+        # Derived purely from the vocab sizes (no state_dict dependency), so it is built
+        # identically with or without --skip-model-load; cache_file_name lets it load from
+        # the ttnn cache like every other tensor here instead of being rebuilt each run.
+        vocab_mask_torch = build_out_of_vocab_logit_mask(self.vocab_size, padded_vocab_size)
+        if vocab_mask_torch is not None:
+            self.lm_head_vocab_mask = ttnn.as_tensor(
+                vocab_mask_torch,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_vocab_mask"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.mesh_config.column_parallel(mesh_device),
+            )
+        else:
+            self.lm_head_vocab_mask = None
 
         # Initialize on-device sampling (supported when padded per-device vocab fits in 64K)
         self._supports_on_device_sampling = per_device_padded <= 64 * 1024
@@ -415,6 +467,9 @@ class Model:
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
+        if self.lm_head_vocab_mask is not None:
+            # Push out-of-vocab padded logits far negative so they never enter top-k sampling.
+            logits = ttnn.add(logits, self.lm_head_vocab_mask)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode
         # (outside trace capture) since all_gather_async writes to device,
