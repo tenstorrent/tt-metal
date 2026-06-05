@@ -230,6 +230,13 @@ def build_matmul_pcfg(
         import os as _os
 
         _tune = _os.environ.get("PI0_DENOISE_MM_TUNE", "").lower() in ("1", "true", "yes", "on")
+        # PI0_MM_SWEEP_V2=1 — proposed new override table from 2026-06-05
+        # sharding sweep. See [[pi05-matmul-sharding-sweep-results]] memory.
+        # Production picker ranked bottom-half on all swept shapes; sweep
+        # top-1 configs predict +13 to +62% wall-clock speedup (subject to
+        # in-model tracy translation). These are UNVERIFIED — use only for
+        # A/B testing, never default-on.
+        _tune_v2 = _os.environ.get("PI0_MM_SWEEP_V2", "").lower() in ("1", "true", "yes", "on")
         if _tune and m_tiles == 1:
             # (k_tiles, n_tiles) -> (num_cores, in0_block_w)
             # Only shapes where tracy verified a real device-kernel-time WIN
@@ -237,10 +244,27 @@ def build_matmul_pcfg(
             # mlp_gate_up) regressed when their wall-clock-sweep "winners"
             # were applied — the wall-clock proxy doesn't generalize at
             # small K. Tracy-verified wins for large K only.
-            _DENOISE_TUNE_TABLE = {
-                (64, 32): (120, 32),  # o_proj:   M=32 K=2048 N=1024 — verified -10% kernel
-                (128, 32): (24, 32),  # mlp_down: M=32 K=4096 N=1024 — verified -6% kernel
-            }
+            if _tune_v2:
+                # Sweep-derived configs (2026-06-05). Tracy verification on the
+                # v10 perf trace (52.432 ms) showed only 1 of 3 candidates
+                # translated to a real device-kernel-time win:
+                #   - qkv_fused: 9.04 → 8.22 µs/call (-9%, -0.147 ms) ✓ KEPT
+                #   - mlp_gate_up: 12.50 → 13.62 µs/call (+0.40 ms) ✗ REVERTED
+                #   - mlp_down:    13.60 → 14.41 µs/call (+0.15 ms) ✗ REVERTED
+                # Same wall-clock-doesn't-translate pattern as prior sweeps.
+                # Keeping the env knob so V2 stays a clean opt-in for future
+                # A/B testing of additional candidates; only the verified
+                # qkv_fused override is in the table by default.
+                _DENOISE_TUNE_TABLE = {
+                    (64, 32): (120, 32),  # o_proj:     keep verified config
+                    (128, 32): (24, 32),  # mlp_down:   keep verified config
+                    (32, 80): (64, 8),  # qkv_fused:  NEW — tracy-verified -9%
+                }
+            else:
+                _DENOISE_TUNE_TABLE = {
+                    (64, 32): (120, 32),  # o_proj:   M=32 K=2048 N=1024 — verified -10% kernel
+                    (128, 32): (24, 32),  # mlp_down: M=32 K=4096 N=1024 — verified -6% kernel
+                }
             override = _DENOISE_TUNE_TABLE.get((k_tiles, n_tiles))
             if override is not None:
                 tuned_cores, tuned_bw = override
