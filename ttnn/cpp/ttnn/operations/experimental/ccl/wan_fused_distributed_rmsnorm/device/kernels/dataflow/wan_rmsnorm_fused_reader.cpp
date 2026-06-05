@@ -59,7 +59,11 @@ void kernel_main() {
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
     constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(22);
-    constexpr auto input_args = TensorAccessorArgs<23>();
+    // When set (MUX path), the WRITER populates reduce_scalar_*/epsilon/
+    // transformation_mat CBs instead of the reader, so the reader's first NoC
+    // op is the input read (it starts streaming input ASAP).
+    constexpr uint32_t scalars_in_writer = get_compile_time_arg_val(23);
+    constexpr auto input_args = TensorAccessorArgs<24>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto transformation_mat_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -98,24 +102,27 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate reduce scalars (SUM for pre uses 1.0, AVG for post uses 1/H_full)
-    // and the eps tile.
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        reduce_scalar_sum_cb,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        reduce_scalar_avg_cb,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
-    generate_bcast_col_scalar(epsilon_cb, epsilon_value);
+    // and the eps tile. Skipped when the writer populates them (MUX path) so the
+    // reader can start the input read immediately.
+    if constexpr (scalars_in_writer == 0) {
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            reduce_scalar_sum_cb,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW>();
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            reduce_scalar_avg_cb,
+            ckernel::PoolType::AVG,
+            ckernel::ReduceDim::REDUCE_ROW,
+            reduce_factor>();
+        generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
-    if constexpr (fuse_rope) {
-        cb_reserve_back(transformation_mat_cb, 1);
-        uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
-        noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
-        noc_async_read_barrier();
-        cb_push_back(transformation_mat_cb, 1);
+        if constexpr (fuse_rope) {
+            cb_reserve_back(transformation_mat_cb, 1);
+            uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
+            noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
+            noc_async_read_barrier();
+            cb_push_back(transformation_mat_cb, 1);
+        }
     }
 
     // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
