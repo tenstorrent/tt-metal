@@ -29,7 +29,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode, InputOutputFormat, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
@@ -115,7 +115,14 @@ def test_matmul(
     enable_direct_indexing,
     transpose,
 ):
-    format.register_format_hint = register_format_hint
+
+    # Reassign format with register_format_hint so that test config generation and stimulus generation are aware of the register format hint.
+    format = InputOutputFormat(
+        format.input_format,
+        format.output_format,
+        input_format_B=format.input_format_B,
+        register_format_hint=register_format_hint,
+    )
 
     input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
         dimensions_dest_acc_dest_sync

@@ -138,8 +138,10 @@ def infer_unpack_out(
         unpacking_to_dest: Indicates whether unpacking targets the destination register
         register_format_hint: Optional opt-in for a SrcA/SrcB-only register format
             (MxFp4_2x_A or MxFp4_2x_B). When set, returned as the unpack-out format
-            instead of the default. Only valid when input_format == MxFp4 and the
-            requested hint is family-compatible with output_format.
+            instead of the default. Only valid when input_format == MxFp4; the hint is
+            compatible with any output_format (output_format is not constrained here).
+            The exponent family it implies for downstream math/pack is derived in
+            infer_data_formats via _peel_srcab_only (2x_A -> Float16, 2x_B -> Float16_b).
 
     Returns:
         The inferred output data format for unpacking to registers
@@ -377,7 +379,9 @@ def infer_data_formats(
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
         input_format_B: Optional input data format for src_B if different from src_A, used for testing specific scenarios with different A and B formats.
         unpacking_to_srcs: Whether unpacking also targets SrcS (default: False). When True, the SrcS unpack-out is inferred via a separate path.
-        register_format_hint: Optional opt-in SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set, overrides the default unpack_*_dst inferred for the input (e.g. for MxFp4 input, default is Float16_b). Only valid for MxFp4 input, and incompatible with unpacking_to_dest=True.
+        register_format_hint: Optional opt-in SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set,
+        overrides the default unpack_*_dst inferred for the input (e.g. for MxFp4 input, default is Float16_b).
+        Incompatible with unpacking_to_dest=True.
 
     Returns:
         FormatConfig struct containing all inferred formats. The same_src_format field
@@ -545,8 +549,8 @@ def data_formats(
         register_format_hint: Optional opt-in for a SrcA/SrcB-only register format (e.g. MxFp4_2x_A / MxFp4_2x_B). When set, the inferred
                               unpack_A_dst / unpack_B_dst become the hint instead of the default (e.g. for MxFp4 input, Float16_b). Honored
                               by the inference path only; must be paired with `disable_format_inference=False`. Currently valid only when
-                              `input_format == DataFormat.MxFp4` and the requested hint is family-compatible with `output_format` (2x_A pairs
-                              with Float16/Float32, 2x_B with Float16_b/Float32).
+                              `input_format == DataFormat.MxFp4`; the hint is compatible with any `output_format`. The exponent family it
+                              implies for downstream math/pack is derived via _peel_srcab_only (2x_A -> Float16, 2x_B -> Float16_b).
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
