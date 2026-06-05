@@ -1,82 +1,17 @@
 # Kernel Arguments as Function and Template Parameters
 
 **Status:** Design proposal
-**Scope:** Device-side kernel authoring ergonomics for runtime/common/compile-time args in tt-metal
+**Scope:** Device-side kernel authoring ergonomics for compile-time / runtime / common-runtime args
 **Builds on:** Metal 2.0 named-argument infrastructure (`experimental/kernel_args.h`, per-kernel `kernel_args_generated.h`)
 
-## 1. Motivation
+## 1. What we have today (Metal 2.0)
 
-Today a kernel reads its arguments positionally, tracking L1 indices by hand:
+Metal 1.0 reads args positionally — `get_arg_val<uint32_t>(0)` — with hand-tracked indices
+that silently desync from the host's `SetRuntimeArgs`. Metal 2.0 fixed the indices by
+giving args **names**. Three pieces already exist in tree:
 
-```cpp
-void kernel_main() {
-    uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t dst_addr  = get_arg_val<uint32_t>(2);
-    // ...
-}
-```
-
-Indices are manual, meaningless, and easy to desync from the host's `SetRuntimeArgs`
-call. Insert an argument in the middle and every downstream index shifts silently.
-
-Metal 2.0 already removes the raw indices by giving arguments **names**. The host
-registers ordered arg names; the JIT emits a per-kernel `kernel_args_generated.h`
-with one accessor constant per name, and the kernel reads by name:
-
-```cpp
-void kernel_main() {
-    auto src_addr  = get_arg(args::src_addr);
-    auto num_tiles = get_arg(args::num_tiles);
-    auto dst_addr  = get_arg(args::dst_addr);
-}
-```
-
-This proposal takes the **last step**: let the user write the kernel as an ordinary
-typed function whose parameters *are* the arguments. The user never writes
-`get_arg`, never writes `kernel_main`, never sees L1 at all.
-
-```cpp
-template <uint32_t z>                                     // CTAs  (compile-time)
-TT_KERNEL void my_awesome_kernel(uint32_t x, uint32_t y) { // RTAs / CRTAs (runtime)
-    // Look ma, real kernel arguments!
-    if constexpr (z) {
-        // x + y, etc.
-    }
-}
-```
-
-Two parameter lists, two axes:
-
-- **Template parameters are compile-time args (CTAs).** They are genuine constant
-  expressions, so they can drive `if constexpr`, array bounds, other template arguments —
-  anything that must be known at compile time. This is the one distinction the *source*
-  has to express, because it changes what the compiler may specialize away.
-- **Function parameters are runtime args.** Whether each is delivered per-core (RTA) or
-  shared across cores (CRTA) is a pure **host-schema** choice with **zero** source impact —
-  `get_arg` returns the value either way (Section 2). The kernel body cannot tell, and
-  shouldn't have to.
-
-On the host, the user supplies values by name — a name→value map (or zipped key/value
-vectors) for runtime args, and the named compile-time args for the CTAs:
-
-```cpp
-auto k = CreateKernel(program, "my_awesome_kernel.cpp", core,
-    ComputeConfig{
-        .named_compile_args = {{"z", 1}},                 // CTA  → template arg
-        .runtime_arg_names  = {"x", "y"},                 // RTA/CRTA → fn params
-    });
-
-SetRuntimeArgs(program, k, core, {
-    {"x", 5},
-    {"y", 7},
-});
-```
-
-## 2. Key insight: one accessor, two binding sites
-
-The Metal 2.0 accessor layer (`tt_metal/hw/inc/experimental/kernel_args.h`) defines
-three accessor kinds and one overloaded `get_arg`:
+**Accessor layer** (`tt_metal/hw/inc/experimental/kernel_args.h`) — three accessor structs
+and one overloaded `get_arg`:
 
 ```cpp
 template <typename T> struct RtaArg  { uint32_t byte_offset; };  // per-core runtime arg
@@ -88,349 +23,60 @@ template <typename T> FORCE_INLINE T get_arg(CrtaArg<T> a);           // reads c
 template <typename T> FORCE_INLINE constexpr T get_arg(CtaVal<T> a);  // returns the constant
 ```
 
-Two properties of this layer make the whole feature fall out:
+**Per-kernel codegen** — `write_kernel_args_generated_header()` (`genfiles.cpp:200`) emits
+a `kernel_args_generated.h` with one `args::<name>` constant per declared name, its *type*
+fixing the arg kind and its *brace* holding a baked value (CTA) or a byte offset (RTA/CRTA).
 
-**(a) RTA and CRTA are indistinguishable to the caller.** Both `get_arg(RtaArg<T>)` and
-`get_arg(CrtaArg<T>)` return `T` (today `uint32_t`). Which one is selected depends only on
-the *type* of the generated `args::<name>` constant, which is decided by the **host
-schema**, not the kernel source. So a runtime parameter `x` is fetched as
-`get_arg(args::x)` whether the host registered `x` as per-core or common — the call site
-is identical. Promoting `x` from RTA to CRTA is a one-line host change with **zero** kernel
-edits. This is why function parameters don't need to encode RTA-vs-CRTA.
+**Host schema** — `named_compile_args` (CTAs) and ordered `runtime_arg_names` /
+`common_runtime_arg_names` on the kernel spec (`kernel_types.hpp`).
 
-**(b) The CTA accessor is `constexpr`.** `get_arg(CtaVal<T>)` is a constant expression, so
-`get_arg(args::z)` can be used as a **template argument**. That is what lets compile-time
-args bind to *template* parameters:
+So a kernel reads by name:
 
 ```cpp
-my_awesome_kernel<get_arg(args::z)>(get_arg(args::x), get_arg(args::y));
-//               └ CTA: constexpr, template arg ┘ └ RTA/CRTA: runtime fn args ┘
-```
-
-The single generated call site above is the entire device-side mechanism. Compile-time
-args go in the angle brackets (constant expressions), runtime args go in the parentheses,
-and the RTA/CRTA choice for the parenthesized ones is invisible. We are not inventing a
-new fetch path — we generate a thin `kernel_main()` that instantiates and calls the user
-function through accessors that already exist.
-
-## 3. Architecture
-
-No changes to firmware or to the host L1 write path. The firmware
-(`tt_metal/hw/firmware/src/tt-1xx/brisck.cc:80`, and the ncrisc/trisc equivalents) keeps
-calling a bare `kernel_main()`. We add exactly two things:
-
-1. **Host:** a name→value runtime-arg API that reconciles against the registered schema
-   (CTAs already flow through the existing `named_compile_args` path).
-2. **JIT codegen:** generate a `kernel_main()` shim that fetches each arg by name,
-   instantiates the user template with the CTAs, and calls it with the runtime args.
-
-```
- user kernel.cpp                     host program
- ┌────────────────────────────┐      ┌─────────────────────────────────────┐
- │ template <uint32_t z>       │      │ CreateKernel(...,                    │
- │ TT_KERNEL void my_kernel(   │      │   .named_compile_args = {{"z",1}},   │
- │     uint32_t x,             │      │   .runtime_arg_names  = {"x","y"})   │
- │     uint32_t y) {…}         │      │ SetRuntimeArgs(prog,k,core,          │
- └──────────────┬─────────────┘      │   {{"x",5},{"y",7}})                 │
-                │ parsed at JIT       └───────────────┬─────────────────────┘
-                │ (template + fn params)              │ ordered names + values
-                ▼                                      ▼  (existing dispatch path)
-        ┌─────────────────────────────────────────────────────────┐
-        │ genfiles.cpp                                              │
-        │  • write_kernel_args_generated_header()  (exists)         │
-        │      namespace args {                                     │
-        │        CtaVal<uint32_t> z{1};                             │
-        │        RtaArg<uint32_t> x{0}; RtaArg<uint32_t> y{4}; }    │
-        │  • write_kernel_main_shim()              (NEW)            │
-        │      void kernel_main() {                                 │
-        │        my_kernel<get_arg(args::z)>(    // CTA → tmpl arg   │
-        │            get_arg(args::x),           // RTA/CRTA → fn    │
-        │            get_arg(args::y));                             │
-        │      }                                                    │
-        └───────────────────────────┬─────────────────────────────┘
-                                     ▼
-                  kernel_includes.hpp  =  generated headers
-                                       +  user source
-                                       +  generated kernel_main() shim
-                                     ▼
-                       brisck.cc calls kernel_main()  (unchanged)
-```
-
-## 4. Device-side authoring contract
-
-### 4.1 The marker
-
-The entry function carries a `[[tt::kernel_main]]` attribute, surfaced to users as the
-`TT_KERNEL` macro — both compiler-benign and a reliable textual anchor for the parser:
-
-```cpp
-// in a public kernel header
-#define TT_KERNEL [[tt::kernel_main]]
-```
-
-Spelled at the use site as `TT_KERNEL void my_awesome_kernel(...)`, it expands to
-`[[tt::kernel_main]] void my_awesome_kernel(...)`. `[[tt::kernel_main]]` is a
-vendor-namespaced attribute; the riscv toolchain ignores unknown attributes (we build
-kernels with `-Wno-attributes`, or register it). It carries no semantics for the compiler —
-it exists so codegen can locate the entry unambiguously without heuristics about "the one
-free function."
-
-Exactly one marked entry per kernel translation unit. Zero → fall back to the classic
-hand-written `void kernel_main()` (full backward compatibility). Two → JIT error.
-
-### 4.2 Two parameter lists; both bind by name
-
-The entry has up to two parameter lists, mapping to the two axes from Section 2:
-
-| Source position | Arg kind | How it reaches the kernel |
-| --- | --- | --- |
-| **template** non-type params (`template <uint32_t z>`) | **CTA** (compile-time) | template argument: `my_kernel<get_arg(args::z)>(…)` (constexpr) |
-| **function** params (`(uint32_t x, uint32_t y)`) | **RTA or CRTA** (runtime; host decides) | function argument: `…(get_arg(args::x), get_arg(args::y))` |
-
-Both lists **bind by name**: each parameter binds to the host arg whose name equals the
-parameter name. Order within a list is irrelevant to correctness; the shim emits
-`get_arg(args::<paramname>)` per parameter in declared order, and `args::<paramname>` is
-keyed by name. Consequences:
-
-- Reordering parameters within a list is safe.
-- A parameter whose name was never registered on the host produces a compile error
-  (`args::<name>` does not exist) — caught at JIT time, with a clear generated-file
-  location. A host-side pre-check (Section 5.3) gives a friendlier message.
-- A template param's name should be a registered **CTA** (`named_compile_args`); a function
-  param's name should be a registered **runtime** arg (`runtime_arg_names` /
-  `common_runtime_arg_names`). One crossing is caught for free by the type system: putting
-  a **runtime** arg in a template slot fails to compile, because `get_arg(args::<rta>)` is
-  not `constexpr` and can't be a template argument. The reverse — a **CTA** name used as a
-  function param — would silently compile (the constant is just passed at runtime), so the
-  host-side check in Section 5.3 flags it instead.
-- Parameter *types* are `uint32_t` today (Section 8). RTA-vs-CRTA is never spelled in the
-  source — only compile-time-vs-runtime is (template vs function list).
-
-### 4.3 What the user does *not* write
-
-No `get_arg`, no `args::`, no `kernel_main`, no L1 addresses, no indices. The
-`kernel_args_generated.h` and the shim are generated and live only in the JIT build dir.
-
-## 5. Host-side API
-
-### 5.1 Declaring the schema (exists, lightly extended)
-
-All three kinds are declared at `CreateKernel` time on the existing kernel spec
-(`tt_metal/api/tt-metalium/kernel_types.hpp`):
-
-- **CTAs:** `named_compile_args` (`unordered_map<string,uint32_t>`) — already drives the
-  `CtaVal` constants in `kernel_args_generated.h`. These are the template parameters.
-- **Runtime args:** ordered `runtime_arg_names` / `common_runtime_arg_names`. These are the
-  function parameters; the name's presence in one list vs. the other is what makes it an
-  RTA or a CRTA — invisibly to the kernel.
-
-No change required to *declare* names; the only new host surface is *setting runtime
-values by name* (5.2).
-
-### 5.2 Setting values by name (new overload)
-
-Add overloads alongside the existing positional `SetRuntimeArgs`
-(`tt_metal/api/tt-metalium/host_api.hpp`):
-
-```cpp
-// name → value; reconciled against the kernel's registered runtime_arg_names.
-void SetRuntimeArgs(
-    const Program&, KernelHandle,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>&,
-    const std::unordered_map<std::string, uint32_t>& named_args);
-
-// zipped key/value vectors (the user's other requested form)
-void SetRuntimeArgs(
-    const Program&, KernelHandle,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>&,
-    stl::Span<const std::string_view> names,
-    stl::Span<const uint32_t> values);
-
-void SetCommonRuntimeArgs(
-    const Program&, KernelHandle,
-    const std::unordered_map<std::string, uint32_t>& named_args);
-```
-
-Implementation reorders the map into the registered name order and then funnels into the
-**existing** positional `set_runtime_args` path — i.e. the L1 layout, offsets
-(`dispatch.cpp`), and `WriteRuntimeArgsToDevice` are entirely unchanged. This is pure
-host-side name→index resolution.
-
-### 5.3 Validation
-
-At `SetRuntimeArgs` and again at program finalize:
-
-- every registered name has a value (or a documented default policy);
-- no unknown names supplied;
-- (optional, strongest) every entry parameter name is a registered name **of the matching
-  kind** — template params ↔ `named_compile_args`, function params ↔ runtime-arg names.
-  This catches the one crossing the type system misses (a CTA name used as a function
-  param, Section 4.2). It requires the parsed parameter lists to be available on the host;
-  see Section 6.4 on threading parse results back.
-
-## 6. JIT codegen changes
-
-All changes are in `tt_metal/jit_build/genfiles.cpp`, adjacent to the existing
-`write_kernel_args_generated_header()` (`genfiles.cpp:200`) and
-`jit_build_genfiles_kernel_include()` (`genfiles.cpp:282`).
-
-### 6.1 Parse the entry signature
-
-We need, from the user source: the **function name**, the optional **template
-non-type-parameter list** (CTAs), and the **function-parameter list** (runtime args) — each
-as an ordered `(type, name)` list, anchored on the marker.
-
-Anchor handling: the marker (`TT_KERNEL` → `[[tt::kernel_main]]`) sits between the optional
-`template < … >` clause and the return type. So the parser scans **backward** from the
-marker for an optional `template < … >` clause, and **forward** for `ret-type name
-( params )` up to the matching `{`. Each list splits on top-level commas.
-
-Two implementation options:
-
-- **(A) Lightweight tokenizer (recommended for v1).** Kernels are small and the anchor is
-  exact. Handles the realistic surface — `template <uint32_t z, uint32_t w>`, plain
-  `uint32_t name` function params, trailing commas, comments, line breaks. No new build
-  dependency. Reject, with a clear error, anything it cannot parse unambiguously (type
-  template params, defaulted params, macros in the signature), pushing those authors to the
-  classic `kernel_main()`.
-- **(B) libclang parse (hardening / v2).** Robust against arbitrary C++. Adds a host-side
-  libclang dependency to the JIT path and a parse pass over the (preprocessed) source.
-  Worth it once we support non-`uint32_t` types and want exact type info.
-
-Recommendation: ship (A), keep the parser behind a single function
-(`parse_kernel_main_signature(source) -> {name, template_params, fn_params}`) so (B) can
-replace it without touching the codegen.
-
-### 6.2 Emit the shim
-
-New `write_kernel_main_shim(out_dir, settings, parsed_sig)` emits, into a generated
-header included **after** the user source:
-
-```cpp
-// AUTO-GENERATED — do not edit.
 void kernel_main() {
-    my_awesome_kernel<
-        get_arg(args::z)        // one per template param (CTA), in declared order
-    >(
-        get_arg(args::x),       // one per function param (RTA/CRTA), in declared order
-        get_arg(args::y));
+    auto src_addr  = get_arg(args::src_addr);
+    auto num_tiles = get_arg(args::num_tiles);
 }
 ```
 
-`get_arg(args::<name>)` for every parameter — CTAs inside the `<…>`, runtime args inside
-the `(…)`. If there are no template params, the `<…>` is omitted entirely (plain call).
-Because the `args::*` constants already exist (from `write_kernel_args_generated_header`)
-and `get_arg` is overloaded on their type — `constexpr` for the CTA template args, a runtime
-L1 read for the function args — this is the whole shim.
+Two properties of this layer are load-bearing for the proposal:
 
-### 6.3 Ordering in `kernel_includes.hpp`
+- **(a) RTA and CRTA are indistinguishable to the caller.** Both `get_arg` runtime overloads
+  return `T`; which is selected depends only on the *type* of `args::<name>`, decided by the
+  host schema. Promoting an arg from per-core to common is a host-only change — the call
+  site is identical.
+- **(b) The CTA accessor is `constexpr`.** `get_arg(args::z)` is a constant expression, so it
+  can be used as a **template argument**.
 
-Current `jit_build_genfiles_kernel_include()` builds:
+**The remaining gap:** the user still hand-writes `void kernel_main()` and calls `get_arg`
+once per arg.
 
-```
-kernel_bindings_generated.h
-kernel_args_generated.h
-<user source>
-```
+## 2. Proposal
 
-New order:
+Let the user write the entry as an ordinary typed function whose **parameters are the
+args**. No `get_arg`, no `kernel_main`, no L1, no indices.
 
-```
-kernel_bindings_generated.h
-kernel_args_generated.h
-<user source>            // declares my_awesome_kernel + the [[tt::kernel_main]] marker
-kernel_main_shim.h       // NEW: defines kernel_main() that calls my_awesome_kernel(...)
-```
+- **Template parameters → CTAs.** Real constant expressions (property *b*), usable in
+  `if constexpr`, array bounds, nested template args. This is the one distinction the
+  *source* must express, because it changes what the compiler can specialize.
+- **Function parameters → runtime args.** RTA vs CRTA is a pure host-schema choice with
+  zero source impact (property *a*); the body can't tell and shouldn't have to.
 
-The shim must follow the user source so the entry function is already declared. The TRISC
-path (`jit_build_genfiles_triscs_src`, `genfiles.cpp:305`) gets the same shim include in
-each `chlkc_*.cpp` wrapper.
-
-### 6.4 Threading parse results to the host (for 5.3)
-
-The parser runs at genfiles time (host process). To enable the strongest host-side
-validation, store the parsed parameter lists (template + function, with kinds) on the
-kernel object when the source is first read, so `SetRuntimeArgs` / finalize can cross-check
-name *and* kind. If we keep the parser purely in codegen for v1, we rely on the JIT compile
-error from a missing `args::<name>` (and the constexpr-in-template-slot error) instead.
-
-## 7. Backward compatibility
-
-- Kernels with no `[[tt::kernel_main]]` and a hand-written `void kernel_main()` are
-  untouched — no shim generated.
-- Metal 1.0 indexed `get_arg_val` kernels are untouched.
-- Metal 2.0 `get_arg(args::x)` kernels with a hand-written `kernel_main()` are untouched.
-- The feature is purely additive codegen gated on the marker.
-
-## 8. Limitations and roadmap
-
-- **Types.** v1 is `uint32_t`-only, inherited from the `sizeof(T)==4` static_assert in
-  `kernel_args.h`. The shim mechanism is type-agnostic; widening is a `get_arg`/accessor
-  change (multi-word reads), not a shim change. Tracked as a follow-up. Template params are
-  likewise non-type `uint32_t` (and trivially `bool`) only.
-- **RTA-vs-CRTA stays host-side.** By design the function-param list never spells per-core
-  vs. common; the host schema decides (Section 2), so promotion between them needs no
-  kernel edit. The compile-time-vs-runtime split *is* spelled in the source (template vs
-  function param), because moving an arg across it changes what the compiler can
-  specialize — so that promotion is intentionally a source edit.
-- **Parser surface.** Tokenizer rejects exotic signatures (type template params, defaults,
-  macros in the signature); libclang (option B) lifts that limit.
-- **Varargs.** Out of scope; the existing `get_vararg()` helpers
-  (`genfiles.cpp:272`) remain available inside the body.
-
-## 9. Worked examples (target end state)
-
-### 9.1 Minimal — 1 CTA, 2 RTAs
-
-Device — `reader.cpp` (`cb_id` is a CTA so the CB index is a compile-time constant;
-`src_addr`/`num_tiles` are runtime):
+The entry is tagged with a `TT_KERNEL` marker (`#define TT_KERNEL [[tt::kernel_main]]`). At
+JIT time we parse its signature and generate a `kernel_main()` shim that fetches every arg
+by name and calls the user function — CTAs in the angle brackets, runtime args in the
+parens:
 
 ```cpp
-#include "dataflow_api.h"   // pulls get_arg + the TT_KERNEL marker macro
-
-template <uint32_t cb_id>                          // CTA
-TT_KERNEL void reader(uint32_t src_addr, uint32_t num_tiles) {   // runtime args
-    const InterleavedAddrGenFast<true> s{.bank_base_address = src_addr, /* … */};
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_reserve_back(cb_id, 1);                 // cb_id is a constant here
-        noc_async_read_tile(i, s, get_write_ptr(cb_id));
-        noc_async_read_barrier();
-        cb_push_back(cb_id, 1);
-    }
-}
+my_kernel<get_arg(args::z)>(get_arg(args::x), get_arg(args::y));
+//       └ CTA: constexpr ┘ └ RTA/CRTA: runtime L1 reads ┘
 ```
 
-Host:
+This is the entire device-side mechanism. **No firmware change** (`brisck.cc` still calls a
+bare `kernel_main()`), **no host write-path change** — we reuse the accessors and codegen
+that already exist. The two additions are a name→value host API and the shim generator.
 
-```cpp
-auto k = CreateKernel(program, "reader.cpp", core,
-    DataMovementConfig{
-        .named_compile_args = {{"cb_id", tt::CBIndex::c_0}},   // CTA → template arg
-        .runtime_arg_names  = {"src_addr", "num_tiles"},       // RTA/CRTA → fn params
-    });
-
-SetRuntimeArgs(program, k, core, {
-    {"src_addr",  src_buffer.address()},
-    {"num_tiles", 64},
-});
-```
-
-Generated (in the JIT build dir, never seen by the user):
-
-```cpp
-// kernel_args_generated.h
-namespace args {
-  constexpr experimental::CtaVal<uint32_t> cb_id{0u};        // tt::CBIndex::c_0
-  constexpr experimental::RtaArg<uint32_t> src_addr{0};
-  constexpr experimental::RtaArg<uint32_t> num_tiles{4};
-}
-// kernel_main_shim.h
-void kernel_main() {
-    reader<get_arg(args::cb_id)>(get_arg(args::src_addr), get_arg(args::num_tiles));
-}
-```
-
-### 9.2 All three kinds — 3 CTAs, 3 RTAs, 2 CRTAs
+### Worked example — 3 CTAs, 3 RTAs, 2 CRTAs
 
 Device — `my_kernel.cpp` (what the user writes):
 
@@ -498,7 +144,7 @@ namespace args {
 }
 ```
 
-Generated `kernel_main()` shim:
+Generated `kernel_main()` shim (never seen by the user):
 
 ```cpp
 void kernel_main() {
@@ -511,38 +157,122 @@ void kernel_main() {
 }
 ```
 
-Three things this example makes concrete:
+Three things this makes concrete:
 
-- **The CTA-vs-runtime split is the only thing in the signature** — 3 template params (CTAs)
-  vs 5 function params. The shim puts the CTAs in `<…>` (they're `constexpr`) and the rest
-  in `(…)`.
+- **The CTA-vs-runtime split is the only thing in the signature** — 3 template params vs 5
+  function params. The shim puts the CTAs in `<…>` (constexpr) and the rest in `(…)`.
 - **RTA vs CRTA is invisible in the kernel.** All five function args are plain `uint32_t`
   and all five shim calls are identical `get_arg(args::name)`. Only the *generated type*
-  (`RtaArg` vs `CrtaArg`) differs, and that came purely from the host putting the name in
-  `runtime_arg_names` vs `common_runtime_arg_names`.
+  (`RtaArg` vs `CrtaArg`) differs — set purely by which host list the name is in.
 - **RTA and CRTA offsets are independent.** Both start at `0` because per-core and common
   args live in separate L1 regions (`rta_offset` vs `crta_offset` in the launch message).
 
-## 10. Implementation checklist (for the eventual PR)
+## 3. Pros and cons
 
-1. `TT_KERNEL` marker macro (→ `[[tt::kernel_main]]`) + attribute tolerance in the kernel
-   build flags (`-Wno-attributes` or register the attribute).
-2. `parse_kernel_main_signature()` (tokenizer, option A) in `jit_build` — extracts function
-   name, template non-type params (CTAs), and function params (runtime).
-3. `write_kernel_main_shim()` in `genfiles.cpp`: emit `my_kernel<get_arg(args::ct)…>(
-   get_arg(args::rt)…)`, omitting the `<…>` when there are no template params. Wire its
-   include into `jit_build_genfiles_kernel_include()` and `jit_build_genfiles_triscs_src()`
-   after the user source.
-4. `SetRuntimeArgs` / `SetCommonRuntimeArgs` name→value overloads in
-   `host_api.hpp` + `tt_metal.cpp`, resolving to the existing positional path.
-5. Host-side validation (Section 5.3), including name↔kind matching.
-6. Tests: a DM-kernel and a compute-kernel example (each with at least one CTA template
-   param and runtime fn params), built and run on a Wormhole target; an RTA→CRTA promotion
-   test (host-only change, **zero** kernel edits); and a negative test that a runtime arg
-   in a template slot fails to compile.
-7. Docs: promote this design to a user-facing how-to once landed.
+**Pros**
 
-## Appendix: source anchors (as of this investigation)
+- **Zero boilerplate.** Kernels read like ordinary functions; no `get_arg`, `args::`,
+  `kernel_main`, indices, or L1 addresses anywhere in user code.
+- **Cheap to build.** Reuses the existing Metal 2.0 accessors + `args::` codegen; no
+  firmware change and no host L1 write-path change. The net new code is a signature parser,
+  a shim emitter, and host name→value overloads.
+- **Host-only RTA↔CRTA promotion.** Moving a runtime arg between per-core and common is a
+  one-line host edit with zero kernel changes (property *a*).
+- **Real compile-time args.** CTAs are genuine `constexpr` template params — usable for
+  `if constexpr` specialization, array sizes, and further template arguments.
+- **Some mistakes caught by the type system.** A runtime arg placed in a template slot fails
+  to compile (a non-`constexpr` value can't be a template argument). Names are
+  self-documenting and order-independent within a list.
+- **Purely additive.** Gated on the `TT_KERNEL` marker; Metal 1.0, Metal 2.0, and
+  hand-written `kernel_main()` kernels are untouched.
+
+**Cons / costs**
+
+- **New JIT parse step.** We must extract the entry signature. A lightweight tokenizer has a
+  limited surface (rejects type template params, defaulted params, macros in the signature);
+  libclang lifts that but adds a host-side dependency.
+- **Compile-time-vs-runtime is a source decision.** Moving an arg across that line (CTA ↔
+  runtime) *is* a kernel edit — unavoidable, since it changes what the compiler can
+  specialize, but it breaks the "host-only" promotion story for that one axis.
+- **One crossing not caught by the compiler.** A CTA name used as a *function* param compiles
+  silently (the constant is just passed at runtime); only a host-side check flags it.
+- **`uint32_t`-only initially**, inherited from the `sizeof(T)==4` assert in `kernel_args.h`
+  (template params likewise non-type `uint32_t`/`bool`).
+- **More indirection to debug.** Compile errors can point at the generated shim /
+  `kernel_args_generated.h` rather than the user file; needs decent diagnostics and marker
+  discipline (exactly one `TT_KERNEL` per TU).
+
+## 4. Implementation details
+
+All codegen lives in `tt_metal/jit_build/genfiles.cpp`, next to the existing
+`write_kernel_args_generated_header()` and `jit_build_genfiles_kernel_include()`.
+
+**Marker.** `#define TT_KERNEL [[tt::kernel_main]]` in a public kernel header. Used as
+`TT_KERNEL void my_kernel(...)`. The attribute is a vendor-namespaced no-op for the compiler
+(build with `-Wno-attributes` or register it); it exists purely as a reliable parse anchor.
+Exactly one per TU — zero falls back to a hand-written `kernel_main()`, two is a JIT error.
+
+**Signature parser** — `parse_kernel_main_signature(source) -> {name, template_params,
+fn_params}`. The marker sits between the optional `template <…>` clause and the return type,
+so the parser scans backward for the template clause and forward for `ret-type name
+( params )` up to the matching `{`, splitting each list on top-level commas. Ship a
+tokenizer (option A); keep it behind one function so a libclang implementation (option B)
+can replace it later without touching the emitter.
+
+**Shim emitter** — `write_kernel_main_shim()` emits `kernel_main()` calling
+`my_kernel<get_arg(args::ct)…>(get_arg(args::rt)…)`, one `get_arg(args::<name>)` per param
+in declared order, omitting the `<…>` entirely when there are no template params. Because
+the `args::*` constants already exist and `get_arg` is overloaded on their type, that's the
+whole shim.
+
+**Include ordering** — append the shim *after* the user source in `kernel_includes.hpp`
+(the entry must be declared first): `kernel_bindings_generated.h` → `kernel_args_generated.h`
+→ user source → `kernel_main_shim.h`. The TRISC path
+(`jit_build_genfiles_triscs_src`, `genfiles.cpp:305`) gets the same shim include in each
+`chlkc_*.cpp` wrapper.
+
+**Host name→value API** — add overloads alongside positional `SetRuntimeArgs`
+(`host_api.hpp`):
+
+```cpp
+void SetRuntimeArgs(const Program&, KernelHandle,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>&,
+    const std::unordered_map<std::string, uint32_t>& named_args);
+void SetRuntimeArgs(const Program&, KernelHandle,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>&,
+    stl::Span<const std::string_view> names, stl::Span<const uint32_t> values);
+void SetCommonRuntimeArgs(const Program&, KernelHandle,
+    const std::unordered_map<std::string, uint32_t>& named_args);
+```
+
+These reorder the map into the registered name order and funnel into the **existing**
+positional `set_runtime_args` path — L1 layout, offsets (`dispatch.cpp`), and
+`WriteRuntimeArgsToDevice` are unchanged. Pure host-side name→index resolution.
+
+**Validation.** At set-time / finalize: every registered name has a value; no unknown names;
+and (strongest) every entry parameter name is a registered name *of the matching kind*
+(template ↔ `named_compile_args`, function ↔ runtime-arg names) — this catches the CTA-as-
+function-param crossing the compiler misses. The kind check needs the parsed parameter lists
+threaded back to the kernel object; without it, v1 relies on the JIT compile errors instead.
+
+## 5. Phased rollout
+
+- **Phase 0 — done.** Metal 2.0 named accessors (`kernel_args.h`), `args::` codegen, host
+  named-arg schema. Kernels still hand-write `kernel_main()` + `get_arg`.
+- **Phase 1 — runtime args only.** `TT_KERNEL` marker + tokenizer for the *function*
+  parameter list; shim generation for RTA/CRTA (no template params yet); host name→value
+  `SetRuntimeArgs` / `SetCommonRuntimeArgs` overloads; `uint32_t`-only. Proves the
+  shim mechanism end-to-end on silicon. Deliverable: a reader/writer kernel with named
+  function params, plus an RTA→CRTA host-only promotion test.
+- **Phase 2 — compile-time args.** Parse the `template <…>` clause; emit template-arg
+  instantiation in the shim; add name↔kind validation. Deliverable: the §2 example
+  (CTAs + RTAs + CRTAs), plus a negative test that a runtime arg in a template slot fails to
+  compile.
+- **Phase 3 — hardening & reach.** Swap the tokenizer for a libclang parse; widen beyond
+  `uint32_t` (multi-word POD reads in `get_arg`/accessors); improve diagnostics so errors
+  point back at the user file; promote this design to a user-facing how-to.
+
+## Appendix: source anchors
 
 | Concept | File | Symbol |
 | --- | --- | --- |
@@ -554,7 +284,6 @@ Three things this example makes concrete:
 | Device fetch primitives | `tt_metal/hw/inc/api/dataflow/dataflow_api.h` | `get_arg_val`/`get_arg_addr` |
 | Per-RISC L1 base setup | `tt_metal/hw/inc/internal/firmware_common.h` | `rta_l1_base`/`crta_l1_base` |
 | Host RTA API | `tt_metal/api/tt-metalium/host_api.hpp` | `SetRuntimeArgs`/`GetRuntimeArgs` |
-| Host RTA storage | `tt_metal/impl/kernels/kernel.cpp` | `set_runtime_args` |
 | L1 write path | `tt_metal/impl/host_api/tt_metal.cpp:1016` | `WriteRuntimeArgsToDevice` |
 | RTA offset config | `tt_metal/impl/program/dispatch.cpp:142` | `configure_rta_offsets_for_kernel_groups` |
 | Arg-kind schema fields | `tt_metal/api/tt-metalium/kernel_types.hpp` | `named_compile_args`, `runtime_arg_names` |
