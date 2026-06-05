@@ -116,7 +116,7 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 //
 // Three active regions (plus zero default):
 //   x >= 2.78125:               Identity (result = x)
-//   -3.125 <= x < 2.78125:     Core CDF polynomial (degree-15 in u=x²)
+//   -3.125 <= x < 2.78125:     Core CDF polynomial (degree-13 in u=x²)
 //   -5.54259443 < x < -3.125:  Moroz exp_21f with correction polynomial
 //   x <= -5.54259443:           Zero (matches torch.nn.functional.gelu saturation)
 //
@@ -126,16 +126,15 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 // (0xc0b2), so all BF16 inputs ≤ -5.5625 also return 0 as expected.
 // =============================================================================
 
-// Degree-15 CDF polynomial for Phi(x) over [-3.125, 2.78125]
+// Degree-13 CDF polynomial for Phi(x) over [-3.125, 2.78125]
 // Phi(x) is an even function offset by 0.5: Phi(x) = 0.5 + odd_function(x)
 // Only odd-power coefficients are non-zero; evaluated via u=x^2 factoring
 // to avoid wasting SFPU cycles on zero even-power coefficients.
 // Covers the extended range [-3.125, 2.78125) to eliminate the LEFT polynomial
 // region entirely, reducing from 4 active regions to 3.
-// Degree-13 CDF polynomial (6 MADs in u=x² Horner, down from degree-15 / 8 MADs).
-// Minimax-fitted over (-3.125, 2.78125) with BF16-ULP weighting → MaxULP = 0.87 < 1.
-// Removing the C15 term saves 2 MADs per element, reducing LREG pressure so that
-// #pragma GCC unroll 8 can fill the SFPU pipeline more effectively.
+// Minimax-fitted over (-3.125, 2.78125) with BF16-ULP weighting → MaxULP = 0.87 < 1
+// (6 MADs in u=x² Horner). Removing the C13 term from degree-15 saves 2 MADs per
+// element, reducing LREG pressure so that #pragma GCC unroll 8 fills the pipeline.
 constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
 constexpr float GELU_CDF_CORE_C1 = 3.9894227818e-01f;
 constexpr float GELU_CDF_CORE_C3 = -6.6361041488e-02f;
@@ -193,7 +192,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         result = exp_val * correction;
 
         // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
-        // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
+        // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C13)))
         // Factored via u=x^2 to eliminate zero even-power coefficients
         v_and(x >= -3.125f);
         sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
@@ -483,6 +482,13 @@ inline void gelu_derivative_polynomial_init() {
         // inline (not _calculate_reciprocal_internal_), so SFPLOADMACRO fast-path init is
         // not needed. On BH, _init_reciprocal_ omits _init_sfpu_reciprocal_ (it only
         // configures SFPLOADMACRO macros), so vConstFloatPrgm0=2.0f would be unset.
+        //
+        // Not keyed on is_fp32_dest_acc_en: the template arg to _sfpu_reciprocal_<N>
+        // selects the Newton-Raphson step count (2 for FP32, 1 for BF16), but
+        // _init_sfpu_reciprocal_ only seeds the initial estimate and does not vary
+        // with N. A single <false> call therefore covers both precisions. The
+        // asymmetry vs gelu_init() (which gained an fp32-specific branch) is
+        // intentional — the derivative path has no LUT to load.
         _init_sfpu_reciprocal_<false>();
     }
 }
