@@ -112,11 +112,17 @@ ttnn::Tensor unified_routed_expert_moe(
     // otherwise keep uninitialized DRAM garbage (incl. NaN/Inf bit patterns).
     // The torch reference zeros these, and a NaN in padding would corrupt any
     // downstream masked reduction/combine, so the buffer is zeroed up front.
-    auto expert_outputs = ttnn::zeros(
-        dispatched_buffer.logical_shape(),
-        dispatched_buffer.dtype(),
-        ttnn::TILE_LAYOUT,
-        *dispatched_buffer.device(),
+    //
+    // zeros_like (not zeros): dispatched_buffer is a TILE device tensor in a
+    // device-fill-eligible dtype (bf8/bf16/fp32), so zeros_like takes the
+    // on-device ttnn::fill path — no host-side std::vector(volume) + H2D copy
+    // (which plain ttnn::zeros would incur for a large dispatch buffer) and no
+    // device-pointer deref here.
+    auto expert_outputs = ttnn::zeros_like(
+        dispatched_buffer,
+        /*dtype=*/std::nullopt,
+        /*layout=*/std::nullopt,
+        /*device=*/std::nullopt,
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(
