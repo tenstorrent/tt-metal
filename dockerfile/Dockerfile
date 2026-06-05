@@ -279,7 +279,6 @@ RUN apt update && apt install -y --no-install-recommends \
 RUN adduser --uid 1001 --shell /bin/bash user && \
     usermod -aG sudo user && \
     echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
-    usermod -p 'NP' user && \
     mkdir -p /run/sshd && \
     echo "StrictModes no" >> /etc/ssh/sshd_config
 
