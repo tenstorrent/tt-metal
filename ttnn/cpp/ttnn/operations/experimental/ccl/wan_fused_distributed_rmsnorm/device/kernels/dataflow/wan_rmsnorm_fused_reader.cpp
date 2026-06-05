@@ -235,7 +235,9 @@ void kernel_main() {
                 uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t w_idx = tile_row * num_tile_cols + col_tile + i;
+#ifndef WAN_ABL_SKIP_WEIGHT_READ
                     noc_async_read_tile(w_idx, weight_accessor, weight_wr_ptr);
+#endif
                     weight_wr_ptr += weight_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -250,7 +252,9 @@ void kernel_main() {
                 uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t b_idx = tile_row * num_tile_cols + col_tile + i;
+#ifndef WAN_ABL_SKIP_WEIGHT_READ
                     noc_async_read_tile(b_idx, bias_accessor, bias_wr_ptr);
+#endif
                     bias_wr_ptr += bias_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -275,8 +279,10 @@ void kernel_main() {
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+#ifndef WAN_ABL_SKIP_WEIGHT_READ
                         noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes);
                         noc_async_read(weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes);
+#endif
                         weight_wr_ptr += weight_tile_bytes;
                     }
                     noc_async_read_barrier();
@@ -294,8 +300,10 @@ void kernel_main() {
                     uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         uint64_t bias_noc_addr = get_noc_addr(col_tile + i, bias_accessor);
+#ifndef WAN_ABL_SKIP_WEIGHT_READ
                         noc_async_read(bias_noc_addr, bias_wr_ptr, face_row_bytes);
                         noc_async_read(bias_noc_addr + face_bytes, bias_wr_ptr + face_bytes, face_row_bytes);
+#endif
                         bias_wr_ptr += bias_tile_bytes;
                     }
                     noc_async_read_barrier();

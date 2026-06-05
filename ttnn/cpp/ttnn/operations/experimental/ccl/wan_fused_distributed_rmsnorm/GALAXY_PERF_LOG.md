@@ -237,3 +237,24 @@ Perf (fused µs/iter, two runs, vs Idea H):
 
 KEPT (committed). N18944-RoPE finally moved (was flat for H) -> 1.57x composite
 (was 1.48x); N9472-RoPE 1.42x (was 1.36x). Session arc N18944-RoPE: 982 -> 790 (-20%).
+
+## Ablation re-run with weight-read column (post A-I)
+
+Added ablation 6 (WAN_ABLATION=6 -> skip weight/bias NoC reads, keep CB APIs).
+Exposed cost = baseline - ablation, % of fused baseline:
+
+| config | base µs | input | rope | weight | out-wr | fabric | gather |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| N18944 RoPE | 788.1 | 19% | 13% | 2% | 10% | 3% | 2% |
+| N9472 RoPE  | 429.6 | 13% | 3% | ~0 | 2% | 1% | 1% |
+| N2368 RoPE  | 205.8 | 3% | 0.4% | ~0 | 3% | 2% | 2% |
+| N18944 no-rope | 588.5 | 19% | — | ~0 | 8% | 3% | 3% |
+| N9472 no-rope  | 321.0 | 10% | — | ~0 | 9% | ~0 | ~0 |
+| N2368 no-rope  | 141.6 | 12% | — | 3% | 2% | 3% | 6% |
+| L512 | 64.7 | ~0 | — | 1% | 8% | 1% | 1% |
+
+Weight read is HIDDEN (<=2.4%, several deltas negative = noise): broadcast weight
+is read once/worker (face-row partial reads), deferred to overlap chunk-0 compute
++ fabric, and Idea I placed it before rope. Not a nail. Ranking unchanged:
+input #1 (-> Idea F), output-write #2 on no-rope/large (8-10%, best unaddressed
+lever), rope-read #2 on N18944-RoPE only (13%).
