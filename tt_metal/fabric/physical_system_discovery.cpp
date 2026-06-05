@@ -24,7 +24,6 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include <board/board.hpp>
 #include <board/port_lookup.hpp>
 
 namespace tt::tt_metal {
