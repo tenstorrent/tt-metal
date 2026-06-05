@@ -41,7 +41,7 @@ mkdir -p "${INSTALL_DIR}/bin"
 "${TMPDIR_EXTRACT}/install.sh" \
     --prefix="${INSTALL_DIR}" \
     --libexecdir=/usr/local/libexec \
-    --sysconfdir=/usr/local/etc
+    --sysconfdir=/etc
 
 # The storage helper is the ccache binary itself, invoked as a background
 # daemon for async remote storage.  ccache looks for it in libexec_dirs
