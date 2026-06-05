@@ -101,7 +101,7 @@ inline void _llk_pack_rows_mop_config_(const std::uint32_t num_rows)
  *    - Z/W counters: Reset to zero
  *
  * @param num_rows: Total number of rows to pack from the destination register to L1.
- * @post Pair with @ref _llk_pack_rows_uninit_ after the matching @ref _llk_pack_rows_ execute calls.
+ * @note Pair with @ref _llk_pack_rows_uninit_ after the matching @ref _llk_pack_rows_ execute calls.
  */
 inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 {
@@ -138,8 +138,8 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
  *
  * @param tile_index: Index of the tile in the destination register to read from.
  * @param address: L1 memory address where the packed rows will be written.
- * @pre @ref _llk_pack_rows_init_ must have been called to program the row count and counters.
- * @post Call @ref _llk_pack_rows_uninit_ once all row-pack calls are complete.
+ * @note Call @ref _llk_pack_rows_init_ to program the row count and counters before this function, and
+ *       @ref _llk_pack_rows_uninit_ once all row-pack calls are complete.
  */
 inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t address)
 {
@@ -159,7 +159,7 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
  *
  * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
  *
- * @pre Pairs with @ref _llk_pack_rows_init_.
+ * @note Pairs with @ref _llk_pack_rows_init_.
  */
 inline void _llk_pack_rows_uninit_()
 {

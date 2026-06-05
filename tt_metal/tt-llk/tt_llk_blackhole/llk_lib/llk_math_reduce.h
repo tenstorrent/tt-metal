@@ -162,8 +162,8 @@ inline void reduce_pool_op()
  * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
- * @pre @ref _llk_math_reduce_init_ must be called with matching template args.
- * @post Call @ref _llk_math_reduce_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_reduce_init_ with matching template args before this
+ *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
 template <
     PoolType type,
@@ -351,7 +351,7 @@ inline void reduce_configure_mop()
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
- * @post @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
@@ -377,14 +377,14 @@ inline void _llk_math_reduce_init_()
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
  * @tparam enforce_fp32_accumulation: Must match the value used at init.
- * @post Reverses @ref _llk_math_reduce_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only when FP32 accumulation was enforced.
+ * @note Reverses @ref _llk_math_reduce_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only when FP32 accumulation was enforced.
  */
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
+        // Clear bit 11 (restore from workaround for tt-metal#46219)
         // Uses helper from llk_math_common.h which includes tensix_sync()
         _llk_math_dbg_feature_enable_();
         // Note: BH doesn't need format restoration (init doesn't change it)

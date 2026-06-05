@@ -651,8 +651,8 @@ inline void matmul_configure_mop_throttled(
  * @param transpose: Non-zero to transpose in1 faces during the multiply.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
- * @pre On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
- * @post @ref _llk_math_matmul_ runs the configured matmul with matching template args.
+ * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
+ * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
@@ -685,7 +685,7 @@ inline void _llk_math_matmul_init_(
 /**
  * @brief Uninitialize/cleanup after matmul operations, restoring any modified state to defaults.
  *
- * @post Reverses @ref _llk_math_matmul_init_; currently a no-op since all state is transient.
+ * @note Reverses @ref _llk_math_matmul_init_; currently a no-op since all state is transient.
  */
 inline void _llk_math_matmul_uninit_()
 {
@@ -703,9 +703,9 @@ inline void _llk_math_matmul_uninit_()
  * @param dst_index: Base tile index into the destination register for the output block.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
- * @pre @ref _llk_math_matmul_init_ must be called with matching template args.
- * @pre On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
- * @post Call @ref _llk_math_matmul_uninit_ to restore modified state.
+ * @note Call @ref _llk_math_matmul_init_ with matching template args before this
+ *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state.
+ * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)

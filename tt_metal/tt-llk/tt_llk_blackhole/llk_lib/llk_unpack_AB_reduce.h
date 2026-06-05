@@ -142,9 +142,9 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
  * @param address_a: Base address for source A data in L1 memory.
  * @param address_b: Base address for source B data in L1 memory.
  *
+ * @note Call @ref _llk_unpack_AB_reduce_init_ with matching template args before this function.
  * @note This function manages dual-context switching for pipelined execution.
  * @note Semaphores ensure proper synchronization between Trisc and unpacker.
- * @pre @ref _llk_unpack_AB_reduce_init_ must be called first with matching template args.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)

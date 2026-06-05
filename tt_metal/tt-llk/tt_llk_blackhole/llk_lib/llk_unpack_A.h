@@ -219,7 +219,7 @@ inline void _llk_unpack_A_mop_config_(
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @post Call @ref _llk_unpack_A_uninit_ to restore the modified datum-count state.
+ * @note Call @ref _llk_unpack_A_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_A_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
  */
@@ -277,7 +277,7 @@ inline void _llk_unpack_A_init_(
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
- * @pre @ref _llk_unpack_A_init_ must have been called with matching template args.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
@@ -302,8 +302,8 @@ inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
  * @param address: L1 address of the source tile.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
- * @pre @ref _llk_unpack_A_init_ must be called first with matching template args.
- * @post Call @ref _llk_unpack_A_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_A_uninit_ after it to restore modified state.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <

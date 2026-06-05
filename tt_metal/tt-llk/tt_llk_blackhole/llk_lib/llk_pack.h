@@ -76,6 +76,7 @@ inline void _llk_pack_configure_addrmod_()
             .set(ADDR_MOD_2);
     }
 }
+
 /**
  * @brief Build and program the packer MOP template for the selected pack mode.
  *
@@ -88,7 +89,7 @@ inline void _llk_pack_configure_addrmod_()
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
- * @pre @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
+ * @note @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
@@ -432,7 +433,8 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
- * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats are unaffected by the issue).
+ * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
+ * are unaffected by the issue).
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
@@ -462,7 +464,7 @@ inline void _llk_pack_hw_configure_(
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
- * @post Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
 inline void _llk_pack_init_(
@@ -493,7 +495,7 @@ inline void _llk_pack_init_(
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
- * @post Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
  */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
@@ -535,7 +537,7 @@ inline void _llk_pack_init_(
  * On Blackhole @ref _llk_pack_init_ leaves the PAC X counter at its default value, so there is no
  * state to restore.
  *
- * @pre Pairs with @ref _llk_pack_init_.
+ * @note Pairs with @ref _llk_pack_init_.
  */
 inline void _llk_pack_uninit_()
 {
@@ -553,8 +555,8 @@ inline void _llk_pack_uninit_()
  * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
  * @param tile_index: Index of the source tile in the destination register.
  * @param address: L1 destination address for the packed tile.
- * @pre @ref _llk_pack_init_ must have been called with matching template/runtime args.
- * @post Call @ref _llk_pack_uninit_ once all pack calls are complete.
+ * @note Call @ref _llk_pack_init_ with matching template/runtime args before this function, and
+ *       @ref _llk_pack_uninit_ once all pack calls are complete.
  */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)

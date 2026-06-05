@@ -16,24 +16,24 @@ using namespace ckernel::math;
 /**
  * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
  *
- * @note Workaround for bug tenstorrent/budabackend#1372. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
+ * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
  */
 inline void _llk_math_dbg_feature_disable_()
 {
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                             // workaround for bug tenstorrent/budabackend#1372
+                                                             // workaround for bug tt-metal#46219
 }
 
 /**
  * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
  *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tenstorrent/budabackend#1372). Issues a tensix_sync() first.
+ * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219). Issues a tensix_sync() first.
  */
 inline void _llk_math_dbg_feature_enable_()
 {
     tensix_sync();
     reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
-                                                       // workaround for bug tenstorrent/budabackend#1372
+                                                       // workaround for bug tt-metal#46219
 }
 
 /**
@@ -262,7 +262,7 @@ inline std::uint32_t _llk_math_get_compute_special_value_flags_()
 /**
  * @brief Clear the FPU sticky special-value flags register.
  *
- * @post Read with @ref _llk_math_get_compute_special_value_flags_ to observe flags accumulated after this clear.
+ * @note Read with @ref _llk_math_get_compute_special_value_flags_ to observe flags accumulated after this clear.
  */
 inline void _llk_math_clear_compute_special_value_flags_()
 {

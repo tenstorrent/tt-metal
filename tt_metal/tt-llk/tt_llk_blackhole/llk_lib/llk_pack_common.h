@@ -169,8 +169,8 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  *
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @pre Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
- * @post Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
+ * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
@@ -260,7 +260,7 @@ inline void _llk_pack_reduce_mask_config_()
  * Resets the edge-offset masks to pass-through and points all tile-row-set mappings back to
  * PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
  *
- * @pre Pairs with @ref _llk_pack_reduce_mask_config_.
+ * @note Pairs with @ref _llk_pack_reduce_mask_config_.
  */
 inline void _llk_pack_reduce_mask_clear_()
 {

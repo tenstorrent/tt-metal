@@ -68,7 +68,7 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
  * @param face_r_dim: Rows per face, valid values = <2, 4, 8, 16>.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
  * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
- * @post Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
+ * @note Call @ref _llk_unpack_tilize_uninit_ to restore the modified tile-descriptor state.
  * @ref _llk_unpack_tilize_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D, PackMode::Tilize) is the matching init on the math thread.
  */
@@ -151,8 +151,8 @@ inline void _llk_unpack_tilize_init_(
  * @param face_r_dim: Rows per face.
  * @param num_faces: Number of faces in the tile, valid values = <2, 4>.
  * @param narrow_tile: Whether the tile is narrow (single column of faces).
- * @pre @ref _llk_unpack_tilize_init_ must be called first.
- * @post Call @ref _llk_unpack_tilize_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_tilize_init_ before this function, and
+ *       @ref _llk_unpack_tilize_uninit_ after it to restore modified state.
  */
 inline void _llk_unpack_tilize_(
     const std::uint32_t base_address,
@@ -286,7 +286,7 @@ inline void _llk_unpack_tilize_(
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param num_faces: Number of faces, used to restore the Z dimension, valid values = <1, 2, 4>.
  * @param face_r_dim: Rows per face, used to compute the restored datum count.
- * @pre @ref _llk_unpack_tilize_init_ must have been called first.
+ * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, const std::uint32_t face_r_dim)
 {
@@ -390,7 +390,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
- * @post Call @ref _llk_unpack_tilizeA_B_uninit_ to restore the modified stride/datum-count state.
+ * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to restore the modified stride/datum-count state.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -442,8 +442,8 @@ inline void _llk_unpack_tilizeA_B_init_(
  * @param tile_index_a: Column tile index into operand A.
  * @param block_ct_dim: Number of column tiles in the block, used to compute face strides.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
- * @pre @ref _llk_unpack_tilizeA_B_init_ must be called first with matching template args.
- * @post Call @ref _llk_unpack_tilizeA_B_uninit_ to restore modified state.
+ * @note Call @ref _llk_unpack_tilizeA_B_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_tilizeA_B_uninit_ after it to restore modified state.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void _llk_unpack_tilizeA_B_(
@@ -531,7 +531,7 @@ inline void _llk_unpack_tilizeA_B_(
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param face_r_dim: Rows per face, used to compute the restored datum count.
- * @pre @ref _llk_unpack_tilizeA_B_init_ must have been called first.
+ * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
 inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {

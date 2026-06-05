@@ -92,7 +92,7 @@ inline void _llk_unpack_reduce_init_(
  * @tparam type: Reduction pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param address: L1 address of the source tile.
- * @pre @ref _llk_unpack_reduce_init_ must be called first with matching template args.
+ * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  */
 template <PoolType type, ReduceDim dim>
 inline void _llk_unpack_reduce_(const std::uint32_t address)

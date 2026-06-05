@@ -70,7 +70,7 @@ inline void _llk_unpack_untilize_mop_config_()
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param tile_size: Size of one tile, stored to the tile-size GPR for per-tile offset stepping.
  * @param face_r_dim: Rows per face.
- * @post Call @ref _llk_unpack_untilize_uninit_ to restore the default unpacker config.
+ * @note Call @ref _llk_unpack_untilize_uninit_ to restore the default unpacker config.
  * @ref _llk_unpack_untilize_pass_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D) is the matching init on the math thread.
  */
@@ -126,7 +126,7 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
  *
  * @param unpack_dst_format: Destination data format used to recompute the restored Y stride.
  * @param face_r_dim: Rows per face, used to compute the restored datum count and Y stride.
- * @pre @ref _llk_unpack_untilize_init_ must have been called first.
+ * @note Call @ref _llk_unpack_untilize_init_ before this function.
  */
 inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
@@ -163,8 +163,8 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
  * @tparam first_pass: Select the top faces (true) or bottom faces (false) of each tile.
  * @param base_address: L1 base address of the tile row to untilize.
  * @param block_tile_cols: Number of tile columns in the block row.
- * @pre @ref _llk_unpack_untilize_init_ must be called first.
- * @post Call @ref _llk_unpack_untilize_uninit_ after the final pass to restore modified state.
+ * @note Call @ref _llk_unpack_untilize_init_ before this function, and
+ *       @ref _llk_unpack_untilize_uninit_ after the final pass to restore modified state.
  */
 template <bool first_pass = true>
 inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const std::uint32_t block_tile_cols)
