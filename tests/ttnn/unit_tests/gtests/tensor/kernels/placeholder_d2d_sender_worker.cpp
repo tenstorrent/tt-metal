@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// Placeholder sender-side worker kernel for D2DStreamService tests (M4, step 8).
+// Stands in for a real producer op: it fills the sender backing tensor with a
+// per-iteration value, then runs the inverted handshake against the persistent
+// sender service kernel.
+//
+// Per iteration:
+//   1. write value (iter+1) into every page of the sender backing tensor,
+//   2. atomic-inc data_ready_counter on the sender service core (the service
+//      kernel waits for num_workers of these),
+//   3. spin on the local consumed_sem until the service multicast-incs it
+//      (transfer drained over fabric), then reset it to 0.
+//
+// Runs a fixed num_iters then exits, so a test can Finish() the worker workload.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
+
+constexpr uint32_t consumed_sem_addr = get_compile_time_arg_val(0);
+constexpr uint32_t backing_tensor_addr = get_compile_time_arg_val(1);
+constexpr uint32_t num_pages = get_compile_time_arg_val(2);
+constexpr uint32_t tensor_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_iters = get_compile_time_arg_val(4);
+constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(5);
+constexpr auto backing_tensor_accessor_args = TensorAccessorArgs<6>();
+
+void kernel_main() {
+    const uint32_t data_ready_counter_addr = get_arg_val<uint32_t>(0);
+    const uint32_t service_noc_x = get_arg_val<uint32_t>(1);
+    const uint32_t service_noc_y = get_arg_val<uint32_t>(2);
+
+    auto backing = TensorAccessor(backing_tensor_accessor_args, backing_tensor_addr);
+
+    volatile tt_l1_ptr uint32_t* consumed_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(consumed_sem_addr);
+    const uint64_t data_ready_counter_noc = get_noc_addr(service_noc_x, service_noc_y, data_ready_counter_addr);
+
+    const uint32_t cb_l1_addr = get_write_ptr(scratch_cb_index);
+    volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_l1_addr);
+    const uint32_t page_elems = tensor_page_size / sizeof(uint32_t);
+
+    for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        // 1. Produce this iteration's slice: a uniform per-iter value across the
+        //    whole backing tensor (distinct per iter so a stuck/reused transfer
+        //    is caught by the readback).
+        const uint32_t value = iter + 1;
+        for (uint32_t e = 0; e < page_elems; ++e) {
+            scratch[e] = value;
+        }
+        for (uint32_t p = 0; p < num_pages; ++p) {
+            noc_async_write(cb_l1_addr, backing.get_noc_addr(p), tensor_page_size);
+        }
+        noc_async_write_barrier();
+
+        // 2. Ack into data_ready_counter — the service kernel waits for num_workers.
+        noc_semaphore_inc(data_ready_counter_noc, 1);
+        noc_async_atomic_barrier();
+
+        // 3. Wait for the service to confirm the transfer drained, then reset.
+        while (*consumed_sem == 0) {
+            invalidate_l1_cache();
+        }
+        *consumed_sem = 0;
+    }
+}

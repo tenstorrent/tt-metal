@@ -1518,15 +1518,20 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     // ServiceCoreManager — the runtime CB allocation path still needs to be
     // taught about service-core L1 (the worker-grid base address is wrong),
     // but the up-front shape check shouldn't reject these ranges outright.
+    // Use the global is_service_core() check (consistent with the routing logic in
+    // MeshWorkloadImpl::add_program and the sibling validate_circular_buffer_region):
+    // service-core claims are keyed by physical chip id, but `device` here may be a
+    // MeshDevice (synthetic mesh id) when validation runs against a mesh/submesh, so a
+    // per-device claimed_cores(device->id()) lookup would miss legitimately-claimed
+    // cores. Per-device claim correctness is enforced at dispatch (EnqueueMeshWorkload).
     const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
-    const auto claimed_on_device = svc.claimed_cores(device->id());
     auto entirely_on_service_cores = [&](const CoreRange& cr) {
-        if (claimed_on_device.empty()) {
+        if (!svc.has_any_claims()) {
             return false;
         }
         for (uint32_t x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
             for (uint32_t y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
-                if (claimed_on_device.count(CoreCoord{x, y}) == 0) {
+                if (!svc.is_service_core(CoreCoord{x, y})) {
                     return false;
                 }
             }
