@@ -1,24 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC tests for the SeamlessM4Tv2 text decoder using production-shaped inputs.
+"""Text decoder PCC at maximum encoder timeline length (512 mel/text frames).
 
-The decoder is fed the same tensors ``generate()`` uses:
-
-  * **T2TT** — ``text_encoder`` hidden states on a tokenized source prompt + a two-token seed
-    ``[decoder_start_token_id, tgt_lang_code]``.
-  * **S2TT** — ``speech_encoder`` hidden states on processor ``input_features`` from audio +
-    the same decoder seed, with subsampled encoder attention masks.
-
-Random ``input_ids`` / ``randn(encoder_hidden)`` are intentionally avoided: they do not match
-the activation distribution of the HF or TT stack and falsely cap PCC at short seq.
-
-Both HF reference and TT paths tile-pad encoder/decoder timelines and build masks the same way
-``TTSeamlessM4Tv2Model._prefill_text_decoder_kv_cache`` does before ``text_decoder.forward``.
-PCC is checked on the logical (unpadded) decoder prefix only.
-
-Hardware prefill L1 for very long encoder timelines is a separate ceiling from decoder seed
-length; production only prefills the two-token seed regardless of source length.
+Tests T2TT and S2TT production-shaped inputs at ``MAX_ENC_SEQ`` — the longest encoder
+timeline validated on BH 1×4 with the two-token decoder seed.
 """
 
 from __future__ import annotations
@@ -319,34 +305,6 @@ def _run_decoder_prefill_decode_pcc(
     for layer in cross_attn_cache:
         ttnn.deallocate(layer[0])
         ttnn.deallocate(layer[1])
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_decoder_t2tt_prefill_pcc(mesh_device, device_params, reset_seeds):
-    """Decoder prefill PCC ≥ 0.99 on T2TT-shaped inputs (text-encoder hidden + lang seed)."""
-    _ = reset_seeds
-    _ = device_params
-    weights_dir = _weights_dir_or_skip()
-
-    with mesh_default_device(mesh_device):
-        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
-        case = make_t2tt_decoder_pcc_inputs(hf_model, processor)
-        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="T2TT")
-
-
-@pytest.mark.timeout(1800)
-@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_decoder_s2tt_prefill_pcc(mesh_device, device_params, reset_seeds):
-    """Decoder prefill PCC ≥ 0.99 on S2TT-shaped inputs (speech-encoder hidden + lang seed)."""
-    _ = reset_seeds
-    _ = device_params
-    weights_dir = _weights_dir_or_skip()
-
-    with mesh_default_device(mesh_device):
-        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
-        case = make_s2tt_decoder_pcc_inputs(hf_model, processor)
-        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="S2TT")
 
 
 @pytest.mark.timeout(3600)
