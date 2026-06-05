@@ -504,16 +504,20 @@ class TTSeamlessM4Tv2Model:
             if bucket in self._speech_prewarmed_buckets:
                 continue
             self._speech_prewarmed_buckets.add(bucket)
+            import torch as _torch
+
             feats = ttnn.from_torch(
-                torch.zeros(1, bucket, n_mels, dtype=torch.bfloat16),
+                _torch.zeros(1, bucket, n_mels, dtype=_torch.bfloat16),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             )
+            mask_host = _torch.zeros(1, bucket, dtype=_torch.int32)
+            mask_host[0, :sl] = 1
             mask = ttnn.from_torch(
-                torch.ones(1, bucket, dtype=torch.int32),
+                mask_host,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
