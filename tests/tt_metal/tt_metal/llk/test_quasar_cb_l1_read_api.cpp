@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -11,46 +10,29 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "llk_device_fixture.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
 
 namespace {
 
 static constexpr CoreCoord WORKER_CORE = {0, 0};
+static constexpr uint32_t RESULT_L1_ADDR = 1000 * 1024;
 
 using DataT = std::uint32_t;
 static constexpr auto DATA_FORMAT = DataFormat::UInt32;
-
-static constexpr std::size_t CB_PAGE_SIZE = 16;
 
 static constexpr DataT VAL0 = 0xA5A5A5A5u;
 static constexpr DataT VAL1 = 0x11111111u;
 static const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL0};
 
-static constexpr std::size_t RESULT_BUFFER_PAGE_SIZE = CB_PAGE_SIZE;
-static constexpr std::size_t RESULT_BUFFER_SIZE = RESULT_BUFFER_PAGE_SIZE;
-static constexpr auto RESULT_BUFFER_TYPE = BufferType::L1;
-
-std::shared_ptr<distributed::MeshBuffer> create_result_buffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    distributed::DeviceLocalBufferConfig local_config{
-        .page_size = RESULT_BUFFER_PAGE_SIZE,
-        .buffer_type = RESULT_BUFFER_TYPE,
-    };
-    distributed::ReplicatedBufferConfig buffer_config{
-        .size = RESULT_BUFFER_SIZE,
-    };
-    auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-    std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
-    distributed::WriteShard(
-        mesh_device->mesh_command_queue(), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
-    return result_buffer;
-}
-
 }  // namespace
 
 // Validates ckernel::read_tile_value and ckernel::get_tile_address on Quasar (cb_api.h).
+// The compute kernel seeds a tile in-place and reads it back through both APIs; no
+// producer/consumer data movement is required.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     auto mesh_device = devices_.at(0);
     auto* device = mesh_device->get_devices()[0];
@@ -58,6 +40,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+    const uint32_t tile_page_size = tt::tile_size(DATA_FORMAT);
 
     Program program = CreateProgram();
     workload.add_program(device_range, std::move(program));
@@ -67,18 +51,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
         program_,
         WORKER_CORE,
         experimental::dfb::DataflowBufferConfig{
-            .entry_size = static_cast<uint32_t>(CB_PAGE_SIZE),
+            .entry_size = tile_page_size,
             .num_entries = 1,
             .data_format = DATA_FORMAT,
-        });
-
-    auto reader_kernel = experimental::quasar::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/quasar_cb_l1_read_api_reader.cpp",
-        WORKER_CORE,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1,
-            .compile_args = {dfb_id},
+            .tensix_scope = experimental::dfb::TensixScope::INTRA,
         });
 
     auto compute_kernel = experimental::quasar::CreateKernel(
@@ -90,16 +66,20 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
             .compile_args = {dfb_id},
         });
 
-    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, dfb_id, reader_kernel, compute_kernel);
+    // Bind the compute kernel as both producer and consumer so the DFB config (base_addr,
+    // entry_size, ...) is finalized and written to L1; the kernel only reads from it.
+    experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, dfb_id, compute_kernel, compute_kernel);
 
-    auto result_buffer = create_result_buffer(mesh_device);
-    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {result_buffer->address()});
+    std::vector<DataT> result_init(EXPECTED_RESULT.size(), 0);
+    detail::WriteToDeviceL1(device, WORKER_CORE, RESULT_L1_ADDR, result_init);
+
+    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {RESULT_L1_ADDR, VAL0, VAL1});
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
     std::vector<DataT> host_buffer;
     const auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+    detail::ReadFromDeviceL1(device, WORKER_CORE, RESULT_L1_ADDR, expected_result_size, host_buffer);
 
     EXPECT_EQ(host_buffer, EXPECTED_RESULT);
 }
