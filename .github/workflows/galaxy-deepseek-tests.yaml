@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: false
         type: choice
         options:
@@ -40,7 +40,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
       recreate_weights_cache:
-        description: 'Recreate weights cache in a new directory'
+        description: "Recreate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -48,10 +48,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache."
         required: false
         type: string
-        default: ''
+        default: ""
       enable-tracy:
         required: false
         type: boolean
@@ -62,9 +62,14 @@ on:
     - cron: "30 3 * * *" # Separate daily run for final-op-unit with Tracy enabled
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -131,11 +136,11 @@ jobs:
 
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: topology-6u

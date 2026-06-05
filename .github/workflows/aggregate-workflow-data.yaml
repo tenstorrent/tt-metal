@@ -4,20 +4,20 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '*/10 * * * *' # every 10 minutes
+    - cron: "*/10 * * * *" # every 10 minutes
   workflow_dispatch:
     inputs:
       days:
-        description: 'Number of days to look back for workflow runs'
+        description: "Number of days to look back for workflow runs"
         required: false
-        default: '15'
+        default: "15"
       force-fresh:
-        description: 'Force fresh fetch (skip using past artifacts and redownload everything)'
+        description: "Force fresh fetch (skip using past artifacts and redownload everything)"
         required: false
         type: boolean
         default: false
       slack-channel-id:
-        description: 'Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID.'
+        description: "Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID."
         required: false
       failures-to-elevate:
         description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
@@ -26,7 +26,7 @@ on:
       max-regression-analysis-dispatches:
         description: 'Hard cap on total regression-analysis dispatches per run. Empty = unlimited. Pair with failures-to-elevate for safe dispatch-driven testing.'
         required: false
-        default: ''
+        default: ""
 
 jobs:
   fetch-data:
@@ -247,7 +247,7 @@ jobs:
           gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
           other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
           last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
-          alert-all: 'false'
+          alert-all: "false"
           failures_to_elevate: ${{ github.event.inputs.failures-to-elevate || '' }}
       - name: Upload status changes artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

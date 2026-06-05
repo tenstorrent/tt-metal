@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
         default: 'unet-shallow'
         type: choice
@@ -23,7 +23,7 @@ on:
           - wan2.2-t2v-a14b
           - z-image-turbo
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: choice
@@ -70,10 +70,10 @@ on:
       model:
         required: false
         type: string
-        default: 'all'
+        default: "all"
         description: "Select model to test"
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: string
@@ -93,7 +93,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+    - cron: "0 4 * * *" # Every day at 4:00 UTC
 
 jobs:
   generate-model-matrix:
@@ -166,9 +166,14 @@ jobs:
           echo "System-type filter: $SYSTEM_TYPE_FILTER"
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -186,7 +191,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate-model-matrix.outputs.matrix) }}
     name: ${{ matrix.model }}
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
