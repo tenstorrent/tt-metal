@@ -701,15 +701,14 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
-inline void configure_unpack_AB(
+template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
     const std::uint32_t unpA_dst_format,
     const std::uint32_t unpB_dst_format,
     const std::uint32_t unpA_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpB_face_r_dim = FACE_R_DIM,
-    const bool transpose_xy_srca_en     = false,
     const std::uint32_t unpA_num_faces  = 4,
     const std::uint32_t unpB_num_faces  = 4)
 {
@@ -742,7 +741,6 @@ inline void configure_unpack_AB(
                                                                                                       : 1;
     std::uint32_t unpA_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpA_ch1_x_stride;
     std::uint32_t unpB_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpB_ch1_x_stride;
-    std::uint32_t exp_width         = (unpA_dst_format >> 2) & 0x1; // 0=5-bit, 1=8-bit
 
     // Strides for incrementing ch1 address to srcA and srcB
     cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] =
@@ -779,9 +777,9 @@ inline void configure_unpack_AB(
     static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
     constexpr std::uint32_t alu_stoch_rnd_mask =
         ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
-    alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = fpu_srnd_en;
-    alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
-    alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = pack_srnd_en;
+    alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en    = false;
+    alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = false;
+    alu_payload.f.ALU_ROUNDING_MODE_Packer_srnd_en = false;
 
     constexpr std::uint32_t alu_mask = alu_format_mask | alu_stoch_rnd_mask;
 
@@ -813,7 +811,7 @@ inline void configure_unpack_AB(
     {
         cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + i] = tile_descriptor.val[i];
     }
-    tile_descriptor.f.in_data_format = row_pool ? to_underlying(DataFormat::Float32) : masked_data_format(unpB_src_format);
+    tile_descriptor.f.in_data_format = masked_data_format(unpB_src_format);
     tile_descriptor.f.x_dim          = unpB_face_r_dim * FACE_C_DIM;
     tile_descriptor.f.z_dim          = unpB_num_faces;
     for (std::uint32_t i = 0; i < TILE_DESC_SIZE; i++)
@@ -830,7 +828,7 @@ inline void configure_unpack_AB(
     config.f.out_data_format = masked_data_format(unpA_dst_format);
     config.f.throttle_mode   = 2;
     config.f.context_count   = 0;
-    config.f.haloize_mode    = transpose_xy_srca_en ? 1 : 0;
+    config.f.haloize_mode    = 0;
     // config.f.upsample_rate   = 0;
     // config.f.upsamle_and_interlave  = 0;
     // config.f.shift_amount = 0;
@@ -843,7 +841,7 @@ inline void configure_unpack_AB(
         cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
 
-    config.f.out_data_format = row_pool ? (to_underlying(DataFormat::Float16) | (exp_width << 2)) : masked_data_format(unpB_dst_format);
+    config.f.out_data_format = masked_data_format(unpB_dst_format);
     config.f.haloize_mode    = 0;
 
     for (std::uint32_t i = 0; i < CONFIG_SIZE; i++)
@@ -883,6 +881,20 @@ inline void configure_unpack_AB(
 
     // Clear context ID
     reset_config_context();
+
+    // TILE_SIZE_A/B GPRs hold the per-tile L1 footprint in bytes; the unpacker
+    // uses them for byte-level address arithmetic (e.g. base_address +
+    // tile_size * tile_index in matmul) and they must agree with the CB's
+    // fifo_page_size, which is also recorded in bytes. Derive the same value
+    // from face geometry: num_faces * face_r_dim * FACE_C_DIM is the datum
+    // count, and TILE_SIZE_BYTES scales it to the actual L1 footprint --
+    // including BFP4/BFP2 sub-byte mantissa packing and the per-face exponent
+    // bytes that BFP* formats add. The matching LLK API assert (#34495)
+    // validates this against fifo_page_size.
+    const std::uint32_t unpA_tile_size = TILE_SIZE_BYTES(unpA_src_format, unpA_num_faces * unpA_face_r_dim * FACE_C_DIM);
+    const std::uint32_t unpB_tile_size = TILE_SIZE_BYTES(unpB_src_format, unpB_num_faces * unpB_face_r_dim * FACE_C_DIM);
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 }
 
 template <std::uint32_t UNP_SEL = p_setadc::UNP_AB>

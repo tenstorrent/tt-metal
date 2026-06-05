@@ -48,10 +48,23 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+    // fifo_page_size is the per-tile L1 footprint in bytes, recorded on the CB
+    // by the host program. Validate it matches the geometry-derived byte size:
+    // TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * FACE_C_DIM), where
+    // num_faces * face_r_dim * FACE_C_DIM is the datum count and
+    // TILE_SIZE_BYTES scales it to the actual L1 footprint -- including
+    // BFP4/BFP2 sub-byte mantissa packing and the per-face exponent bytes
+    // added by BFP* formats. This is the contract that lets the LLK compute
+    // tile size internally from face geometry + src format; see
+    // tt-metal#34495.
+    LLK_ASSERT(
+        get_local_cb_interface(unpA_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[unpA_operand_id], unpA_num_faces * unpA_face_r_dim * ckernel::FACE_C_DIM),
+        "unpA fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * FACE_C_DIM)");
+    LLK_ASSERT(
+        get_local_cb_interface(unpB_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[unpB_operand_id], unpB_num_faces * unpB_face_r_dim * ckernel::FACE_C_DIM),
+        "unpB fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * FACE_C_DIM)");
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         unpack_src_format[unpA_operand_id],
@@ -61,9 +74,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces,
-        unpA_tile_size,
-        unpB_tile_size);
+        unpB_num_faces);
 }
 
 /**
@@ -94,11 +105,21 @@ llk_unpack_hw_configure(
 
     const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+    const uint32_t unpA_face_c_dim = ckernel::FACE_C_DIM;
+    const uint32_t unpB_face_c_dim = ckernel::FACE_C_DIM;
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+    // fifo_page_size is the per-tile L1 footprint in bytes, recorded on the CB
+    // by the host program. Validate it matches the geometry-derived byte size:
+    // TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * face_c_dim). See
+    // the matching comment on the two-operand overload above for details.
+    LLK_ASSERT(
+        get_local_cb_interface(unpA_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[unpA_operand_id], unpA_num_faces * unpA_face_r_dim * unpA_face_c_dim),
+        "unpA fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * face_c_dim)");
+    LLK_ASSERT(
+        get_local_cb_interface(unpB_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[unpB_operand_id], unpB_num_faces * unpB_face_r_dim * unpB_face_c_dim),
+        "unpB fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * face_c_dim)");
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
         unpack_src_format[unpA_operand_id],
@@ -108,9 +129,7 @@ llk_unpack_hw_configure(
         unpA_face_r_dim,
         unpB_face_r_dim,
         unpA_num_faces,
-        unpB_num_faces,
-        unpA_tile_size,
-        unpB_tile_size);
+        unpB_num_faces);
 }
 
 /**
