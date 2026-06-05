@@ -12,6 +12,16 @@
 
 #include "ckernel.h"
 
+// Quasar gets a 4th compute thread (SFPU) on top of unpack/math/pack, and the
+// arm/freeze barrier below assumes exactly 3 threads (1 arm + 2 followers). The
+// build system is supposed to keep `-DPERF_COUNTERS_COMPILED` off for Quasar
+// (see `test_config.py::build_kernel_part`); this guard catches a silent
+// regression of that gate.
+#ifdef ARCH_QUASAR
+#error \
+    "Perf counters do not support Quasar yet: the entry/exit barrier hardcodes a 3-thread post count and `is_arm_thread`/`is_freeze_thread` have no LLK_TRISC_ISOLATE_SFPU path. Re-enabling for Quasar requires parameterizing PERF_NUM_SPINWAITERS by the active thread count."
+#endif
+
 // L1 region constants (PERF_COUNTERS_BASE_ADDR and friends) live in perf.h next to the
 // stimuli buffer addresses so the disjoint L1 ranges are visible side-by-side.
 
@@ -359,6 +369,12 @@ namespace llk_perf
 {
 namespace detail
 {
+// `.bss.perf_counters` is NOBITS (the `.bss.*` prefix is honored by GCC) and is
+// absorbed by the catch-all `*(.bss .bss.* ...)` line in sections.ld, so these
+// symbols live inside [__ldm_bss_start, __ldm_bss_end) and are zero-initialized
+// by do_crt0() on every cold start. The named section also lets the linker
+// script document the WC-only zone allocator and keeps these symbols grouped
+// for objdump inspection.
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
 __attribute__((section(".bss.perf_counters"))) static std::uint32_t next_zone_id;
 

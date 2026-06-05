@@ -15,8 +15,6 @@ from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 COUNTER_DATA_WORD_COUNT = TestConfig._PERF_COUNTERS_DATA_WORDS
-PERF_COUNTERS_STARTER_MASK = 0x3
-PERF_COUNTERS_STOPPER_MASK = 0x3
 
 PERF_COUNTERS_CONFIG_ADDR = TestConfig.PERF_COUNTERS_CONFIG_ADDR
 PERF_COUNTERS_DATA_ADDR = TestConfig.PERF_COUNTERS_DATA_ADDR
@@ -30,9 +28,6 @@ PERF_COUNTERS_STOP_COUNTER_ADDR = PERF_COUNTERS_START_COUNTER_ADDR + (
 PERF_COUNTERS_STOP_ELECT_ADDR = PERF_COUNTERS_STOP_COUNTER_ADDR + (
     PERF_COUNTERS_THREAD_COUNT * 4
 )
-
-# TRISC id -> name. BH uses ids 0–2; Quasar uses 0–3. Same mapping for missing-thread errors and starter/stopper.
-PERF_COUNTER_TRISC_NAMES = {0: "UNPACK", 1: "MATH", 2: "PACK", 3: "SFPU"}
 
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
@@ -522,28 +517,24 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         return []
 
     sync_word = sync_ctrl[0]
-    logger.info(
+    logger.debug(
         f"Zone {zone} ({zone_name}): sync_word=0x{sync_word:08x} at addr=0x{sync_addr:06x}"
     )
 
     # Zone was never used (BRISC clears sync to 0 before each run)
     if sync_word == 0:
-        logger.info(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
+        logger.debug(f"Zone {zone}: sync_word is 0, skipping (zone not used)")
         return []
 
-    # Lightweight stop writes SYNC_ZONE_COMPLETE (0xFF) in low byte + stopper thread ID.
+    # Lightweight stop writes only SYNC_ZONE_COMPLETE (0xFF); the high bytes are
+    # unused under the current protocol. Any other low-byte value signals
+    # corrupted or partially-written sync state.
     if (sync_word & 0xFF) != _SYNC_ZONE_COMPLETE:
         logger.warning(
             f"Zone {zone}: unexpected sync word 0x{sync_word:08x} "
             f"(expected SYNC_ZONE_COMPLETE=0xFF in low byte)"
         )
         return []
-
-    # Extract stopper thread ID
-    thread_count = len(TestConfig.KERNEL_COMPONENTS)
-    stopper_shift = 2 * thread_count + 2 + 2  # SYNC_STOPPER_SHIFT from counters.h
-    stopper_id = (sync_word >> stopper_shift) & PERF_COUNTERS_STOPPER_MASK
-    stopper_thread = PERF_COUNTER_TRISC_NAMES.get(stopper_id, f"UNKNOWN_{stopper_id}")
 
     # Shared config (same for all zones) — read once metadata layout.
     config_addr = _zone_config_addr(zone)
@@ -600,8 +591,6 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         results.append(
             {
                 "zone": zone_name,
-                "starter_thread": "N/A",
-                "stopper_thread": stopper_thread,
                 "bank": bank_name,
                 "counter_name": counter_name,
                 "counter_id": counter_id,
@@ -626,7 +615,7 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
 
     Returns:
         DataFrame with columns:
-        zone, starter_thread, stopper_thread, bank, counter_name, counter_id, cycles, count, l1_mux
+        zone, bank, counter_name, counter_id, cycles, count, l1_mux
     """
     all_results = []
 

@@ -1207,7 +1207,16 @@ class TestConfig:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
                 # EXPERIMENT: enable -DPERF_COUNTERS_COMPILED on TRISC.
-                if TestConfig.ENABLE_PERF_COUNTERS:
+                # Quasar is intentionally excluded: it adds a 4th compute thread
+                # (SFPU) and the entry/exit barrier in `counters.h` posts a fixed
+                # number of tokens for 3 threads, so enabling perf counters on
+                # Quasar would deadlock the SFPU thread (it would spinwait on a
+                # semaphore that never gets the extra post). A static_assert in
+                # `counters.h` enforces this at compile time as a safety net.
+                if (
+                    TestConfig.ENABLE_PERF_COUNTERS
+                    and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
+                ):
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
                 COVERAGES_DEPS = (
