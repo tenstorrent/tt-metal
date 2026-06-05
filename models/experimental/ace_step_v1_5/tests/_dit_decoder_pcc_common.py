@@ -16,6 +16,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 PCC_THRESHOLD = 0.99
 
 
+def print_pcc_result(label: str, score: float, *, threshold: float) -> None:
+    """Print a standardized PCC line (same format as :func:`assert_pcc_print`)."""
+    ok = float(score) >= float(threshold)
+    print(
+        f"[ace_step_v1_5][PCC] {label}: {float(score):.6f} (threshold={threshold}, ok={ok})",
+        flush=True,
+    )
+
+
 def assert_pcc_print(label: str, expected, actual, *, pcc: float = PCC_THRESHOLD) -> float:
     """Print PCC score, then assert ``comp_pcc`` passes at ``pcc`` (default 0.99)."""
     import ttnn
@@ -30,10 +39,7 @@ def assert_pcc_print(label: str, expected, actual, *, pcc: float = PCC_THRESHOLD
     exp = _to_torch(expected)
     act = _to_torch(actual)
     passed, score = comp_pcc(exp, act, pcc=pcc)
-    print(
-        f"[ace_step_v1_5][PCC] {label}: {float(score):.6f} (threshold={pcc}, ok={passed})",
-        flush=True,
-    )
+    print_pcc_result(label, float(score), threshold=pcc)
     assert_with_pcc(expected, actual, pcc=pcc)
     return float(score)
 
