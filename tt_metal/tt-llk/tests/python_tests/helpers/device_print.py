@@ -441,21 +441,16 @@ class ElfStrings:
 
 
 # DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
-# These match what Metal's parser handles.
+# Only formats that can plausibly be sent are listed.
 _DF_FLOAT32 = 0
 _DF_FLOAT16 = 1
-_DF_BFP8 = 2
-_DF_BFP4 = 3
 _DF_TF32 = 4
 _DF_FLOAT16_B = 5
 _DF_BFP8_B = 6
 _DF_BFP4_B = 7
 _DF_INT32 = 8
 _DF_UINT16 = 9
-_DF_LF8 = 10
-_DF_BFP2 = 11
 _DF_INT8 = 14
-_DF_BFP2_B = 15
 _DF_UINT32 = 24
 _DF_UINT8 = 30
 
@@ -472,7 +467,7 @@ def _make_float(exp_bits: int, mant_bits: int, data: int) -> float:
     exp_bias = (1 << (exp_bits - 1)) - 1
     exp_val = (data & exp_mask) - exp_bias
     mantissa_val = (data & (((1 << mant_bits) - 1) << exp_bits)) >> exp_bits
-    # Zero exponent and zero mantissa is zero (IEEE 754 convention).
+    # Zero exponent and zero mantissa is zero.
     if (data & exp_mask) == 0 and mantissa_val == 0:
         return -0.0 if sign else 0.0
     result = (1.0 + mantissa_val / (1 << mant_bits)) * (2.0**exp_val)
@@ -488,8 +483,8 @@ _F16 = ("e", None)
 _BF16 = ("H", lambda v: _bitcast_f32(v << 16))
 _U16, _I8, _U8 = ("H", None), ("b", None), ("B", None)
 
-# Map format into decode recipe for tile_slice
-# and the non-aliased typed_array formats.
+# Map format into decode recipe for tile slice
+# and the non-aliased typed array formats.
 _WIRE: dict[int, tuple[str, Any]] = {
     _DF_FLOAT32: _F32,
     _DF_INT32: _I32,
@@ -502,51 +497,47 @@ _WIRE: dict[int, tuple[str, Any]] = {
     _DF_UINT8: _U8,
 }
 
-# Recipes for floats ripped straight out of DEST: they arrive in _make_float's
-# [sign][mantissa][exponent] order, not IEEE, so they can't just be cast.
-# Metal emits Bfp*/Lf8 as fp16(5,10) and Bfp*_b as bf16(8,7).
-_TA_F16 = ("H", lambda v: _make_float(5, 10, v))
-_TA_BF16 = ("H", lambda v: _make_float(8, 7, v))
-_TA_TF32 = ("I", lambda v: _make_float(8, 10, v))
-
-# typed_array decode is arch-dependent:
-#   - Wormhole reads DEST directly, so it has to go through _make_float.
-#   - Blackhole reads DEST through 0xFFBD8000, so it just be casted.
-# Integers and fp32 are identical either way.
-_TYPED_ARRAY_WIRE_MAKE_FLOAT: dict[int, tuple[str, Any]] = {
-    _DF_FLOAT32: _F32,
-    _DF_INT32: _I32,
-    _DF_UINT32: _U32,
-    _DF_UINT16: _U16,
-    _DF_INT8: _I8,
-    _DF_UINT8: _U8,
-    _DF_TF32: _TA_TF32,
-    _DF_FLOAT16: _TA_F16,
-    _DF_BFP8: _TA_F16,
-    _DF_BFP4: _TA_F16,
-    _DF_BFP2: _TA_F16,
-    _DF_LF8: _TA_F16,
-    _DF_FLOAT16_B: _TA_BF16,
-    _DF_BFP8_B: _TA_BF16,
-    _DF_BFP4_B: _TA_BF16,
-    _DF_BFP2_B: _TA_BF16,
+# Bytes per element in a typed array by DataFormat.
+_TA_ELT_BYTES: dict[int, int] = {
+    _DF_FLOAT32: 4,
+    _DF_INT32: 4,
+    _DF_UINT32: 4,
+    _DF_UINT16: 2,
+    _DF_INT8: 1,
+    _DF_UINT8: 1,
+    _DF_FLOAT16: 2,
+    _DF_FLOAT16_B: 2,
 }
 
-# Standard-IEEE variant (Blackhole aperture): floats use the same bit-cast
-# recipes as the tile_slice path; Bfp*/Lf8 still alias fp16/bf16.
-_TYPED_ARRAY_WIRE_STANDARD: dict[int, tuple[str, Any]] = {
-    **_WIRE,
-    _DF_BFP8: _F16,
-    _DF_BFP4: _F16,
-    _DF_BFP2: _F16,
-    _DF_LF8: _F16,
-    _DF_BFP8_B: _BF16,
-    _DF_BFP4_B: _BF16,
-    _DF_BFP2_B: _BF16,
-}
 
-# In tile_slice context, Bfp_b is NOT aliased — it has its own byte-pair layout
-# (shared_exp byte + sign|mantissa byte). Mantissa width selects the variant.
+def _decode_typed_array(data: bytes, n: int, df: int, dest_make_float: bool) -> list:
+    """Decode n elements of DataFormat `df` from the front of a DEST dump.
+
+    16-bit floats arrive in _make_float [sign][mantissa][exponent] order if DEST
+    is read directly (on WH), or standard IEEE if read through 0xFFBD8000 (BH)."""
+    if df == _DF_FLOAT32:
+        return list(struct.unpack_from(f"<{n}f", data))
+    if df == _DF_INT32:
+        return list(struct.unpack_from(f"<{n}i", data))
+    if df == _DF_UINT32:
+        return list(struct.unpack_from(f"<{n}I", data))
+    if df == _DF_UINT16:
+        return list(struct.unpack_from(f"<{n}H", data))
+    if df == _DF_INT8:
+        return list(struct.unpack_from(f"<{n}b", data))
+    if df == _DF_UINT8:
+        return list(struct.unpack_from(f"<{n}B", data))
+    # Float16 / Float16_b.
+    if dest_make_float:
+        exp, mant = (5, 10) if df == _DF_FLOAT16 else (8, 7)
+        return [_make_float(exp, mant, v) for v in struct.unpack_from(f"<{n}H", data)]
+    if df == _DF_FLOAT16:
+        return list(struct.unpack_from(f"<{n}e", data))  # IEEE half
+    return [_bitcast_f32(v << 16) for v in struct.unpack_from(f"<{n}H", data)]  # bf16
+
+
+# Packing format for Bfp_b in TileSlice: (shared_exp byte + sign|mantissa byte).
+# Mantissa width selects the variant.
 _TILE_SLICE_BFP_BITS: dict[int, int] = {_DF_BFP8_B: 7, _DF_BFP4_B: 3}
 
 
@@ -588,21 +579,19 @@ def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
     return word >> 16, word & 0xFFFF
 
 
-def _render_typed_array(
-    args_blob: bytes, offset: int, ta_wire: dict[int, tuple[str, Any]]
-) -> str:
-    """Render a dp_typed_array_t record as one row of colored cells.
-    `ta_wire` is the per-arch decode table (DEST float byte order is arch-
-    dependent). Cell formatting follows helpers.utils.format_tile_row."""
+def _render_typed_array(args_blob: bytes, offset: int, dest_make_float: bool) -> str:
+    """Render a dp_typed_array_t record (a DEST register dump) as one row of
+    colored cells. DEST float byte order is arch-dependent, see _decode_typed_array.
+
+    Cell formatting follows helpers.utils.format_tile_row."""
     length, fmt_code = _typed_array_header(args_blob, offset)
-    recipe = ta_wire.get(fmt_code)
-    if recipe is None:
+    elt_bytes = _TA_ELT_BYTES.get(fmt_code)
+    if elt_bytes is None:
         return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
-    bpe = struct.calcsize(recipe[0])
-    # `length` is a count of u32 words; element count is byte_len // bpe.
+    # `length` is a count of u32 words; element count is byte_len // elt_bytes.
     byte_len = length * 4
     data = args_blob[offset + 4 : offset + 4 + byte_len]
-    values = _unpack(data, byte_len // bpe, recipe)
+    values = _decode_typed_array(data, byte_len // elt_bytes, fmt_code, dest_make_float)
     # Leading newline lifts the row off the '[RISC|file:line]' marker so the
     # array reads as its own block.
     return "\n" + format_tile_row(values, TILE_BG_RESULT) + " "
@@ -695,7 +684,7 @@ class DevicePrintParser:
         buffer_base: int,
         total_buffer_size: int,
         processor_count: int,
-        typed_array_make_float: bool = True,
+        dest_make_float: bool = True,
     ):
         self.buffer_base = buffer_base
         self.total_buffer_size = total_buffer_size
@@ -705,13 +694,7 @@ class DevicePrintParser:
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
         self._risc_names: dict[int, str] = _risc_names_tensix()
-        # DEST float byte order is arch-dependent (debug-array vs aperture read);
-        # see _TYPED_ARRAY_WIRE_* above.
-        self._ta_wire = (
-            _TYPED_ARRAY_WIRE_MAKE_FLOAT
-            if typed_array_make_float
-            else _TYPED_ARRAY_WIRE_STANDARD
-        )
+        self._dest_make_float = dest_make_float
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
         """Parse all complete records in data_slice,
@@ -865,7 +848,9 @@ class DevicePrintParser:
                 continue
 
             if ph.kind == "typed_array":
-                parts.append(_render_typed_array(args_blob, ph.offset, self._ta_wire))
+                parts.append(
+                    _render_typed_array(args_blob, ph.offset, self._dest_make_float)
+                )
                 continue
 
             if ph.kind == "tile_slice":
@@ -945,6 +930,6 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
         TestConfig.DEVICE_PRINT_BUFFER_SIZE,
         TestConfig.PROCESSOR_COUNT,
         # Blackhole reads DEST via the 0xFFBD8000 aperture (standard-IEEE floats);
-        # Wormhole reads via the debug-array port (_make_float order).
-        typed_array_make_float=TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE,
+        # every other arch reads it directly (floats in _make_float order).
+        dest_make_float=TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE,
     )
