@@ -89,6 +89,7 @@ def init_text_decoder_kv_cache(
         if hasattr(device, "get_num_devices") and int(device.get_num_devices()) > 1:
             mm = ttnn.ReplicateTensorToMesh(device)
     except Exception:
+        # Single-device KV-cache init skips mesh replication.
         pass
 
     kv_cache: list[list[ttnn.Tensor]] = []

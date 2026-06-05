@@ -73,6 +73,7 @@ def mesh_default_device(mesh: ttnn.Device):
     try:
         original = ttnn.GetDefaultDevice()
     except Exception:
+        # Default device may be unset before tests open a mesh.
         original = None
     ttnn.SetDefaultDevice(mesh)
     try:
@@ -108,6 +109,7 @@ def _requires_bh_qb() -> bool:
     try:
         return ttnn.get_num_devices() != _NUM_DEVICES
     except Exception:
+        # Treat probe failures as "wrong host" so tests skip instead of crashing at collection.
         return True
 
 

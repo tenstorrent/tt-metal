@@ -1629,7 +1629,7 @@ def _conv1d_same(
             prep_cache=prep_cache,
         )
 
-    chunk_size = _CONV1D_WIDE_CHUNK_ROWS if in_channels >= 512 else _CONV1D_CHUNK_ROWS
+    chunk_size = _CONV1D_WIDE_CHUNK_ROWS
     chunks: list[ttnn.Tensor] = []
     for start in range(0, seq, chunk_size):
         end = min(start + chunk_size, seq)
@@ -2881,6 +2881,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         try:
             ttnn.release_trace(self.device, rt.trace_id)
         except Exception:
+            # Best-effort trace release during teardown; local runtime state is cleared below.
             pass
         self._forward_trace_rt = None
 
