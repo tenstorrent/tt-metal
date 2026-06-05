@@ -51,11 +51,6 @@ _LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
 # Query-block relative attention above this seq (avoids O(S²) L1 use).
 _ATTN_QUERY_CHUNK_THRESHOLD = 3072
 _ATTN_QUERY_CHUNK = 512
-# A relative-position table at ``seq_len`` is ``seq * head_dim * seq * 2 B`` bf16. With 24
-# conformer layers each holding its own (distinct ``distance_weight`` per layer), caching every
-# table at long audio overflows DRAM (seq=2125 → ~578 MB each). Above this size cap the table
-# is built per attention call and deallocated by the caller after use.
-_MAX_CACHED_REL_POS_TABLE_BYTES = 32 * 1024 * 1024  # 32 MB
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
@@ -119,19 +114,14 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self.speech_encoder_chunk_size = speech_encoder_chunk_size
         self.speech_encoder_left_chunk_num = speech_encoder_left_chunk_num
         self.has_adapter = parameters.adapter is not None
-        # Device flat uint32 distance-index tensors ``[1, S*S]`` keyed by
-        # ``(seq_len, left_max, right_max)`` — fed to on-device ``ttnn.embedding``.
+        # Device uint32 distance-index tensors ``[S, S]`` keyed by ``(seq_len, left_max, right_max)``.
         self._rel_pos_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
-        # Per-query-block uint32 distance index ``[Qc, S]`` keyed by ``(q0, Qc, S, left, right)`` for the
-        # long-seq query-block attention path (see ``_relative_table_block``).
+        # Per-query-block uint32 distance index ``[Qc, S]`` keyed by ``(q0, Qc, S, left, right)``.
         self._rel_block_idx_cache: dict[Tuple[int, int, int, int, int], ttnn.Tensor] = {}
+        # ``ttnn.gather`` index ``[B, H, Q, S]`` (TILE uint32) keyed by ``(idx_id, batch, num_heads)``.
+        self._rel_gather_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
         # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
         self._runtime_warmed: set[Tuple[int, int]] = set()
-        # Cache the full embedded position table ``[S, S, head_dim]`` per ``(seq_len, weight_id)``
-        # — eliminates 24× ``ttnn.embedding`` + reshape per forward. The scale is pre-folded into
-        # the cached table and the tensor is stored in L1 when it fits (≤ 1 MB), eliminating
-        # 24× rel_logits scale-multiply + 24× DRAM reshape.
-        self._rel_pos_tab_cache: dict[Tuple[int, int, float], ttnn.Tensor] = {}
         # Cache depthwise conv left-pad zero tensors per ``(batch, lp, hidden_size)`` — eliminates
         # 24–25 ``ttnn.zeros`` (FillPad) calls per forward pass (~1.1 ms).
         self._dw_left_pad_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
@@ -1187,13 +1177,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
 
     def _relative_position_index_device(self, seq_len: int, *, left_max: int, right_max: int) -> ttnn.Tensor:
-        """Cached device ``[S, S]`` uint32 distance indices for on-device ``ttnn.embedding``.
+        """Cached device ``[S, S]`` uint32 distance indices for fused relative logits.
 
         The index grid (a clamped ``q - k`` distance) depends only on ``(seq_len, left_max,
         right_max)``, so it is built once per shape on host (cheap integer arithmetic) and uploaded
-        as a small uint32 tensor. Keeping it 2-D ``[S, S]`` (not flattened to ``[1, S*S]``) makes
-        ``ttnn.embedding`` yield the table already shaped ``[S, S, head_dim]`` — no reshape to expose
-        the per-query batch dim for the relative-logits bmm.
+        as a small uint32 tensor.
         """
         idx_key = (seq_len, left_max, right_max)
         cached = self._rel_pos_idx_cache.get(idx_key)
@@ -1214,145 +1202,89 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._rel_pos_idx_cache[idx_key] = idx_dev
         return idx_dev
 
-    def _relative_embedding_table(
-        self,
-        seq_len: int,
-        *,
-        distance_weight: ttnn.Tensor,
-        left_max: int,
-        right_max: int,
-        scale: float,
+    def _relative_block_position_index_device(
+        self, q0: int, q1: int, seq_len: int, *, left_max: int, right_max: int
     ) -> ttnn.Tensor:
-        """Return pre-scaled ``[S, S, head_dim]`` relative position table for batched matmul.
-
-        Cached per ``(seq_len, weight_id, scale)``. Layout is ``pos[s_q, s_k, d]``; the
-        relative-logits bmm contracts ``d`` via ``transpose_b=True`` (see ``_relative_logits_bmm``),
-        so no per-layer permute to ``[s_q, d, s_k]`` is needed.
-        """
-        weight_id = self._tensor_stable_id(distance_weight)
-        tab_key = (seq_len, weight_id, scale)
-        cached_tab = self._rel_pos_tab_cache.get(tab_key)
-        if cached_tab is not None:
-            return cached_tab
-
-        head_dim = self.hidden_size // self.speech_encoder_attention_heads
-        idx_dev = self._relative_position_index_device(seq_len, left_max=left_max, right_max=right_max)
-
-        # The table is ``S * head_dim * S * 2 B`` bf16. For long audio (S ≳ 256) this exceeds
-        # L1, so build straight into DRAM; otherwise stay in L1 for the hot short-seq path.
-        _L1_POS_TAB_LIMIT = 1 * 1024 * 1024
-        table_bytes = seq_len * seq_len * head_dim * 2
-        upload_mc = ttnn.DRAM_MEMORY_CONFIG if table_bytes > _L1_POS_TAB_LIMIT else ttnn.L1_MEMORY_CONFIG
-
-        # On-device gather: ``ttnn.embedding`` over the ``[S, S]`` distance indices yields the table
-        # already shaped ``[S, S, D]`` (``pos[s_q, s_k, d]``). The relative-logits bmm contracts ``d``
-        # with ``transpose_b=True``, so we skip the previous ``reshape [1,S²,D]→[S,S,D]`` (a physical
-        # re-tile of a hundreds-of-MB table) and the ``permute (0,2,1)→[S,D,S]`` (another full copy) —
-        # ~1 s of device work + two ~GB allocations per conformer layer at long audio. Replaces the
-        # host ``torch.nn.functional.embedding`` + full-table H2D upload of the original path.
-        emb = ttnn.embedding(idx_dev, weight=distance_weight, layout=ttnn.TILE_LAYOUT, memory_config=upload_mc)
-
-        # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
-        if scale != 1.0:
-            emb_scaled = ttnn.multiply(emb, scale, memory_config=upload_mc)
-            ttnn.deallocate(emb)
-            emb = emb_scaled
-
-        # Very long audio: a single table is hundreds of MB (seq=2125, head_dim=64 → ~578 MB).
-        # Caching 24 of them across conformer layers blows DRAM. Skip the cache here so the caller
-        # treats the result as a one-shot tensor and deallocates after each layer's attention.
-        # On TP meshes, also skip cache at S>=256: the cached L1/DRAM table can diverge on 1×4.
-        if table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES or (self._tp > 1 and seq_len >= 256):
-            return emb
-        self._rel_pos_tab_cache[tab_key] = emb
-        return emb
-
-    @staticmethod
-    def _relative_logits_bmm(
-        q: ttnn.Tensor,
-        pos_bmm: ttnn.Tensor,
-        *,
-        batch: int,
-        num_heads: int,
-        seq_len: int,
-        memory_config: ttnn.MemoryConfig,
-        compute_kernel_config: ttnn.DeviceComputeKernelConfig,
-    ) -> ttnn.Tensor:
-        """``einsum('bhld,lrd->bhlr', q, pos)`` via batched matmul over query positions.
-
-        ``pos_bmm`` is ``[S, S, head_dim]`` (``pos[s_q, s_k, d]``); ``transpose_b=True`` contracts the
-        last dim ``d`` (reading ``pos[s_q]`` as ``[d, s_k]``) so no explicit ``[s_q, d, s_k]`` permute
-        is built.
-        """
-        head_dim = int(q.shape[-1])
-        q_bh = ttnn.reshape(q, (batch * num_heads, seq_len, head_dim))
-        q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)
-        ttnn.deallocate(q_bh)
-        rel_sid = ttnn.matmul(
-            q_sid,
-            pos_bmm,
-            transpose_b=True,
-            memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-        ttnn.deallocate(q_sid)
-        rel_bh = ttnn.permute(rel_sid, (1, 0, 2), memory_config=memory_config)
-        ttnn.deallocate(rel_sid)
-        return ttnn.reshape(rel_bh, (batch, num_heads, seq_len, seq_len))
-
-    def _relative_table_block(
-        self, q0: int, q1: int, seq_len: int, *, distance_weight: ttnn.Tensor, left_max: int, right_max: int
-    ) -> ttnn.Tensor:
-        """``[Qc, S, head_dim]`` rel-pos table for query rows ``[q0:q1]`` (all keys) — never the full
-        ``[S, S, D]`` table, so peak memory is O(Qc·S). Index grid cached per ``(q0, Qc, S, l, r)``."""
+        """Cached device ``[Qc, S]`` uint32 distance indices for a query block."""
         qc = q1 - q0
         idx_key = (q0, qc, seq_len, left_max, right_max)
-        idx_dev = self._rel_block_idx_cache.get(idx_key)
-        if idx_dev is None:
-            r = np.arange(seq_len, dtype=np.int64)
-            l = np.arange(q0, q1, dtype=np.int64)
-            dist = (np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max).astype(np.int32)
-            idx_dev = ttnn.from_torch(
-                torch.from_numpy(np.ascontiguousarray(dist)),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper(self.device),
-            )
-            self._rel_block_idx_cache[idx_key] = idx_dev
-        return ttnn.embedding(
-            idx_dev, weight=distance_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        cached = self._rel_block_idx_cache.get(idx_key)
+        if cached is not None:
+            return cached
+        r = np.arange(seq_len, dtype=np.int64)
+        l = np.arange(q0, q1, dtype=np.int64)
+        dist = (np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max).astype(np.int32)
+        idx_dev = ttnn.from_torch(
+            torch.from_numpy(np.ascontiguousarray(dist)),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper(self.device),
         )
+        self._rel_block_idx_cache[idx_key] = idx_dev
+        return idx_dev
 
-    @staticmethod
-    def _relative_logits_bmm_block(
-        q_blk: ttnn.Tensor,
-        table_blk: ttnn.Tensor,
+    def _relative_gather_index_4d(
+        self,
+        idx_dev: ttnn.Tensor,
         *,
         batch: int,
         num_heads: int,
-        qc: int,
+        q_rows: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Expand ``[Q, S]`` distance indices to ``[B, H, Q, S]`` TILE uint32 for ``ttnn.gather``."""
+        cache_key = (self._tensor_stable_id(idx_dev), batch, num_heads)
+        cached = self._rel_gather_idx_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        idx_tile = ttnn.to_layout(idx_dev, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        idx_4d = ttnn.reshape(idx_tile, (1, 1, q_rows, seq_len))
+        idx_gather = ttnn.repeat(idx_4d, [batch, num_heads, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(idx_4d)
+        self._rel_gather_idx_cache[cache_key] = idx_gather
+        return idx_gather
+
+    def _relative_logits_fused(
+        self,
+        q: ttnn.Tensor,
+        *,
+        idx_dev: ttnn.Tensor,
+        distance_weight: ttnn.Tensor,
+        batch: int,
+        num_heads: int,
+        q_rows: int,
         seq_len: int,
         memory_config: ttnn.MemoryConfig,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ) -> ttnn.Tensor:
-        """Per-query-block ``einsum('bhqd,qkd->bhqk', q_blk, table_blk)`` → ``[B, H, Qc, S]``."""
-        head_dim = int(q_blk.shape[-1])
-        q_bh = ttnn.reshape(q_blk, (batch * num_heads, qc, head_dim))
-        q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)  # [Qc, bh, D]
-        ttnn.deallocate(q_bh)
-        rel_sid = ttnn.matmul(
-            q_sid,
-            table_blk,
+        """``einsum('bhqd,qkd->bhqk', q, emb(idx))`` without materializing ``[Q, S, D]``.
+
+        Distance vocabulary ``V = left_max + right_max + 1`` is tiny (73 for Seamless M4T v2), so:
+          1. ``q_scores[b,h,q,v] = dot(q[b,h,q,:], emb_weight[v,:])`` via matmul
+          2. ``rel[b,h,q,k] = q_scores[b,h,q, idx[q,k]]`` via ``ttnn.gather``
+        """
+        head_dim = int(q.shape[-1])
+        vocab = int(distance_weight.shape[-2])
+        q_bh = ttnn.reshape(q, (batch * num_heads, q_rows, head_dim))
+        emb_w = ttnn.reshape(distance_weight, (vocab, head_dim))
+        q_scores_bh = ttnn.matmul(
+            q_bh,
+            emb_w,
             transpose_b=True,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
-        )  # [Qc, bh, S]
-        ttnn.deallocate(q_sid)
-        rel_bh = ttnn.permute(rel_sid, (1, 0, 2), memory_config=memory_config)  # [bh, Qc, S]
-        ttnn.deallocate(rel_sid)
-        return ttnn.reshape(rel_bh, (batch, num_heads, qc, seq_len))
+        )
+        ttnn.deallocate(q_bh)
+        q_scores = ttnn.reshape(q_scores_bh, (batch, num_heads, q_rows, vocab))
+        ttnn.deallocate(q_scores_bh)
+        idx_gather = self._relative_gather_index_4d(
+            idx_dev, batch=batch, num_heads=num_heads, q_rows=q_rows, seq_len=seq_len
+        )
+        rel = ttnn.gather(q_scores, dim=3, index=idx_gather, memory_config=memory_config)
+        ttnn.deallocate(q_scores)
+        return rel
 
     def _chunked_relative_attention(
         self,
@@ -1391,20 +1323,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
             q1 = min(q0 + _ATTN_QUERY_CHUNK, seq_len)
             qc = q1 - q0
             q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
-            table_blk = self._relative_table_block(
-                q0, q1, seq_len, distance_weight=dist_w, left_max=left_max, right_max=right_max
+            idx_blk = self._relative_block_position_index_device(
+                q0, q1, seq_len, left_max=left_max, right_max=right_max
             )
-            rel_blk = self._relative_logits_bmm_block(
+            rel_blk = self._relative_logits_fused(
                 q_blk,
-                table_blk,
+                idx_dev=idx_blk,
+                distance_weight=dist_w,
                 batch=batch,
                 num_heads=num_heads,
-                qc=qc,
+                q_rows=qc,
                 seq_len=seq_len,
                 memory_config=mc,
                 compute_kernel_config=self._linear_compute_cfg,
             )  # [B,H,Qc,S] — the additive rel-pos bias
-            ttnn.deallocate(table_blk)
             if attention_mask_4d is not None:
                 mask_blk = ttnn.slice(
                     attention_mask_4d,
@@ -1522,31 +1454,22 @@ class TTSeamlessM4Tv2SpeechEncoder:
             )
             ttnn.deallocate(k)
 
-            # Q is pre-scaled by 1/√head_dim, so pos_tab uses scale=1.0 here —
-            # the einsum over the pre-scaled Q already provides the single correct factor.
-            pos_bmm = self._relative_embedding_table(
+            idx_dev = self._relative_position_index_device(
                 seq_len,
-                distance_weight=attn_module.distance_embedding.weight,
                 left_max=int(attn_module.left_max_position_embeddings),
                 right_max=int(attn_module.right_max_position_embeddings),
-                scale=1.0,
             )
-            # Long-audio: ``_relative_embedding_table`` returns an uncached table at this seq.
-            # Deallocate after the BMM so the next layer's table fits in DRAM.
-            head_dim_local = self.hidden_size // self.speech_encoder_attention_heads  # per-head, constant
-            pos_table_bytes = seq_len * seq_len * head_dim_local * 2
-            uncached_pos_bmm = pos_table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES or (self._tp > 1 and seq_len >= 256)
-            rel_logits = self._relative_logits_bmm(
+            rel_logits = self._relative_logits_fused(
                 q,
-                pos_bmm,
+                idx_dev=idx_dev,
+                distance_weight=attn_module.distance_embedding.weight,
                 batch=batch,
                 num_heads=num_heads,
+                q_rows=seq_len,
                 seq_len=seq_len,
                 memory_config=scores_mc,
                 compute_kernel_config=self._linear_compute_cfg,
             )
-            if uncached_pos_bmm:
-                ttnn.deallocate(pos_bmm)
             ttnn.deallocate(q)
             scores = ttnn.add(scores, rel_logits, memory_config=scores_mc)
             ttnn.deallocate(rel_logits)
@@ -2145,31 +2068,25 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(h2)
         return ttnn.add(res2, ff, memory_config=self._mc_act(seq_len=lens_a))
 
-    def warm_relative_position_caches_for_seq_lens(self, seq_lens: list[int]) -> None:
-        """Populate ``_rel_pos_tab_cache`` and ``_rel_pos_idx_cache`` for each seq len.
-
-        Conformer self-attention always uses ``scale=1.0`` because Q weights are pre-scaled
-        by 1/√head_dim during preprocessing. Cached tables are ``[S, S, D]`` for ``bmm`` (transpose_b).
-
-        Skips lengths where forward never uses the full table: chunked relative attention at
-        ``slen > _ATTN_QUERY_CHUNK_THRESHOLD``, or when the table would exceed
-        ``_MAX_CACHED_REL_POS_TABLE_BYTES`` (same conditions as ``_relative_embedding_table`` cache).
-        """
-        head_dim = self.hidden_size // self.speech_encoder_attention_heads
+    def warm_relative_position_caches_for_seq_lens(self, seq_lens: list[int], *, batch: int = 1) -> None:
+        """Populate distance-index and gather-index caches for each seq len."""
         enc = self.parameters.encoder
+        sa0 = enc.layers[0].self_attn
+        left_max = int(sa0.left_max_position_embeddings)
+        right_max = int(sa0.right_max_position_embeddings)
+        num_heads = self._num_local_heads
         for slen in seq_lens:
-            table_bytes = slen * slen * head_dim * 2
-            if slen > _ATTN_QUERY_CHUNK_THRESHOLD or table_bytes > _MAX_CACHED_REL_POS_TABLE_BYTES:
-                continue
-            for i in range(self.speech_encoder_layers):
-                sa = enc.layers[i].self_attn
-                self._relative_embedding_table(
-                    slen,
-                    distance_weight=sa.distance_embedding.weight,
-                    left_max=int(sa.left_max_position_embeddings),
-                    right_max=int(sa.right_max_position_embeddings),
-                    scale=1.0,
-                )
+            idx_full = self._relative_position_index_device(slen, left_max=left_max, right_max=right_max)
+            if slen <= _ATTN_QUERY_CHUNK_THRESHOLD:
+                self._relative_gather_index_4d(idx_full, batch=batch, num_heads=num_heads, q_rows=slen, seq_len=slen)
+            else:
+                for q0 in range(0, slen, _ATTN_QUERY_CHUNK):
+                    q1 = min(q0 + _ATTN_QUERY_CHUNK, slen)
+                    qc = q1 - q0
+                    idx_blk = self._relative_block_position_index_device(
+                        q0, q1, slen, left_max=left_max, right_max=right_max
+                    )
+                    self._relative_gather_index_4d(idx_blk, batch=batch, num_heads=num_heads, q_rows=qc, seq_len=slen)
 
     def _ensure_runtime_caches(self, batch: int, seq_len: int) -> None:
         """One-time per ``(batch, seq_len)`` warmup before the conformer stack runs."""
@@ -2183,13 +2100,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Pre-populate shape-dependent caches for ``(batch, seq_len)`` before the first forward.
 
         Caches populated:
-        * ``_rel_pos_tab_cache``   — ``[S, S, D]`` tables for short seq only (skipped when chunked)
+        * ``_rel_pos_idx_cache`` / ``_rel_block_idx_cache`` / ``_rel_gather_idx_cache``
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
-        * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
+        * ``_encoder_additive_mask_cache`` — no-padding-mask entry ( ``mask_id=-1``)
         * depthwise conv weight prep — ``prepare_conv_weights`` only (no Conv2d forward)
         """
         self._prewarm_depthwise_conv_weights(batch, seq_len)
-        self.warm_relative_position_caches_for_seq_lens([seq_len])
+        self.warm_relative_position_caches_for_seq_lens([seq_len], batch=batch)
         self._chunk_attention_mask_float01(batch, seq_len, ttnn.bfloat16)
         self._encoder_additive_mask(None, batch=batch, seq_len=seq_len, dtype=ttnn.bfloat16)
 
@@ -2233,7 +2150,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 cur = lens_r
                 seq_lens_to_warm.add(cur)
 
-        self.warm_relative_position_caches_for_seq_lens(sorted(seq_lens_to_warm))
+        self.warm_relative_position_caches_for_seq_lens(sorted(seq_lens_to_warm), batch=batch)
         return SpeechEncoderTraceMasks(enc_4d, adapter_masks, pads)
 
     def forward(
