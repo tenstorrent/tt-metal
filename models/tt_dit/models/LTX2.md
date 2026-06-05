@@ -97,40 +97,6 @@ pytest models/tt_dit/tests/models/ltx/test_audio_components_ltx.py \
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
 
-### 1080p on Wormhole Loud Box (2×4) only
-
-Blackhole workflows are unchanged — keep using the pytest commands above (`bh_2x4sp1tp0`, etc.).
-
-On **Wormhole** (`wormhole_b0`, `-k 2x4sp0tp1`), full-resolution AV at 1920×1088 needs extra DRAM headroom and a
-two-process prompt flow for **new** prompts (inline Gemma encode fragments device memory before VAE decode).
-
-**Supported entry point** (one command; runs encode then generate):
-
-```bash
-export TT_METAL_HOME="$(pwd)"
-export PYTHONPATH="$(pwd):$(pwd)/ttnn:$(pwd)/tools"
-export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-$HOME/.cache/tt-dit}"
-
-./run_ltx_1080p.sh fast "your prompt" out.mp4   # distilled 2-stage (~3 min after encode)
-./run_ltx_1080p.sh pro  "your prompt" out.mp4   # one-stage Pro (~30+ min denoise at 1080p)
-```
-
-Defaults: `HEIGHT=1088`, `WIDTH=1920`, `NUM_FRAMES=145`, `MESH_K=2x4sp0tp1`.
-
-Prompts with embedded quotes: `PROMPT="$(cat prompts/my.txt)" ./run_ltx_1080p.sh fast "" out.mp4`
-
-After a prompt is encoded once, its embedding is cached under `~/.cache/tt-dit/ltx-embeddings/` and a single
-pytest run with the same `PROMPT` may work without the wrapper.
-
-Optional: `LTX_MEM_PROFILE=1` logs per-phase DRAM (debug only). `LTX_ENCODE_ONLY=1` is used internally by the
-wrapper (Wormhole only).
-
-If weights fail to load after pulling this branch (`dtype` / sharding `LoadingError`), delete the stale
-transformer cache subfolder for your mesh under `~/.cache/tt-dit/` and rerun so weights rebuild.
-
-WH-only code paths (no effect on Blackhole): encoder FSDP, DiT AV FFN FSDP, gather+local SDPA (BH keeps ring-joint),
-CCL scratch reclaim before VAE, and `LTX_ENCODE_ONLY`.
-
 ## Scalability
 
 **Wormhole:**

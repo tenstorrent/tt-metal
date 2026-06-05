@@ -400,30 +400,6 @@ class CCLManager:
             t_front_pad=t_front_pad,
         )
 
-    def clear_persistent_buffers(self):
-        """Deallocate every cached all-gather / reduce-scatter / neighbor-pad ping-pong
-        scratch buffer and reset the round-robin indices.
-
-        Quality-neutral: these are transient communication scratch buffers, regenerated
-        lazily on the next collective. Use it to reclaim DRAM between pipeline phases so a
-        large transient buffer from one phase (e.g. the gathered K/V at high resolution in
-        the DiT denoise) does not stay resident and fragment the allocator for the next
-        phase (e.g. the high-res VAE decode, which needs a large contiguous block)."""
-        for buffers in self._ping_pong_buffer_cache.values():
-            for buf in buffers:
-                try:
-                    ttnn.deallocate(buf)
-                except Exception:
-                    pass
-        self._ping_pong_buffer_cache.clear()
-        self._ping_pong_buffer_indices.clear()
-        self.rs_ping_pong_idx = [0, 0]
-        self.rs_ping_pong_idx_fused = [0, 0]
-        self.ag_ping_pong_idx = [0, 0]
-        self.exp_ring_ping_pong_idx = [0, 0]
-        self.np_ping_pong_idx = [0, 0]
-        self.sr_ping_pong_idx = [0, 0]
-
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
         for axis in [0, 1]:

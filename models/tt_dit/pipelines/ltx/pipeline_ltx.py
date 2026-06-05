@@ -220,15 +220,8 @@ class LTXPipeline:
         # Text-encoder TP spans the full width of mesh axis 1 (T5 encoder pattern):
         # TP=1 on 1x1, 4 on 2x4, 8 on 4x8. Shared by the Gemma encoder and the
         # embeddings connectors so both shard identically.
-        # WH-only: FSDP the encoder across mesh axis 0 (1080p DRAM). BH keeps TP-only config.
-        encoder_sequence_parallel = (
-            ParallelFactor(factor=self.mesh_device.shape[0], mesh_axis=0)
-            if ttnn.device.is_wormhole_b0(self.mesh_device)
-            else None
-        )
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
-            sequence_parallel=encoder_sequence_parallel,
         )
         # When True, the denoise loop captures the DiT forward as a ttnn trace on the
         # first step and replays it thereafter (collapses per-op dispatch overhead).
@@ -316,10 +309,8 @@ class LTXPipeline:
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
             self._prime_caches()
-            self._log_mem("post-init (caches primed)")
             if run_warmup and num_frames > 0 and height > 0 and width > 0:
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
-                self._log_mem("post-warmup")
 
     def _traced_step(self, trace_key: str, fn: Callable, *, capture_inputs: dict, replay_inputs: dict):
         """Capture ``fn`` as a ttnn trace on the first call for ``trace_key``; replay after.
@@ -543,7 +534,7 @@ class LTXPipeline:
             mesh_device=self.mesh_device,
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
-            is_fsdp=self.is_fsdp and self._wormhole_memory_opts_enabled(),
+            is_fsdp=self.is_fsdp,
             has_audio=self.mode == "av",
             apply_gated_attention=self._has_gate,
             cross_attention_adaln=self._cross_attention_adaln,
@@ -649,60 +640,6 @@ class LTXPipeline:
         # measured coresident on BH-LB 2x4 (the tightest BH config) with no OOM,
         # even with the fp32 vocoder's conv3d activations live. Excluding them only
         # forces a redundant audio reload at decode (~6s warm) for no memory gain.
-        # (On WH-LB the resident audio modules are part of the canonical primed layout
-        # the VAE decode is validated against; evicting them reshapes the heap and
-        # actually reduces the largest contiguous block, so keep them resident here too.)
-
-    def _wormhole_memory_opts_enabled(self) -> bool:
-        """WH-only 1080p memory paths (encoder FSDP, DiT FSDP AV, CCL scratch reclaim, encode-only)."""
-        return ttnn.device.is_wormhole_b0(self.mesh_device)
-
-    def _clear_ccl_scratch_before_vae_if_wormhole(self) -> None:
-        """Reclaim denoise CCL scratch before VAE load — WH-only; BH generate() unchanged."""
-        if not self._wormhole_memory_opts_enabled():
-            return
-        self.ccl_manager.clear_persistent_buffers()
-        if self.vae_ccl_manager is not self.ccl_manager:
-            self.vae_ccl_manager.clear_persistent_buffers()
-
-    def _log_mem(self, label: str) -> None:
-        """Phase-boundary memory probe for OOM localization (Phase-1 instrumentation).
-
-        Logs per-chip DRAM (and L1) used/total/free plus a running per-run peak, so a
-        resolution ladder produces a phase table pinpointing where memory peaks/OOMs.
-        Gated on ``LTX_MEM_PROFILE`` so the extra ``synchronize_device`` cost is only paid
-        when profiling, and wrapped so a probe failure can never break a generate.
-
-        ``get_memory_view`` reports per-bank figures for a single device's allocator (the
-        same allocation is mirrored across the mesh), so the totals here are PER CHIP — the
-        number to compare against 12 GB on a Wormhole n300 ASIC.
-        """
-        if os.environ.get("LTX_MEM_PROFILE", "0").lower() not in ("1", "true", "yes"):
-            return
-        try:
-            ttnn.synchronize_device(self.mesh_device)
-            if not hasattr(self, "_mem_peak"):
-                self._mem_peak = {}
-            parts = []
-            for name, btype in (("DRAM", ttnn.BufferType.DRAM), ("L1", ttnn.BufferType.L1)):
-                v = ttnn.get_memory_view(self.mesh_device, btype)
-                used = v.num_banks * v.total_bytes_allocated_per_bank
-                total = v.num_banks * v.total_bytes_per_bank
-                free = v.num_banks * v.total_bytes_free_per_bank
-                peak = max(self._mem_peak.get(name, 0), used)
-                self._mem_peak[name] = peak
-                pct = (100.0 * used / total) if total else 0.0
-                parts.append(
-                    f"{name} {used / 2**30:.2f}/{total / 2**30:.2f} GB ({pct:.0f}%, "
-                    f"free {free / 2**30:.2f}, peak {peak / 2**30:.2f})"
-                )
-            logger.info(f"[MEM {label}] per-chip: " + " | ".join(parts))
-        except Exception as e:  # never let a memory probe break a run
-            logger.warning(f"[MEM {label}] memory probe failed: {e}")
-
-    def _reset_mem_peak(self) -> None:
-        """Clear the per-run memory peak so each generate() starts a fresh high-water mark."""
-        self._mem_peak = {}
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -711,13 +648,9 @@ class LTXPipeline:
             self._prepare_transformer(idx)
         # Each _prepare_* no-ops when its module isn't present (None), so no call-site guards.
         self._prepare_vae()
-        self._log_mem("prime: after VAE")
         self._prepare_upsampler()
-        self._log_mem("prime: after upsampler")
         self._prepare_audio_decoder()
-        self._log_mem("prime: after audio decoder")
         self._prepare_transformer(0)
-        self._log_mem("prime: after transformer(0) [DiT resident, peers evicted]")
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
@@ -727,27 +660,10 @@ class LTXPipeline:
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
-            is_fsdp=self.is_fsdp and self._wormhole_memory_opts_enabled(),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=state.state_dict_provider,
         )
         self.transformer = state.model
-
-        if os.environ.get("LTX_MEM_PROFILE", "0").lower() in ("1", "true", "yes"):
-            try:
-                blk = self.transformer.transformer_blocks[0]
-                for name, p in (
-                    ("ffn.ff1.weight", blk.ffn.ff1.weight),
-                    ("attn1.to_qkv.weight", blk.attn1.to_qkv.weight),
-                ):
-                    shards = ttnn.get_device_tensors(p.data)
-                    per_dev = tuple(shards[0].shape) if shards else None
-                    logger.info(
-                        f"[SHARD t{idx} {name}] total={tuple(p.total_shape)} "
-                        f"expected_local={tuple(p.local_shape)} mesh_axes={p.mesh_axes} "
-                        f"actual_per_device={per_dev} num_shards={len(shards)}"
-                    )
-            except Exception as e:
-                logger.warning(f"[SHARD probe] failed: {e}")
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
@@ -1052,32 +968,18 @@ class LTXPipeline:
 
         total_t0 = time.time()
 
-        self._reset_mem_peak()
-        self._log_mem(f"generate start (Pro) {width}x{height} {num_frames}f")
-
         t0 = time.time()
         # On-device Gemma encode; coresident-excluded with the DiT/VAE, so loading it auto-evicts
         # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
         # a cached prompt skips the encoder entirely.
-        encoder_ran_inline = not os.path.exists(self._device_embed_cache_path([prompt, neg]))
-        if encoder_ran_inline:
+        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt, neg])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
-        # WH-only encode-only pre-pass (see run_ltx_1080p.sh): cache embedding, skip denoise/VAE.
-        if self._wormhole_memory_opts_enabled() and os.environ.get("LTX_ENCODE_ONLY", "0").lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            logger.info("LTX_ENCODE_ONLY: prompt embedding cached to host; skipping denoise/VAE.")
-            return output_path
-        self._log_mem("after encode")
 
         self._prepare_transformer(0)
-        self._log_mem("after transformer prepare")
 
         t0 = time.time()
         video_latent, audio_latent = self.call_av(
@@ -1102,23 +1004,18 @@ class LTXPipeline:
         )
         denoise_time = time.time() - t0
         logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
-        self._log_mem("after denoise (call_av)")
 
-        self._clear_ccl_scratch_before_vae_if_wormhole()
         t0 = time.time()
         self._prepare_vae()
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
-        self._log_mem("after VAE prepare (DiT evicted)")
 
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
 
         t0 = time.time()
         video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
-        self._log_mem("after VAE decode")
 
         audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
-        self._log_mem("after audio decode")
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         total_time = time.time() - total_t0

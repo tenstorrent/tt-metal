@@ -610,33 +610,19 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_width = width // 2
         total_t0 = time.time()
 
-        self._reset_mem_peak()
-        self._log_mem(f"generate start {width}x{height} {num_frames}f")
-
         t0 = time.time()
         # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
         # miss — a cached prompt skips the encoder entirely.
-        encoder_ran_inline = not os.path.exists(self._device_embed_cache_path([prompt]))
-        if encoder_ran_inline:
+        if not os.path.exists(self._device_embed_cache_path([prompt])):
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
-        # WH-only encode-only pre-pass (see run_ltx_1080p.sh): cache embedding, skip denoise/VAE.
-        if self._wormhole_memory_opts_enabled() and os.environ.get("LTX_ENCODE_ONLY", "0").lower() in (
-            "1",
-            "true",
-            "yes",
-        ):
-            logger.info("LTX_ENCODE_ONLY: prompt embedding cached to host; skipping denoise/VAE.")
-            return output_path
-        self._log_mem("after encode")
 
         # Both distilled stages share variant 0 (no weight swap between stages).
         t0 = time.time()
         self._prepare_transformer(0)
         logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
-        self._log_mem("after transformer prepare")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -652,7 +638,6 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key="s1",
         )
         logger.info(f"Stage 1 denoise: {time.time() - t0:.1f}s")
-        self._log_mem("after stage 1 denoise")
 
         if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
             s1_path = output_path.replace(".mp4", "_s1.wav")
@@ -668,7 +653,6 @@ class LTXDistilledPipeline(LTXPipeline):
         t0 = time.time()
         upsampled = self._upsample_latent(s1_spatial)
         logger.info(f"Latent upsample: {time.time() - t0:.1f}s")
-        self._log_mem("after upsample")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
@@ -689,24 +673,19 @@ class LTXDistilledPipeline(LTXPipeline):
             trace_key="s2",
         )
         logger.info(f"Stage 2 denoise: {time.time() - t0:.1f}s")
-        self._log_mem("after stage 2 denoise")
 
-        self._clear_ccl_scratch_before_vae_if_wormhole()
         t0 = time.time()
         self._prepare_vae()
         logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
-        self._log_mem("after VAE prepare (DiT evicted)")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
-        self._log_mem("after VAE decode")
 
         t0 = time.time()
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
         logger.info(f"Audio decode: {time.time() - t0:.1f}s")
-        self._log_mem("after audio decode")
 
         t0 = time.time()
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
