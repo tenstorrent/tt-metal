@@ -36,7 +36,8 @@ void kernel_main() {
     // data_ready=receiver_sem (the flag we broadcast); consumed unused on this control path.
     dataflow_kernel_lib::Pipe<> ready_pipe(
         noc,
-        dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests},
+        dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y},  // area() = num_dests
+        num_dests,  // active-core count (send_signal does not consult it; kept meaningful)
         receiver_sem,
         sender_sem);
 
