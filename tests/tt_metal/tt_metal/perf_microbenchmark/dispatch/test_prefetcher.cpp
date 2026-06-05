@@ -2594,8 +2594,7 @@ static constexpr uint32_t kSdQuasarIssueBase = 0x2000000u;
 static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + Common::SD_HUGEPAGE_ISSUE_BUFFER_SIZE;
 static constexpr uint32_t kHostDataDirtyPattern = 0xBAADF00Du;
 
-void dirty_quasar_sd_completion_dram(
-    tt_metal::distributed::MeshDevice::IDevice* device, uint32_t size_bytes) {
+void dirty_quasar_sd_completion_dram(tt_metal::distributed::MeshDevice::IDevice* device, uint32_t size_bytes) {
     static constexpr uint32_t kChunkBytes = 64 * 1024;
     std::vector<uint32_t> chunk(kChunkBytes / sizeof(uint32_t), kHostDataDirtyPattern);
     for (uint32_t offset = 0; offset < size_bytes; offset += kChunkBytes) {
@@ -3332,12 +3331,18 @@ protected:
             false};
     }
 
-    void run_sd_host_repro(const std::vector<uint32_t>& payload_lengths, uint32_t num_iterations, const char* case_name) {
+    void run_sd_host_repro(
+        const std::vector<uint32_t>& payload_lengths, uint32_t num_iterations, const char* case_name) {
         if (this->device_->arch() != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Quasar-only SD prefetch/dispatch repro";
         }
 
-        log_info(tt::LogTest, "SD prefetch/dispatch repro '{}': {} cmd(s)/iter, {} iteration(s)", case_name, payload_lengths.size(), num_iterations);
+        log_info(
+            tt::LogTest,
+            "SD prefetch/dispatch repro '{}': {} cmd(s)/iter, {} iteration(s)",
+            case_name,
+            payload_lengths.size(),
+            num_iterations);
 
         const CoreCoord first_worker = this->worker_start();
         const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/true);
@@ -3348,7 +3353,14 @@ protected:
         dirty_host_completion_buffer(completion_queue_buffer, completion_queue_size);
 
         Common::DeviceData device_data(
-            device_, worker_range, l1_base, dram_base_, completion_queue_buffer, false, get_dram_data_size_words(), cfg_);
+            device_,
+            worker_range,
+            l1_base,
+            dram_base_,
+            completion_queue_buffer,
+            false,
+            get_dram_data_size_words(),
+            cfg_);
 
         std::vector<HostMemDeviceCommand> commands_per_iteration;
         HelperInfo info{
@@ -3363,7 +3375,12 @@ protected:
         const bool wait_for_completion = false;
         const bool wait_for_host_writes = true;
         execute_generated_commands(
-            commands_per_iteration, device_data, worker_range.size(), num_iterations, wait_for_completion, wait_for_host_writes);
+            commands_per_iteration,
+            device_data,
+            worker_range.size(),
+            num_iterations,
+            wait_for_completion,
+            wait_for_host_writes);
 
         refresh_completion_data();
         EXPECT_TRUE(device_data.validate(device_)) << "SD prefetch/dispatch repro failed validation: " << case_name;
@@ -3802,9 +3819,7 @@ TEST_F(QuasarSdPrefetchDispatchReproFixture, PageBoundaryWrites) {
     const uint32_t page = dispatch_buffer_page_size_;
     const uint32_t cmd = sizeof(CQDispatchCmd);
     run_sd_host_repro(
-        {page - 2U * cmd, page - cmd, page, page + cmd},
-        HOST_SMOKE_SIM_ITERATIONS,
-        "page_boundary_writes");
+        {page - 2U * cmd, page - cmd, page, page + cmd}, HOST_SMOKE_SIM_ITERATIONS, "page_boundary_writes");
 }
 
 TEST_F(QuasarSdPrefetchDispatchReproFixture, HostSmokeScaleDown) {

@@ -139,8 +139,7 @@ inline DeviceData::DeviceData(
     bool is_banked,
     uint32_t dram_data_size_words,
     const DispatchTestConfig& cfg) :
-    use_coherent_data_(cfg.use_coherent_data),
-    hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
+    use_coherent_data_(cfg.use_coherent_data), hugepage_issue_buffer_size_(cfg.hugepage_issue_buffer_size) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;

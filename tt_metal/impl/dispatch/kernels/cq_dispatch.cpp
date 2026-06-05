@@ -101,7 +101,8 @@ constexpr uint32_t is_h_variant = IS_H_VARIANT;
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+constexpr uint32_t dispatch_s_noc_xy =
+    uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 #if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
@@ -217,7 +218,6 @@ constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPAC
 constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 volatile uint32_t last_event;
 }
-
 
 static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;
@@ -1443,8 +1443,7 @@ FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
         .nonposted_writes_num_issued = noc_nonposted_writes_num_issued[noc_index],
         .nonposted_writes_acked = noc_nonposted_writes_acked[noc_index],
         .nonposted_atomics_acked = noc_nonposted_atomics_acked[noc_index],
-        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]
-    };
+        .posted_writes_num_issued = noc_posted_writes_num_issued[noc_index]};
 }
 
 // dispatch_d writes to the NOC1 core, but dispatch_s holds dedicated noc status on it. L1 noc counters
@@ -1475,8 +1474,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
         upstream_noc_index, nonposted_writes_acked_delta);
     set_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(
         upstream_noc_index, nonposted_atomics_acked_delta);
-    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
-        upstream_noc_index, posted_writes_delta);
+    set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(upstream_noc_index, posted_writes_delta);
 
     volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         l1_uncached_addr(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id)));

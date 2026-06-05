@@ -561,8 +561,7 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
-    const uintptr_t consumed_entry_cached =
-        l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+    const uintptr_t consumed_entry_cached = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
     *prefetch_q_rd_ptr = 0U;
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
@@ -742,11 +741,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         if (has_pending_stall_after) {
         } else {
             for (;;) {
-
                 const bool would_continue =
                     (fetch_size != 0U) &&
-                    (inflight_count <
-                     tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS);
+                    (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS);
                 if (!would_continue) {
                     break;
                 }
@@ -755,7 +752,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 uint32_t total_size = 0U;
                 const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
                 const bool queue_empty = (inflight_count == 0U) && !cmd_ready;
-
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_ATTEMPT idx=" << idx << " trid=" << this_trid
@@ -811,7 +807,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 // Cycle through PREFETCH_TRIDS.
                 next_trid_idx = (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
 
-
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_OK trid=" << this_trid << " read_start=" << read_fence
                        << " read_size=" << fetch_size << " total_size=" << total_size
@@ -859,8 +854,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << retire_trid
-                       << " read_start=" << retire_start
-                       << " read_size=" << (retire_reserved - preamble_size)
+                       << " read_start=" << retire_start << " read_size=" << (retire_reserved - preamble_size)
                        << " total_size=" << retire_reserved << " preamble_size=" << preamble_size
                        << " flags=" << (retire_flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
                        << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
@@ -883,8 +877,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 if (retire_start < cmd_ptr) {
                     DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> " << retire_start
                            << ENDL();
-                    DEVICE_PRINT(
-                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n", cmd_ptr, retire_start);
+                    DEVICE_PRINT("fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n", cmd_ptr, retire_start);
                 }
 #endif
                 cmd_ptr = retire_start;
@@ -2250,7 +2243,6 @@ bool process_cmd(
     quasar_cmddat_pre_cmd_decode_sync();
 #endif
     bool done = false;
-
 
     DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << " exec_buf=" << exec_buf
            << ENDL();
