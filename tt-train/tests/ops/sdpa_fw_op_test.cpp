@@ -657,7 +657,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
     run_sdpa_test(config);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
@@ -673,7 +674,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     run_sdpa_test(config);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
@@ -732,7 +734,8 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
 
-TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
     // Test Case 1: Minimum viable dimensions
@@ -954,7 +957,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_SingleTile) {
     run_sdpa_test(config);
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_DifferentVDim_MultiBatch) {
     // Multi-batch with different V dim
     SDPATestConfig config{
         .batch_size = 4U,

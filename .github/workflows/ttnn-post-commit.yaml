@@ -10,6 +10,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       wheel-artifact-name:
         required: true
         type: string
@@ -18,12 +22,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -110,7 +114,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ matrix.test-group.sku != 'bh_p100' && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work

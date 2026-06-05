@@ -277,15 +277,20 @@ jobs:
               sys.exit(1)
           PYEOF
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
-    needs: preflight
+    needs: [check-harbor, preflight]
     if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}

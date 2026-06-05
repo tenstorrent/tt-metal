@@ -21,11 +21,11 @@ constexpr float TWO_POW_31 = 2147483648.0f;
 // Returns: unsigned remainder r
 sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
     // Get absolute value of b for reciprocal computation
-    sfpi::vUInt b = sfpi::abs(b_signed);
+    sfpi::vMag b = sfpi::abs(b_signed);
 
     // Convert to float for reciprocal computation
     // Handle edge case: if conversion results in negative
-    sfpi::vFloat b_f = sfpi::int32_to_float(b, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::NearestEven);
     v_if(b_f < 0.0f) { b_f = TWO_POW_31; }
     v_endif;
 
@@ -55,7 +55,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
-    sfpi::vUInt q = sfpi::exman(q_f);
+    sfpi::vMag q = sfpi::exman(q_f);
 
     // Recompute b for chunk extraction to reduce register pressure
     b = sfpi::abs(b_signed);
@@ -64,11 +64,11 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
 
     // Split q and b into 11-bit chunks to compute q * b
-    sfpi::vUInt MASK_11 = 0x7ff;
-    sfpi::vFloat q1 = int32_to_float(q & MASK_11, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat q2 = int32_to_float(q >> 11, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat b1 = int32_to_float((b >> 11) & MASK_11, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat b0 = int32_to_float(b & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vMag MASK_11{0x7ff};
+    sfpi::vFloat q1 = sfpi::convert<sfpi::vFloat>(q & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q >> 11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::NearestEven);
 
     // hi = q2 * b0 + q1 * b1 (high part)
     // lo = q1 * b0 (low part)
@@ -93,9 +93,9 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
 
     // Recompute b chunks for correction multiplication to reduce register pressure
     b = sfpi::abs(b_signed);
-    b0 = int32_to_float(b & MASK_11, sfpi::RoundMode::NearestEven);
-    b1 = int32_to_float((b >> 11) & MASK_11, sfpi::RoundMode::NearestEven);
-    sfpi::vFloat b2 = sfpi::int32_to_float(b >> 22, sfpi::RoundMode::NearestEven);
+    b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::NearestEven);
+    b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b2 = sfpi::convert<sfpi::vFloat>(b >> 22, sfpi::RoundMode::NearestEven);
 
     // tmp = correction * (b2<<22 + b1<<11 + b0)
     sfpi::vFloat low = correction_f * b0 + MANTISSA_ALIGNMENT_OFFSET;

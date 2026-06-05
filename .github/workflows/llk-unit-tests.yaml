@@ -61,12 +61,11 @@ jobs:
     runs-on: >-
       ${{
         inputs.runs-on-labels != '' && fromJSON(inputs.runs-on-labels)
-        || (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || (inputs.runner-label == 'p150b') && 'tt-ubuntu-2204-p150b-stable'
+        || (inputs.runner-label == 'P150b') && 'tt-ubuntu-2204-P150b-stable'
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

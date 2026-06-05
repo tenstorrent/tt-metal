@@ -644,7 +644,12 @@ TEST_F(DescriptorMergerTest, RejectWHAndBHMesh) {
     }
 }
 
-TEST_F(DescriptorMergerTest, RejectGraphTemplatesWithDifferentChildren_ForwardPass) {
+// DISABLED: This test asserts that merging graph_templates with different children is rejected,
+// but commit 085eff70e87 (#36418, "Universal Cluster Configuration for Combined 8x16 Topologies")
+// intentionally removed that enforcement to allow adding new nodes/subgraphs from source to target
+// (e.g. combining 4x32 + 8x16 Exabox clusters). Re-enabling this test would require re-adding a
+// check that regresses that feature, so it stays disabled until the intended semantics are settled.
+TEST_F(DescriptorMergerTest, DISABLED_RejectGraphTemplatesWithDifferentChildren_ForwardPass) {
     // Test forward pass: source has nodes that target doesn't have
     // File 1 has {node_a, node_b}, File 2 has {node_c, node_d} - completely different sets
     const std::string test_dir = create_test_dir("different_children_forward_test");

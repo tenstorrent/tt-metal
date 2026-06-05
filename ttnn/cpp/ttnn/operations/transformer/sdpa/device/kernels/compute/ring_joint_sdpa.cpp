@@ -71,6 +71,8 @@ void kernel_main() {
     constexpr uint32_t kv_pad_q_valid_tile_count = get_compile_time_arg_val(45);
     constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(46);
     constexpr uint32_t last_active_ring_iter = get_compile_time_arg_val(47);
+    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
+    constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -109,7 +111,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 48;
+    constexpr uint32_t cb_arg_offset = 49;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -289,7 +291,9 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 has_straddle && is_causal && is_balanced,
-                kv_pad_rotation_enabled>(
+                kv_pad_rotation_enabled,
+                v_cb_physical_width_t,
+                v_shares_k_buffer>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

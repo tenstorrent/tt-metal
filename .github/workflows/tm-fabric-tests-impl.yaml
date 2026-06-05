@@ -61,8 +61,23 @@ on:
         type: boolean
         default: true
         description: "Run tests on BH-Quietbox-2"
+      run-fabric-cpu-only-unit-tests:
+        required: false
+        type: boolean
+        default: false
+        description: "Run fabric CPU-only unit tests (no hardware needed)"
 
 jobs:
+  # CPU-only fabric unit tests (no hardware, runs in parallel on a single CPU runner)
+  fabric-cpu-only-unit-tests:
+    if: ${{ inputs.run-fabric-cpu-only-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
+    with:
+      arch: wormhole_b0
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
   # Wormhole N300 - Fabric tests
   wh-n300-fabric-tests:
     if: ${{ inputs.run-wh-n300-fabric-tests }}
@@ -70,9 +85,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -93,9 +106,9 @@ jobs:
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout: 20
-      run-fabric-tests: 'true'
-      run-multiprocess-tests: 'false'
-      run-ccl-tests: 'false'
+      run-fabric-tests: "true"
+      run-multiprocess-tests: "false"
+      run-ccl-tests: "false"
 
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:
@@ -103,7 +116,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

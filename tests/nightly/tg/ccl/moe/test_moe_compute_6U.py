@@ -23,6 +23,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
+    get_tilize_drain_core,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -1418,8 +1419,7 @@ def run_moe_compute_test(
     # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
     #   WH (max_tilize_cores[0]): (6, 9)
     #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
-    is_blackhole_arch = mesh_device.arch() == ttnn.Arch.BLACKHOLE
-    drain_core_coord = ttnn.CoreCoord(10, 9) if is_blackhole_arch else ttnn.CoreCoord(6, 9)
+    drain_core_coord = get_tilize_drain_core()
     tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###

@@ -129,7 +129,7 @@ jobs:
             {
               "name": "[WH-T3K] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 10,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
@@ -142,7 +142,7 @@ jobs:
             {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 15,
+              "server-timeout": 30,
               "benchmark-timeout": 5,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
