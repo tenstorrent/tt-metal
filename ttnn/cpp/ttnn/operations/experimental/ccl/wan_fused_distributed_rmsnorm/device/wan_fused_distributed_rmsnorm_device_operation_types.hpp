@@ -123,8 +123,12 @@ struct WanFusedDistributedRmsnormSizing {
     uint32_t num_chunks_per_device = 0;  // ceil(num_tile_rows / window_size)
     uint32_t total_pages = 0;            // num_devices * num_chunks_per_device (0 when !use_mux)
     uint32_t page_size_bytes = 0;        // TILE_HEIGHT * window_size * sizeof(float)
+    bool streaming_low_l1 = false;       // low-L1 fallback (forces chunk_size_rows==1)
 };
 
-WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input);
+WanFusedDistributedRmsnormSizing compute_sizing(
+    const WanFusedDistributedRmsnormParams& args,
+    const Tensor& input,
+    const WanFusedDistributedRmsnormInputs& tensor_args);
 
 }  // namespace ttnn::experimental::prim

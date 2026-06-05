@@ -246,8 +246,17 @@ def _trace_and_time(submesh, run_op, *, num_iters: int = NUM_ITERS) -> float:
 
 def _bench_cfg(submesh, ag_sem, cfg: LtxCfg) -> dict:
     inp = _build(submesh, cfg)
+    # Pass weight/RoPE so the stats-buffer chunk sizing matches the program's
+    # streaming-low-L1 decision (per-head RoPE at feat>=1024 streams -> chunk 1).
     pob = ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
-        inp["x"], TP_AXIS, submesh, num_heads_per_device=cfg.heads
+        inp["x"],
+        TP_AXIS,
+        submesh,
+        num_heads_per_device=cfg.heads,
+        weight=inp.get("weight"),
+        transformation_mat=inp.get("trans"),
+        rope_cos=inp.get("cos"),
+        rope_sin=inp.get("sin"),
     )
     methods = [m.strip() for m in _os.getenv("LTX_BENCH_METHODS", "baseline,fused").split(",") if m.strip()]
     t = {}
