@@ -42,7 +42,7 @@ Final optimized evidence should show:
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
 -[ ] DRAM-sharded decode matmuls.
 -[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
--[ ] For MoE models: optimized the routed active-expert path using `all_to_all_dispatch_metadata` + `moe_compute` where the model/hardware fits, including packed W0/W1/W2 weights, expert mapping, combine/reduce, and no dense all-expert runtime path.
+-[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, following the GPT-OSS experts pattern for sparse gate/up/down projections, routing-score weighting, expert reduction, and no dense all-expert runtime path.
 
 If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
 
@@ -58,9 +58,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
 - `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
 - `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
-- `ttnn/ttnn/_experimental/moe_compute_utils.py`: packed W0/W1/W2 layouts, DRAM-sharded weight memory configs, shared-expert helpers, and bias variants for `ttnn.experimental.moe_compute`.
-- `models/demos/deepseek_v3/tt/moe_optimized.py`, `tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py`, and `tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`: current routed MoE decode examples using `all_to_all_dispatch_metadata` and `moe_compute`.
-- `models/common/modules/moe/tt_moe_decode.py`: preferred common MoE decode wrapper when present in the checkout.
+- `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
 - `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
 
 ## Core Optimization Rules
@@ -73,7 +71,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - Explicitly configure `memory_config`, `program_config`, and `compute_kernel_config` for important ops. Defaults are often correct but suboptimal.
 - Choose shard specs and core grids that divide tensor dimensions cleanly into tiles. Padding in sharded paths is a common source of bugs or wasted work.
 - For DRAM-sharded decode matmul, weights should be width-sharded in DRAM and activations/outputs width-sharded in L1 on the matching core grid.
-- Keep the optimization target single-user prefill/decode. For MoE decoders, preserve gate-selected active-expert execution and prefer the `all_to_all_dispatch_metadata` -> `moe_compute` -> model-appropriate combine/reduce pipeline. Dense all-expert execution is a debug baseline, not the optimized target.
+- Keep the optimization target single-user prefill/decode. For MoE decoders on non-Galaxy systems, preserve gate-selected active-expert execution and prefer the GPT-OSS `ttnn.sparse_matmul` path for sparse expert projections plus score weighting and expert reduction. Dense all-expert execution is a debug baseline, not the optimized target.
 
 ## Matmul Choices
 

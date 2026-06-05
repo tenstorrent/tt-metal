@@ -9,7 +9,7 @@ Read and follow `tech_reports/LLMs/llms.md` particularly section 3.3 Multi-Devic
 
 Then carefully read your single-chip baseline code and any reports/documentation it comes with. Identify layer kinds, tested shapes, sequence limits, layouts, precision, cache behavior, trace behavior, and latency.
 
-Choose a strategy for the hardware. For 1D meshes up to 8 chips, 1D tensor parallelism the starting point. For Galaxy-class meshes, make a model-specific 2D plan. For dense models this might be using 2D matmuls. For MoE models, make the routed decode pipeline part of the mesh plan: choose the dispatch axis, replicated or TP axis, expert mapping, packed-weight placement, combine/reduce path, and whether the model can afford expert replication across all layers. Prefer the `all_to_all_dispatch_metadata` + `moe_compute` path or the common MoE decode wrapper when it fits. If your single-chip code has already been optimized its program configs and shard specs will all be configured for the full weight/tensor sizes. Make a table to help you understand how each of these will change according to your proposed parallelism scheme - most of the time this will involve dividing by the TP factor along that mesh dimension for example, sometimes this might mean implicit or explicit padding is necessary. This is a good table to include in your final report so it is time well spent.
+Choose a strategy for the hardware. For 1D meshes up to 8 chips, 1D tensor parallelism the starting point. For Galaxy-class meshes, make a model-specific 2D plan. For dense models this might be using 2D matmuls. For MoE models, make the routed decode pipeline part of the mesh plan: choose the routing representation, replicated or TP axis, expert mapping, sparse expert weight placement, score-weighted reduce path, and whether the model can afford expert replication across all layers. On non-Galaxy systems, prefer the GPT-OSS-style active-expert path built from `ttnn.sparse_matmul`; do not start from Galaxy-only fused MoE paths unless you have direct evidence that the target hardware and ops support them. If your single-chip code has already been optimized its program configs and shard specs will all be configured for the full weight/tensor sizes. Make a table to help you understand how each of these will change according to your proposed parallelism scheme - most of the time this will involve dividing by the TP factor along that mesh dimension for example, sometimes this might mean implicit or explicit padding is necessary. This is a good table to include in your final report so it is time well spent.
 
 A good multichip design needs to keep two competing objectives in mind: apply as much flops + memory bandwidth to the workload as possible and minimize the impact of the additional data movement this requires. In practice this means considering: (1) which weight tensors to fracture across which mesh dimensions and (2) how and when to move the activations between them. The second one is somewhat analgous to the choices required for within-chip sharding performed in the decoder optimization stage. It is important to think about the residual stream and the interfaces to each module - we want to minimize time spent in collective operations here and this might require revisiting configurations and choices made in the decoder previously. All of this is on the table, our goal is the fastest possible multichip implementation, not the most convenient given our starting point.
 
@@ -119,11 +119,19 @@ Do not phrase distributed RMSNorm as always mandatory. Correct RMSNorm is mandat
 
 For TP up to 8 devices, the default is to run each active expert selected by the gate with tensor parallelism. Keep the gate-selected active-expert path from the single-chip baseline; do not run every expert densely as the final path unless there is no practical alternative.
 
-For routed MoE decode, the preferred current pattern is `ttnn.experimental.all_to_all_dispatch_metadata` -> `ttnn.experimental.moe_compute` -> model-appropriate score-weighted combine/reduce. If `models/common/modules/moe/tt_moe_decode.py` exists in the checkout, read it first; it wraps dispatch, packed expert compute, fast reduce/combine, shared experts, and reduce-scatter behind a config. Otherwise use `models/demos/deepseek_v3/tt/moe_optimized.py`, `ttnn/ttnn/_experimental/moe_compute_utils.py`, `tests/nightly/tg/ccl/moe/test_all_to_all_dispatch_metadata_6U.py`, and `tests/nightly/tg/ccl/moe/test_moe_compute_6U.py`.
+For routed MoE decode on non-Galaxy systems, use the GPT-OSS generic experts path as the first reference. The important pattern is router/top-k scores as a sparsity tensor, `ttnn.sparse_matmul` for gate/up/down active-expert projections, score weighting, `ttnn.sum` or the model-appropriate reduce over experts, and only then any required TP/EP collective. Read these files first:
 
-Treat expert mapping, `cluster_axis`, shared expert placement, packed W0/W1/W2 layout, DRAM-sharded weight memory configs, semaphores/preallocated buffers, and final residual layout as correctness contracts. A multi-chip MoE path is not done just because the gate and expert MLPs pass separately; validate the routed dispatch -> compute -> combine/reduce sequence.
+- `models/demos/gpt_oss/tt/experts/README.md`
+- `models/demos/gpt_oss/tt/experts/decode.py`
+- `models/demos/gpt_oss/tt/experts/prefill.py`
+- `models/demos/gpt_oss/tt/experts/weights.py`
+- `models/demos/gpt_oss/tt/experts/config.py`
+- `models/demos/gpt_oss/tt/topk.py`
+- `models/demos/gpt_oss/tests/unit/test_modules.py`
 
-For Galaxy 4x8 MoE, read GPT-OSS throughput experts:
+Treat expert mapping, routing-weight layout, shared expert placement, sparse weight layout, DRAM/L1 memory configs, semaphores/preallocated buffers, and final residual layout as correctness contracts. A multi-chip MoE path is not done just because the gate and expert MLPs pass separately; validate the router -> sparse expert projection -> score weighting -> expert reduce -> TP/EP collective sequence.
+
+For Galaxy 4x8 MoE only, GPT-OSS also has throughput-experts code worth reading:
 
 - `models/demos/gpt_oss/tt/experts_throughput/config.py`
 - `models/demos/gpt_oss/tt/experts_throughput/weights.py`
