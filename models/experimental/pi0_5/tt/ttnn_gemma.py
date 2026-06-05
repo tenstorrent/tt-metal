@@ -946,20 +946,21 @@ class GemmaMLPTTNN:
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
         num_cores = device_grid.x * device_grid.y
 
-        # Chunk size must be tile-aligned (multiple of 32).
-        # Scale chunk size with core count: more cores can process larger chunks
-        # in parallel. P150 (~130 cores) uses 544 (full seq for bs=1 production:
-        # 256 img + ≤256 lang ≤ 512). N150 (64 cores) uses 256.
+        # Chunk size must be tile-aligned (multiple of 32). Scale with core count.
         #
-        # IMPORTANT: pi0.5 LIBERO production is bs=3 (3 image slots — see
-        # [[pi05-siglip-bs3-production]]). At bs=3, prefix = 3·256 + lang_seq =
-        # up to 1024 tokens, which forces 2 chunks through this MLP. Each chunk
-        # is a full 18-layer forward dispatch — doubles the VLM MLP dispatch
-        # count (36 calls → 72 calls per inference). Override via
-        # PI0_VLM_CHUNK_SIZE=N to test merging into a single pass:
-        #   1024 → single-pass at bs=3 production
-        #   768  → single-pass at bs=2
-        # The default (544) preserves historical behavior.
+        # P150 / BH (>=100 cores): default 768. pi0.5 LIBERO production is bs=2
+        # single-arm (base + wrist; the 3rd zero-padded right_wrist slot from the
+        # bimanual training convention is masked off in single-arm — see
+        # [[pi05-siglip-bs3-production]]). Prefix at bs=2 = 2·256 + ≤256 lang ≤ 768
+        # tokens, so 768 fits in one chunk. Single-pass VLM saves -7.7 ms tracy-
+        # verified at bs=2 (vs the prior 544-chunk default which forced two
+        # 18-layer MLP dispatches at 544 + 224 = 768).
+        # At bs=3 (PI0_NUM_CAMERAS=3, prefix=1024) this chunks as 768 + 256.
+        # Override via PI0_VLM_CHUNK_SIZE to test other values:
+        #   1024 → single-pass at bs=3 (CB clash today; see OPEN_ISSUE_MLP_CB_CLASH.md)
+        #   544  → previous default (preserves bs=1 production behavior)
+        #
+        # N150 (64 cores): 256, unchanged.
         import os as _os
 
         _user_chunk = _os.environ.get("PI0_VLM_CHUNK_SIZE", "").strip()
@@ -970,7 +971,7 @@ class GemmaMLPTTNN:
             except (ValueError, AssertionError) as e:
                 raise RuntimeError(f"Invalid PI0_VLM_CHUNK_SIZE={_user_chunk!r}: {e}") from e
         elif num_cores >= 100:
-            self.chunk_size = 544
+            self.chunk_size = 768
         else:
             self.chunk_size = 256
 
