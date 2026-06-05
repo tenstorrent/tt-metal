@@ -218,30 +218,27 @@ void run_borrowed_memory_dfb_program(
     const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        experimental::KernelSpecName{"producer"},
-        ProgramRunArgs::KernelRunArgs{
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = experimental::KernelSpecName{"producer"},
+        .runtime_arg_values = {dm_rtas},
+    });
+    if (cfg.tensix_consumer) {
+        params.kernel_run_args.push_back(
+            ProgramRunArgs::KernelRunArgs{.kernel = experimental::KernelSpecName{"consumer"}});
+    } else {
+        params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"consumer"},
             .runtime_arg_values = {dm_rtas},
         });
-    if (cfg.tensix_consumer) {
-        params.kernel_run_args.emplace(experimental::KernelSpecName{"consumer"}, ProgramRunArgs::KernelRunArgs{});
-    } else {
-        params.kernel_run_args.emplace(
-            experimental::KernelSpecName{"consumer"},
-            ProgramRunArgs::KernelRunArgs{
-                .runtime_arg_values = {dm_rtas},
-            });
     }
     params.tensor_args.emplace(
-        experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)});
+        experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{std::cref(src_tensor)});
     if (!cfg.tensix_consumer) {
         params.tensor_args.emplace(
-            experimental::TensorParamName{"dst_tensor"},
-            ProgramRunArgs::TensorArgument{.tensor = std::cref(*dst_tensor)});
+            experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{std::cref(*dst_tensor)});
     }
     params.tensor_args.emplace(
-        experimental::TensorParamName{"dfb_ring_tensor"},
-        ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor)});
+        experimental::TensorParamName{"dfb_ring_tensor"}, ProgramRunArgs::TensorArgument{std::cref(ring_tensor)});
     SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
@@ -368,14 +365,19 @@ void run_update_address_test(
 
     ProgramRunArgs params1;
     params1.kernel_run_args = {
-        {experimental::KernelSpecName{"producer"}, ProgramRunArgs::KernelRunArgs{.runtime_arg_values = {dm_rtas}}},
-        {experimental::KernelSpecName{"consumer"}, ProgramRunArgs::KernelRunArgs{.runtime_arg_values = {dm_rtas}}},
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"producer"},
+            .runtime_arg_values = {dm_rtas},
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"consumer"},
+            .runtime_arg_values = {dm_rtas},
+        },
     };
     params1.tensor_args = {
-        {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)}},
-        {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(dst_tensor)}},
-        {experimental::TensorParamName{"dfb_ring_tensor"},
-         ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor_a)}},
+        {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{std::cref(src_tensor)}},
+        {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{std::cref(dst_tensor)}},
+        {experimental::TensorParamName{"dfb_ring_tensor"}, ProgramRunArgs::TensorArgument{std::cref(ring_tensor_a)}},
     };
     SetProgramRunArgs(program, params1);
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
@@ -397,12 +399,10 @@ void run_update_address_test(
     UpdateTensorArgs(
         program,
         Table<experimental::TensorParamName, ProgramRunArgs::TensorArgument>{
-            {experimental::TensorParamName{"src_tensor"},
-             ProgramRunArgs::TensorArgument{.tensor = std::cref(src_tensor)}},
-            {experimental::TensorParamName{"dst_tensor"},
-             ProgramRunArgs::TensorArgument{.tensor = std::cref(dst_tensor)}},
+            {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{std::cref(src_tensor)}},
+            {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{std::cref(dst_tensor)}},
             {experimental::TensorParamName{"dfb_ring_tensor"},
-             ProgramRunArgs::TensorArgument{.tensor = std::cref(ring_tensor_b)}},
+             ProgramRunArgs::TensorArgument{std::cref(ring_tensor_b)}},
         });
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

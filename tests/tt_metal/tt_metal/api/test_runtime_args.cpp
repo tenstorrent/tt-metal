@@ -999,15 +999,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto& program = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {
-        {experimental::KernelSpecName{kernel_names[0]},
-         experimental::ProgramRunArgs::KernelRunArgs{
-             .advanced_options =
-                 experimental::AdvancedKernelRunArgs{
-                     .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
-                     .common_runtime_varargs = common_rtas,
-                 },
-         }}};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = experimental::KernelSpecName{kernel_names[0]},
+        .advanced_options =
+            experimental::AdvancedKernelRunArgs{
+                .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
+                .common_runtime_varargs = common_rtas,
+            },
+    }};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -1042,15 +1041,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        params.kernel_run_args.emplace(
-            experimental::KernelSpecName{kernel_names[i]},
-            experimental::ProgramRunArgs::KernelRunArgs{
-                .advanced_options =
-                    experimental::AdvancedKernelRunArgs{
-                        .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
-                        .common_runtime_varargs = kernel_crtas,
-                    },
-            });
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{kernel_names[i]},
+            .advanced_options =
+                experimental::AdvancedKernelRunArgs{
+                    .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
+                    .common_runtime_varargs = kernel_crtas,
+                },
+        });
     }
     experimental::SetProgramRunArgs(program, params);
 

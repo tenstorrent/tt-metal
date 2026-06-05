@@ -132,8 +132,12 @@ inline ProgramSpec MakeSpecWithBothKernelRTAs(
 
 // Helper to create ProgramRunArgs for a single kernel
 inline ProgramRunArgs::KernelRunArgs MakeKernelRunArgs(
-    const NodeCoord& node, const std::vector<uint32_t>& per_node_args, const std::vector<uint32_t>& common_args) {
+    KernelSpecName kernel,
+    const NodeCoord& node,
+    const std::vector<uint32_t>& per_node_args,
+    const std::vector<uint32_t>& common_args) {
     return ProgramRunArgs::KernelRunArgs{
+        .kernel = std::move(kernel),
         .advanced_options =
             AdvancedKernelRunArgs{
                 .runtime_varargs = {{node, per_node_args}},
@@ -150,10 +154,10 @@ inline ProgramRunArgs MakeRunArgsForMinimalSpec(
     const std::vector<uint32_t>& compute_per_node_args = {},
     const std::vector<uint32_t>& compute_common_args = {}) {
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"}, MakeKernelRunArgs(node, dm_per_node_args, dm_common_args));
-    params.kernel_run_args.emplace(
-        KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, compute_per_node_args, compute_common_args));
+    params.kernel_run_args.push_back(
+        MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, dm_per_node_args, dm_common_args));
+    params.kernel_run_args.push_back(
+        MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, compute_per_node_args, compute_common_args));
     return params;
 }
 
@@ -167,15 +171,14 @@ TEST_F(ProgramRunArgsTestQuasar, UnknownKernelNameFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"nonexistent_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {},
-                    .common_runtime_varargs = {},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"nonexistent_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {},
+                .common_runtime_varargs = {},
+            },
+    });
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -190,16 +193,15 @@ TEST_F(ProgramRunArgsTestQuasar, InvalidNodeForKernelFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{wrong_node, {1, 2}}},  // Wrong node!
-                    .common_runtime_varargs = {},
-                },
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{wrong_node, {1, 2}}},  // Wrong node!
+                .common_runtime_varargs = {},
+            },
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -246,7 +248,7 @@ TEST_F(ProgramRunArgsTestQuasar, EmptySchemaKernelOmittedFromRunArgsSucceeds) {
     // Only provide params for dm_kernel; omit compute_kernel.
     // Since compute_kernel's schema is empty, this should succeed.
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"dm_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
 
     EXPECT_NO_THROW({ SetProgramRunArgs(program, params); });
 }
@@ -265,7 +267,7 @@ TEST_F(ProgramRunArgsTestQuasar, NonEmptySchemaKernelMissingFromRunArgsFails) {
     // Only provide params for dm_kernel; omit compute_kernel.
     // Since compute_kernel has declared RTAs, this should fail.
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"dm_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -281,16 +283,15 @@ TEST_F(ProgramRunArgsTestQuasar, MissingNodeRTAsFails) {
 
     // Don't provide the per-node RTAs (empty runtime_varargs)
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {},  // Missing node RTAs!
-                    .common_runtime_varargs = {},
-                },
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {},  // Missing node RTAs!
+                .common_runtime_varargs = {},
+            },
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -307,11 +308,10 @@ TEST_F(ProgramRunArgsTestQuasar, DFBSizeOverrideFails) {
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
     // Add DFB run params with size override (not implemented)
-    params.dfb_run_overrides.emplace(
-        DFBSpecName{"dfb_0"},
-        ProgramRunArgs::DFBRunOverrides{
-            .entry_size = 2048,  // Override - not implemented!
-        });
+    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
+        .dfb = DFBSpecName{"dfb_0"},
+        .entry_size = 2048,  // Override - not implemented!
+    });
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -328,16 +328,73 @@ TEST_F(ProgramRunArgsTestQuasar, DFBNumEntriesOverrideFails) {
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
     // Add DFB run params with num_entries override (not implemented)
-    params.dfb_run_overrides.emplace(
-        DFBSpecName{"dfb_0"},
-        ProgramRunArgs::DFBRunOverrides{
-            .num_entries = 4,  // Override - not implemented!
-        });
+    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
+        .dfb = DFBSpecName{"dfb_0"},
+        .num_entries = 4,  // Override - not implemented!
+    });
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("DFB size overrides are not yet implemented")));
+}
+
+// ============================================================================
+// SECTION 1b: Uniqueness Tests (duplicate detection)
+// ============================================================================
+
+TEST_F(ProgramRunArgsTestQuasar, DuplicateKernelParamsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    // Push dm_kernel twice — should trigger duplicate detection.
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate kernel 'dm_kernel'")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DuplicateDFBParamsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    // Push dfb_0 twice with no size overrides (so size-override guard does not fire first).
+    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{.dfb = DFBSpecName{"dfb_0"}});
+    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{.dfb = DFBSpecName{"dfb_0"}});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate DFB 'dfb_0'")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
+    NodeCoord node{0, 0};
+    // Spec with per-node named RTAs so runtime_arg_values is validated.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    // runtime_arg_values has two entries for the same node — duplicate node_coord.
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values =
+            {
+                {node, {{"input_ptr", 0x1000}}}, {node, {{"input_ptr", 0x2000}}},  // duplicate!
+            },
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate node_coord")));
 }
 
 // ============================================================================
@@ -412,11 +469,10 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_DFBRunOverridesWithNoOverrid
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
 
     // DFB run params with no overrides is allowed
-    params.dfb_run_overrides.emplace(
-        DFBSpecName{"dfb_0"},
-        ProgramRunArgs::DFBRunOverrides{
-            // No overrides - both entry_size and num_entries are nullopt
-        });
+    params.dfb_run_overrides.push_back(ProgramRunArgs::DFBRunOverrides{
+        .dfb = DFBSpecName{"dfb_0"},
+        // No overrides - both entry_size and num_entries are nullopt
+    });
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -523,24 +579,22 @@ TEST_F(ProgramRunArgsTestQuasar, SetRunArgsSucceeds_MultiNodeKernel) {
 
     // Create run params with per-node RTAs for both nodes
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"producer"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node0, {10, 20}}, {node1, {30, 40}}},
-                    .common_runtime_varargs = {100},
-                },
-        });
-    params.kernel_run_args.emplace(
-        KernelSpecName{"consumer"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node0, {}}, {node1, {}}},
-                    .common_runtime_varargs = {},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node0, {10, 20}}, {node1, {30, 40}}},
+                .common_runtime_varargs = {100},
+            },
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"consumer"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node0, {}}, {node1, {}}},
+                .common_runtime_varargs = {},
+            },
+    });
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -575,24 +629,22 @@ TEST_F(ProgramRunArgsTestQuasar, MultiNode_MissingOneNodeFails) {
 
     // Only provide RTAs for node0, missing node1
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"producer"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node0, {10, 20}}},  // Missing node1!
-                    .common_runtime_varargs = {},
-                },
-        });
-    params.kernel_run_args.emplace(
-        KernelSpecName{"consumer"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node0, {}}, {node1, {}}},
-                    .common_runtime_varargs = {},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node0, {10, 20}}},  // Missing node1!
+                .common_runtime_varargs = {},
+            },
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"consumer"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node0, {}}, {node1, {}}},
+                .common_runtime_varargs = {},
+            },
+    });
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -628,13 +680,12 @@ TEST_F(ProgramRunArgsTestQuasar, NamedRTAsAndCRTAsSucceed) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .runtime_arg_values = {{node, {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}}},
-            .common_runtime_arg_values = {{"tile_count", 64}},
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"input_ptr", 0x1000}, {"output_ptr", 0x2000}}}},
+        .common_runtime_arg_values = {{"tile_count", 64}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -645,12 +696,11 @@ TEST_F(ProgramRunArgsTestQuasar, MissingNamedRTAForNodeFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            // No runtime_arg_values for node (0,0) at all — but schema declares one.
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        // No runtime_arg_values for node (0,0) at all — but schema declares one.
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -664,13 +714,12 @@ TEST_F(ProgramRunArgsTestQuasar, MissingDeclaredNamedRTANameFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            // Only one name provided — output_ptr missing.
-            .runtime_arg_values = {{node, {{"input_ptr", 0x1000}}}},
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        // Only one name provided — output_ptr missing.
+        .runtime_arg_values = {{node, {{"input_ptr", 0x1000}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -684,12 +733,11 @@ TEST_F(ProgramRunArgsTestQuasar, UndeclaredNamedRTAFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .runtime_arg_values = {{node, {{"input_ptr", 0x1000}, {"not_in_schema", 0}}}},
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"input_ptr", 0x1000}, {"not_in_schema", 0}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -703,13 +751,12 @@ TEST_F(ProgramRunArgsTestQuasar, NamedCRTACountMismatchFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            // Only one CRTA provided; schema declares two.
-            .common_runtime_arg_values = {{"tile_count", 4}},
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        // Only one CRTA provided; schema declares two.
+        .common_runtime_arg_values = {{"tile_count", 4}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     // Validation now reports the specific missing name first (more useful than a count mismatch).
     EXPECT_THAT(
@@ -744,14 +791,13 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyMultiNodeDifferingCountsSucceeds) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node_a, {10, 20}}, {node_b, {100, 200, 300, 400, 500}}},
+            },
+    });
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
@@ -779,15 +825,13 @@ TEST_F(ProgramRunArgsTestQuasar, VarargPerNodeOverrideMixedEntryTypesSucceeds) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs =
-                        {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node_a, {1, 2, 3}}, {node_b, {10, 20, 30}}, {node_c, {100, 200, 300, 400, 500}}},
+            },
+    });
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
@@ -814,19 +858,18 @@ TEST_F(ProgramRunArgsTestQuasar, VarargScalarDefaultWithSparseOverrideSucceeds) 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs =
-                        {
-                            {node_a, {1, 2}},                     // scalar default (2 args)
-                            {node_b, {10, 20}},                   // scalar default (2 args)
-                            {node_c, {100, 200, 300, 400, 500}},  // override (5 args)
-                        },
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {
+                        {node_a, {1, 2}},                     // scalar default (2 args)
+                        {node_b, {10, 20}},                   // scalar default (2 args)
+                        {node_c, {100, 200, 300, 400, 500}},  // override (5 args)
+                    },
+            },
+    });
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
@@ -852,14 +895,13 @@ TEST_F(ProgramRunArgsTestQuasar, VarargSparseOverrideZeroErasesScalarDefault) {
 
     // node_b is treated as having no varargs — run-params needs no entry for it.
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node_a, {1, 2, 3}}},
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node_a, {1, 2, 3}}},
+            },
+    });
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
@@ -873,8 +915,8 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyAcrossMultipleKernelsSucceeds) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"dm_kernel"}, MakeKernelRunArgs(node, {1, 2, 3}, {99}));
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {7, 8}, {42, 43}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"dm_kernel"}, node, {1, 2, 3}, {99}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {7, 8}, {42, 43}));
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
 
@@ -894,14 +936,13 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyRTAsMissingNodeCoverageFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node_a, {10, 20}}},  // node_b missing!
-                },
-        });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node_a, {10, 20}}},  // node_b missing!
+            },
+    });
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("missing vararg runtime args for node")));
@@ -917,15 +958,14 @@ TEST_F(ProgramRunArgsTestQuasar, VarargOnlyUnknownNodeFails) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{wrong_node, {42}}},
-                },
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{wrong_node, {42}}},
+            },
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the kernel does not run on that node")));
@@ -946,8 +986,8 @@ TEST_F(ProgramRunArgsTestQuasar, AllEmptySchemaSucceeds) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"dm_kernel"}, ProgramRunArgs::KernelRunArgs{});
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, ProgramRunArgs::KernelRunArgs{});
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"dm_kernel"}});
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"compute_kernel"}});
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -961,16 +1001,15 @@ TEST_F(ProgramRunArgsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
 
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .runtime_arg_values = {{node, {{"input_ptr", 0x1000}}}},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {7, 8, 9}}},
-                },
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{node, {{"input_ptr", 0x1000}}}},
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs = {{node, {7, 8, 9}}},
+            },
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -1034,8 +1073,8 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
 inline ProgramRunArgs MakeBorrowedDFBRunArgs() {
     NodeCoord node{0, 0};
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"producer"}, MakeKernelRunArgs(node, {}, {}));
-    params.kernel_run_args.emplace(KernelSpecName{"consumer"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"producer"}, node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"consumer"}, node, {}, {}));
     return params;
 }
 
@@ -1076,7 +1115,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1095,7 +1134,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
     ProgramRunArgs params = MakeBorrowedDFBRunArgs();
     params.tensor_args = {
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor1)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor1.address()));
@@ -1106,7 +1145,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor2)}},
+        {TensorParamName{"borrowed_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor2.address()))
@@ -1221,7 +1260,7 @@ TEST_F(ProgramRunArgsTestGen1, UnknownTensorParameterInRunArgsFails) {
     // tensor_parameter_name doesn't match any TensorParameter in the spec.
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
 
     EXPECT_THAT(
@@ -1250,7 +1289,7 @@ TEST_F(ProgramRunArgsTestGen1, TensorSpecMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
 
     EXPECT_THAT(
@@ -1298,7 +1337,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_BeforeSetProgramRunArgsFails) {
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
 
     // No SetProgramRunArgs call before the partial update.
@@ -1321,7 +1360,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_MissingTensorArgFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1345,12 +1384,12 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_UnknownTensorParameterFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     SetProgramRunArgs(program, params);
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"ghost_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_THAT(
         [&] { UpdateTensorArgs(program, tensor_args); },
@@ -1370,7 +1409,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1383,7 +1422,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_TensorSpecMismatchFails) {
     MeshTensor wrong_tensor = MeshTensor::allocate_on_device(*mesh_device_, wrong_spec, TensorTopology{});
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(wrong_tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(wrong_tensor)}},
     };
     EXPECT_THAT(
         [&] { UpdateTensorArgs(program, tensor_args); },
@@ -1404,7 +1443,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(
@@ -1416,7 +1455,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesBindingAddress) {
         << "Test pre-condition: two separate allocations should yield distinct addresses";
 
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
@@ -1438,14 +1477,13 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     constexpr uint32_t kNamedCRTAValue = 0xABCD1234;
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(
-        KernelSpecName{"dm_kernel"},
-        ProgramRunArgs::KernelRunArgs{
-            .common_runtime_arg_values = {{"tile_count", kNamedCRTAValue}},
-        });
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .common_runtime_arg_values = {{"tile_count", kNamedCRTAValue}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1457,7 +1495,7 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     // Partial update.
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
     };
     UpdateTensorArgs(program, tensor_args);
 
@@ -1482,13 +1520,13 @@ TEST_F(ProgramRunArgsTestGen1, UpdateTensorArgs_PatchesAllKernelsBoundToSameTens
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor1)}},
+        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
     };
     SetProgramRunArgs(program, params);
 
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor2)}},
+        {TensorParamName{"shared_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
     };
     UpdateTensorArgs(program, tensor_args);
 
@@ -1528,7 +1566,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_InterleavedAcceptsDifferentSha
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -1554,7 +1592,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_DTypeMismatchStillFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1579,7 +1617,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1642,7 +1680,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     SetProgramRunArgs(program, params);
 
@@ -1669,7 +1707,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     MeshTensor tensor1 = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor1)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor1)}},
     };
     SetProgramRunArgs(program, params);
     ASSERT_EQ(
@@ -1679,7 +1717,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_ShardedUpdateRefreshesShape) {
     auto smaller_spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 32, 32}, binding.spec.tensor_layout());
     MeshTensor tensor2 = MeshTensor::allocate_on_device(*mesh_device_, smaller_spec, TensorTopology{});
     Table<TensorParamName, ProgramRunArgs::TensorArgument> tensor_args{
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor2)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor2)}},
     };
     EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
 
@@ -1727,7 +1765,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_AcceptsDifferentLogicalShape
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
@@ -1759,7 +1797,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_PaddedShapeMismatchFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1788,7 +1826,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DTypeMismatchStillFails) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_THAT(
         [&] { SetProgramRunArgs(program, params); },
@@ -1817,9 +1855,9 @@ TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelMissingFromRunArgsFails) {
     // check on the binding-owning kernel.
     MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, binding.spec, TensorTopology{});
     ProgramRunArgs params;
-    params.kernel_run_args.emplace(KernelSpecName{"compute_kernel"}, MakeKernelRunArgs(node, {}, {}));
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
 
     EXPECT_THAT(
@@ -1850,7 +1888,7 @@ TEST_F(ProgramRunArgsTestGen1, MatchPaddedShapeOnly_DynamicWinsWhenBothSet) {
 
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{.tensor = std::cref(tensor)}},
+        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{std::cref(tensor)}},
     };
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
 }
