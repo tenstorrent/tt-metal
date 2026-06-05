@@ -46,6 +46,8 @@ NUM_ITERS = 20
 LANG_SEQ_LEN = 256  # tile-aligned
 SEED = 0
 TRACE_REGION_SIZE = 134_217_728  # 128 MiB — full sample_actions trace ~81 MB
+# Production pi0.5 LIBERO passes 3 images to SigLIP. See [[pi05-siglip-bs3-production]].
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
@@ -53,31 +55,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_inputs(device, batch_size: int = 1):
+def _build_inputs(device, num_cameras: int = NUM_CAMERAS):
     """Device-resident input buffers the trace references. These are the targets
     of the per-chunk CQ 1 H2D uploads in the steady-state loop."""
     torch.manual_seed(SEED)
-    image = torch.randn(batch_size, 3, 224, 224, dtype=torch.float32)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
-    lang_tokens = torch.randint(0, 256000, (batch_size, LANG_SEQ_LEN), dtype=torch.int32)
-    lang_masks = torch.ones(batch_size, LANG_SEQ_LEN, dtype=torch.bool)
+    images = [torch.randn(1, 3, 224, 224, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cameras)]
+    lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
+    lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    image_ttnn = ttnn.from_torch(
-        image,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    # Pre-convert img_mask to TTNN so embed_images doesn't trigger a host->device
+    images_ttnn = [
+        ttnn.from_torch(
+            im, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for im in images
+    ]
+    # Pre-convert img_masks to TTNN so embed_images doesn't trigger a host->device
     # transfer during trace capture (which would call Synchronize).
-    img_mask_ttnn = ttnn.from_torch(
-        img_mask.float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    img_masks_ttnn = [
+        ttnn.from_torch(
+            m.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for m in img_masks
+    ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
@@ -90,13 +94,13 @@ def _build_inputs(device, batch_size: int = 1):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    return image_ttnn, img_mask_ttnn, lang_tokens_ttnn, lang_masks_ttnn
+    return images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn
 
 
-def _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn):
+def _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn):
     return model.sample_actions(
-        images=[image_ttnn],
-        img_masks=[img_mask],
+        images=images_ttnn,
+        img_masks=img_masks_ttnn,
         lang_tokens=lang_tokens_ttnn,
         lang_masks=lang_masks_ttnn,
         state=None,
@@ -124,12 +128,13 @@ def test_pi0_5_ttnn_full_e2e_trace_2cq(device):
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print("✅ Model loaded")
 
-    image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
+    images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
+    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
 
     print(f"\n🔥 Warmup ({NUM_WARMUP} calls) — JIT compile of full sample_actions")
     for i in range(NUM_WARMUP):
         with torch.no_grad():
-            out = _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn)
+            out = _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn)
         ttnn.synchronize_device(device)
         if isinstance(out, ttnn.Tensor):
             ttnn.deallocate(out)
@@ -142,14 +147,15 @@ def test_pi0_5_ttnn_full_e2e_trace_2cq(device):
     # Pre-stage upstream-compat artifacts (mask + RoPE) before capture so
     # sample_actions consumes them by reference (no host->device inside trace).
     if use_upstream_masks():
-        prefix_len = 256 + LANG_SEQ_LEN
-        model.prepare_upstream_artifacts([img_mask], lang_masks_ttnn, prefix_len=prefix_len)
+        num_image_tokens = cfg.siglip_config.num_patches
+        prefix_len = num_image_tokens * len(img_masks_ttnn) + LANG_SEQ_LEN
+        model.prepare_upstream_artifacts(img_masks_ttnn, lang_masks_ttnn, prefix_len=prefix_len)
         print(f"   pre-staged upstream artifacts (prefix_len={prefix_len})")
 
     print("\n📷 Capturing trace of full sample_actions…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    out_trace = _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn)
+    out_trace = _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
     capture_ms = (time.perf_counter() - capture_start) * 1000.0
@@ -162,25 +168,34 @@ def test_pi0_5_ttnn_full_e2e_trace_2cq(device):
     assert torch.isfinite(actions).all(), "trace output contains NaN/Inf"
     print(f"   ✅ output shape {tuple(actions.shape)}, all finite")
 
-    # Host-side staging tensors for the per-chunk CQ 1 uploads: the next camera
-    # frame (the dominant per-chunk H2D) + the next noise. Built once; values are
-    # irrelevant to timing (compute is data-independent) but deterministic.
+    # Host-side staging tensors for the per-chunk CQ 1 uploads: NUM_CAMERAS image
+    # frames per chunk (production sends 3 — base + wrist + zero placeholder) plus
+    # the next noise. Built once; values are irrelevant to timing (compute is
+    # data-independent) but deterministic.
     x_t = model.x_t_ttnn
     ah_padded = model._action_horizon_padded
     torch.manual_seed(SEED)
-    host_imgs: List[ttnn.Tensor] = []
+    host_imgs: List[List[ttnn.Tensor]] = []  # host_imgs[chunk_i] is a list of len(images_ttnn)
     host_noise: List[ttnn.Tensor] = []
     for _ in range(NUM_ITERS + 1):
-        img = torch.randn(1, 3, 224, 224, dtype=torch.float32)
-        host_imgs.append(ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
+        chunk_imgs = [
+            ttnn.from_torch(
+                torch.randn(1, 3, 224, 224, dtype=torch.float32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            for _ in range(len(images_ttnn))
+        ]
+        host_imgs.append(chunk_imgs)
         n = torch.zeros(1, ah_padded, cfg.action_dim, dtype=torch.float32)
         n[:, : cfg.action_horizon, :] = torch.randn(1, cfg.action_horizon, cfg.action_dim)
         host_noise.append(ttnn.from_torch(n, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT))
 
     print(f"\n⏱️  Measuring full e2e trace + 2CQ ({NUM_ITERS} chunks; H2D on CQ1, D2H included)")
     times_ms: List[float] = []
-    # Pre-stage chunk 0's inputs on CQ 1.
-    ttnn.copy_host_to_device_tensor(host_imgs[0], image_ttnn, cq_id=1)
+    # Pre-stage chunk 0's inputs on CQ 1 — one H2D per camera.
+    for k, dev_t in enumerate(images_ttnn):
+        ttnn.copy_host_to_device_tensor(host_imgs[0][k], dev_t, cq_id=1)
     ttnn.copy_host_to_device_tensor(host_noise[0], x_t, cq_id=1)
     write_event = ttnn.record_event(device, 1)
 
@@ -191,12 +206,13 @@ def test_pi0_5_ttnn_full_e2e_trace_2cq(device):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         op_event = ttnn.record_event(device, 0)
 
-        # Upload next chunk's frame + noise on CQ 1, overlapped with CQ 0 compute.
+        # Upload next chunk's frames + noise on CQ 1, overlapped with CQ 0 compute.
         # CQ 1 waits for op_event so it only overwrites the input buffers after
         # the trace has finished consuming them.
         if i + 1 < NUM_ITERS:
             ttnn.wait_for_event(1, op_event)
-            ttnn.copy_host_to_device_tensor(host_imgs[i + 1], image_ttnn, cq_id=1)
+            for k, dev_t in enumerate(images_ttnn):
+                ttnn.copy_host_to_device_tensor(host_imgs[i + 1][k], dev_t, cq_id=1)
             ttnn.copy_host_to_device_tensor(host_noise[i + 1], x_t, cq_id=1)
             write_event = ttnn.record_event(device, 1)
 
@@ -223,8 +239,8 @@ def test_pi0_5_ttnn_full_e2e_trace_2cq(device):
     print("\n" + "=" * 72)
     print("  PI0.5 TTNN FULL E2E — TRACE + 2CQ (H2D overlapped on CQ1, D2H included)")
     print("=" * 72)
-    print("   Includes:            SigLIP + VLM prefill + denoise + project")
-    print(f"   H2D each chunk:      next camera frame + noise on CQ1 (overlapped)")
+    print(f"   Includes:            SigLIP (bs={len(images_ttnn)}) + VLM prefill + denoise + project")
+    print(f"   H2D each chunk:      {len(images_ttnn)} camera frames + noise on CQ1 (overlapped)")
     print(f"   D2H each chunk:      action chunk readback via to_torch (in timed loop)")
     print(f"   Trace capture:       {capture_ms:7.2f} ms (one-time)")
     print(f"   Iterations:          {NUM_ITERS} chunks")

@@ -7,6 +7,7 @@ PI0.5 reference inference on the real lerobot/pi05_base checkpoint.
 Skipped if the checkpoint isn't present locally.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -35,16 +36,17 @@ def test_pi0_5_reference_sample_actions_real_weights():
 
     batch_size = 1
     seq_len = 16  # short prompt
-    # One 224x224 image, 1 valid mask, language tokens, no continuous state.
-    image = torch.randn(batch_size, 3, 224, 224)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
+    # Production pi0.5 LIBERO bs=3 — see [[pi05-siglip-bs3-production]].
+    num_cameras = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+    images = [torch.randn(batch_size, 3, 224, 224) for _ in range(num_cameras)]
+    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(num_cameras)]
     lang_tokens = torch.randint(0, 1000, (batch_size, seq_len))
     lang_masks = torch.ones(batch_size, seq_len, dtype=torch.bool)
 
     with torch.no_grad():
         actions = model.sample_actions(
-            images=[image],
-            img_masks=[img_mask],
+            images=images,
+            img_masks=img_masks,
             lang_tokens=lang_tokens,
             lang_masks=lang_masks,
             state=None,

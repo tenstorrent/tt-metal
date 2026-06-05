@@ -100,10 +100,13 @@ def test_pcc_siglip_vision_tower(device, use_pretrained):
         config = create_small_siglip_config()
         vision_weights = create_random_siglip_weights(config)
 
-    # Create input — bs=2 matches the production pi0.5 SigLIP setup (wrist
-    # cam + base cam stacked). bs=1 hides a class of bug where the BS path
-    # flattens batch into seq and SDPA computes cross-image attention.
-    pixel_values = torch.randn(2, 3, config.image_size, config.image_size)
+    # Production pi0.5 LIBERO uses 3 image slots (base + wrist + zero placeholder).
+    # See [[pi05-siglip-bs3-production]]. bs=2 was the prior assumption — kept as
+    # a backward-compat A/B target via PI0_NUM_CAMERAS=2. bs=1 hides a class of
+    # bug where the BS path flattens batch into seq and SDPA computes cross-image
+    # attention.
+    bs = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+    pixel_values = torch.randn(bs, 3, config.image_size, config.image_size)
 
     # PyTorch forward
     model_torch = SigLIPVisionTowerTorch(config, vision_weights)
@@ -203,10 +206,10 @@ def main():
         vision_weights = weight_loader.get_vlm_vision_weights()
         print(f"   ✅ Loaded {len(vision_weights)} vision weight tensors")
 
-        # Create input — bs=2 matches the production pi0.5 SigLIP setup
-        # (wrist cam + base cam stacked). See header note.
+        # Production pi0.5 LIBERO is bs=3. See [[pi05-siglip-bs3-production]].
         print("\n2. Creating test input...")
-        pixel_values = torch.randn(2, 3, config.image_size, config.image_size)
+        bs = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+        pixel_values = torch.randn(bs, 3, config.image_size, config.image_size)
         print(f"   Input: {pixel_values.shape}")
 
         # PyTorch

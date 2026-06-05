@@ -69,11 +69,14 @@ def create_pi05_config() -> PI0ModelConfig:
     return config
 
 
-def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
+def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1, num_cameras: int = None):
     """Create test inputs."""
+    # Production pi0.5 LIBERO uses 3 image slots — see [[pi05-siglip-bs3-production]].
+    if num_cameras is None:
+        num_cameras = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
     image_size = config.siglip_config.image_size
-    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(2)]
-    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(2)]
+    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(num_cameras)]
     # Use lang_seq_len=256 to match the prefix-padding contract that our
     # sharded RMSNorm is validated against (256 image + 256 lang = 512 = 16×32).
     # Shorter prompts (e.g. 32) give prefix=288 which trips an L1 CB clash in

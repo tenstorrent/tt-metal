@@ -35,6 +35,13 @@ NUM_ITERS = 20
 LANG_SEQ_LEN = 256  # tile-aligned
 SEED = 0
 TRACE_REGION_SIZE = 134_217_728  # 128 MiB — full sample_actions trace ~81 MB
+# Production pi0.5 (lerobot/pi05_base + pi05_libero_upstream) declares 3 image
+# slots in config.json — base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb. For
+# LIBERO (single arm), the right_wrist slot is zero-padded with img_mask=False
+# (see eval/libero_rollout.py:336-355) — but SigLIP runs BEFORE the mask is
+# consumed (see tt/ttnn_prefix.py:99-100 vs :117+), so the production SigLIP
+# batch is 3, not 2. Override with PI0_NUM_CAMERAS=1 or =2 for A/B.
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
@@ -42,29 +49,37 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_inputs(device, batch_size: int = 1):
+def _build_inputs(device, num_cameras: int = NUM_CAMERAS):
     torch.manual_seed(SEED)
-    image = torch.randn(batch_size, 3, 224, 224, dtype=torch.float32)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
-    lang_tokens = torch.randint(0, 256000, (batch_size, LANG_SEQ_LEN), dtype=torch.int32)
-    lang_masks = torch.ones(batch_size, LANG_SEQ_LEN, dtype=torch.bool)
+    # One (1, 3, 224, 224) tensor per camera. The prefix-embed (ttnn_prefix.py:86-109)
+    # detects same-shape inputs and runs SigLIP once at bs=num_cameras via ttnn.concat.
+    images = [torch.randn(1, 3, 224, 224, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cameras)]
+    lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
+    lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    image_ttnn = ttnn.from_torch(
-        image,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    # Pre-convert img_mask to TTNN so embed_images doesn't trigger a host->device
+    images_ttnn = [
+        ttnn.from_torch(
+            im,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for im in images
+    ]
+    # Pre-convert img_masks to TTNN so embed_images doesn't trigger a host->device
     # transfer during trace capture (which would call Synchronize).
-    img_mask_ttnn = ttnn.from_torch(
-        img_mask.float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    img_masks_ttnn = [
+        ttnn.from_torch(
+            m.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for m in img_masks
+    ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
@@ -77,13 +92,13 @@ def _build_inputs(device, batch_size: int = 1):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    return image_ttnn, img_mask_ttnn, lang_tokens_ttnn, lang_masks_ttnn
+    return images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn
 
 
-def _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn):
+def _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn):
     return model.sample_actions(
-        images=[image_ttnn],
-        img_masks=[img_mask],
+        images=images_ttnn,
+        img_masks=img_masks_ttnn,
         lang_tokens=lang_tokens_ttnn,
         lang_masks=lang_masks_ttnn,
         state=None,
@@ -111,12 +126,13 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
-    image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
+    images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
+    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
 
     print(f"\n🔥 Warmup ({NUM_WARMUP} calls) — JIT compile of full sample_actions")
     for i in range(NUM_WARMUP):
         with torch.no_grad():
-            out = _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn)
+            out = _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn)
         ttnn.synchronize_device(device)
         if isinstance(out, ttnn.Tensor):
             ttnn.deallocate(out)
@@ -137,17 +153,17 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import use_upstream_masks
 
     if use_upstream_masks():
-        # The image is uploaded as (B, 3, 224, 224); prefix_len = 256 (one
-        # image) + LANG_SEQ_LEN. Match `_call_sample_actions`'s single-image
-        # signature for this test.
-        prefix_len = 256 + LANG_SEQ_LEN
-        model.prepare_upstream_artifacts([img_mask], lang_masks_ttnn, prefix_len=prefix_len)
+        # prefix_len = num_image_tokens · num_cameras + LANG_SEQ_LEN.
+        # At num_cameras=2 this is 256·2 + 256 = 768 (was 512 at bs=1).
+        num_image_tokens = cfg.siglip_config.num_patches
+        prefix_len = num_image_tokens * len(img_masks_ttnn) + LANG_SEQ_LEN
+        model.prepare_upstream_artifacts(img_masks_ttnn, lang_masks_ttnn, prefix_len=prefix_len)
         print(f"   pre-staged upstream artifacts (prefix_len={prefix_len})")
 
     print(f"\n📷 Capturing trace of full sample_actions…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    out_trace = _call_sample_actions(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn)
+    out_trace = _call_sample_actions(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
     capture_ms = (time.perf_counter() - capture_start) * 1000.0
@@ -181,7 +197,9 @@ def test_pi0_5_ttnn_full_e2e_trace(device):
     print("\n" + "=" * 72)
     print(f"  PI0.5 TTNN FULL END-TO-END WITH TRACE ({CHECKPOINT_DIR.name})")
     print("=" * 72)
-    print(f"   Includes:            SigLIP + VLM prefill + {num_denoising_steps}-step denoise + project")
+    print(
+        f"   Includes:            SigLIP (bs={len(images_ttnn)}) + VLM prefill + {num_denoising_steps}-step denoise + project"
+    )
     print(f"   Trace capture:       {capture_ms:7.2f} ms (one-time)")
     print(f"   Iterations:          {NUM_ITERS} traced replays")
     print("-" * 72)

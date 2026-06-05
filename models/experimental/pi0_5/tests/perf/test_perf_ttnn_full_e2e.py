@@ -39,6 +39,10 @@ NUM_ITERS = 1
 LANG_SEQ_LEN = 256
 SEED = 0
 TRACE_REGION_SIZE = 80_000_000
+# Production pi0.5 LIBERO passes 3 images to SigLIP (base + wrist + zero placeholder
+# for the unused right_wrist slot — see [[pi05-siglip-bs3-production]]). Default to
+# bs=3 to match real production; override with PI0_NUM_CAMERAS=1/2 for A/B.
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
@@ -46,20 +50,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_inputs(cfg, device, batch_size: int = 1):
+def _build_inputs(cfg, device, num_cameras: int = NUM_CAMERAS):
     torch.manual_seed(SEED)
-    image = torch.randn(batch_size, 3, 224, 224, dtype=torch.float32)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
-    lang_tokens = torch.randint(0, 256000, (batch_size, LANG_SEQ_LEN), dtype=torch.int32)
-    lang_masks = torch.ones(batch_size, LANG_SEQ_LEN, dtype=torch.bool)
+    images = [torch.randn(1, 3, 224, 224, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cameras)]
+    lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
+    lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    image_ttnn = ttnn.from_torch(
-        image,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    images_ttnn = [
+        ttnn.from_torch(
+            im,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for im in images
+    ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
@@ -72,7 +79,7 @@ def _build_inputs(cfg, device, batch_size: int = 1):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    return image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn
+    return images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn
 
 
 @pytest.mark.parametrize(
@@ -97,7 +104,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
-    image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
+    images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
+    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
 
     # Set NUM_WARMUP=0 to skip the cold-start call entirely (useful when
     # profiling — the per-op CSV will then contain exactly NUM_ITERS
@@ -109,8 +117,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
         for _ in range(NUM_WARMUP):
             with torch.no_grad():
                 out = model.sample_actions(
-                    images=[image_ttnn],
-                    img_masks=[img_mask],
+                    images=images_ttnn,
+                    img_masks=img_masks,
                     lang_tokens=lang_tokens_ttnn,
                     lang_masks=lang_masks_ttnn,
                     state=None,
@@ -134,8 +142,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
         start = time.perf_counter()
         with torch.no_grad():
             _ = model.sample_actions(
-                images=[image_ttnn],
-                img_masks=[img_mask],
+                images=images_ttnn,
+                img_masks=img_masks,
                 lang_tokens=lang_tokens_ttnn,
                 lang_masks=lang_masks_ttnn,
                 state=None,
