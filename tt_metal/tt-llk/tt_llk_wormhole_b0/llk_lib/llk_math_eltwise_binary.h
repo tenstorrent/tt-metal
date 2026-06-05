@@ -433,16 +433,27 @@ inline void eltwise_binary_run_with_dest_reuse(
     {
         eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
 
-        // Clear DEST face-by-face when reusing dest as source
-        auto base_address = (get_dest_buffer_base() >> 4) + (dst_index << ((is_fp32_dest_acc_en && clear_fp32_dst_acc) ? 3 : 2));
+        // Set DEST zero flags face-by-face when reusing dest as source.
         if (is_fp32_dest_acc_en && clear_fp32_dst_acc)
         {
-            const std::uint32_t face_offset_fp32 = face_offset * 2;
-            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (face_offset_fp32 + n * 2));
-            TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (face_offset_fp32 + ((n * 2) + 1)));
+            // fp32 DEST stores each datum across two physical rows (hi16 + mantissa16) in
+            // the 32-bit Adj32 layout. The dest-reuse MOVD2B/ELWMUL operate in that 32-bit
+            // layout (UseDst32b from ALU_ACC_CTRL_Fp32_enabled), so the zero-flag set must
+            // also be issued in 32-bit mode, otherwise it flags the wrong physical rows and
+            // ELWMUL accumulates onto stale (x - a) data (the (1+b)/b over-scale on WH).
+            // WH p_zeroacc has no named CLR_16 32-bit variant, so raw-encode
+            // (UseDst32b << 2) | CLR_16 == 0b101. Imm10 is in fp32-face units (one CLR_16
+            // call = one 32-physical-row fp32 face), and must be < 32:
+            //   (get_dest_buffer_base() >> 5) selects the SyncHalf (0 or 16),
+            //   (dst_index << 2)            = 4 faces per fp32 tile,
+            //   (face_offset + n)           = the face within the tile.
+            constexpr std::uint32_t ZERO_ACC_MODE_32B = (1u << 2) | p_zeroacc::CLR_16; // 0b101
+            const std::uint32_t base_face             = (get_dest_buffer_base() >> 5) + (dst_index << 2);
+            TT_ZEROACC(ZERO_ACC_MODE_32B, ADDR_MOD_1, base_face + face_offset + n);
         }
         else
         {
+            const std::uint32_t base_address = (get_dest_buffer_base() >> 4) + (dst_index << 2);
             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (face_offset + n));
         }
 
