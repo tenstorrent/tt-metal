@@ -135,6 +135,24 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
 #endif
 }
 
+#ifdef TRISC_UNPACK
+// Returns the L1 byte address of element 0 of `tile_index` within `operand_id`'s buffer.
+// Shared by get_tile_address and read_tile_value; only valid on the UNPACK thread.
+ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index) {
+#ifdef ARCH_QUASAR
+    LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    const auto& slot = local_dfb.tc_slots[local_dfb.tc_idx];
+    uint32_t base_address = slot.base_addr + slot.rd_offset;
+    // Per-tile spacing is stride_size, not entry_size (matches pop_front/push_back).
+    uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
+#else
+    uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
+    uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+#endif
+    return (base_address + offset_address) << 4;  // Convert to byte address
+}
+#endif
+
 // clang-format off
 /**
  * Gets the L1 address of a tile in the specified circular buffer using mailbox-based
@@ -155,17 +173,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     uint32_t address = 0;
 
     UNPACK({
-        uint32_t operand_id = get_operand_id(cb_id);
-#ifdef ARCH_QUASAR
-        LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
-        uint32_t base_address =
-            local_dfb.tc_slots[local_dfb.tc_idx].base_addr + local_dfb.tc_slots[local_dfb.tc_idx].rd_offset;
-        uint32_t offset_address = static_cast<uint32_t>(local_dfb.entry_size) * tile_index;
-#else
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
-        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-#endif
-        address = (base_address + offset_address) << 4;  // Convert to byte address
+        address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
         mailbox_write(ckernel::ThreadId::PackThreadId, address);
@@ -195,17 +203,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     uint32_t value = 0;
 
     UNPACK({
-        uint32_t operand_id = get_operand_id(cb_id);
-#ifdef ARCH_QUASAR
-        LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
-        uint32_t base_address =
-            local_dfb.tc_slots[local_dfb.tc_idx].base_addr + local_dfb.tc_slots[local_dfb.tc_idx].rd_offset;
-        uint32_t offset_address = static_cast<uint32_t>(local_dfb.entry_size) * tile_index;
-#else
-        uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
-        uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-#endif
-        uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
+        uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), tile_index);
 
         value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
 

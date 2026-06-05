@@ -10,6 +10,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "llk_device_fixture.hpp"
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -26,13 +27,16 @@ static constexpr auto DATA_FORMAT = DataFormat::UInt32;
 
 static constexpr DataT VAL0 = 0xA5A5A5A5u;
 static constexpr DataT VAL1 = 0x11111111u;
-static const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL0};
+static constexpr DataT VAL2 = 0x22222222u;
+static constexpr DataT VAL3 = 0x33333333u;
+// {read tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0]}
+static const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL2, VAL3, VAL2};
 
 }  // namespace
 
 // Validates ckernel::read_tile_value and ckernel::get_tile_address on Quasar (cb_api.h).
-// The compute kernel seeds a tile in-place and reads it back through both APIs; no
-// producer/consumer data movement is required.
+// The host preloads two known tiles into the DFB's L1 ring, then the compute kernel reads
+// them back through both APIs. Reading tile_index 1 exercises the per-tile stride term.
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     auto mesh_device = devices_.at(0);
     auto* device = mesh_device->get_devices()[0];
@@ -52,7 +56,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
         WORKER_CORE,
         experimental::dfb::DataflowBufferConfig{
             .entry_size = tile_page_size,
-            .num_entries = 1,
+            .num_entries = 2,
             .data_format = DATA_FORMAT,
             .tensix_scope = experimental::dfb::TensixScope::INTRA,
         });
@@ -70,10 +74,21 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarCbL1ReadApi) {
     // entry_size, ...) is finalized and written to L1; the kernel only reads from it.
     experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program_, dfb_id, compute_kernel, compute_kernel);
 
+    // Preload two known tiles into the DFB's L1 ring (single DFB → ring base is the L1
+    // allocator base). Tiles are entry_size apart for this 1-producer/1-consumer layout.
+    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t words_per_entry = tile_page_size / sizeof(DataT);
+    std::vector<DataT> ring(2 * words_per_entry, 0);
+    ring[0] = VAL0;
+    ring[1] = VAL1;
+    ring[words_per_entry + 0] = VAL2;
+    ring[words_per_entry + 1] = VAL3;
+    detail::WriteToDeviceL1(device, WORKER_CORE, dfb_l1_addr, ring);
+
     std::vector<DataT> result_init(EXPECTED_RESULT.size(), 0);
     detail::WriteToDeviceL1(device, WORKER_CORE, RESULT_L1_ADDR, result_init);
 
-    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {RESULT_L1_ADDR, VAL0, VAL1});
+    SetRuntimeArgs(program_, compute_kernel, WORKER_CORE, {RESULT_L1_ADDR});
 
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
