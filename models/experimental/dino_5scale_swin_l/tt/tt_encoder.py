@@ -428,11 +428,16 @@ class TtFFN:
         self.b1 = params["fc1"]["bias"]
         self.w2 = params["fc2"]["weight"]
         self.b2 = params["fc2"]["bias"]
+        # Passing core_grid routes fc1 through the optimized matmul path which
+        # FUSES the ReLU into the matmul kernel. Without it, ttnn.linear applies
+        # activation as a separate unary op (~3 ms/layer of pure overhead).
+        grid = device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
     def __call__(self, x, identity=None):
         if identity is None:
             identity = x
-        x = ttnn.linear(x, self.w1, bias=self.b1, activation="relu")
+        x = ttnn.linear(x, self.w1, bias=self.b1, activation="relu", core_grid=self.core_grid)
         x = ttnn.linear(x, self.w2, bias=self.b2)
         return ttnn.add(x, identity)
 
