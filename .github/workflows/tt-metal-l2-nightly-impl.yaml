@@ -443,7 +443,7 @@ jobs:
   ttnn-sdxl-tests:
     if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100a' }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'P150b' && inputs.docker-image) || inputs.non-harbor-docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
