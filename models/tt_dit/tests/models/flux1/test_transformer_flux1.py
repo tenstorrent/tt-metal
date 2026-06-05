@@ -61,9 +61,10 @@ def test_single_transformer_block(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
-
     model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
-    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
+    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
+        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+    )
     torch_model = parent_torch_model.single_transformer_blocks[0]
     assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxSingleTransformerBlock)
     torch_model.eval()
@@ -101,10 +102,10 @@ def test_single_transformer_block(
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch.manual_seed(0)
-    combined = torch.randn([batch_size, prompt_seq_len + spatial_seq_len, inner_dim])
-    time_embed = torch.randn([batch_size, inner_dim])
-    rope_cos = torch.randn([prompt_seq_len + spatial_seq_len, head_dim])
-    rope_sin = torch.randn([prompt_seq_len + spatial_seq_len, head_dim])
+    combined = torch.randn([batch_size, prompt_seq_len + spatial_seq_len, inner_dim]).to(torch.bfloat16)
+    time_embed = torch.randn([batch_size, inner_dim]).to(torch.bfloat16)
+    rope_cos = torch.randn([prompt_seq_len + spatial_seq_len, head_dim]).to(torch.bfloat16)
+    rope_sin = torch.randn([prompt_seq_len + spatial_seq_len, head_dim]).to(torch.bfloat16)
 
     tt_spatial = bf16_tensor_2dshard(
         combined[:, prompt_seq_len:], device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2}
@@ -225,10 +226,15 @@ def test_transformer(
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
     if dit_unit_test:
+        print("DIT_UNIT_TEST")
         torch_model = reference.FluxTransformer2DModel(num_layers=1, num_single_layers=1)
     else:
+        print("BLAH")
+
         model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
-        torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
+        torch_model = reference.FluxTransformer2DModel.from_pretrained(
+            model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+        )
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 
