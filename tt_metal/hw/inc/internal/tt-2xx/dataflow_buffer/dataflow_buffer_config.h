@@ -63,7 +63,10 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     DFB config region layout (Quasar / tt-2xx):
 
     [dfb_config_base]:
-      dfb_global_header_t (64B) + uint16_t dfb_byte_offset[num_dfbs] — variable-length prefix
+      dfb_global_header_t (64B)
+        + uint16_t dfb_byte_offset[num_dfbs]
+        + uint16_t per_risc_byte_offset[num_dfbs][NUM_PARTICIPATING_HARTIDS]
+      — variable-length prefix (4-byte padded)
 
     [dfb_config_base + dm1_remapper_blob_offset]:
       DM1 remapper blob — contiguous across all DFBs, read by DM1:
@@ -94,7 +97,10 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
 */
 
 // Fixed header at the start of the DFB config region.
-// Immediately followed in L1 by uint16_t dfb_byte_offset[num_dfbs] (num_dfbs × 2 bytes, ids 0..num_dfbs-1).
+// Immediately followed in L1 by:
+//   uint16_t dfb_byte_offset[num_dfbs] — byte offset to dfb_initializer_t per logical id
+//   uint16_t per_risc_byte_offset[num_dfbs][NUM_PARTICIPATING_HARTIDS] — byte offset to this hart's
+//     dfb_initializer_per_risc_t (0 when hart does not participate on that DFB)
 struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob (dfb_dm1_remapper_entry_header_t + slots per DFB)
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
@@ -107,10 +113,20 @@ struct dfb_global_header_t {
 
 inline uint32_t dfb_byte_offset_table_byte_offset() { return sizeof(dfb_global_header_t); }
 
+inline uint32_t dfb_per_risc_byte_offset_table_byte_offset(uint8_t num_dfbs) {
+    return dfb_byte_offset_table_byte_offset() + static_cast<uint32_t>(num_dfbs) * sizeof(uint16_t);
+}
+
+inline uint32_t dfb_per_risc_byte_offset_table_index(uint8_t logical_dfb_id, uint8_t hartid) {
+    return static_cast<uint32_t>(logical_dfb_id) * static_cast<uint32_t>(dfb::NUM_PARTICIPATING_HARTIDS) +
+           static_cast<uint32_t>(hartid);
+}
+
 inline uint32_t dfb_config_prefix_size(uint8_t num_dfbs) {
-    const uint32_t table_end =
-        dfb_byte_offset_table_byte_offset() + static_cast<uint32_t>(num_dfbs) * sizeof(uint16_t);
-    // Pad after dfb_byte_offset[] so DM1/DM0 blobs and per-DFB layout start on 4-byte boundaries (L1 u32 access).
+    const uint32_t table_end = dfb_per_risc_byte_offset_table_byte_offset(num_dfbs) +
+                               static_cast<uint32_t>(num_dfbs) * static_cast<uint32_t>(dfb::NUM_PARTICIPATING_HARTIDS) *
+                                   sizeof(uint16_t);
+    // Pad prefix so DM1/DM0 blobs and per-DFB layout start on 4-byte boundaries (L1 u32 access).
     return (table_end + 3u) & ~3u;
 }
 struct dfb_txn_id_descriptor_t {
