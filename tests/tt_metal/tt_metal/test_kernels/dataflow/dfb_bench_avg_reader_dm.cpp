@@ -27,11 +27,11 @@ void kernel_main() {
     DataflowBuffer dfb_sa(dfb::sa_out);
 
     // per_txn = 2: each DM issues 2 reads per DFB (4 DMs × 2 = 8 = hw_threshold)
-    dfb_issue_implicit_read(noc, dfb_ss);
-    dfb_issue_implicit_read(noc, dfb_ss);
+    // dfb_issue_implicit_read(noc, dfb_ss);
+    // dfb_issue_implicit_read(noc, dfb_ss);
 
-    dfb_issue_implicit_read(noc, dfb_sa);
-    dfb_issue_implicit_read(noc, dfb_sa);
+    // dfb_issue_implicit_read(noc, dfb_sa);
+    // dfb_issue_implicit_read(noc, dfb_sa);
 
     // dfb_ss.finish();
     // dfb_sa.finish();

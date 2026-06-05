@@ -17,8 +17,8 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::t6_in);
 
     // Wait for compute to push_back(1) via explicit sync
-    dfb.wait_front(1);
-    dfb.pop_front(1);
+    // dfb.wait_front(1);
+    // dfb.pop_front(1);
 
     // dfb.finish();
 }

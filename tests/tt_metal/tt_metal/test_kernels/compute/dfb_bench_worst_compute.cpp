@@ -26,10 +26,10 @@ void kernel_main() {
     DataflowBuffer in1(dfb::in1);
     DataflowBuffer in2(dfb::in2);
 
-    // Wait for ISR to fire (tiles_to_post=2); pop 2 credits to unblock DM finish()
-    in0.wait_front(1); in0.pop_front(1);
-    in1.wait_front(1); in1.pop_front(1);
-    in2.wait_front(1); in2.pop_front(1);
+    // // Wait for ISR to fire (tiles_to_post=2); pop 2 credits to unblock DM finish()
+    // in0.wait_front(1); in0.pop_front(1);
+    // in1.wait_front(1); in1.pop_front(1);
+    // in2.wait_front(1); in2.pop_front(1);
 
     // in0.finish();
     // in1.finish();
