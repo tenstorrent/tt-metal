@@ -47,14 +47,12 @@ void kernel_main() {
                 cb_wait_front(intermediate_cb, tile_granularity);
                 cb_reserve_back(output_cb, tile_granularity);
                 tile_regs_acquire();
-                for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
-                    add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
-                }
-                tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t tile_id = 0; tile_id < num_pages_to_read; tile_id++) {
+                    add_tiles(input_cb_id, intermediate_cb, tile_id, tile_id, tile_id);
                     pack_tile(tile_id, output_cb);
                 }
+                tile_regs_commit();
                 tile_regs_release();
                 cb_pop_front(input_cb_id, tile_granularity);
                 cb_pop_front(intermediate_cb, tile_granularity);

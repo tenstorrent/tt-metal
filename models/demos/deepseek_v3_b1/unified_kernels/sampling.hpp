@@ -404,8 +404,8 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
 
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     tile_regs_commit();
-    ckernel::pack_reconfig_data_format(out_scores_cb);
     tile_regs_wait();
+    ckernel::pack_reconfig_data_format(out_scores_cb);
     ckernel::pack_tile(value_offset_tiles, out_scores_cb);
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);

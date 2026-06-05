@@ -33,8 +33,14 @@ namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
-ALWI void ACQ() { tile_regs_acquire(); }
-ALWI void REL() { tile_regs_release(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -147,10 +153,6 @@ void kernel_main() {
             cb_x_obj.reserve_back(block.full_block_size());
             for (auto i : block.local()) {
                 add_tiles(cb_in, cb_inb, i, i, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
                 pack_tile(i, cb_x);
             }
             REL();
@@ -184,10 +186,6 @@ void kernel_main() {
             ACQ();
             for (auto i : block.local()) {
                 sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
                 pack_tile(i, cb_xmm);
             }
             cb_xmm_obj.push_back(block.full_block_size());
@@ -216,10 +214,6 @@ void kernel_main() {
             for (auto i : block.local()) {
                 const auto global_i = block.to_global(i);
                 mul_tiles(cb_xmm, cb_xmm, global_i, global_i, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
                 pack_tile(i, cb_xmm2);
             }
             cb_xmm2_obj.push_back(block.full_block_size());
@@ -243,8 +237,6 @@ void kernel_main() {
         cb_ex2pe_obj.reserve_back(1);  // 1
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);
-        tile_regs_commit();
-        tile_regs_wait();
         pack_reconfig_data_format(cb_ex2pe);
         pack_tile(dst0, cb_ex2pe);
         cb_ex2pe_obj.push_back(1);
@@ -277,10 +269,6 @@ void kernel_main() {
                     SFPU_OP_FUNC_ACTIVATION
                 }
 #endif
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
                 pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             cb_im_or_out_obj.push_back(
@@ -317,10 +305,6 @@ void kernel_main() {
                         SFPU_OP_FUNC_ACTIVATION
                     }
 #endif
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (auto i : block.local()) {
                     pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());
@@ -348,10 +332,6 @@ void kernel_main() {
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
 #endif
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (auto i : block.local()) {
                     pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());

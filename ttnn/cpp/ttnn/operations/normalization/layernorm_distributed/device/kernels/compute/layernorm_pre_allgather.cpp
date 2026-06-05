@@ -20,8 +20,14 @@
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
 
-ALWI void ACQ() { tile_regs_acquire(); }
-ALWI void REL() { tile_regs_release(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -61,10 +67,6 @@ void kernel_main() {
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 pack_tile(wtr, cb_x2, wt + wtr);
             }
             REL();
