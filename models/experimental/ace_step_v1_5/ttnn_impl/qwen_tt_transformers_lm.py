@@ -449,6 +449,7 @@ class QwenModelTtTransformers:
             rot_mats_local,
             page_table_tt,
             _chunk_page_table_tt,
+            _chunk_start_idx_tt,
         ) = inputs
 
         # The stock tt_transformers ``LMHead`` is *width-sharded* and requires exactly one
@@ -487,8 +488,8 @@ class QwenModelTtTransformers:
                 rot_mats_local=rot_mats_local,
                 user_id=0,
                 page_table=page_table_tt,
-                chunk_page_table=None,
-                chunk_start_idx=None,
+                chunk_page_table=_chunk_page_table_tt,
+                chunk_start_idx=_chunk_start_idx_tt,
                 get_last_token=get_last_token,
                 kv_cache=self.tt_kv_cache,
                 batch_size=1,
@@ -531,17 +532,23 @@ class QwenModelTtTransformers:
             )
             tt_rot_global = host_inputs[1]
             tt_rot_local = host_inputs[2]
-            host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
+            host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
-            x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            (
+                x_embd,
+                tt_page_table,
+                tt_chunk_page_table,
+                tt_chunk_start_idx,
+            ) = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
             with self._prefill_l1_op_context():
                 warm = self.tt_model.ttnn_prefill_forward(
                     x_embd,
                     rot_mats_global=tt_rot_global,
                     rot_mats_local=tt_rot_local,
                     page_table=tt_page_table,
-                    chunk_page_table=None,
+                    chunk_page_table=tt_chunk_page_table,
+                    chunk_start_idx=tt_chunk_start_idx,
                     kv_cache=self.tt_kv_cache,
                     get_last_token=get_last_token,
                 )
@@ -553,14 +560,20 @@ class QwenModelTtTransformers:
 
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-            x_embd, tt_page_table, _chunk_pt = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            (
+                x_embd,
+                tt_page_table,
+                tt_chunk_page_table,
+                tt_chunk_start_idx,
+            ) = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
             with self._prefill_l1_op_context():
                 _ = self.tt_model.ttnn_prefill_forward(
                     x_embd,
                     rot_mats_global=tt_rot_global,
                     rot_mats_local=tt_rot_local,
                     page_table=tt_page_table,
-                    chunk_page_table=None,
+                    chunk_page_table=tt_chunk_page_table,
+                    chunk_start_idx=tt_chunk_start_idx,
                     kv_cache=self.tt_kv_cache,
                     get_last_token=get_last_token,
                 )
@@ -581,7 +594,7 @@ class QwenModelTtTransformers:
             padded_tokens,
             page_table=page_table_for_prefill,
         )
-        host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4])
+        host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
         copy_host_to_device(host_tuple, st.device_inputs, mesh_device=self.device)
         ttnn.execute_trace(self.device, st.trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(self.device)
@@ -736,6 +749,7 @@ class QwenModelTtTransformers:
             rot_mats_local,
             page_table_tt,
             _chunk_page_table_tt,
+            _chunk_start_idx_tt,
         ) = inputs
 
         with self._prefill_l1_op_context():
@@ -745,8 +759,8 @@ class QwenModelTtTransformers:
                 rot_mats_local=rot_mats_local,
                 user_id=0,
                 page_table=page_table_tt,
-                chunk_page_table=None,
-                chunk_start_idx=None,
+                chunk_page_table=_chunk_page_table_tt,
+                chunk_start_idx=_chunk_start_idx_tt,
                 get_last_token=-1,
                 kv_cache=self.tt_kv_cache,
                 batch_size=1,

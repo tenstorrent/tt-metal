@@ -156,6 +156,7 @@ class AceStepQwen3Encoder:
         self._persistent_tokens: Optional[ttnn.Tensor] = None
         self._persistent_page_table: Optional[ttnn.Tensor] = None
         self._persistent_chunk_page_table: Optional[ttnn.Tensor] = None
+        self._persistent_chunk_start_idx: Optional[ttnn.Tensor] = None
         self._persistent_output: Optional[ttnn.Tensor] = None
         self._rot_mats_global: Any = None
         self._rot_mats_local: Any = None
@@ -462,7 +463,7 @@ class AceStepQwen3Encoder:
         )
         self._rot_mats_global = host_inputs[1]
         self._rot_mats_local = host_inputs[2]
-        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4])
+        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
         # 2. Warmup (compile) pass — uploads host_payload to throw-away device tensors
         #    so every program-cache entry the trace will reference is already resident.
@@ -476,7 +477,7 @@ class AceStepQwen3Encoder:
                 user_id=0,
                 page_table=transformed[1],
                 chunk_page_table=transformed[2],
-                chunk_start_idx=None,
+                chunk_start_idx=transformed[3],
                 get_last_token=-1,
                 kv_cache=self.tt_kv_cache,
                 batch_size=1,
@@ -501,6 +502,7 @@ class AceStepQwen3Encoder:
         self._persistent_tokens = device_payload[0]
         self._persistent_page_table = device_payload[1]
         self._persistent_chunk_page_table = device_payload[2]
+        self._persistent_chunk_start_idx = device_payload[3]
 
         # 4. Capture the trace against the persistent buffers.
         self._trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
@@ -508,6 +510,7 @@ class AceStepQwen3Encoder:
             self._persistent_tokens,
             self._persistent_page_table,
             self._persistent_chunk_page_table,
+            self._persistent_chunk_start_idx,
         )
         with ace_step_qwen_prefill_l1_op_context():
             hidden = self.tt_model.ttnn_prefill_forward(
@@ -517,7 +520,7 @@ class AceStepQwen3Encoder:
                 user_id=0,
                 page_table=transformed[1],
                 chunk_page_table=transformed[2],
-                chunk_start_idx=None,
+                chunk_start_idx=transformed[3],
                 get_last_token=-1,
                 kv_cache=self.tt_kv_cache,
                 batch_size=1,
@@ -563,7 +566,9 @@ class AceStepQwen3Encoder:
             ids_padded, page_table=page_table, batch_size=1, user_id=0
         )
         rot_g, rot_l = host_inputs[1], host_inputs[2]
-        device_payload = copy_host_to_device((host_inputs[0], host_inputs[3], host_inputs[4]), mesh_device=self.device)
+        device_payload = copy_host_to_device(
+            (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5]), mesh_device=self.device
+        )
         transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload)
         with ace_step_qwen_prefill_l1_op_context():
             hidden = self.tt_model.ttnn_prefill_forward(
@@ -573,7 +578,7 @@ class AceStepQwen3Encoder:
                 user_id=0,
                 page_table=transformed[1],
                 chunk_page_table=transformed[2],
-                chunk_start_idx=None,
+                chunk_start_idx=transformed[3],
                 get_last_token=-1,
                 kv_cache=self.tt_kv_cache,
                 batch_size=1,
@@ -602,11 +607,12 @@ class AceStepQwen3Encoder:
             batch_size=1,
             user_id=0,
         )
-        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4])
+        host_payload = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
         persistent_payload = (
             self._persistent_tokens,
             self._persistent_page_table,
             self._persistent_chunk_page_table,
+            self._persistent_chunk_start_idx,
         )
 
         # CQ 1 writes wait for the previous CQ 0 trace execution to finish reading the
@@ -641,6 +647,7 @@ class AceStepQwen3Encoder:
             "_persistent_tokens",
             "_persistent_page_table",
             "_persistent_chunk_page_table",
+            "_persistent_chunk_start_idx",
             "_persistent_output",
         ):
             t = getattr(self, attr, None)
