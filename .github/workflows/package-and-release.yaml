@@ -38,6 +38,7 @@ permissions:
   packages: write
   actions: write
   id-token: write
+  checks: read
 
 # =============================================================================
 # Default commit SHAs to ignore when analyzing version bumps.
@@ -144,7 +145,6 @@ jobs:
       force-bump-type: ${{ inputs.force-bump-type || '' }}
       ignore-commits: ${{ inputs.ignore-commits || needs.release-precheck.outputs.default-ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
-
 
   build-test-publish:
     needs: [create-tag, release-precheck]

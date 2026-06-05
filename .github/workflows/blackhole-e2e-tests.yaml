@@ -25,13 +25,13 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       model:
-        description: 'Select model to test (filters rows by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; untagged rows always run)'
+        description: 'Select model to test (filters rows strictly by model-name in tests/pipeline_reorg/blackhole_e2e_tests.yaml; use "all" to run every row including untagged)'
         required: false
         default: 'all'
         type: choice
         options:
           - all
-          - deepseek
+          - deepseek_prefill
       test-selection:
         description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
         required: false
@@ -94,6 +94,8 @@ on:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   generate-card-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -124,18 +126,21 @@ jobs:
           echo "Selected system type: $selected_system_type"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-e2e-tests:
-    needs: [build-artifact, generate-card-matrix]
+    needs: [check-harbor, build-artifact, generate-card-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-e2e-tests-impl.yaml
     strategy:

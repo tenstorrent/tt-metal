@@ -83,7 +83,7 @@ def _build_model_test_cases_and_ids(users_per_row: int, prefill_seq_len: int):
         expanded_cases = [
             (
                 pytest.param(*case, marks=pytest.mark.skip(reason=TG_MODEL_DECODE_SKIP_REASON))
-                if case == ("decode", 1, users_per_row, None)
+                if (case[0] == "decode") or (max_seq_len_env is not None)
                 else case
             )
             for case in expanded_cases

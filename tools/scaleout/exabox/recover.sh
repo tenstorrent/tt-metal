@@ -27,8 +27,7 @@ Optional:
                                             (Kubernetes CNI, flannel, docker) being selected by MPI
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
-    --log-file <path>                       Log file path (default: recover_YYYYMMDD_HHMMSS.log)
-                                            ANSI color codes and carriage returns are stripped in the log
+    --output <directory>                     Output directory for log files (default: recover-logs)
 
     --cabling-descriptor-path <path>        Path to cabling descriptor file (4x32 only, overrides --config default)
                                             (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
@@ -63,7 +62,7 @@ SEND_TRAFFIC=true
 CHECK=false
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
-LOG_FILE=""
+OUTPUT_DIR="recover-logs"
 
 CABLING_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH_DEFAULT="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -162,12 +161,12 @@ while [[ $# -gt 0 ]]; do
             MPI_EXTRA_ARGS+=("${_extra[@]}")
             shift 2
             ;;
-        --log-file)
+        --output)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --log-file requires a non-empty value"
+                echo "Error: --output requires a non-empty value"
                 exit 1
             fi
-            LOG_FILE="$2"
+            OUTPUT_DIR="$2"
             shift 2
             ;;
         --cabling-descriptor-path)
@@ -220,8 +219,9 @@ if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     exit 1
 fi
 
-# Set default log file name after parsing (captures actual start time)
-[[ -z "$LOG_FILE" ]] && LOG_FILE="recover_$(date +%Y%m%d_%H%M%S).log"
+# Set log file path inside output directory (captures actual start time)
+mkdir -p "$OUTPUT_DIR"
+LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
 # Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
 exec > >(tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
@@ -288,6 +288,7 @@ echo "Send traffic: $SEND_TRAFFIC"
 echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
+echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
@@ -321,7 +322,9 @@ if [[ "$SKIP_VALIDATION" == false ]]; then
     if [[ -n "$DOCKER_IMAGE" ]]; then
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
+            --mpi-interface "$MPI_IF" \
             --volume /data/scaleout_configs \
+            "${MPI_EXTRA_ARGS[@]}" \
             --host "$HOSTS" \
             ./build/tools/scaleout/run_cluster_validation \
             "${VALIDATION_ARGS[@]}"

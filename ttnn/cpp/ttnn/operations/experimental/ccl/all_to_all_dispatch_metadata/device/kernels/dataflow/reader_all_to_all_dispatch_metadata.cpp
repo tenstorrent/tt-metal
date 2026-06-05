@@ -143,7 +143,7 @@ void kernel_main() {
         // Read input token (or portion of it in payload split mode)
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
-        uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
+        uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(i);
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 

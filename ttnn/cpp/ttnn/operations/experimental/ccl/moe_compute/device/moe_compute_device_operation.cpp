@@ -6,6 +6,9 @@
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -397,24 +400,6 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
-    if (compute_only) {
-        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
-        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
-        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
-        TT_FATAL(
-            !mux_core_range_set.has_value(),
-            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
-        TT_FATAL(
-            !optional_cross_device_semaphore.has_value(),
-            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
-        TT_FATAL(
-            !optional_output_tensor.has_value(),
-            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
-    } else {
-        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
-    }
-
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
     // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
@@ -428,16 +413,40 @@ std::vector<ttnn::Tensor> moe_compute(
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
-        // Full path: cluster_axis is required here; the validation block above ensures has_value().
+        // see #27196 for potential limitations
+        const uint32_t resolved_num_links =
+            num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis));
+        // Resolve `topology` via the shared CCL helper. This (a) substitutes the fabric
+        // default when `topology` is nullopt, (b) maps Torus → Mesh when the tensor doesn't
+        // span a wrap edge so the TT_FATAL below can reject it, and (c) downgrades Ring → Linear
+        // for the trivial `mesh_shape[cluster_axis] == 2` case. Notably, it does NOT detect
+        // physically-LINE meshes whose tensor still spans the full cluster axis (e.g. BH single
+        // Loudbox 2x4 LINE/LINE with cluster_axis=1) — that case still resolves to Ring here.
+        // BH LB callers must pass topology=Linear explicitly; the kernel-side `Topology` template
+        // guard in fabric_multicast_bidirectional_atomic_inc_1d (moe_utils.hpp) then routes the
+        // multicast through the line-aware code path. (Fixing get_usable_topology() to consult
+        // physical mesh wrap capability is a separate follow-up that affects all CCL ops.)
+        const auto resolved_topology = ttnn::ccl::get_usable_topology(tilize_input_tensor, topology, cluster_axis);
+        // Mirror the kernel-side static_assert in fabric_multicast_bidirectional_atomic_inc_1d
+        // (moe_utils.hpp). `get_usable_topology` can return Mesh when the fabric default is Torus
+        // and the tensor doesn't span a wrap edge; the combine kernel only handles Ring/Linear and
+        // would silently produce wrong wait counts → on-device hang. Reject at the host boundary
+        // with a clear message instead of waiting for a JIT compile failure or a hang.
+        TT_FATAL(
+            resolved_topology == tt::tt_fabric::Topology::Linear || resolved_topology == tt::tt_fabric::Topology::Ring,
+            "moe_compute: combine kernel only supports Topology::Linear or Topology::Ring, got {}. "
+            "If the fabric default is Torus/Mesh, pass topology=ttnn.Topology.Linear or "
+            "ttnn.Topology.Ring explicitly to ttnn.experimental.moe_compute.",
+            resolved_topology);
         combine_params = ttnn::experimental::prim::SelectiveReduceCombineParams{
             .hidden_size = hidden_size,
             .batch_size = 1,
             .seq_size = total_tokens,
             .select_experts_k = select_experts_k,
             .experts = experts,
-            .num_links = num_links.value_or(4),
+            .num_links = resolved_num_links,
             .axis = cluster_axis.value(),
-            .topology = topology.value_or(tt::tt_fabric::Topology::Ring),
+            .topology = resolved_topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,
             .worker_cores = combine_cores,

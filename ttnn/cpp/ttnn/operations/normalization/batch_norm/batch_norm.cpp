@@ -110,8 +110,6 @@ Tensor batch_norm(
         auto mean_sq = operations::normalization::mean_NHW(
             ttnn::square(input, memory_config), memory_config, compute_kernel_config);
         batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
-        ttnn::prim::running_statistics(
-            batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     } else {
         TT_FATAL(
             (running_mean.has_value() && running_var.has_value()),
@@ -119,8 +117,18 @@ Tensor batch_norm(
         batch_mean = running_mean.value();
         batch_var = running_var.value();
     }
-    return ttnn::prim::batch_norm(
+
+    // Normalize before updating running stats: running_statistics writes running_mean/running_var
+    // in place, which would corrupt weight/bias if the caller aliases those buffers.
+    auto output_tensor = ttnn::prim::batch_norm(
         input, batch_mean, batch_var, eps, weight, bias, output, memory_config, compute_kernel_config);
+
+    if (training) {
+        ttnn::prim::running_statistics(
+            batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
+    }
+
+    return output_tensor;
 }
 
 }  // namespace ttnn

@@ -468,7 +468,7 @@ void set_go_signal_noc_data() {
 FORCE_INLINE
 void merge_dispatch_d_noc_counter_deltas() {
     if constexpr (distributed_dispatcher) {
-        DEVICE_PRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core");
+        DPRINT("merge_dispatch_d_noc_counter_deltas is only supported when dispatch_d runs on the same core\n");
         ASSERT(0);
         return;
     }
@@ -510,8 +510,7 @@ void merge_dispatch_d_noc_counter_deltas() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
-    DPRINT << "dispatch_s : start" << ENDL();
-    DEVICE_PRINT("dispatch_s : start\n");
+    DPRINT("dispatch_s : start\n");
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
@@ -593,10 +592,7 @@ void kernel_main() {
                 }
                 done = true;
                 break;
-            default:
-                DPRINT << "dispatcher_s invalid command" << ENDL();
-                DEVICE_PRINT("dispatcher_s invalid command\n");
-                ASSERT(0);
+            default: DPRINT("dispatcher_s invalid command\n"); ASSERT(0);
         }
         // Dispatch s only supports single page commands for now
         ASSERT(cmd_ptr <= (reinterpret_cast<uintptr_t>(cmd) + cb_page_size));
@@ -622,8 +618,7 @@ void kernel_main() {
 
     noc_async_full_barrier();
 
-    DPRINT << "dispatch_s : done" << ENDL();
-    DEVICE_PRINT("dispatch_s : done\n");
+    DPRINT("dispatch_s : done\n");
 #if DEVICE_PRINT_DISPATCH_ENABLED
     device_print_dispatcher.shutdown();
 #endif

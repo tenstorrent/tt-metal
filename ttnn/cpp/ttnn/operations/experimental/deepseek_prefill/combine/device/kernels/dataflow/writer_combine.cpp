@@ -12,11 +12,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -25,70 +23,69 @@ void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
     // ===== Compile Time Args =====
-    // CB IDs (indices 0-5)
+    // CB IDs (indices 0-4)
     constexpr uint32_t cb_dispatched_buffer_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dispatched_metadata_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(2);
     constexpr uint32_t cb_route_info_id = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_output_for_writer_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_packet_header_id = get_compile_time_arg_val(4);
 
-    // Page counts (indices 6-9)
-    constexpr uint32_t dispatched_buffer_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t dispatched_metadata_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t output_pages = get_compile_time_arg_val(9);
+    // Page counts (indices 5-8)
+    constexpr uint32_t dispatched_buffer_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t dispatched_metadata_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(7);
+    constexpr uint32_t output_pages = get_compile_time_arg_val(8);
 
-    // Page sizes (indices 10-13)
-    constexpr uint32_t dispatched_buffer_page_size = get_compile_time_arg_val(10);
-    constexpr uint32_t dispatched_metadata_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t experts_tok_counter_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(13);
+    // Page sizes (indices 9-12)
+    constexpr uint32_t dispatched_buffer_page_size = get_compile_time_arg_val(9);
+    constexpr uint32_t dispatched_metadata_page_size = get_compile_time_arg_val(10);
+    constexpr uint32_t experts_tok_counter_page_size = get_compile_time_arg_val(11);
+    constexpr uint32_t output_page_size = get_compile_time_arg_val(12);
 
-    // Operation parameters (indices 14-17)
-    constexpr uint32_t num_chips = get_compile_time_arg_val(14);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(15);
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(16);
-    constexpr uint32_t seq_len_per_chip = get_compile_time_arg_val(17);
+    // Operation parameters (indices 13-16)
+    constexpr uint32_t num_chips = get_compile_time_arg_val(13);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(14);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(15);
+    constexpr uint32_t seq_len_per_chip = get_compile_time_arg_val(16);
 
-    // Hidden dimension (index 18)
-    constexpr uint32_t hidden_size = get_compile_time_arg_val(18);
+    // Hidden dimension (index 17)
+    constexpr uint32_t hidden_size = get_compile_time_arg_val(17);
 
-    // Aligned page sizes (indices 19-22)
-    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(19);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(20);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(21);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(22);
+    // Aligned page sizes (indices 18-21)
+    constexpr uint32_t aligned_dispatched_buffer_page_size = get_compile_time_arg_val(18);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(19);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(20);
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(21);
 
-    // Mesh information (indices 23-27)
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
+    // Mesh information (indices 22-26)
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(22);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(23);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(24);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(25);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(26);
 
-    // Fabric configuration (indices 28-31)
-    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(28);
-    constexpr uint32_t l1_alignment = get_compile_time_arg_val(29);
-    constexpr uint32_t num_links = get_compile_time_arg_val(30);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(31);
+    // Fabric configuration (indices 27-30)
+    constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(27);
+    constexpr uint32_t l1_alignment = get_compile_time_arg_val(28);
+    constexpr uint32_t num_links = get_compile_time_arg_val(29);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(30);
 
-    // Batch configuration (index 32)
-    constexpr uint32_t read_batch_size = get_compile_time_arg_val(32);
-    // Number of dispatch groups (index 33)
-    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(33);
+    // Batch configuration (index 31)
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(31);
+    // Number of dispatch groups (index 32)
+    constexpr uint32_t num_dispatch_groups = get_compile_time_arg_val(32);
 
-    // Expert region offsets tensor metadata (indices 34-37)
-    constexpr uint32_t cb_expert_region_offsets_id = get_compile_time_arg_val(34);
-    constexpr uint32_t expert_region_offsets_pages = get_compile_time_arg_val(35);
-    constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(37);
+    // Expert region offsets tensor metadata (indices 33-36)
+    constexpr uint32_t cb_expert_region_offsets_id = get_compile_time_arg_val(33);
+    constexpr uint32_t expert_region_offsets_pages = get_compile_time_arg_val(34);
+    constexpr uint32_t expert_region_offsets_page_size = get_compile_time_arg_val(35);
+    constexpr uint32_t aligned_expert_region_offsets_page_size = get_compile_time_arg_val(36);
 
-    // Index 38 (max_dispatch_buffer_token_size) is consumed by reader_combine only;
-    // writer_combine skips over it and continues with TensorAccessorArgs at index 39.
+    // Index 37 (max_dispatch_buffer_token_size) is consumed by reader_combine only;
+    // writer_combine skips over it and continues with TensorAccessorArgs at index 38.
 
-    // TensorAccessorArgs for all 5 tensors (starting at index 39)
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<39>();
+    // TensorAccessorArgs for all 5 tensors (starting at index 38)
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<38>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
     constexpr auto experts_tok_counter_args =
@@ -102,18 +99,18 @@ void kernel_main() {
     uint32_t experts_tok_counter_addr = get_arg_val<uint32_t>(rt_args_idx++);
     rt_args_idx++;  // expert_region_offsets_addr — consumed by reader only
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zero_init_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_init_complete_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
     // Separate semaphore for the exit handshake. Reusing init_semaphore_address
     // for both phases is racy
     uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t zero_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t output_init_barrier_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
 
-    uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
-    uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
+    uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
+    uint32_t output_init_barrier_l1_offset = get_semaphore(output_init_barrier_semaphore_id);
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling).
     // num_cores = effective_num_links = min(num_links, 4).
@@ -123,7 +120,7 @@ void kernel_main() {
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-        all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, zero_init_barrier_l1_offset);
+        all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_barrier_l1_offset);
     }
 
 #ifdef AXIS
@@ -134,15 +131,18 @@ void kernel_main() {
     constexpr uint32_t combine_devices = num_chips;
 #endif
 
-    DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                   << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
+    DPRINT_COMBINE(
+        "Combine Writer: experts=[{}, {}) linearized_mesh_coord={}\n",
+        expert_start_idx,
+        expert_end_idx,
+        linearized_mesh_coord);
 
-#if ZERO_INIT
-    // Wait for reader to complete zero-init
-    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
-    noc_semaphore_wait(zero_init_sem_ptr, 1);
-    noc_semaphore_set(zero_init_sem_ptr, 0);
+#if INIT_ZEROS
+    // Wait for reader to complete output-zeroing
+    volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_complete_semaphore_address);
+    noc_semaphore_wait(output_init_complete_sem_ptr, 1);
+    noc_semaphore_set(output_init_complete_sem_ptr, 0);
 #endif
 
 #ifdef DEST_CHIP_ID
@@ -177,7 +177,7 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_COMBINE << "Fabric setup complete" << ENDL();
+    DPRINT_COMBINE("Fabric setup complete\n");
 #endif
 
 #if INIT_ZEROS
@@ -192,41 +192,47 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-    // Sentinel-terminated fabric send loop
-    while (true) {
-        cb_wait_front(cb_route_info_id, 1);
-        volatile tt_l1_ptr uint32_t* route_info =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_route_info_id));
+    {
+        // DeviceZoneScopedN("combine-ethernet-flow");
+        //  Sentinel-terminated fabric send loop
+        while (true) {
+            cb_wait_front(cb_route_info_id, 1);
+            uint32_t cb_base = get_read_ptr(cb_route_info_id);
+            volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+            uint32_t route = route_info[0];
+            {
+                // DeviceZoneScopedN("combine-waiting-for-route-info");
+                if (route == ROUTE_INFO_SENTINEL) {
+                    cb_pop_front(cb_route_info_id, 1);
+                    break;
+                }
+            }
+            uint32_t distance = route_info[1];
+            uint32_t output_page_idx = route_info[2];
+            uint32_t output_data_addr = cb_base + l1_alignment;
 
-        uint32_t route = route_info[0];
-        if (route == ROUTE_INFO_SENTINEL) {
-            cb_pop_front(cb_route_info_id, 1);
-            break;
-        }
-        uint32_t distance = route_info[1];
-        uint32_t output_page_idx = route_info[2];
-        cb_pop_front(cb_route_info_id, 1);
-
-        cb_wait_front(cb_output_for_writer_id, 1);
-        uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
-
-        DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << output_page_idx
-                       << ENDL();
+            DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
 #ifdef DEST_CHIP_ID
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-        fabric_send_noc_unicast<fabric_max_packet_size>(
-            output_addr_gen,
-            fabric_connections[route],
-            unicast_packet_header,
-            output_data_addr,
-            output_page_idx,
-            (int)aligned_output_page_size,
-            l1_alignment);
-        noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+            {
+                // DeviceZoneScopedN("FABRIC-send");
+                fabric_set_unicast_route<false>(
+                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                fabric_send_noc_unicast<fabric_max_packet_size>(
+                    output_addr_gen,
+                    fabric_connections[route],
+                    unicast_packet_header,
+                    output_data_addr,
+                    output_page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment);
+                noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+            }
 #endif
 
-        cb_pop_front(cb_output_for_writer_id, 1);
+            // Pop the route-info CB, which also carries the output payload (merged CB).
+            cb_pop_front(cb_route_info_id, 1);
+        }
     }
 
 #ifdef DEST_CHIP_ID

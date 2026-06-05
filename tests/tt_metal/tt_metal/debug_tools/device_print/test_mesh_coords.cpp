@@ -75,7 +75,6 @@ void ConfigureDevicePrintForCoord(
     rtopts.set_feature_prepend_device_core_risc(kDprint, true);
     rtopts.set_feature_mesh_coords(kDprint, {{row, col}});
     rtopts.set_feature_all_chips(kDprint, false);
-    rtopts.set_use_device_print(true);
 }
 
 // Builds a MeshWorkload where each device DEVICE_PRINTs its global mesh coordinate (row, col).

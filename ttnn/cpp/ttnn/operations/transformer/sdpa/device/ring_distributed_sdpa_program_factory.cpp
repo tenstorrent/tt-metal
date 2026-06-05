@@ -358,11 +358,10 @@ ProgramDescriptor RingDistributedSdpaDeviceOperation::RingDistributedSdpaProgram
         scale_packed,
         0,          //(uint32_t)sliding_window_size,
         0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
         valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
-        0,          // arg 32: uniform_dataformat — unused when streaming is off
-        0,          // arg 33: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 34
+        0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
+        static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
     };
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);

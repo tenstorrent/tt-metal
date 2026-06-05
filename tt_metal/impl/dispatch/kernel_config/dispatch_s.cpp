@@ -179,7 +179,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
             TT_FATAL(
                 noc_locations_size <= l1_cache_size,
-                "DEVICE_PRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
+                "DPRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
                 "({} bytes). Bump TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES.",
                 noc_locations_size,
                 num_print_cores,
@@ -315,7 +315,7 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";

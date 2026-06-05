@@ -2,38 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cctype>
-#include <cmath>
 #include <pthread.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <array>
 #include <filesystem>
+#include <fstream>
 #include <future>
-#include <iomanip>
-#include <ios>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <span>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
 #include <vector>
-#include <fstream>
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "context/metal_env_accessor.hpp"
-#include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -49,33 +42,23 @@
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
-#include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
 #include "impl/debug/inspector/inspector.hpp"
-#include "tt_metal/llrt/tt_elffile.hpp"
-#include "tt_stl/span.hpp"
 #include "jit_build/build_env_manager.hpp"
 
 using std::flush;
-using std::int32_t;
 using std::ofstream;
 using std::ostream;
-using std::ostringstream;
-using std::set;
 using std::string;
 using std::to_string;
-using std::tuple;
 using std::uint32_t;
 
 using namespace tt;
-
-#define CAST_U8P(p) (reinterpret_cast<uint8_t*>(p))
 
 using RiscKey = std::tuple<ChipId, umd::CoreDescriptor, uint32_t>;  // Chip id, core, risc id
 
@@ -166,31 +149,23 @@ void WriteInitMagic(
     TT_THROW("Timed out writing init magic");
 }  // WriteInitMagic
 
-// Checks if our magic value was cleared by the device code at the given buffer address.
-// The assumption is that if our magic number was cleared,
-// it means there is a write in the queue and wpos/rpos are now valid
-// Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(tt::Cluster& cluster, ChipId device_id, const CoreCoord& virtual_core, uint64_t base_addr) {
-    auto result = cluster.read_core(device_id, virtual_core, base_addr, 4);
-    return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
-}  // CheckInitMagicCleared
-
 }  // namespace
 
 namespace tt::tt_metal {
 
-// Base class for DPrintServer implementations.
-// Contains all common state and logic; subclasses only override peek_one_risc_non_blocking.
+using DevicePrintHeader = device_print_detail::structures::DevicePrintHeader;
+static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
+
 class DPrintServer::Impl {
 public:
-    Impl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+    Impl(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     Impl() = delete;
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
-    virtual ~Impl();
+    ~Impl();
 
     void set_mute(bool mute_print_server) { mute_print_server_ = mute_print_server; }
-    virtual void await();
+    void await();
     void attach_devices();
     void detach_devices();
     void clear_log_file();
@@ -198,7 +173,7 @@ public:
     bool hang_detected() { return server_killed_due_to_hang_; }
 
     std::vector<umd::CoreDescriptor> get_print_cores(ChipId device_id) {
-        std::lock_guard<std::mutex> lock(device_to_core_range_lock_);
+        std::lock_guard lock(device_to_core_range_lock_);
         auto it = device_to_core_range_.find(device_id);
         if (it == device_to_core_range_.end()) {
             return {};
@@ -206,140 +181,13 @@ public:
         return it->second;
     }
 
-protected:
-    // Polls one core for any new print data and outputs it. Returns true if some data was read.
-    // Old DPRINT iterates over per-RISC buffers; new DEVICE_PRINT reads a single per-core buffer.
-    virtual bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) = 0;
-
-    // Writes disabled init magic to all print buffers on a single core.
-    // DPrintImpl: iterates over all per-RISC buffers.
-    // DevicePrintImpl: writes to the single shared buffer once.
-    virtual void init_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) = 0;
-
-    // Writes enabled init magic to the appropriate print buffers on a single core.
-    // DPrintImpl: uses RiscEnabled() to iterate over only the enabled per-RISC buffers.
-    // DevicePrintImpl: writes to the single shared buffer once.
-    virtual void enable_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) = 0;
-
-    // Returns true if the given core has any outstanding unread print data.
-    // DPrintImpl: checks across all enabled per-RISC buffers.
-    // DevicePrintImpl: checks the single shared buffer.
-    virtual bool core_has_outstanding_prints(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) = 0;
-
-    // Flag for main thread to signal the print server thread to stop.
-    std::atomic<bool> stop_print_server_ = false;
-    // Flag for muting the print server. This doesn't disable reading print data from the device,
-    // but it suppresses the output of that print data the user.
-    std::atomic<bool> mute_print_server_ = false;
-    // Flag for signalling whether the print server thread has recently processed data (and is
-    // therefore likely to continue processing data in the next round of polling).
-    std::atomic<bool> new_data_last_iter_ = false;
-    std::thread* print_server_thread_;
-
-    std::atomic<bool> profiler_is_running_ = false;
-
-    // A flag to signal to the main thread if the print server detected a print-based hang.
-    std::atomic<bool> server_killed_due_to_hang_ = false;
-
-    // A counter to keep track of how many iterations the print server has gone through without
-    std::atomic<int> wait_loop_iterations_ = 0;
-
-    ofstream* outfile_ = nullptr;  // non-cout
-    ostream* stream_ = nullptr;    // either == outfile_ or is &cout
-
-    // Parser instances for each risc (handles parsing state, intermediate buffering, and line prefixing).
-    std::map<RiscKey, std::unique_ptr<DPrintParser>, RiscKeyComparator> risc_to_parser_;
-
-    // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
-    std::map<RiscKey, ofstream*, RiscKeyComparator> risc_to_file_stream_;
-
-    // A map from Device -> Core Range, which is used to determine which cores on which devices
-    // to scan for print data. Also a lock for editing it.
-    std::map<ChipId, std::vector<umd::CoreDescriptor>> device_to_core_range_;
-    std::map<ChipId, bool> device_reads_dispatch_cores_;  // True if given device reads any dispatch cores. Used to
-                                                          // know whether dprint can be compiled out.
-    std::mutex device_to_core_range_lock_;
-
-    // Used to signal to the print server to flush all intermediate streams for a device so that any remaining prints
-    // are printed out.
-    std::map<ChipId, bool> device_intermediate_streams_force_flush_;
-    std::mutex device_intermediate_streams_force_flush_lock_;
-
-    MetalEnvImpl& env_;
-    uint8_t num_hw_cqs_;
-    DispatchCoreConfig dispatch_core_config_;
-
-    // Polls specified cores/riscs on all attached devices and prints any new print data. This
-    // function is the main loop for the print server thread.
-    void poll_print_data();
-
-    // Polls one device for print data. Returns true if some data was read.
-    virtual bool poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores);
-
-    // Transfers data from all parser intermediate streams to output stream and flushes it.
-    void transfer_all_streams_to_output(ChipId device_id);
-
-    // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
-    // stdout, or nothing.
-    ostream* get_output_stream(const RiscKey& risc_key);
-
-    // Helper functions to init/attach/detach a single device
-    void init_device(ChipId device_id);
-    virtual void attach_device(ChipId device_id);
-    void detach_device(ChipId device_id);
-};
-
-// Original DPRINT implementation: reads DPRINT buffers written by device kernels.
-class DPrintImpl : public DPrintServer::Impl {
-public:
-    DPrintImpl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
-        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {}
-
-protected:
-    bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
-    void init_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
-    void enable_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
-    bool core_has_outstanding_prints(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
-
 private:
-    // Reads the DPRINT buffer for a single RISC and outputs any new data.
-    bool peek_one_risc_non_blocking(
-        ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter);
-};
-
-// New DEVICE_PRINT implementation
-using DevicePrintHeader = device_print_detail::structures::DevicePrintHeader;
-static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
-
-class DevicePrintImpl : public DPrintServer::Impl {
-public:
-    DevicePrintImpl(
-        MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
-        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config), context_(context) {
-        Inspector::enable_kernel_path_collection();
-    }
-
-protected:
-    bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
+    bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter);
     void init_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
+        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type);
     void enable_print_buffers_for_core(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
-    bool core_has_outstanding_prints(
-        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) override;
+        ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type);
 
-    void attach_device(ChipId device_id) override;
-    bool poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores) override;
-    void await() override;
-
-private:
-    MetalContext* context_;
     struct RiscData {
         std::string firmware_elf_path;
         std::shared_ptr<DevicePrintParser> firmware_elf_parser;
@@ -365,56 +213,69 @@ private:
     };
     std::map<ChipId, DispatchDramData> dispatch_dram_data_;
     std::mutex dispatch_dram_data_lock_;
+
+    MetalContext* context_;
+
+    // Flag for main thread to signal the print server thread to stop.
+    std::atomic<bool> stop_print_server_ = false;
+    // Flag for muting the print server. This doesn't disable reading print data from the device,
+    // but it suppresses the output of that print data the user.
+    std::atomic<bool> mute_print_server_ = false;
+    // Flag for signalling whether the print server thread has recently processed data (and is
+    // therefore likely to continue processing data in the next round of polling).
+    std::atomic<bool> new_data_last_iter_ = false;
+    std::thread* print_server_thread_;
+
+    std::atomic<bool> profiler_is_running_ = false;
+
+    // A flag to signal to the main thread if the print server detected a print-based hang.
+    std::atomic<bool> server_killed_due_to_hang_ = false;
+
+    // A counter to keep track of how many iterations the print server has gone through without
+    std::atomic<int> wait_loop_iterations_ = 0;
+
+    ofstream* outfile_ = nullptr;  // non-cout
+    ostream* stream_ = nullptr;    // either == outfile_ or is &cout
+
+    // For printing each risc's dprint to a separate file, a map from {device id, core, risc index} to files.
+    std::map<RiscKey, ofstream*, RiscKeyComparator> risc_to_file_stream_;
+
+    // A map from Device -> Core Range, which is used to determine which cores on which devices
+    // to scan for print data. Also a lock for editing it.
+    std::map<ChipId, std::vector<umd::CoreDescriptor>> device_to_core_range_;
+    std::map<ChipId, bool> device_reads_dispatch_cores_;  // True if given device reads any dispatch cores. Used to
+                                                          // know whether dprint can be compiled out.
+    std::mutex device_to_core_range_lock_;
+
+    MetalEnvImpl& env_;
+    uint8_t num_hw_cqs_;
+    DispatchCoreConfig dispatch_core_config_;
+
+    // Polls specified cores/riscs on all attached devices and prints any new print data. This
+    // function is the main loop for the print server thread.
+    void poll_print_data();
+
+    // Polls one device for print data via the dispatch_s DRAM aggregator. Returns true if some
+    // data was read. Falls back to poll_device_print_data_l1 when dispatch_s is unavailable or
+    // unhealthy.
+    bool poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores);
+
+    // Direct per-core L1 polling. Used as the fallback when dispatch_s aggregation is unavailable.
+    bool poll_device_print_data_l1(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores);
+
+    // Returns the stream that the dprint data should be output to. Can be auto-generated files, the user-selected file,
+    // stdout, or nothing.
+    ostream* get_output_stream(const RiscKey& risc_key);
+
+    // Helper functions to init/attach/detach a single device
+    void init_device(ChipId device_id);
+    void attach_device(ChipId device_id);
+    void detach_device(ChipId device_id);
 };
-
-void DPrintImpl::init_print_buffers_for_core(
-    ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    auto& cluster = env_.get_cluster();
-    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-        WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), false);
-    }
-}
-
-void DPrintImpl::enable_print_buffers_for_core(
-    ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    const auto& rtoptions = env_.get_rtoptions();
-    auto& cluster = env_.get_cluster();
-    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-        if (RiscEnabled(rtoptions, core_type, risc_index)) {
-            WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
-        }
-    }
-}
-
-bool DPrintImpl::core_has_outstanding_prints(
-    ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    const auto& rtoptions = env_.get_rtoptions();
-    auto& cluster = env_.get_cluster();
-    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
-    for (int risc_id = 0; risc_id < num_processors; risc_id++) {
-        if (!RiscEnabled(rtoptions, core_type, risc_id)) {
-            continue;
-        }
-        uint64_t base_addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
-        if (!CheckInitMagicCleared(cluster, device_id, virtual_core, base_addr)) {
-            continue;
-        }
-        constexpr int eightbytes = 8;
-        auto from_dev =
-            cluster.read_core(device_id, virtual_core, base_addr, eightbytes);
-        uint32_t wpos = from_dev[0], rpos = from_dev[1];
-        if (rpos < wpos) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // DEVICE_PRINT implementations — single shared buffer per core.
 
-void DevicePrintImpl::print_buffer_data(
+void DPrintServer::Impl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, std::span<uint32_t> data) {
     std::size_t word_index = 0;
     auto& cluster = env_.get_cluster();
@@ -609,7 +470,7 @@ void DevicePrintImpl::print_buffer_data(
     }
 }
 
-bool DevicePrintImpl::poll_one_core(
+bool DPrintServer::Impl::poll_one_core(
     ChipId device_id, const umd::CoreDescriptor& logical_core, bool /*new_data_this_iter*/) {
     auto& cluster = env_.get_cluster();
     auto virtual_core =
@@ -687,21 +548,27 @@ bool DevicePrintImpl::poll_one_core(
     return true;
 }
 
-void DevicePrintImpl::init_print_buffers_for_core(
+void DPrintServer::Impl::init_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
     const auto& hal = env_.get_hal();
     auto& cluster = env_.get_cluster();
     uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
-    WriteInitMagic(cluster, device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), true, buffer_size);
+    // Default every core to disabled; enable_print_buffers_for_core flips opted-in cores to the
+    // starting magic. Muted cores must see the disabled magic or their kernels will write into the
+    // buffer and wait forever for a drain that never comes.
+    WriteInitMagic(
+        cluster, device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), false, buffer_size);
 }
 
-void DevicePrintImpl::enable_print_buffers_for_core(
+void DPrintServer::Impl::enable_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
     auto& cluster = env_.get_cluster();
     const auto& hal = env_.get_hal();
     uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint64_t device_print_buffer_address = GetDevicePrintBufAddr(device_id, virtual_core);
+    uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
+    WriteInitMagic(cluster, device_id, virtual_core, device_print_buffer_address, true, buffer_size);
     uint64_t risc_flags_address = device_print_buffer_address + 8;  // sizeof(wpos) + sizeof(rpos)
     std::vector<uint8_t> risc_flags(
         (num_processors + 3) / 4 * 4, static_cast<uint8_t>(DevicePrintRiscCoreState::KernelNotPrinted));
@@ -718,72 +585,11 @@ void DevicePrintImpl::enable_print_buffers_for_core(
     cluster.write_core(device_id, virtual_core, risc_flags, risc_flags_address);
 }
 
-bool DevicePrintImpl::core_has_outstanding_prints(
-    ChipId /*device_id*/, const CoreCoord& /*virtual_core*/, HalProgrammableCoreType /*core_type*/) {
-    // New implmementation doesn't have outstanding prints.
-    return false;
-}
-
-void DevicePrintImpl::attach_device(ChipId device_id) {
-    // Normal L1 setup
-    DPrintServer::Impl::attach_device(device_id);
-
-    // Check if we should set up dispatch_s DRAM aggregation for this device.
-    auto& cluster = env_.get_cluster();
-    const auto& hal = env_.get_hal();
-
-    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
-        return;
-    }
-
-    // Initialize DRAM data
-    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-    DispatchDramData data;
-    data.dram_view = 0;
-    data.rw_pointers_address = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
-    data.buffer_address = data.rw_pointers_address + dram_alignment;
-    data.buffer_size = hal.get_dev_size(HalDramMemAddrType::DEVICE_PRINT_DISPATCH) - dram_alignment;
-    data.disabled = false;
-    data.noc_to_core.clear();
-
-    // Build the (virtual NOC1 x, y) -> CoreDescriptor map dispatch_s reports headers in.
-    // Replicates Device::virtual_noc0_coordinate(NOC_1, virtual_core) without an IDevice
-    // (IDevices aren't registered yet at attach_device time): for Blackhole NOC0 and NOC1
-    // share the virtual coordinate space, and for other archs the cluster's soc_desc
-    // grid_size + HAL noc_coordinate transform yields the NOC1 coord.
-    const auto& print_cores = get_print_cores(device_id);
-    for (const auto& core_desc : print_cores) {
-        auto virtual_core =
-            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core_desc.coord, core_desc.type);
-        data.noc_to_core.emplace(std::make_pair(virtual_core.x, virtual_core.y), core_desc);
-    }
-
-    // Initialize read/write pointers
-    std::array<uint32_t, 5> rw_init = {DEBUG_PRINT_SERVER_STARTING_MAGIC, 0u, 0u, 0u, 0u};
-    cluster.write_dram_vec(rw_init.data(), sizeof(rw_init), device_id, data.dram_view, data.rw_pointers_address);
-
-    // Store dispatch DRAM data for this device so that we can use it in poll_device_print_data.
-    // There is race condition between poll_device_print_data and attach_device, so adding dispatch
-    // DRAM data to map at the end of this function to make sure poll_device_print_data won't read
-    // uninitialized data and update our structure.
-    {
-        std::lock_guard<std::mutex> lock(dispatch_dram_data_lock_);
-        dispatch_dram_data_[device_id] = std::move(data);
-    }
-
-    // In case we are running multiple tests, we want to make sure there is no race condition
-    // between dispatch kernel and host. After writing STARTING_MAGIC, we want to make sure dispatch
-    // observes it and updates rw pointers before we start polling.
-    // In regular flow, we will do this initialization before dispatch kernel starts.
-    const uint32_t full_us = env_.get_rtoptions().get_device_print_dispatch_full_us();
-    const uint32_t wait_ms = (full_us + 999) / 1000 + 5;
-    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
-}
-
-bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores) {
+bool DPrintServer::Impl::poll_device_print_data(
+    ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores) {
     // In case dispatch is not working, we want to fall back to per-L1 polling of device_print buffers to avoid losing
     // prints.
-    auto fall_back_to_l1 = [&]() { return DPrintServer::Impl::poll_device_print_data(device_id, logical_cores); };
+    auto fall_back_to_l1 = [&]() { return poll_device_print_data_l1(device_id, logical_cores); };
 
     // Check if dispatch is disabled for this device.
     std::lock_guard<std::mutex> lock(dispatch_dram_data_lock_);
@@ -820,7 +626,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
             const uint32_t required = rw[3];
             log_warning(
                 tt::LogMetal,
-                "DEVICE_PRINT: dispatch DRAM aggregation self-disabled on device {} — L1 cache buffer was {} bytes but "
+                "DPRINT: dispatch DRAM aggregation self-disabled on device {} — L1 cache buffer was {} bytes but "
                 "{} bytes or more are required. Increase the size via TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES. "
                 "Falling back to per-core L1 polling.",
                 device_id,
@@ -839,7 +645,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
         // Log that dispatch is running on this device, bug only once.
         if (!data.running_logged) {
             data.running_logged = true;
-            log_info(tt::LogMetal, "DEVICE_PRINT: dispatch DRAM aggregation running on device {}", device_id);
+            log_info(tt::LogMetal, "DPRINT: dispatch DRAM aggregation running on device {}", device_id);
         }
 
         // Is there something in DRAM that we should read?
@@ -858,7 +664,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
         if (wpos >= data.buffer_size || rpos >= data.buffer_size) {
             log_warning(
                 tt::LogMetal,
-                "DEVICE_PRINT: dispatch DRAM cell out of range on device {} — wpos={} rpos={} buffer_size={}.",
+                "DPRINT: dispatch DRAM cell out of range on device {} — wpos={} rpos={} buffer_size={}.",
                 device_id,
                 wpos,
                 rpos,
@@ -903,7 +709,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
             if (align == 0 && length == 0 && !buffer_wrapped) {
                 log_warning(
                     tt::LogMetal,
-                    "DEVICE_PRINT: dispatch DRAM chunk has zero align+length at pos={} (likely "
+                    "DPRINT: dispatch DRAM chunk has zero align+length at pos={} (likely "
                     "stale ring bytes); skipping rest of window",
                     pos);
                 break;
@@ -915,7 +721,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
             if (core_it == data.noc_to_core.end()) {
                 log_warning(
                     tt::LogMetal,
-                    "DEVICE_PRINT: dispatch DRAM chunk references unknown core ({},{})",
+                    "DPRINT: dispatch DRAM chunk references unknown core ({},{})",
                     static_cast<uint32_t>(header.x),
                     static_cast<uint32_t>(header.y));
             }
@@ -923,7 +729,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
             // Check if whole message is here.
             const size_t body_start = pos + align;
             if (body_start + length > payload.size()) {
-                log_warning(tt::LogMetal, "DEVICE_PRINT: dispatch DRAM chunk truncated; stopping");
+                log_warning(tt::LogMetal, "DPRINT: dispatch DRAM chunk truncated; stopping");
                 break;
             }
 
@@ -940,12 +746,11 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
                 if (!buffer_wrapped) {
                     if (body_start % sizeof(uint32_t) != 0) {
                         log_warning(
-                            tt::LogMetal,
-                            "DEVICE_PRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
+                            tt::LogMetal, "DPRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
                     } else if (length % sizeof(uint32_t) != 0) {
                         log_warning(
                             tt::LogMetal,
-                            "DEVICE_PRINT: dispatch DRAM chunk body length not multiple of word size; skipping this "
+                            "DPRINT: dispatch DRAM chunk body length not multiple of word size; skipping this "
                             "chunk");
                     } else {
                         std::span<uint32_t> data =
@@ -955,8 +760,7 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
                 } else {
                     size_t rw_offset = rw_ptrs_inside_align ? (pos + header_size) : (body_start + length);
                     if (rw_offset + rw_ptrs_size > payload.size()) {
-                        log_warning(
-                            tt::LogMetal, "DEVICE_PRINT: dispatch DRAM wrap chunk rw_pointers truncated; stopping");
+                        log_warning(tt::LogMetal, "DPRINT: dispatch DRAM wrap chunk rw_pointers truncated; stopping");
                         break;
                     }
                     uint16_t wrap_wpos = 0, wrap_rpos = 0;
@@ -965,17 +769,16 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
                     if (wrap_rpos <= length && wrap_wpos <= length) {
                         if (body_start % sizeof(uint32_t) != 0) {
                             log_warning(
-                                tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
+                                tt::LogMetal, "DPRINT: dispatch DRAM chunk body not word-aligned; skipping this chunk");
                         } else if (length % sizeof(uint32_t) != 0) {
                             log_warning(
                                 tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk body length not multiple of word size; skipping "
+                                "DPRINT: dispatch DRAM chunk body length not multiple of word size; skipping "
                                 "this chunk");
                         } else if (wrap_rpos % sizeof(uint32_t) != 0 || wrap_wpos % sizeof(uint32_t) != 0) {
                             log_warning(
                                 tt::LogMetal,
-                                "DEVICE_PRINT: dispatch DRAM chunk wrap pointers not word-aligned; skipping this "
+                                "DPRINT: dispatch DRAM chunk wrap pointers not word-aligned; skipping this "
                                 "chunk");
                         } else {
                             if (wrap_rpos > wrap_wpos) {
@@ -1034,8 +837,14 @@ bool DevicePrintImpl::poll_device_print_data(ChipId device_id, const std::vector
     }
 }
 
-DPrintServer::Impl::Impl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
-    env_(MetalEnvAccessor(env).impl()), num_hw_cqs_(num_hw_cqs), dispatch_core_config_(dispatch_core_config) {
+DPrintServer::Impl::Impl(
+    MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
+    context_(context),
+    env_(MetalEnvAccessor(env).impl()),
+    num_hw_cqs_(num_hw_cqs),
+    dispatch_core_config_(dispatch_core_config) {
+    Inspector::enable_kernel_path_collection();
+
     // Read risc mask + log file from rtoptions
     string file_name = env_.get_rtoptions().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
     bool one_file_per_risc = env_.get_rtoptions().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
@@ -1094,7 +903,7 @@ DPrintServer::Impl::~Impl() {
     // Parser instances are automatically cleaned up via unique_ptr
 }  // Impl::~Impl
 
-void DevicePrintImpl::await() {
+void DPrintServer::Impl::await() {
     // Wait for dispatch to collect all data into DRAM.
     // Since this happens during full dispatch pass, we need to wait for it to happen.
     if (!server_killed_due_to_hang_) {
@@ -1103,10 +912,6 @@ void DevicePrintImpl::await() {
         const uint32_t initial_wait_ms = 2 * ((full_us + 999) / 1000);
         std::this_thread::sleep_for(std::chrono::milliseconds(initial_wait_ms));
     }
-    DPrintServer::Impl::await();
-}  // DevicePrintImpl::await
-
-void DPrintServer::Impl::await() {
     auto poll_until_no_new_data = [&]() {
         // Simply poll the flag every few ms to check whether new data is still being processed,
         // or whether any cores are waiting for a signal to be raised.
@@ -1288,21 +1093,61 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
         }
     }
 
-    device_intermediate_streams_force_flush_lock_.lock();
-    TT_ASSERT(
-        !device_intermediate_streams_force_flush_.contains(device_id),
-        "Device {} added to DPRINT server more than once!",
-        device_id);
-    device_intermediate_streams_force_flush_[device_id] = false;
-    device_intermediate_streams_force_flush_lock_.unlock();
-
     // Save this device + core range to the print server
-    device_to_core_range_lock_.lock();
-    TT_ASSERT(
-        !device_to_core_range_.contains(device_id), "Device {} added to DPRINT server more than once!", device_id);
-    device_to_core_range_[device_id] = print_cores_sanitized;
-    device_to_core_range_lock_.unlock();
+    {
+        std::lock_guard lock(device_to_core_range_lock_);
+        TT_ASSERT(
+            !device_to_core_range_.contains(device_id), "Device {} added to DPRINT server more than once!", device_id);
+        device_to_core_range_[device_id] = print_cores_sanitized;
+    }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
+
+    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled).
+    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
+        return;
+    }
+
+    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    DispatchDramData data;
+    data.dram_view = 0;
+    data.rw_pointers_address = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
+    data.buffer_address = data.rw_pointers_address + dram_alignment;
+    data.buffer_size = hal.get_dev_size(HalDramMemAddrType::DEVICE_PRINT_DISPATCH) - dram_alignment;
+    data.disabled = false;
+    data.noc_to_core.clear();
+
+    // Build the (virtual NOC1 x, y) -> CoreDescriptor map dispatch_s reports headers in.
+    // Replicates Device::virtual_noc0_coordinate(NOC_1, virtual_core) without an IDevice
+    // (IDevices aren't registered yet at attach_device time): for Blackhole NOC0 and NOC1
+    // share the virtual coordinate space, and for other archs the cluster's soc_desc
+    // grid_size + HAL noc_coordinate transform yields the NOC1 coord.
+    const auto& print_cores = get_print_cores(device_id);
+    for (const auto& core_desc : print_cores) {
+        auto core_virtual =
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core_desc.coord, core_desc.type);
+        data.noc_to_core.emplace(std::make_pair(core_virtual.x, core_virtual.y), core_desc);
+    }
+
+    // Initialize read/write pointers
+    std::array<uint32_t, 5> rw_init = {DEBUG_PRINT_SERVER_STARTING_MAGIC, 0u, 0u, 0u, 0u};
+    cluster.write_dram_vec(rw_init.data(), sizeof(rw_init), device_id, data.dram_view, data.rw_pointers_address);
+
+    // Store dispatch DRAM data for this device so that we can use it in poll_device_print_data.
+    // There is race condition between poll_device_print_data and attach_device, so adding dispatch
+    // DRAM data to map at the end of this function to make sure poll_device_print_data won't read
+    // uninitialized data and update our structure.
+    {
+        std::lock_guard lock(dispatch_dram_data_lock_);
+        dispatch_dram_data_[device_id] = std::move(data);
+    }
+
+    // In case we are running multiple tests, we want to make sure there is no race condition
+    // between dispatch kernel and host. After writing STARTING_MAGIC, we want to make sure dispatch
+    // observes it and updates rw pointers before we start polling.
+    // In regular flow, we will do this initialization before dispatch kernel starts.
+    const uint32_t full_us = env_.get_rtoptions().get_device_print_dispatch_full_us();
+    const uint32_t wait_ms = (full_us + 999) / 1000 + 5;
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
 }  // attach_device
 
 void DPrintServer::Impl::detach_devices() {
@@ -1320,51 +1165,8 @@ void DPrintServer::Impl::detach_devices() {
 void DPrintServer::Impl::detach_device(ChipId device_id) {
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    // When we detach a device, we should poll to make sure there's no outstanding prints.
-    bool outstanding_prints = true;
-    while (outstanding_prints && !server_killed_due_to_hang_) {
-        // Polling interval of 1ms
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-        // Check all dprint-enabled cores on this device for outstanding prints.
-        outstanding_prints = false;
-        for (auto& logical_core : device_to_core_range_.at(device_id)) {
-            CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
-            auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-            if (core_has_outstanding_prints(device_id, virtual_core, programmable_core_type)) {
-                outstanding_prints = true;
-                break;
-            }
-        }
-    }
-
-    // When we detach a device, we should poll to make sure that any leftover prints in the intermediate stream are
-    // transferred to the output stream and flushed to ensure that they are printed out to the user.
-    if (!server_killed_due_to_hang_) {
-        device_intermediate_streams_force_flush_lock_.lock();
-        device_intermediate_streams_force_flush_[device_id] = true;
-        device_intermediate_streams_force_flush_lock_.unlock();
-        bool intermediate_streams_need_to_be_flushed = true;
-        while (intermediate_streams_need_to_be_flushed) {
-            // Polling interval of 1ms
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            device_intermediate_streams_force_flush_lock_.lock();
-            intermediate_streams_need_to_be_flushed = device_intermediate_streams_force_flush_[device_id];
-            device_intermediate_streams_force_flush_lock_.unlock();
-        }
-    }
-
-    // Remove the device from relevant data structures.
-    device_intermediate_streams_force_flush_lock_.lock();
-    TT_ASSERT(
-        device_to_core_range_.contains(device_id),
-        "Device {} not present in DPRINT server but tried removing it!",
-        device_id);
-    device_intermediate_streams_force_flush_.erase(device_id);
-    device_intermediate_streams_force_flush_lock_.unlock();
-
-    device_to_core_range_lock_.lock();
+    std::lock_guard lock(device_to_core_range_lock_);
     TT_ASSERT(
         device_to_core_range_.contains(device_id),
         "Device {} not present in DPRINT server but tried removing it!",
@@ -1379,7 +1181,6 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         init_print_buffers_for_core(device_id, virtual_core, llrt::get_core_type(device_id, virtual_core));
     }
-    device_to_core_range_lock_.unlock();
 }  // detach_device
 
 void DPrintServer::Impl::clear_log_file() {
@@ -1395,99 +1196,6 @@ void DPrintServer::Impl::clear_log_file() {
     }
 }  // clear_log_file
 
-bool DPrintImpl::poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) {
-    auto& cluster = env_.get_cluster();
-    auto virtual_core =
-        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-    auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    uint32_t risc_count = env_.get_hal().get_num_risc_processors(programmable_core_type);
-    bool new_data = false;
-    for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-        if (RiscEnabled(env_.get_rtoptions(), programmable_core_type, risc_index)) {
-            new_data |= peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter || new_data);
-        }
-    }
-    return new_data;
-}  // poll_one_core
-
-bool DPrintImpl::peek_one_risc_non_blocking(
-    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
-    // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    auto& cluster = env_.get_cluster();
-    const auto& hal = env_.get_hal();
-    CoreCoord virtual_core =
-        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
-    if (!CheckInitMagicCleared(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_id))) {
-        return false;
-    }
-
-    // compute the buffer address for the requested risc
-    uint64_t base_addr = tt::tt_metal::GetDprintBufAddr(device_id, virtual_core, risc_id);
-    ChipId chip_id = device_id;
-    RiscKey risc_key{chip_id, logical_core, risc_id};
-
-    // Get or create parser for this RISC
-    if (!risc_to_parser_[risc_key]) {
-        // Compute line prefix based on RTOptions
-        std::string line_prefix;
-        const bool prepend_device_core_risc =
-            env_.get_rtoptions().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
-        if (prepend_device_core_risc) {
-            const string& device_id_str = to_string(device_id);
-            const string& core_coord_str = logical_core.coord.str();
-            const string& risc_name = GetRiscName(cluster, hal, device_id, logical_core, risc_id, true);
-            line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
-        }
-        risc_to_parser_[risc_key] = std::make_unique<DPrintParser>(line_prefix);
-    }
-    DPrintParser* parser = risc_to_parser_[risc_key].get();
-
-    // Device is incrementing wpos
-    // Host is reading wpos and incrementing local rpos up to wpos
-    // Device is filling the buffer and in the end waits on host to write rpos
-    auto from_dev = env_.get_cluster().read_core(chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
-    DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
-    uint32_t rpos = l->aux.rpos;
-    uint32_t wpos = l->aux.wpos;
-    if (rpos < wpos) {
-        // at this point rpos,wpos can be stale but not reset to 0 by the producer
-        // it's ok for the consumer to be behind the latest wpos+rpos from producer
-        // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
-        // until we update rpos and write it back
-        // The producer only updates rpos in case of buffer overflow.
-        // Then it waits for rpos to first catch up to wpos (rpos update by the consumer) before proceeding
-
-        // Parse the data using DPrintParser
-        uint32_t data_len = wpos - rpos;
-        DPrintParser::ParseResult result = parser->parse(l->data + rpos, data_len);
-
-        // Write each completed line to output
-        for (const auto& line : result.completed_lines) {
-            ostream* output_stream = get_output_stream(risc_key);
-            *output_stream << line << flush;
-        }
-
-        // Update rpos based on bytes consumed
-        rpos += result.bytes_consumed;
-
-        // writes by the producer should've been atomic w.r.t code+size+payload
-        // i.e at this point we shouldn't have piecemeal reads on code+size+payload
-        // with rpos not aligned to wpos
-
-        // write back to device - update rpos only
-        std::vector<uint32_t> rposbuf;
-        rposbuf.push_back(rpos);
-        uint32_t offs = DebugPrintMemLayout::rpos_offs();
-        env_.get_cluster().write_core(chip_id, virtual_core, rposbuf, base_addr + offs);
-
-        // Return true to signal that some print data was read
-        return true;
-    }  // if (rpos < wpos)
-
-    // Return false to signal that no print data was ready this time.
-    return false;
-}  // peek_one_risc_non_blocking
-
 void DPrintServer::Impl::poll_print_data() {
     // Give the print server thread a reasonable name.
     pthread_setname_np(pthread_self(), "TT_DPRINT_SERVER");
@@ -1502,19 +1210,15 @@ void DPrintServer::Impl::poll_print_data() {
 
         // Make a copy of the device->core map, so that it can be modified while polling.
         std::map<ChipId, std::vector<umd::CoreDescriptor>> device_to_core_range_copy;
-        device_to_core_range_lock_.lock();
-        device_to_core_range_copy = device_to_core_range_;
+        {
+            std::lock_guard lock(device_to_core_range_lock_);
+            device_to_core_range_copy = device_to_core_range_;
+        }
 
         // Flag for whether any new print data was found in this round of polling.
         bool new_data_this_iter = false;
         for (auto& device_and_cores : device_to_core_range_copy) {
             ChipId device_id = device_and_cores.first;
-            device_intermediate_streams_force_flush_lock_.lock();
-            if (device_intermediate_streams_force_flush_[device_id]) {
-                transfer_all_streams_to_output(device_id);
-                device_intermediate_streams_force_flush_[device_id] = false;
-            }
-            device_intermediate_streams_force_flush_lock_.unlock();
             new_data_this_iter |= poll_device_print_data(device_id, device_and_cores.second);
 
             // If this read detected a print hang, stop processing prints.
@@ -1525,7 +1229,6 @@ void DPrintServer::Impl::poll_print_data() {
 
         // Signal whether the print server is currently processing data.
         new_data_last_iter_ = new_data_this_iter;
-        device_to_core_range_lock_.unlock();
         // Sleep for a few ms if no data was processed.
         if (!new_data_last_iter_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1535,7 +1238,7 @@ void DPrintServer::Impl::poll_print_data() {
     }
 }  // poll_print_data
 
-bool DPrintServer::Impl::poll_device_print_data(
+bool DPrintServer::Impl::poll_device_print_data_l1(
     ChipId device_id, const std::vector<umd::CoreDescriptor>& logical_cores) {
     bool new_data_this_iter = false;
 
@@ -1547,7 +1250,6 @@ bool DPrintServer::Impl::poll_device_print_data(
             // re-throw the exception.
             if (env_.get_rtoptions().get_test_mode_enabled()) {
                 server_killed_due_to_hang_ = true;
-                device_to_core_range_lock_.unlock();
                 return new_data_this_iter;  // Stop the print loop
             }  // Re-throw for instant exit
             throw e;
@@ -1559,20 +1261,7 @@ bool DPrintServer::Impl::poll_device_print_data(
         }
     }
     return new_data_this_iter;
-}  // poll_device_print_data
-
-void DPrintServer::Impl::transfer_all_streams_to_output(ChipId device_id) {
-    for (auto& [risc_key, parser] : risc_to_parser_) {
-        const ChipId risc_key_device_id = get<0>(risc_key);
-        if (device_id == risc_key_device_id) {
-            std::string remaining = parser->flush();
-            if (!remaining.empty()) {
-                ostream* output_stream = get_output_stream(risc_key);
-                *output_stream << remaining << flush;
-            }
-        }
-    }
-}  // transfer_all_streams_to_output
+}  // poll_device_print_data_l1
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
@@ -1605,18 +1294,9 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
 }  // get_output_stream
 
 // Wrapper class functions
-DPrintServer::DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
-    if (MetalEnvAccessor(env).impl().get_rtoptions().get_use_device_print()) {
-        impl_ = std::make_unique<DevicePrintImpl>(context, env, num_hw_cqs, dispatch_core_config);
-    } else {
-        // TODO: Enable this warning once DPRINT is fully deprecated and removed from the codebase.
-        // log_warning(
-        //     tt::LogMetal,
-        //     "DPRINT is deprecated and will be removed in a future release. "
-        //     "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1"
-        //     " and using DEVICE_PRINT() macro when writing kernels.");
-        impl_ = std::make_unique<DPrintImpl>(env, num_hw_cqs, dispatch_core_config);
-    }
+DPrintServer::DPrintServer(
+    MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    impl_ = std::make_unique<DPrintServer::Impl>(context, env, num_hw_cqs, dispatch_core_config);
 }
 DPrintServer::~DPrintServer() = default;
 void DPrintServer::set_mute(bool mute_print_server) { impl_->set_mute(mute_print_server); }

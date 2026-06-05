@@ -82,7 +82,7 @@ jobs:
 
       - name: "📦 Cache CPM source packages"
         id: cpm-cache
-        uses: actions/cache@v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache
           key: cpm-aarch64-ubuntu2404-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt') }}

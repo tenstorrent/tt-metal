@@ -7,7 +7,7 @@
 // SetRuntimeArgs, the dispatcher leaves the 0xBEEF#### sentinel pattern; the device
 // interprets it as rta_count = 0, so the RTA[0] access is out-of-bounds and trips the
 // watcher assert. This scenario can't be expressed via the Metal 2.0 host API because
-// SetProgramRunParameters validates that every targeted node has runtime args bound.
+// SetProgramRunArgs validates that every targeted node has runtime args bound.
 
 #include "api/dataflow/dataflow_api.h"
 

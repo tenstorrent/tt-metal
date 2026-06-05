@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <type_traits>
+
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -26,11 +28,11 @@
 // @param cb_lse_in           CB to push previous LSE tiles into (read by compute)
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
-template <typename ReaderType, typename TensorAccessorType>
+template <typename CatAddrGeneratorType, typename TensorAccessorType, typename StatsShapeType>
 void read_prev_output_and_lse(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const CatAddrGeneratorType& cat_out_generator,
     const TensorAccessorType& stats_writer,
-    const TensorTileShape& stats_tile_logical,
+    const StatsShapeType& stats_tile_logical,
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
@@ -56,15 +58,57 @@ void read_prev_output_and_lse(
     cb_push_back(cb_lse_in, Sq_chunk_t);
 }
 
+template <typename TensorAccessorType, typename StatsShapeType>
+static __attribute__((noinline, noclone)) void issue_stats_column_reads(
+    const TensorAccessorType& stats_writer,
+    const StatsShapeType& stats_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t row_start,
+    const uint32_t num_rows,
+    const uint32_t cb_id,
+    const uint32_t reserve_tiles,
+    const uint32_t stats_tile_bytes) {
+    cb_reserve_back(cb_id, reserve_tiles);
+    uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
+    const uint32_t row_stride = stats_tile_logical.stride2();
+    uint32_t addr = get_write_ptr(cb_id);
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        noc_async_read_page(tile_id, stats_writer, addr);
+        tile_id += row_stride;
+        addr += stats_tile_bytes;
+    }
+}
+
+template <typename TensorAccessorType, typename StatsShapeType>
+static __attribute__((noinline, noclone)) void issue_stats_column_writes(
+    const TensorAccessorType& stats_writer,
+    const StatsShapeType& stats_tile_logical,
+    const uint32_t nb,
+    const uint32_t nq,
+    const uint32_t row_start,
+    const uint32_t num_rows,
+    const uint32_t cb_id,
+    const uint32_t stats_tile_bytes) {
+    uint32_t tile_id = stats_tile_logical.id_of(nb, nq, row_start, 0);
+    const uint32_t row_stride = stats_tile_logical.stride2();
+    uint32_t addr = get_read_ptr(cb_id);
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        noc_async_write_page(tile_id, stats_writer, addr);
+        tile_id += row_stride;
+        addr += stats_tile_bytes;
+    }
+}
+
 // Non-blocking restore: reserves CB space and issues NOC reads for all 3 accumulators.
 // Call complete_restore() later to barrier and push.
 // Split from blocking read_prev_accumulators to enable prefetch: issue reads for Q[q+1]
 // while Q[q]'s K-loop runs, hiding DRAM read latency behind compute.
-template <typename ReaderType, typename TensorAccessorType>
+template <typename CatAddrGeneratorType, typename TensorAccessorType, typename StatsShapeType>
 void issue_restore_reads(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const CatAddrGeneratorType& cat_out_generator,
     const TensorAccessorType& stats_writer,
-    const TensorTileShape& stats_tile_logical,
+    const StatsShapeType& stats_tile_logical,
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
@@ -88,7 +132,7 @@ void issue_restore_reads(
     issue_block_reads(
         cat_out_generator.reader,
         cat_out_generator.tensor_shape.id_of(out_slice.d0, out_slice.d1, out_slice.d2_start, out_slice.d3_start),
-        cat_out_generator.tensor_shape.strides[2],
+        cat_out_generator.tensor_shape.stride2(),
         out_rows,
         out_cols,
         /*dst_row_origin=*/0,
@@ -101,27 +145,27 @@ void issue_restore_reads(
     // Stats drains: single-column linear reads. Hoist id_of once per drain; advance by
     // strides[2] per row. All tiles assumed valid (no bounds clamp needed).
     const uint32_t stats_rows = stats_seq_end_tile - stats_seq_start_tile;
-    const uint32_t stats_row_stride = stats_tile_logical.strides[2];
 
-    // Issue max reads
-    cb_reserve_back(cb_max_in, Sq_chunk_t);
-    uint32_t max_tile_id = stats_tile_logical.id_of(nb, nq, stats_seq_start_tile, 0);
-    uint32_t max_addr = get_write_ptr(cb_max_in);
-    for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_page(max_tile_id, stats_writer, max_addr);
-        max_tile_id += stats_row_stride;
-        max_addr += stats_tile_bytes;
-    }
-
-    // Issue sum reads
-    cb_reserve_back(cb_sum_in, Sq_chunk_t);
-    uint32_t sum_tile_id = stats_tile_logical.id_of(nb, nq, sum_offset + stats_seq_start_tile, 0);
-    uint32_t sum_addr = get_write_ptr(cb_sum_in);
-    for (uint32_t r = 0; r < stats_rows; ++r) {
-        noc_async_read_page(sum_tile_id, stats_writer, sum_addr);
-        sum_tile_id += stats_row_stride;
-        sum_addr += stats_tile_bytes;
-    }
+    issue_stats_column_reads(
+        stats_writer,
+        stats_tile_logical,
+        nb,
+        nq,
+        stats_seq_start_tile,
+        stats_rows,
+        cb_max_in,
+        Sq_chunk_t,
+        stats_tile_bytes);
+    issue_stats_column_reads(
+        stats_writer,
+        stats_tile_logical,
+        nb,
+        nq,
+        sum_offset + stats_seq_start_tile,
+        stats_rows,
+        cb_sum_in,
+        Sq_chunk_t,
+        stats_tile_bytes);
     // NO barrier, NO push — caller must call complete_restore()
 }
 
@@ -151,11 +195,15 @@ constexpr uint32_t TRID_LAST = 3;
 
 // Save all 3 accumulators (out, max, sum) to DRAM, tagged with a TRID for prefetch barriers.
 // Output is drained row-by-row (overlapping with compute's SALAD pushes); max/sum are bulk-drained.
-template <typename ReaderType, typename TensorAccessorType>
+template <
+    bool all_output_rows_valid = false,
+    typename CatAddrGeneratorType,
+    typename TensorAccessorType,
+    typename StatsShapeType>
 void save_accumulators_with_trid(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const CatAddrGeneratorType& cat_out_generator,
     const TensorAccessorType& stats_writer,
-    const TensorTileShape& stats_tile_logical,
+    const StatsShapeType& stats_tile_logical,
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
@@ -173,23 +221,25 @@ void save_accumulators_with_trid(
     const uint32_t save_trid) {
     noc_async_write_set_trid(save_trid);
 
-    write_block_row_grouped_trid(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
+    write_block_row_grouped_trid<all_output_rows_valid>(
+        cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes, sbh, save_trid);
 
     // Bulk drain of max/sum
     cb_wait_front(cb_max_out, Sq_chunk_t);
     cb_wait_front(cb_sum_out, Sq_chunk_t);
 
-    uint32_t max_write_addr = get_read_ptr(cb_max_out);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_page(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
-        max_write_addr += stats_tile_bytes;
-    }
-
-    uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
-    for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
-        noc_async_write_page(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
-        sum_write_addr += stats_tile_bytes;
-    }
+    const uint32_t stats_rows = stats_seq_end_tile - stats_seq_start_tile;
+    issue_stats_column_writes(
+        stats_writer, stats_tile_logical, nb, nq, stats_seq_start_tile, stats_rows, cb_max_out, stats_tile_bytes);
+    issue_stats_column_writes(
+        stats_writer,
+        stats_tile_logical,
+        nb,
+        nq,
+        sum_offset + stats_seq_start_tile,
+        stats_rows,
+        cb_sum_out,
+        stats_tile_bytes);
 
     noc_async_write_flushed_with_trid(save_trid);
     // Reset TRID to 0 to avoid leaking it to unrelated writes (e.g. write_block_row_grouped_trid on last ring iter).
@@ -219,11 +269,11 @@ void save_accumulators_with_trid(
 // @param cb_lse_out          CB to drain LSE tiles from
 // @param tile_bytes          Output tile size in bytes
 // @param stats_tile_bytes    Stats tile size in bytes
-template <typename ReaderType, typename TensorAccessorType>
+template <typename CatAddrGeneratorType, typename TensorAccessorType, typename StatsShapeType>
 void write_output_and_lse(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
+    const CatAddrGeneratorType& cat_out_generator,
     const TensorAccessorType& stats_writer,
-    const TensorTileShape& stats_tile_logical,
+    const StatsShapeType& stats_tile_logical,
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
@@ -334,6 +384,9 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
+    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(31);
+    constexpr uint32_t last_active_ring_iter = get_compile_time_arg_val(32);
+    constexpr uint32_t single_valid_kv_chunk_mask = get_compile_time_arg_val(33);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -344,7 +397,7 @@ void kernel_main() {
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<31>();
+    constexpr auto out_args = TensorAccessorArgs<34>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -382,11 +435,15 @@ void kernel_main() {
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr);
     const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
-    const auto output_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, vDHt);
+    constexpr bool output_has_no_padding = !has_joint_q && (q_local_padded_Nt % Sq_chunk_t == 0);
+    using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
+    using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
+
+    const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     // stats tensor is 2× the sequence length: first half stores max (used by both eager and
     // deferred-norm paths), second half stores sum (deferred-norm only).
-    const auto stats_tile_logical = TensorTileShape(B, NH, (q_local_padded_Nt + Lt) * 2, 1);
+    const auto stats_tile_logical = StaticTensorTileShape<B, NH, (q_local_padded_Nt + Lt) * 2, 1>();
 
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
@@ -411,9 +468,6 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, diag_tile_enabled>();
     }
 
-    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_receiver.seq, kv_local_padded_Nt, logical_nt - 1, L, is_causal, is_balanced, chunked_enabled);
-
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
@@ -431,6 +485,11 @@ void kernel_main() {
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
+        // still advances above so writer stays aligned with reader, compute, and all-gather.
+        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+            continue;
+        }
         const bool do_joint_kv = ring_id == ring_size - 1;
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
@@ -439,29 +498,13 @@ void kernel_main() {
             }
         }
 
-        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        // Last tile id holding any real K data; partial trailing tile is included here and gets
-        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
-        const uint32_t global_n_tile_id = logical_nt - 1;
-        const bool ring_iter_processes_KV_chunks =
-            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
-        const bool joint_contributes = (has_joint_k && L != 0) ? do_joint_kv : false;
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || joint_contributes) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
-        if (!ring_iter_does_work) {
-            continue;
-        }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
-        // When total_valid_kv == 1, compute's sole K chunk triggers save_to_staging on K0,
+        // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
         // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
-        const uint32_t total_valid_kv =
-            count_valid_kv_chunks<chunked_enabled, kv_local_padded_Nt, Sk_chunk_t, chunk_size_t, q_local_padded_Nt>(
-                num_kv_chunks, num_local_k_chunks, ring_id, logical_nt);
-        const bool single_valid_kv_chunk = (total_valid_kv <= 1);
+        const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         /**
         We have 3 possible masks
@@ -576,8 +619,8 @@ void kernel_main() {
             };
 
             // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
-            // the early-flush site (before prefetch when total_valid_kv<=1 or q_per_core==2) and
-            // the late-flush site (after prefetch in the K-loop window).
+            // the early-flush site (before prefetch for single-valid-K iters or q_per_core==2)
+            // and the late-flush site (after prefetch in the K-loop window).
             auto flush_deferred_save = [&]() {
                 constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
                 const auto& gen = [&]() -> const auto& {
@@ -588,7 +631,7 @@ void kernel_main() {
                     }
                     return out_generator;
                 }();
-                save_accumulators_with_trid(
+                save_accumulators_with_trid<output_has_no_padding>(
                     gen,
                     stats_writer,
                     stats_tile_logical,
@@ -636,7 +679,7 @@ void kernel_main() {
                 }
 
                 // 2. Early flush: drain staging before prefetch when needed.
-                // - total_valid_kv <= 1: compute's sole K chunk triggers save_to_staging on K0,
+                // - single valid K chunk: compute saves to staging on K0,
                 //   reserving staging CBs immediately — deadlock if they're still full.
                 // - q_per_core == 2: next Q == last Q whose deferred data isn't in DRAM yet,
                 //   so prefetch would read stale data without flushing first.
@@ -697,9 +740,8 @@ void kernel_main() {
                         }
                         return out_generator;
                     }();
-                    write_block_row_grouped_trid(
+                    write_block_row_grouped_trid<output_has_no_padding>(
                         gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
-                    noc_async_write_barrier();
                 } else if (!single_q_chunk) {
                     deferred.pending = true;
                     deferred.trid = trid_for_q(q_index);

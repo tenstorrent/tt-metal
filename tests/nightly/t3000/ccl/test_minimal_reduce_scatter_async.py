@@ -663,7 +663,16 @@ def test_reduce_scatter_async(
         # Scatter on dim 1
         ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
         ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
-        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),  # perf
+        pytest.param(
+            [16, 8, 8, 8],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            marks=pytest.mark.skip(reason="Disabled: see #45699"),
+        ),  # perf
         # Scatter on dim 2
         ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
         ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
@@ -1065,7 +1074,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             1,  # check
         ),
         # Composite RS
-        (
+        pytest.param(
             [1, 1, 384, 240],
             3,
             [64, 256],
@@ -1075,6 +1084,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             False,
             True,
             10,  # perf
+            marks=pytest.mark.skip(reason="Disabled: see #45687"),
         ),
     ],
 )

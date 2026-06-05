@@ -24,14 +24,14 @@
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_unary_sfpu_api.h"
+#include "llk_math_binary_sfpu_api.h"
 #ifndef ARCH_QUASAR
 #include "llk_math_binary_api.h"
-#include "llk_math_binary_sfpu_api.h"
 #include "llk_math_reduce_api.h"
 #endif
-#define MATH(x) x
+#define MATH(...) __VA_ARGS__
 #else
-#define MATH(x)
+#define MATH(...)
 #endif
 
 #ifdef TRISC_PACK
@@ -42,9 +42,9 @@
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_activations.h"
 #endif
-#define PACK(x) x
+#define PACK(...) __VA_ARGS__
 #else
-#define PACK(x)
+#define PACK(...)
 #endif
 
 #ifdef TRISC_UNPACK
@@ -58,9 +58,9 @@
 #include "llk_unpack_untilize_api.h"
 #endif
 #include "llk_io_unpack.h"
-#define UNPACK(x) x
+#define UNPACK(...) __VA_ARGS__
 #else
-#define UNPACK(x)
+#define UNPACK(...)
 #endif
 
 namespace ckernel {
@@ -439,12 +439,12 @@ ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst))); }
+ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<APPROX, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>())); }
+ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<APPROX, DST_ACCUM_MODE>())); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off

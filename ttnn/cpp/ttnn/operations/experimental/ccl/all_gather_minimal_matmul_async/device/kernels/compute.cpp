@@ -417,13 +417,18 @@ void kernel_main() {
 
                 if (k_block == K_num_blocks - 1) {
                     /**
-                     * On next iteration we might get reuse on in0
-                     *
+                     * On next iteration we might get reuse on in0.
+                     * Only valid for Ring: k_forward toggles each n_block_iter so the last
+                     * actual_k_block of n=X equals the first of n=X+1. Linear keeps k_forward
+                     * fixed, so reusing would feed the previous iter's last K-block (=
+                     * K_num_blocks-1) when the new iter wants K-block 0. Force fresh read.
                      */
+#ifndef IS_LINEAR
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
                     }
+#endif
                 }
                 if (!reuse_in0_block) {
                     cb_pop_front(in0_cb, in0_block_num_tiles);

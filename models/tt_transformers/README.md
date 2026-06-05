@@ -303,8 +303,6 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 
 When a component is not specified (e.g., FF2 is missing for decoder 2 in `models/tt_transformers/demo/config_16_decoders.json`), the baseline configuration is used for that component.
 
-Using the lt tool (`models/tt_transformers/lt`), the user can also provide multiple JSON configurations in the `models/tt_transformers/tests/configurations` folder and run a Pareto analysis on them using the `pareto_from_json` command.
-
 ---
 
 ### Expected performance and accuracy

@@ -27,7 +27,7 @@ template <typename AddrGen>
 FORCE_INLINE void zero_pages(
     uint32_t zero_buf, uint32_t page_start, uint32_t page_end, uint32_t page_size, const AddrGen& addr_gen) {
     for (uint32_t page = page_start; page < page_end; page++) {
-        uint64_t page_noc_addr = get_noc_addr(page, addr_gen);
+        uint64_t page_noc_addr = addr_gen.get_noc_addr(page);
         uint32_t remaining = page_size;
         while (remaining > 0) {
             uint32_t chunk = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;

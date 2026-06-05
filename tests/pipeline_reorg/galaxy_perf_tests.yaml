@@ -16,7 +16,7 @@
   cmd: pytest models/tt_dit/tests/models/sd35/test_performance_sd35.py -k "4x8cfg1sp0tp1" --timeout=480
   model: sd35
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -28,7 +28,7 @@
   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
   model: flux1-dev
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -69,7 +69,7 @@
     pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 " --timeout=1000
   model: mochi
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
@@ -83,7 +83,7 @@
     pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
   model: qwenimage
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models

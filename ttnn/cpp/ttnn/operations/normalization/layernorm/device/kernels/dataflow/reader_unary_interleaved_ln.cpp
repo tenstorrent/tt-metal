@@ -60,12 +60,18 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    // Welford-fp32 alias of cb_in (non-fused) or cb_x (fused). Shares SRAM with the
+    // primary CB but has its own read/write pointers, so we must push_back on it whenever we
+    // push to the primary CB. When welford_fp32_alias is 0, cb_x_welford == cb_in.
+    constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_x_welford(cb_id_x_welford);
 #ifdef FUSE_PRE_ADD
     CircularBuffer cb_in1(cb_id_in1);
 #endif
@@ -167,6 +173,16 @@ void kernel_main() {
             layernorm_dataflow_utils::read_block_to_cb(noc, cb_in0, src_a, src0_page_bytes, flat_offset, block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(noc, cb_in1, src_b, src1_tile_bytes, flat_offset, block);
+#else
+            // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
+            // read/write pointers. After the data lands in cb_in0, push
+            // cb_x_welford by the same amount so compute can wait_front on the alias separately
+            // for welford reads. Skipped when no alias is active (cb_x_welford == cb_in0; the
+            // duplicate push would double-count cb_in0's semaphore).
+            if constexpr (welford_fp32_alias) {
+                cb_x_welford.reserve_back(block.full_block_size());
+                cb_x_welford.push_back(block.full_block_size());
+            }
 #endif
         }
 #endif
