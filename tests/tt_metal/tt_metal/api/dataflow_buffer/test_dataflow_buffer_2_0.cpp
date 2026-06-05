@@ -1072,11 +1072,13 @@ static void run_single_dfb_program_2_0(
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = p.pap,
          .block_size = producer_blocked ? p.block_size : 0u}};
-    // BLOCKED uses dedicated burst kernels (explicit sync only) with a block_size CTA;
-    // STRIDED/ALL keep the implicit_sync CTA.
+    // BLOCKED uses dedicated kernels with a block_size CTA. They support both sync modes:
+    // explicit = one NoC burst per block; implicit = one TXN_ID transfer per tile (single-entry).
     if (producer_blocked) {
         producer.compile_time_args = {
-            {"num_entries_per_producer", num_entries_per_producer}, {"block_size", p.block_size}};
+            {"num_entries_per_producer", num_entries_per_producer},
+            {"block_size", p.block_size},
+            {"implicit_sync", p.implicit_sync ? 1u : 0u}};
     } else {
         producer.compile_time_args = {
             {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
@@ -1091,12 +1093,14 @@ static void run_single_dfb_program_2_0(
                              : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
             p.num_consumers);
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-        // BLOCKED uses the dedicated burst kernel (explicit sync only) with a block_size CTA.
-        // Note: the legacy "blocked_consumer" CTA below is the ALL-pattern contiguous flag,
+        // BLOCKED uses the dedicated kernel (explicit burst or implicit per-tile) with a block_size
+        // CTA. Note: the legacy "blocked_consumer" CTA below is the ALL-pattern contiguous flag,
         // unrelated to the BLOCKED access pattern.
         if (consumer_blocked) {
             consumer.compile_time_args = {
-                {"num_entries_per_consumer", num_entries_per_consumer}, {"block_size", p.block_size}};
+                {"num_entries_per_consumer", num_entries_per_consumer},
+                {"block_size", p.block_size},
+                {"implicit_sync", p.implicit_sync ? 1u : 0u}};
         } else {
             consumer.compile_time_args = {
                 {"num_entries_per_consumer", num_entries_per_consumer},
@@ -1525,39 +1529,43 @@ INSTANTIATE_TEST_SUITE_P(
         run_single_dfb_program_2_0(this->devices_.at(0), params);              \
     }
 
-// One-line macro for a BLOCKED→BLOCKED single-DFB test. BLOCKED uses dedicated
-// explicit-sync burst kernels, so (unlike DFB_TEST_2_0) it is NOT parameterized over
-// implicit_sync — it always runs the explicit credit-flow path.
-#define DFB_BLOCKED_TEST_2_0(suffix, p_type, c_type, num_p, num_c, blk, entries) \
-    TEST_F(MeshDeviceFixture, suffix##_2_0) {                                    \
-        M2SingleDFBParams params{                                                \
-            .producer_type = M2PorCType::p_type,                                 \
-            .consumer_type = M2PorCType::c_type,                                 \
-            .num_producers = (num_p),                                            \
-            .num_consumers = (num_c),                                            \
-            .pap = m2::DFBAccessPattern::BLOCKED,                                \
-            .cap = m2::DFBAccessPattern::BLOCKED,                                \
-            .implicit_sync = false,                                              \
-            .num_entries = (entries),                                            \
-            .block_size = (blk),                                                 \
-        };                                                                       \
-        run_single_dfb_program_2_0(this->devices_.at(0), params);                \
+// One-line macro for a BLOCKED→BLOCKED single-DFB test. The `impl` arg selects the sync mode:
+//   false → explicit (one NoC burst per block);  true → implicit (one TXN_ID transfer per tile).
+#define DFB_BLOCKED_TEST_2_0(suffix, p_type, c_type, num_p, num_c, blk, entries, impl) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                                          \
+        M2SingleDFBParams params{                                                      \
+            .producer_type = M2PorCType::p_type,                                       \
+            .consumer_type = M2PorCType::c_type,                                       \
+            .num_producers = (num_p),                                                  \
+            .num_consumers = (num_c),                                                  \
+            .pap = m2::DFBAccessPattern::BLOCKED,                                      \
+            .cap = m2::DFBAccessPattern::BLOCKED,                                      \
+            .implicit_sync = (impl),                                                   \
+            .num_entries = (entries),                                                  \
+            .block_size = (blk),                                                       \
+        };                                                                             \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);                      \
     }
 
-// --- BLOCKED→BLOCKED (DM-DM, explicit sync) ---
+// --- BLOCKED→BLOCKED (DM-DM, EXPLICIT sync: one NoC burst per block) ---
 // Single-thread (1 producer, 1 consumer): one contiguous sub-ring; block_size divides the ring.
 //   blk4: 16-entry ring → 4 blocks of 4   (verified passing on emulator)
 //   blk2: 16-entry ring → 8 blocks of 2
 //   blk8: 16-entry ring → 2 blocks of 8
 //   blk4, larger ring: 32-entry ring → 8 blocks of 4
-DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16)
-DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16)
-DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16)
-DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16, false)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32, false)
 // Symmetric multi-thread (N producers == N consumers): each thread t owns sub-ring t
 // (stride_in_entries=1 ⇒ contiguous per-thread region), producer t pairs 1:1 with consumer t.
 //   2Bx2B blk4: 16-entry ring → capacity 8/thread → 2 blocks of 4 per thread.
-DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16, false)
+
+// --- BLOCKED→BLOCKED (DM-DM, IMPLICIT sync: one TXN_ID transfer per tile, ISR-batched credits) ---
+// Same layout/page-mapping as the explicit variants; only the sync mode differs.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_impl, DM, DM, 1, 1, 4, 16, true)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4_impl, DM, DM, 2, 2, 4, 16, true)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
