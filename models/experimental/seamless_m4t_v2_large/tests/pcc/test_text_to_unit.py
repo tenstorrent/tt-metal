@@ -5,6 +5,7 @@
 
 import pytest
 import torch
+import ttnn
 from loguru import logger
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
 
@@ -95,6 +96,16 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
         attn_tt = from_torch_bfloat16_tile(mesh_device, mask_4d)
         char_ids_tt = from_torch_uint32_rm(mesh_device, char_input_ids)
 
+        # Optional signposts for device performance measurement (forward only).
+        try:
+            from tracy import signpost
+
+            use_signpost = True
+        except ImportError:
+            use_signpost = False
+
+        if use_signpost:
+            signpost("start")
         logits_tt, pad_tt = tt_full.forward(
             inputs_embeds_tt,
             attn_tt,
@@ -102,6 +113,9 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
             char_count_per_id.squeeze(0).tolist(),
             reference_discrete_durations=ref_durs,
         )
+        ttnn.synchronize_device(mesh_device)
+        if use_signpost:
+            signpost("stop")
 
         Vr = int(ref_logits.shape[2])
         Sr = int(ref_logits.shape[1])
