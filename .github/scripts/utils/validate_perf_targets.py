@@ -6,10 +6,11 @@ import argparse
 import json
 import math
 import sys
-import yaml
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -442,9 +443,7 @@ def validate(
 
     targets_yaml = _load_yaml(targets_yaml_path)
     if not isinstance(targets_yaml, dict):
-        result.schema_errors.append(
-            f"Invalid YAML document at {targets_yaml_path}: expected top-level mapping"
-        )
+        result.schema_errors.append(f"Invalid YAML document at {targets_yaml_path}: expected top-level mapping")
         return result
 
     schema_errors = _validate_targets_schema(targets_yaml)

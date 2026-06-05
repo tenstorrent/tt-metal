@@ -75,8 +75,8 @@ def pytest_sessionfinish(session, exitstatus):
       VALIDATE_PERF_TARGETS_STRICT_MISSING=1    also fail on missing/TODO targets
       VALIDATE_PERF_TARGETS_SKU=<sku>           override SKU (else autodetect / JSON card_type)
     """
-    import os
     import importlib.util
+    import os
     from pathlib import Path
 
     from loguru import logger
@@ -140,7 +140,9 @@ def pytest_sessionfinish(session, exitstatus):
     for missing in result.missing_entries:
         (logger.error if strict_missing else logger.warning)(f"[perf-validation] missing target: {missing}")
 
-    failed = bool(result.schema_errors) or bool(result.hard_failures) or (strict_missing and bool(result.missing_entries))
+    failed = (
+        bool(result.schema_errors) or bool(result.hard_failures) or (strict_missing and bool(result.missing_entries))
+    )
     if failed:
         logger.error("[perf-validation] perf/accuracy target validation FAILED (VALIDATE_PERF_TARGETS=1).")
         if session.exitstatus == pytest.ExitCode.OK:
