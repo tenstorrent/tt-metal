@@ -120,6 +120,7 @@ public:
 
     // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
     // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
+    // Intended for use by topology_mapper_utils when no PGD grouping successfully embeds into the PSD.
     static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
         const MeshGraphDescriptor& mesh_graph_descriptor);
 

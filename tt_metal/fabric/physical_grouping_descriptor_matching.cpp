@@ -52,12 +52,19 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     }
 
     // Calculate total size
-    int32_t total_size = 1;
+    int64_t total_size = 1;
     for (int32_t dim : dims) {
+        if (dim <= 0) {
+            break;
+        }
         total_size *= dim;
+        if (total_size > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            total_size = -1;  // signal overflow; comparison below will throw
+            break;
+        }
     }
 
-    if (static_cast<size_t>(total_size) != instance_ids.size()) {
+    if (total_size < 0 || static_cast<size_t>(total_size) != instance_ids.size()) {
         std::string dims_str = "[";
         for (size_t i = 0; i < dims.size(); ++i) {
             if (i > 0) {
@@ -258,6 +265,12 @@ std::vector<std::pair<uint32_t, uint32_t>> compute_torus_wraparound_edges(
         }
         // For size < 3 the wrap-around edge would duplicate the existing LINE edge between the two endpoints.
         if (dims[d] < 3) {
+            log_debug(
+                tt::LogFabric,
+                "Skipping torus wrap-around for RING dimension {} with size {} (< 3): wrap edge would duplicate "
+                "existing LINE edge",
+                d,
+                dims[d]);
             continue;
         }
         for (uint32_t idx = 0; idx < static_cast<uint32_t>(total_size); ++idx) {
@@ -363,6 +376,10 @@ GroupingInfo add_torus_edges_to_grouping(
     auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
         mgd_adjacency, grouping.adjacency_graph, constraints, ConnectionValidationMode::STRICT, true);
     if (!mapping_result.success) {
+        log_warning(
+            tt::LogFabric,
+            "add_torus_edges_to_grouping: topology re-solve failed; returning grouping without torus edges. Check that "
+            "MGD node 0 exists in mgd_adjacency.");
         return augmented;
     }
 
@@ -372,6 +389,11 @@ GroupingInfo add_torus_edges_to_grouping(
         auto it_a = mapping_result.target_to_global.find(mgd_a);
         auto it_b = mapping_result.target_to_global.find(mgd_b);
         if (it_a == mapping_result.target_to_global.end() || it_b == mapping_result.target_to_global.end()) {
+            log_warning(
+                tt::LogFabric,
+                "add_torus_edges_to_grouping: MGD torus edge ({},{}) not found in topology mapping; skipping edge",
+                mgd_a,
+                mgd_b);
             continue;
         }
         translated_edges.emplace_back(it_a->second, it_b->second);
@@ -461,7 +483,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         required_asics_map[mesh_instance.type][mesh_instance.name] = required_chips;
     }
 
-    // Step 1a: Calculate required ASICs for all switch instances (bottom level)
+    // Step 1b: Calculate required ASICs for all switch instances (bottom level)
     // Switches are treated as MESH type for grouping purposes
     for (GlobalNodeId switch_id : mesh_graph_descriptor.all_switches()) {
         const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_id);
@@ -470,7 +492,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         required_asics_map["MESH"][switch_instance.name] = required_chips;
     }
 
-    // Step 1b: Calculate required ASICs for graph instances bottom-up (children before parents)
+    // Step 1c: Calculate required ASICs for graph instances bottom-up (children before parents)
     // Process graphs in topological order by iterating until all are processed
     std::unordered_set<GlobalNodeId> processed_graphs;
     bool progress_made = true;
