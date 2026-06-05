@@ -10,9 +10,11 @@ extras it needs (e.g. yielding a specific layer or sub-module).
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import os
 from pathlib import Path
+from typing import Any
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
@@ -21,7 +23,49 @@ MAX_SEQ_LEN = 2048
 REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
 
 
+def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
+    """Read the standard ttml training yaml and parse its device section.
+
+    Returns ``(device_config, raw)``: ``device_config`` is a
+    :class:`ttml.common.config.DeviceConfig` ready to be passed to
+    :func:`open_device`; ``raw`` is the parsed yaml dict, useful when a
+    caller also needs ``raw["training_config"]["model_config"]`` to
+    build a :class:`TransformerConfig` for the ttml completer.
+    """
+    from ttml.common.config import DeviceConfig, load_config
+
+    raw = load_config(os.path.join(REPO_ROOT, device_config_rel))
+    return DeviceConfig(raw), raw
+
+
+def open_device(device_config) -> Any:
+    """Open the ttml ``AutoContext`` device for the given config.
+
+    Enables fabric (when multi-device) and opens the AutoContext mesh.
+    Returns the ``ttnn.MeshDevice`` handle that can be passed to both
+    :class:`LlamaCompleterTtt` and :class:`LlamaCompleterTtml`.
+
+    Caller owns the lifetime: pair every ``open_device`` with a
+    matching :func:`close_device` in a ``try/finally``.
+    """
+    import ttml
+
+    if device_config.total_devices() > 1:
+        ttml.core.distributed.enable_fabric(device_config.total_devices())
+    autograd_ctx = ttml.autograd.AutoContext.get_instance()
+    autograd_ctx.open_device(device_config.mesh_shape, device_config.device_ids)
+    return autograd_ctx.get_device()
+
+
+def close_device() -> None:
+    """Close the ``AutoContext`` device opened by :func:`open_device`."""
+    import ttml
+
+    ttml.autograd.AutoContext.get_instance().close_device()
+
+
 def build_completer(
+    mesh_device: Any,
     *,
     dummy_weights: bool,
     max_batch_size: int = 1,
@@ -29,21 +73,16 @@ def build_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Construct a fresh ``LlamaGRPOCompleter``.
+    """Construct a fresh :class:`LlamaCompleterTtt` on ``mesh_device``.
 
-    Heavy: opens a device and (when ``dummy_weights=False``) loads real
-    HF weights for ``model_source`` (default Llama-3.2-1B-Instruct).
-    Tests should call this from a module-scoped fixture so the cost is
-    paid once per file.
+    Heavy when ``dummy_weights=False``: loads real HF weights for
+    ``model_source`` (default Llama-3.2-1B-Instruct). Tests should call
+    this from a module-scoped fixture so the cost is paid once per file.
     """
-    from ttml.common.config import DeviceConfig, load_config
+    from utils.llama_completer_ttt import LlamaCompleterTtt
 
-    from utils.llama_completer_ttt import LlamaGRPOCompleter
-
-    raw = load_config(os.path.join(REPO_ROOT, TTML_DEVICE_CONFIG_REL))
-    device_config = DeviceConfig(raw)
-    return LlamaGRPOCompleter(
-        device_config=device_config,
+    return LlamaCompleterTtt(
+        mesh_device=mesh_device,
         model_source=model_source,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
@@ -52,14 +91,47 @@ def build_completer(
     )
 
 
-def teardown_completer(completer) -> None:
-    """Drop ``completer`` and close the device. Call from a fixture's
-    teardown so the device is released even if a test fails."""
-    import ttml
+@contextlib.contextmanager
+def open_completer(
+    *,
+    dummy_weights: bool,
+    max_batch_size: int = 1,
+    max_seq_len: int = MAX_SEQ_LEN,
+    model_source: str = MODEL_ID,
+    instruct: bool = True,
+):
+    """Context manager that opens the device, builds a TTT completer,
+    and tears both down on exit.
 
-    del completer
-    gc.collect()
-    ttml.autograd.AutoContext.get_instance().close_device()
+    Cleanup runs in dependency order: drop the completer (freeing its
+    on-device tensors), GC, then close the AutoContext mesh. Safe on
+    construction failure (a partially-built completer is still dropped
+    before close_device).
+
+    Usage::
+
+        @pytest.fixture(scope="module")
+        def attn():
+            with open_completer(dummy_weights=True) as c:
+                yield c.model.layers[0].attention
+    """
+    device_config, _ = load_device_config()
+    mesh_device = open_device(device_config)
+    completer = None
+    try:
+        completer = build_completer(
+            mesh_device,
+            dummy_weights=dummy_weights,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            model_source=model_source,
+            instruct=instruct,
+        )
+        yield completer
+    finally:
+        completer = None
+        gc.collect()
+        close_device()
 
 
 def as_update_input(t, mesh_device):
