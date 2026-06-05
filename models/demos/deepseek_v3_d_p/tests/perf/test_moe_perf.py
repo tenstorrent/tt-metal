@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_moe_perf_with_approximation,
 )
 
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ttnn_moe"
+_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe"
 
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and linear-8'"
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and mesh-2x4 and not linear-8 and not mesh-4x2 and not mesh-8x4'"
