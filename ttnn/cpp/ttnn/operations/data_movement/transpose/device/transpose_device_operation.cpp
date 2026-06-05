@@ -84,8 +84,7 @@ MemoryConfig derive_effective_output_memory_config(
             const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
                                       adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
             if (!tile_layout || tile_aligned) {
-                return MemoryConfig(
-                    output_mem_config.memory_layout(), output_mem_config.buffer_type(), std::move(adjusted.value()));
+                return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), adjusted);
             }
         }
     }

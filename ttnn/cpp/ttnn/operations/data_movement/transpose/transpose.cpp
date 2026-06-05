@@ -77,9 +77,7 @@ inline Tensor transpose_(
                         shard_derivation_fallback();
                     } else {
                         output_mem_constructed = MemoryConfig(
-                            output_mem_constructed.memory_layout(),
-                            output_mem_constructed.buffer_type(),
-                            std::move(adjusted.value()));
+                            output_mem_constructed.memory_layout(), output_mem_constructed.buffer_type(), adjusted);
                     }
                 }
             } else if (transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
@@ -94,9 +92,7 @@ inline Tensor transpose_(
                     shard_derivation_fallback();
                 } else {
                     output_mem_constructed = MemoryConfig(
-                        output_mem_constructed.memory_layout(),
-                        output_mem_constructed.buffer_type(),
-                        std::move(adjusted.value()));
+                        output_mem_constructed.memory_layout(), output_mem_constructed.buffer_type(), adjusted);
                 }
             }
         } else if (output_mem_config.has_value()) {
