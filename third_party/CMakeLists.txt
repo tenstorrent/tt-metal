@@ -161,8 +161,10 @@ CPMRegisterPackage("googletest" "1.13.0")
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
 
-CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
-if(reflect_ADDED)
+if(NOT DEFINED reflect_SOURCE_DIR)
+    CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
+endif()
+if(reflect_ADDED OR DEFINED reflect_SOURCE_DIR)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
@@ -190,6 +192,7 @@ CPMAddPackage(
     GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -363,8 +366,10 @@ CPMAddPackage(
 # simd-everywhere/simde : https://github.com/simd-everywhere/simde
 ############################################################################################################################
 
-CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
-if(simd-everywhere_ADDED)
+if(NOT DEFINED simd-everywhere_SOURCE_DIR)
+    CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+endif()
+if(simd-everywhere_ADDED OR DEFINED simd-everywhere_SOURCE_DIR)
     add_library(simde INTERFACE)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
