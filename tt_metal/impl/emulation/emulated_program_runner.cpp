@@ -62,6 +62,10 @@
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
+// Emit the single definition of __emule_asan_panic into libtt_metal here (this
+// TU has the tt-emule include path and is built with GNU features available).
+#define EMULE_ASAN_IMPLEMENTATION
+#include "jit_hw/emule_asan.h"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -144,6 +148,7 @@ thread_local uint32_t __emule_my_thread_id = 0;
 // into the same binary, so the duplicate definitions are benign.
 thread_local uint32_t __emule_sem_l1_range_start = 0;
 thread_local uint32_t __emule_sem_l1_range_end = 0;
+thread_local const char* __emule_kernel_name = nullptr;
 thread_local uint32_t __emule_pending_noc_reads = 0;
 thread_local uint32_t __emule_l1_unreserved_base = 0;
 thread_local const uint64_t* __emule_l1_tensor_ranges = nullptr;
@@ -155,6 +160,10 @@ thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
+thread_local const char* __emule_cb_reserve_file[32] = {};
+thread_local uint32_t __emule_cb_reserve_line[32] = {};
+thread_local const char* __emule_cb_wait_file[32] = {};
+thread_local uint32_t __emule_cb_wait_line[32] = {};
 thread_local bool __emule_cb_boundary_strict = false;
 
 // DRAM equivalent of __emule_l1_tensor_ranges; consumed only by __emule_dram_ptr below.
@@ -214,10 +223,10 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
             }
         }
         if (!in_tensor) {
-            fprintf(stderr,
-                    "[ASAN ERROR] Out-of-Bounds Write: Attempted to access DRAM address 0x%x which is not part of any allocated tensor\n",
-                    addr);
-            abort();
+            __emule_asan_panic(
+                "[ASAN ERROR] Out-of-Bounds Write: Attempted to access DRAM address 0x%x which is not part of any "
+                "allocated tensor\n",
+                addr);
         }
     }
     return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
@@ -226,10 +235,11 @@ extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
     if (__emule_sem_l1_range_end > 0 &&
         offset >= __emule_sem_l1_range_start && offset < __emule_sem_l1_range_end) {
-        fprintf(stderr,
-                "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
-                offset, __emule_sem_l1_range_start, __emule_sem_l1_range_end);
-        abort();
+        __emule_asan_panic(
+            "[ASAN ERROR] Illegal Semaphore Access: Offset 0x%x is inside the reserved Semaphore region [0x%x, 0x%x)\n",
+            offset,
+            __emule_sem_l1_range_start,
+            __emule_sem_l1_range_end);
     }
     return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
 }
@@ -240,12 +250,6 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
-        }
-        if (tt::tt_metal::emule::emule_asan_enabled()) {
-            fprintf(stderr,
-                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
-                    x, y);
-            abort();
         }
     }
     return nullptr;
@@ -280,12 +284,6 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
             return it->second->l1_ptr(offset);
-        }
-        if (tt::tt_metal::emule::emule_asan_enabled()) {
-            fprintf(stderr,
-                    "[ASAN ERROR] Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (%u, %u)\n",
-                    noc_x, noc_y);
-            abort();
         }
     }
     return nullptr;
@@ -409,6 +407,11 @@ struct KernelInfo {
     uint32_t kernel_config_base = 0;
     uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
     uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    // Runtime-arg values handed to this kernel on its core (see PendingKernelInfo).
+    std::vector<uint32_t> rt_arg_values;
+    // Kernel source path; owns the string __emule_kernel_name points at during
+    // this kernel's launch (used by the ASAN trace to name the offending kernel).
+    std::string kernel_name;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -475,6 +478,12 @@ struct PendingKernelInfo {
     uint32_t kernel_config_base = 0;
     uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
     uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    // Flat list of this kernel's runtime-arg values on its core (unique + common).
+    // Buffer L1 addresses handed to the kernel appear here verbatim, so they let
+    // the Object-Intent check discover which tensors are this kernel's I/O. See
+    // ObjectIntentTracker::pre_launch_snapshot.
+    std::vector<uint32_t> rt_arg_values;
+    std::string kernel_name;  // kernel source path, for the ASAN trace
 };
 
 // DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
@@ -498,6 +507,10 @@ struct CoreSetup {
     bool has_dfbs = false;
     uint32_t sem_base;
     uint32_t sem_size;
+    // L1 start offsets of globally-allocated (persistent) CB backing buffers on
+    // this core. These are legitimate kernel write targets (the CB *is* the
+    // tensor), so the Object-Intent check must not flag writes to them.
+    std::vector<uint32_t> persistent_cb_starts;
 };
 
 // Per-slot initialization data for a DFB tile-counter slot. wr_ptr and rd_ptr
@@ -659,6 +672,32 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //      translation through the per-thread __emule_bridge_l1 base pointer.)
 // Reads from `src_path`, writes the patched source to `out_path`, and throws
 // on any I/O failure.
+// emule_line_preserving_replace that preserves the total line count: each replacement is
+// padded with as many trailing newlines as the match consumed beyond it (our
+// replacements never add newlines, so this only ever pads). Keeping the emitted
+// source line-aligned with the original kernel is what lets the `#line` directive
+// below make debug info — and therefore ASAN backtraces — point at the real
+// kernel file:line instead of the generated temp copy.
+static std::string emule_line_preserving_replace(
+    const std::string& input, const std::regex& re, const std::string& fmt) {
+    std::string out;
+    auto pos = input.cbegin();
+    for (std::sregex_iterator it(input.cbegin(), input.cend(), re), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        out.append(pos, m[0].first);
+        const std::string matched = m.str();
+        const std::string rep = m.format(fmt);
+        const long pad = std::count(matched.begin(), matched.end(), '\n') - std::count(rep.begin(), rep.end(), '\n');
+        out += rep;
+        for (long k = 0; k < pad; ++k) {
+            out += '\n';
+        }
+        pos = m[0].second;
+    }
+    out.append(pos, input.cend());
+    return out;
+}
+
 static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
     std::ifstream in(src_path);
     if (!in) {
@@ -670,27 +709,34 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
 
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
-    src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
+    src = emule_line_preserving_replace(src, mhartid_re, "$1 = __processor_id;");
 
     static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*:::\s*"memory"\s*\)\s*;)");
-    src = std::regex_replace(src, fence_re, "__sync_synchronize();");
+    src = emule_line_preserving_replace(src, fence_re, "__sync_synchronize();");
 
     static const std::regex l1_arg_ptr_re(
         R"(reinterpret_cast<([^>]+\*)>\s*\(\s*get_arg_val<uint32_t>\s*(\([^)]*\))\s*\))");
-    src = std::regex_replace(
+    src = emule_line_preserving_replace(
         src, l1_arg_ptr_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>$2))");
 
     // Metal 2.0 named-arg pattern: reinterpret_cast<T*>(static_cast<uintptr_t>(get_arg(args::NAME)))
     static const std::regex l1_named_arg_ptr_re(
         R"(reinterpret_cast<([^>]+\*)>\s*\(\s*static_cast<uintptr_t>\s*\(\s*get_arg\s*\(\s*([^)]+)\s*\)\s*\)\s*\))");
-    src = std::regex_replace(
-        src, l1_named_arg_ptr_re,
+    src = emule_line_preserving_replace(
+        src,
+        l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
 
     std::ofstream out(out_path);
     if (!out) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
     }
+    // Attribute the emitted body to the real kernel file so DWARF (and thus ASAN
+    // backtraces) report `<real kernel>.cpp:<line>` rather than the generated temp
+    // copy. The rewrites above are line-preserving, so line N here == line N there.
+    std::error_code ec;
+    std::filesystem::path abs = std::filesystem::absolute(src_path, ec);
+    out << "#line 1 \"" << (ec ? src_path : abs.string()) << "\"\n";
     out << src;
 }
 
@@ -903,8 +949,18 @@ static std::function<void()> jit_compile_kernel(
 
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
+    // Under ASAN, keep -O2 (so numerics match normal runs) but add debug info +
+    // frame pointers so the unified ASAN backtrace can resolve kernel-source
+    // file:line via llvm-symbolizer/addr2line. The ASAN flag is folded into the
+    // JIT cache key (see compute_cache_key) so these -g .so files never collide
+    // with the lean non-ASAN cache.
+    std::string opt_flags = " -O2";
+    if (tt::tt_metal::emule::emule_asan_enabled()) {
+        opt_flags += " -g -fno-omit-frame-pointer -funwind-tables";
+    }
     std::ostringstream cmd;
-    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared" << opt_flags
+        << " -Wno-c++11-narrowing"
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
@@ -1452,6 +1508,16 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
+                // Codegen version: bump whenever preprocess_kernel_source_for_x86 /
+                // the emitted wrapper changes, so stale cached .so files (whose DWARF
+                // or generated source predate the change) are recompiled. pp1->pp2:
+                // line-preserving rewrites + #line directive pointing at the real kernel.
+                key += ":pp2";
+                // ASAN builds add -g/-fno-omit-frame-pointer; keep their cached
+                // .so distinct from the lean non-ASAN build of the same kernel.
+                if (emule_asan_enabled()) {
+                    key += ":asan_g";
+                }
                 return key;
             };
 
@@ -1528,6 +1594,20 @@ static void collect_kernels(
                             rta_off = rta.rta_offset();
                             crta_off = rta.crta_offset();
                         }
+                        // Snapshot the runtime-arg values handed to this kernel on
+                        // this core (unique + common). Buffer L1 addresses passed as
+                        // args appear here verbatim; the Object-Intent check matches
+                        // them against live-tensor starts to discover the kernel's I/O
+                        // tensors (see ObjectIntentTracker::pre_launch_snapshot). Shared
+                        // across this kernel's proc_ids, so build once and copy.
+                        std::vector<uint32_t> rt_arg_values;
+                        if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
+                            const auto& ra = kernel->runtime_args(logical_core);
+                            rt_arg_values.insert(rt_arg_values.end(), ra.begin(), ra.end());
+                        }
+                        const auto& cra = kernel->common_runtime_args();
+                        rt_arg_values.insert(rt_arg_values.end(), cra.begin(), cra.end());
+
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
@@ -1539,7 +1619,9 @@ static void collect_kernels(
                                 procs.num_threads,
                                 kernel_config_base,
                                 rta_off,
-                                crta_off});
+                                crta_off,
+                                rt_arg_values,
+                                src_path});
                         }
                     }
                 }
@@ -1652,10 +1734,20 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
 // Initialize CB-sync state on a core from the program's circular buffer list.
-static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, const CoreCoord& logical_core) {
+static void init_core_cb_sync(
+    tt_emule::Core* core,
+    detail::ProgramImpl& impl,
+    const CoreCoord& logical_core,
+    std::vector<uint32_t>& persistent_cb_starts) {
     core->reset_cb_sync();
     auto cb_impls = impl.circular_buffers_on_core(logical_core);
     for (auto& cb_impl : cb_impls) {
+        // A globally-allocated CB is bound to a persistent L1 buffer (its
+        // address() == that buffer's address()). Record it so Object-Intent
+        // exempts the kernel's legitimate writes to it.
+        if (cb_impl->globally_allocated()) {
+            persistent_cb_starts.push_back(cb_impl->address());
+        }
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
             if (idx >= EMULE_NUM_CBS) {
                 continue;
@@ -1822,7 +1914,8 @@ static void setup_core_state(
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
-        init_core_cb_sync(core, impl, logical_core);
+        std::vector<uint32_t> persistent_cb_starts;
+        init_core_cb_sync(core, impl, logical_core, persistent_cb_starts);
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
@@ -1839,7 +1932,8 @@ static void setup_core_state(
              std::move(dfb_allocs),
              has_dfbs,
              emule_sem_base,
-             sem_region_size});
+             sem_region_size,
+             std::move(persistent_cb_starts)});
     }
 }
 
@@ -1995,6 +2089,7 @@ public:
         const EmuleOobTensorState& oob,
         const std::vector<KernelInfo>& ki_list,
         const uint8_t* l1_data,
+        const std::vector<uint32_t>& persistent_cb_starts,
         [[maybe_unused]] uint32_t lx,
         [[maybe_unused]] uint32_t ly) {
         if (!oob.object_intent_strict || oob.tensor_ranges == nullptr) {
@@ -2009,12 +2104,33 @@ public:
             // workload. Other sanitizers continue to run.
             return;
         }
+        // I/O tensors from other kernels: a tensor whose L1 address was handed to
+        // this kernel as a runtime arg is one the kernel was explicitly given to
+        // operate on — even if it "belongs" to another kernel's context, this
+        // kernel is allowed to write to it (in-place ops, fused producers). The
+        // base address passed as a runtime arg equals the buffer's start offset,
+        // so any live-tensor start that appears in the kernel's runtime args is an
+        // I/O tensor and must be exempt from the snapshot. (Same space, no
+        // normalization: runtime-arg buffer addresses and the live-range starts are
+        // both direct offsets into the core's L1 backing.)
+        std::unordered_set<uint32_t> io_arg_starts(ki_list[0].rt_arg_values.begin(), ki_list[0].rt_arg_values.end());
         snapshots_.reserve(oob.tensor_ranges_count);
         for (uint32_t i = 0; i < oob.tensor_ranges_count; ++i) {
             uint64_t packed = oob.tensor_ranges[i];
             uint32_t r_start = static_cast<uint32_t>(packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(packed);
             if (r_end <= r_start) {
+                continue;
+            }
+            // Skip persistent (globally-allocated CB) buffers: the kernel is
+            // allowed to write to them, so they must not
+            // be compared. Their address() == the buffer's start offset.
+            if (std::find(persistent_cb_starts.begin(), persistent_cb_starts.end(), r_start) !=
+                persistent_cb_starts.end()) {
+                continue;
+            }
+            // Skip I/O tensors this kernel was handed (see above).
+            if (io_arg_starts.count(r_start) != 0) {
                 continue;
             }
             Snap snap;
@@ -2054,7 +2170,7 @@ public:
         resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
     }
 
-    void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly) const {
+    void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const {
         if (snapshots_.empty()) {
             return;
         }
@@ -2066,12 +2182,22 @@ public:
             uint32_t r_start = static_cast<uint32_t>(snap.packed >> 32);
             uint32_t r_end = static_cast<uint32_t>(snap.packed);
             if (std::memcmp(snap.bytes.data(), l1_data + r_start, r_end - r_start) != 0) {
-                fprintf(stderr,
-                        "[ASAN ERROR] Object Intent Violation: Attempted to modify memory belonging to an "
-                        "adjacent object context — L1 buffer [0x%x, 0x%x) on core (%u, %u) changed but no "
-                        "kernel in this launch resolved a pointer into it via __emule_local_l1_to_ptr.\n",
-                        r_start, r_end, lx, ly);
-                std::abort();
+                // No source line: this is detected post-exit by memcmp (the stray
+                // write bypassed __emule_local_l1_to_ptr, so there is no captured
+                // call site). The kernel name + core + the clobbered buffer range
+                // are the actionable info; the cause is typically an overrun from
+                // an adjacent buffer this kernel *did* resolve.
+                __emule_asan_panic(
+                    "[ASAN ERROR] Object Intent Violation: Attempted to modify memory belonging to an "
+                    "adjacent object context — kernel %s on core (%u, %u) changed L1 buffer [0x%x, 0x%x) "
+                    "without ever resolving a pointer into it via __emule_local_l1_to_ptr (likely an overrun "
+                    "from an adjacent buffer). No source line: detected post-exit by memory comparison, after "
+                    "the kernel returned.\n",
+                    kernel_name ? kernel_name : "(unknown)",
+                    lx,
+                    ly,
+                    r_start,
+                    r_end);
             }
         }
     }
@@ -2114,72 +2240,93 @@ inline void clear_sanitizer_thread_locals() {
     for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
         __emule_cb_reserved_pages[i] = 0;
         __emule_cb_waited_pages[i] = 0;
+        __emule_cb_reserve_file[i] = nullptr;
+        __emule_cb_reserve_line[i] = 0;
+        __emule_cb_wait_file[i] = nullptr;
+        __emule_cb_wait_line[i] = 0;
     }
     __emule_cb_boundary_strict = false;
 }
 
 inline void abort_if_dirty_cb(
     uint32_t cb_id,
-    const tt_emule::CBSyncState& cb,
-    uint32_t occupied,
-    uint32_t popped,
+    uint32_t unpushed,
+    uint32_t unpopped,
     uint32_t lx,
     uint32_t ly,
-    uint32_t processor_id_or_zero,
-    bool per_kernel) {
-    if (per_kernel) {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "Kernel (processor %u) left %u/%u pages on the CB after the consumer popped %u "
-            "(pushed > popped) — would back-pressure the next program launch on silicon.\n",
-            lx,
-            ly,
-            cb_id,
-            processor_id_or_zero,
-            occupied,
-            cb.num_pages,
-            popped);
-    } else {
-        fprintf(
-            stderr,
-            "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "%u/%u pages remain after program exit; the consumer popped %u (pushed > popped) — "
-            "would back-pressure the next program launch on silicon.\n",
-            lx,
-            ly,
-            cb_id,
-            occupied,
-            cb.num_pages,
-            popped);
+    uint32_t processor_id,
+    const char* reserve_file,
+    uint32_t reserve_line,
+    const char* wait_file,
+    uint32_t wait_line) {
+    // The kernel has already returned, so there is no kernel frame to backtrace;
+    // the offending file:line comes from the call site captured at reserve/wait
+    // time (__emule_cb_reserve_file / __emule_cb_wait_file). Only the imbalanced
+    // side(s) are reported.
+    char reserve_clause[512] = "";
+    if (unpushed > 0) {
+        std::snprintf(
+            reserve_clause,
+            sizeof(reserve_clause),
+            " %u page(s) reserved via cb_reserve_back at %s:%u were never committed with cb_push_back.",
+            unpushed,
+            reserve_file ? reserve_file : "?",
+            reserve_line);
     }
-    std::abort();
+    char wait_clause[512] = "";
+    if (unpopped > 0) {
+        std::snprintf(
+            wait_clause,
+            sizeof(wait_clause),
+            " %u page(s) waited via cb_wait_front at %s:%u were never released with cb_pop_front.",
+            unpopped,
+            wait_file ? wait_file : "?",
+            wait_line);
+    }
+    __emule_asan_panic(
+        "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! Kernel (processor %u):%s%s "
+        "Every reserve must be matched by a push and every wait by a pop before the kernel exits, "
+        "or the CB's read/write pointers desync on silicon.\n",
+        lx,
+        ly,
+        cb_id,
+        processor_id,
+        reserve_clause,
+        wait_clause);
 }
 
+// A CB is "flushed" when every cb_reserve_back was committed by a matching
+// cb_push_back and every cb_wait_front was released by a matching cb_pop_front.
+// The per-kernel thread-local counters hold the net unmatched amount at kernel
+// exit: __emule_cb_reserved_pages[cb] is bumped by reserve_back and shrunk by
+// push_back; __emule_cb_waited_pages[cb] is set by wait_front and shrunk by
+// pop_front. Either being > 0 means the kernel reserved/waited without the
+// matching push/pop — an un-flushed CB. This is a per-kernel property (reserve
+// pairs with push within the producer, wait with pop within the consumer), so it
+// is checked at each kernel's exit, before the thread-locals are cleared.
 inline void sweep_per_kernel_dirty_cbs(
-    const EmuleOobTensorState& oob,
-    bool single_kernel_on_core,
-    tt_emule::CBSyncState* cb_array,
-    uint32_t processor_id,
-    uint32_t lx,
-    uint32_t ly) {
-    if (!oob.asan_enabled || !single_kernel_on_core || cb_array == nullptr) {
+    const EmuleOobTensorState& oob, tt_emule::CBSyncState* cb_array, uint32_t processor_id, uint32_t lx, uint32_t ly) {
+    if (!oob.asan_enabled || cb_array == nullptr) {
         return;
     }
     for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-        auto& cb = cb_array[cb_id];
-        if (cb.num_pages == 0) {
+        if (cb_array[cb_id].num_pages == 0) {
             continue;
         }
-        uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-        uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
-        // A non-empty CB at exit is only a real leak if a consumer actually
-        // drained it but under-popped (popped > 0). popped == 0 means the CB had
-        // no consumer at all — a globally-allocated/sharded output CB, or a
-        // producer-only single-kernel program that DMAs its result out — where
-        // leftover pages are by design, not a back-pressure hazard.
-        if (occupied > 0 && popped > 0) {
-            abort_if_dirty_cb(cb_id, cb, occupied, popped, lx, ly, processor_id, /*per_kernel=*/true);
+        uint32_t unpushed = __emule_cb_reserved_pages[cb_id];
+        uint32_t unpopped = __emule_cb_waited_pages[cb_id];
+        if (unpushed > 0 || unpopped > 0) {
+            abort_if_dirty_cb(
+                cb_id,
+                unpushed,
+                unpopped,
+                lx,
+                ly,
+                processor_id,
+                __emule_cb_reserve_file[cb_id],
+                __emule_cb_reserve_line[cb_id],
+                __emule_cb_wait_file[cb_id],
+                __emule_cb_wait_line[cb_id]);
         }
     }
 }
@@ -2223,41 +2370,6 @@ inline OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
         owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());
     }
     return owner;
-}
-
-inline void sweep_program_dirty_cbs(
-    const EmuleOobTensorState& oob, const std::vector<CoreSetup>& core_setups) {
-    if (!oob.asan_enabled) {
-        return;
-    }
-    for (const auto& cs : core_setups) {
-        tt_emule::CBSyncState* cb_array = cs.core->cb_sync_array();
-        if (cb_array == nullptr) {
-            continue;
-        }
-        for (uint32_t cb_id = 0; cb_id < EMULE_NUM_CBS; ++cb_id) {
-            auto& cb = cb_array[cb_id];
-            if (cb.num_pages == 0) {
-                continue;
-            }
-            uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-            uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
-            // Only a real leak if a consumer existed (popped > 0) but under-drained;
-            // popped == 0 => no consumer (sharded/global output or producer-only
-            // single-kernel program), leftover is by design. See per-kernel sweep.
-            if (occupied > 0 && popped > 0) {
-                abort_if_dirty_cb(
-                    cb_id,
-                    cb,
-                    occupied,
-                    popped,
-                    static_cast<uint32_t>(cs.logical_core.x),
-                    static_cast<uint32_t>(cs.logical_core.y),
-                    /*processor_id_or_zero=*/0,
-                    /*per_kernel=*/false);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2438,6 +2550,7 @@ static void launch_cores(
                         oob_state,
                         *cs.ki_list,
                         l1_data,
+                        cs.persistent_cb_starts,
                         static_cast<uint32_t>(cs.logical_core.x),
                         static_cast<uint32_t>(cs.logical_core.y));
 
@@ -2447,9 +2560,6 @@ static void launch_cores(
                     uint32_t ly = cs.logical_core.y;
                     uint32_t sem_base = cs.sem_base;
                     uint32_t sem_size = cs.sem_size;
-                    // Per-kernel dirty-CB attribution requires single-kernel-per-core;
-                    // multi-kernel cases are caught by the program-level sweep below.
-                    bool single_kernel_on_core = cs.ki_list->size() == 1;
                     for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
                         KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
                         tt_emule::EmuleDFBInterface* dfb_array =
@@ -2469,7 +2579,6 @@ static void launch_cores(
                                               sem_base,
                                               sem_size,
                                               kidx,
-                                              single_kernel_on_core,
                                               oob_state,
                                               &intent_tracker,
                                               &kep = kernel_exceptions[kidx]]() {
@@ -2498,6 +2607,7 @@ static void launch_cores(
                             my_y[1] = py;
                             __emule_logical_x = lx;
                             __emule_logical_y = ly;
+                            __emule_kernel_name = ki.kernel_name.empty() ? nullptr : ki.kernel_name.c_str();
                             __emule_pending_noc_reads = 0;
 
                             // Overflow drops excess (biases toward false positives, never false negatives).
@@ -2525,8 +2635,7 @@ static void launch_cores(
                                     }
                                     ki.variants[t]();
                                 }
-                                sweep_per_kernel_dirty_cbs(
-                                    oob_state, single_kernel_on_core, cb_array, ki.processor_id, lx, ly);
+                                sweep_per_kernel_dirty_cbs(oob_state, cb_array, ki.processor_id, lx, ly);
                             } catch (...) {
                                 kep = std::current_exception();
                             }
@@ -2540,6 +2649,7 @@ static void launch_cores(
                             __emule_dfbs = nullptr;
                             __emule_tc_array = nullptr;
                             __emule_core_map = nullptr;
+                            __emule_kernel_name = nullptr;
                             __emule_pending_noc_reads = 0;
                             intent_tracker.teardown_kernel_tls(
                                 oob_state, local_resolved, local_resolved_count);
@@ -2551,7 +2661,10 @@ static void launch_cores(
                         t.join();
                     }
 
-                    intent_tracker.verify_post_launch(l1_data, lx, ly);
+                    const char* oi_kernel_name = (cs.ki_list->size() == 1 && !cs.ki_list->front().kernel_name.empty())
+                                                     ? cs.ki_list->front().kernel_name.c_str()
+                                                     : nullptr;
+                    intent_tracker.verify_post_launch(l1_data, lx, ly, oi_kernel_name);
 
                     // Rethrow first kernel exception
                     for (size_t i = 0; i < kernel_exceptions.size(); ++i) {
@@ -2656,6 +2769,8 @@ void execute_program_emulated(IDevice* device, Program& program) {
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
             }
+            ki.rt_arg_values = std::move(pk.rt_arg_values);
+            ki.kernel_name = std::move(pk.kernel_name);
             core_kernels[logical_core].push_back(std::move(ki));
         }
     }
@@ -2673,7 +2788,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
 
     OobStateOwner oob = build_oob_tensor_state(device, device_id);
     launch_cores(core_setups, dram_data, core_map_ptr, oob.state);
-    sweep_program_dirty_cbs(oob.state, core_setups);
 
     log_debug(tt::LogMetal, "execute_program_emulated: device {} done", device_id);
 }

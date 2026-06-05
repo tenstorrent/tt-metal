@@ -32,11 +32,12 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     CreateCircularBuffer(program, logical_core, cb_config);
 
     // Allocate a real L1 buffer as the noc_async_read destination so the
-    // tensor-area sanitizer doesn't fire before cb_push_back triggers the
+    // tensor-area sanitizer doesn't fire before cb_pop_front triggers the
     // barrier check.
     auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
 
-    // 2. Kernel that reads then pushes WITHOUT a barrier
+    // 2. Kernel that reads then pops WITHOUT a barrier. Popping frees the page
+    //    for the producer to refill while the read is still in flight — a race.
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
@@ -45,7 +46,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 
             noc_async_read(src_addr, dst, 1024);
             // MISSING: noc_async_read_barrier();
-            cb_push_back(0, 1);
+            cb_pop_front(0, 1);
         }
     )";
 
@@ -55,8 +56,7 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
-        ".*Race Condition: cb_push_back.*called while a NoC read is still pending.*"
-    );
+        ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
-}
+}  // namespace tt::tt_metal

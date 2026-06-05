@@ -4,7 +4,7 @@
 
 // To run:
 // $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_api
-// --gtest_filter="MeshDeviceFixture.Dirty_CB_SanityCheck:MeshDeviceFixture.Dirty_CB_ProducerOnly_NoViolation"
+// --gtest_filter="MeshDeviceFixture.Dirty_CB_ReserveWithoutPush:MeshDeviceFixture.Dirty_CB_WaitWithoutPop:MeshDeviceFixture.Dirty_CB_Balanced_NoViolation"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -20,43 +20,29 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-// A kernel that pushes N pages onto a CB but only pops N-1 leaves the CB in a
-// "dirty" state: occupied > 0 at program exit. On silicon the residual page
-// offset survives in the CB pointers, so the next program launch immediately
-// back-pressures (cb_reserve_back blocks forever). This test exercises that
-// exact scenario and verifies the emulator's sanitizer catches it.
-//
-// Note this kernel pops at least once (total_popped > 0), i.e. the CB has a real
-// consumer that under-drains — which is the genuine leak the sweep targets. A CB
-// that is pushed but NEVER popped (no consumer) is a different, legitimate case;
-// see Dirty_CB_ProducerOnly_NoViolation below.
-TEST_F(MeshDeviceFixture, Dirty_CB_SanityCheck) {
+// A CB is "flushed" when every cb_reserve_back is committed by a matching
+// cb_push_back and every cb_wait_front is released by a matching cb_pop_front.
+// A kernel that reserves a page but never pushes it leaves the CB un-flushed:
+// the producer claimed write space it never handed off, so the CB's write
+// pointer desyncs from its committed state. The sanitizer must catch this.
+TEST_F(MeshDeviceFixture, Dirty_CB_ReserveWithoutPush) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
-    // 1. Create a CB with 2 pages (enough headroom to push twice without
-    //    needing to wrap, since pop happens between pushes).
     uint32_t cb_id = 0;
     CircularBufferConfig cb_config =
         CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    // 2. Kernel pushes 2 pages, pops 1 → leaves 1 page on the CB at exit.
+    // Reserve a page but never push it -> reserve without a matching push.
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
-            // First push
             cb_reserve_back(0, 1);
-            cb_push_back(0, 1);
-            // Drain it so the second push doesn't block on a full CB
-            cb_wait_front(0, 1);
-            cb_pop_front(0, 1);
-            // Second push, NOT drained — CB ends with occupied=1.
-            cb_reserve_back(0, 1);
-            cb_push_back(0, 1);
+            // MISSING: cb_push_back(0, 1);
         }
     )";
 
@@ -66,20 +52,54 @@ TEST_F(MeshDeviceFixture, Dirty_CB_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // Verify the emulator catches the dirty state.
+    EXPECT_DEATH(
+        detail::LaunchProgram(device, program), ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
+}
+
+// The consumer-side mirror: a kernel that waits on a page but never pops it
+// leaves the CB un-flushed — the consumer claimed read access it never released,
+// so the read pointer desyncs. The sanitizer must catch this too.
+TEST_F(MeshDeviceFixture, Dirty_CB_WaitWithoutPop) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    auto* device = this->devices_.at(0)->get_devices()[0];
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    uint32_t cb_id = 0;
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
+    CreateCircularBuffer(program, logical_core, cb_config);
+
+    // Push a page so the wait_front below has data and does not block, then wait
+    // on it but never pop -> wait without a matching pop.
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        void kernel_main() {
+            cb_reserve_back(0, 1);
+            cb_push_back(0, 1);
+            cb_wait_front(0, 1);
+            // MISSING: cb_pop_front(0, 1);
+        }
+    )";
+
+    CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
     EXPECT_DEATH(
         detail::LaunchProgram(device, program),
         ".*Dirty CB Detected: Core \\(0, 0\\) CB 0 was not flushed!.*");
 }
 
-// Positive control: a CB that is pushed but NEVER popped is NOT a leak. It models
-// a globally-allocated/sharded output CB, or a producer-only single-kernel program
-// that DMAs its result straight out (e.g. nonzero) — there is no consumer, so the
-// leftover page at exit is by design. With total_popped == 0 the Dirty-CB sweep
-// must NOT abort. This guards against regressing to the old "any occupied CB
-// aborts" rule, which false-positived every sharded/producer-only op across the
-// ttnn sweeps.
-TEST_F(MeshDeviceFixture, Dirty_CB_ProducerOnly_NoViolation) {
+// Positive control: a kernel whose reserve/push and wait/pop all balance leaves
+// the CB flushed, even though pages were left occupied (the producer pushed but
+// nothing was popped). Leftover occupancy is NOT what this check is about — only
+// unmatched reserve/wait. This must NOT abort. It also guards against regressing
+// to the old (mistaken) "any occupied CB aborts" rule.
+TEST_F(MeshDeviceFixture, Dirty_CB_Balanced_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
     auto* device = this->devices_.at(0)->get_devices()[0];
@@ -91,8 +111,8 @@ TEST_F(MeshDeviceFixture, Dirty_CB_ProducerOnly_NoViolation) {
         CircularBufferConfig(2 * 1024, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    // Producer-only: push one page, never pop. occupied == 1 at exit but
-    // total_popped == 0 (no consumer) -> not a dirty-CB leak.
+    // Every reserve is matched by a push; no wait_front is issued so there is
+    // nothing to pop. The CB is left occupied (1 page) but fully flushed.
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
@@ -107,8 +127,7 @@ TEST_F(MeshDeviceFixture, Dirty_CB_ProducerOnly_NoViolation) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    // Must NOT abort. If the sweep regresses to flagging any occupied CB,
-    // LaunchProgram SIGABRTs and this test fails.
+    // Must NOT abort.
     detail::LaunchProgram(device, program);
     SUCCEED();
 

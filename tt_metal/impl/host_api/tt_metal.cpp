@@ -1021,11 +1021,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         }
     } catch (const std::exception& e) {
         if (is_emulated && tt::tt_metal::emule::emule_asan_enabled()) {
-            fprintf(
-                stderr,
-                "[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n",
-                e.what());
-            abort();
+            __emule_asan_panic(
+                "[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n", e.what());
         }
         throw;
     }

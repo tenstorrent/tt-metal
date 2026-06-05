@@ -12,7 +12,9 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 **Common mechanics**
 - All checks are gated by one env var, **`TT_METAL_EMULE_ASAN=1`**, off by
   default (one exception: *CB Reservation Overflow* is always on — see §8).
-- Each fires a single `[ASAN ERROR] <Category>: …` line and then `abort()`s.
+- Each fires a single `[ASAN ERROR] <Category>: …` line, then a unified
+  diagnostic trace (see *Diagnostic trace* below), then `abort()`s — every site
+  calls `__emule_asan_panic()` instead of a bare `abort()`.
 - When the flag is off, every check is a no-op: host helpers return early, and
   the runner leaves the kernel's thread-local state pointers null so the in-kernel
   checks short-circuit.
@@ -31,6 +33,33 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
   registered in `[metal] tt_metal/impl/emulation/emule_live_ranges.{hpp,cpp}`,
   wired in from `[metal] tt_metal/impl/buffers/buffer.cpp`.
 
+## Diagnostic trace
+
+Every `[ASAN ERROR]` is followed by a unified trace, emitted by
+`__emule_asan_panic()` in **`[emule] include/jit_hw/emule_asan.h`** (a
+self-contained, libc/POSIX-only header included by both the kernel-side JIT
+headers and libtt_metal). It prints:
+
+- **Which kernel + where:** when a kernel is on the stack, the kernel source
+  path (`__emule_kernel_name`, threaded in per launch by the runner) plus the
+  logical/physical core and processor/neo/trisc ids (from the existing identity
+  thread-locals). Host-API checks (no kernel running) omit this block.
+- **A symbolized backtrace:** `backtrace()` captures the stack; each frame is
+  mapped to its module via `dladdr`, and frames inside a JIT kernel `.so` are
+  resolved to **kernel-source `file:line`** by shelling out to `llvm-symbolizer`
+  (falling back to `addr2line`, then to raw `backtrace_symbols`). The walk stops
+  at the JIT entry point `__emule_kernel_entry` so libc/runner internals aren't
+  dumped.
+
+To make kernel frames resolvable, `jit_compile_kernel` adds `-g
+-fno-omit-frame-pointer -funwind-tables` to the kernel compile **when ASAN is
+on** (kept at `-O2` so numerics match normal runs); the ASAN flag is folded into
+the JIT cache key (`:asan_g`) so these debug `.so` files never collide with the
+lean non-ASAN cache. The kernel-frame `file:line` refers to the JIT-generated
+kernel source. For post-execution checks (Dirty CB, Object Intent) the kernel
+has already returned, so the trace shows kernel identity + the runner stack, not
+the offending kernel line.
+
 ## Checks at a glance
 
 | Check | Layer | Lives in | Fires when |
@@ -43,11 +72,10 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 | Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
-| NoC-read-pending on push | kernel | `[emule] api/cb_api.h` (push) + `api/dataflow/dataflow_api.h` (read counter) | `cb_push_back` while a `noc_async_read` is unbarriered |
+| NoC-read-pending on pop | kernel | `[emule] api/cb_api.h` (pop) + `api/dataflow/dataflow_api.h` (read counter) | `cb_pop_front` while a `noc_async_read` is unbarriered |
 | NOC Transfer Alignment | kernel | `[emule] include/jit_hw/api/dataflow/dataflow_api.h` | a NoC endpoint isn't aligned to its own memory-type alignment |
-| Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counter in `[emule] tt_emule/cb_sync_state.hpp`) | a consumed CB left non-empty at exit (push > pop) |
+| Dirty CB Detected | runner | `[metal] emulated_program_runner.cpp` (counters in `[emule] api/cb_api.h`) | a kernel left a `cb_reserve_back` un-pushed or a `cb_wait_front` un-popped |
 | Object Intent Violation | runner | `[metal] emulated_program_runner.cpp` | a kernel changed a buffer it never resolved a pointer into |
-| Fabric Access Violation | runner | `[metal] emulated_program_runner.cpp` (`__emule_resolve_noc_addr`) | a NoC access targets an unallocated core coordinate |
 
 ---
 
@@ -179,16 +207,20 @@ instead of reporting a clear error.
 *Diagnostic:* `CB Reservation Overflow: CB <id> has <N> total pages, …`.
 *Exercised by:* `test_cb_pages.cpp`.
 
-### 9. NoC Read Pending on `cb_push_back`
-**Lives in:** `cb_push_back` in `[emule] include/jit_hw/api/cb_api.h`; the pending
+### 9. NoC Read Pending on `cb_pop_front`
+**Lives in:** `cb_pop_front` in `[emule] include/jit_hw/api/cb_api.h`; the pending
 counter is incremented/cleared in `noc_async_read` / `noc_async_read_barrier` in
 `[emule] include/jit_hw/api/dataflow/dataflow_api.h`.
-**What it catches:** pushing a CB page while a `noc_async_read` filling it hasn't
-been barriered — the consumer could read half-filled data on silicon.
+**What it catches:** popping (freeing) a CB page while a `noc_async_read` hasn't
+been barriered — the pop releases the page for the producer to refill, and a read
+still landing into it would race the refill (consumer reads stale/torn data on
+silicon). The check sits on **pop**, not push: a pop frees the page, so all reads
+must have completed first; before a push only writes precede it, so an unbarriered
+read there is harmless.
 **How it works:** `noc_async_read` increments a thread-local
-`__emule_pending_noc_reads`; the read barrier clears it. `cb_push_back` aborts if
-that counter is still > 0 (a barrier was skipped before the push).
-*Diagnostic:* `Race Condition: cb_push_back(cb_id=…) called while a NoC read is still pending`.
+`__emule_pending_noc_reads`; the read barrier clears it. `cb_pop_front` aborts if
+that counter is still > 0 (a barrier was skipped before the pop).
+*Diagnostic:* `Race Condition: cb_pop_front(cb_id=…) called while a NoC read is still pending`.
 *Exercised by:* `test_noc_without_barrier.cpp`.
 
 ### 10. NOC Transfer Alignment
@@ -210,27 +242,35 @@ their low bits differ.
 
 ## Runner / post-launch checks
 
-> These run after all kernel threads join (in
-> `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`) and catch
-> program-level invariants that no single per-access check can see.
+> These live in the runner
+> (`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`) and catch
+> program-structure invariants that no single per-access check can see. Most run
+> after all kernel threads join; **Dirty CB** runs at each kernel's exit (it reads
+> per-kernel thread-locals that are cleared on teardown).
 
 ### 11. Dirty CB Detected
-**Lives in:** the post-join sweeps (`sweep_per_kernel_dirty_cbs` /
-`sweep_program_dirty_cbs`, abort in `abort_if_dirty_cb`) in
-`[metal] emulated_program_runner.cpp`. The `occupied` + `total_popped` counters
-live on `CBSyncState` in `[emule] include/tt_emule/cb_sync_state.hpp` (incremented
-in `cb_sync_pop`; reset in `[emule] include/tt_emule/device.hpp`).
-**What it catches:** a circular buffer left non-empty by a **real producer/consumer
-imbalance** — a consumer that popped fewer pages than were pushed, which can
-back-pressure a later (cache-hit) reuse of the program.
-**How it works:** `CBSyncState` tracks `occupied` (pushes − pops) plus a cumulative
-`total_popped` counter. After join, both sweeps abort only when
-`occupied > 0 && total_popped > 0`. The `total_popped > 0` guard is the key: a CB
-with **no consumer at all** (a globally-allocated/sharded output CB, or a
-producer-only single-kernel program that DMAs its result out) ends non-empty *by
-design*, so it must not be flagged.
-*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> … pages remain after program exit; the consumer popped <M> (pushed > popped)`.
-*Exercised by:* `test_cb_leak.cpp` (a real under-drain + a producer-only control).
+**Lives in:** `sweep_per_kernel_dirty_cbs` (abort in `abort_if_dirty_cb`) in
+`[metal] emulated_program_runner.cpp`. Reads the per-kernel thread-local page
+counters `__emule_cb_reserved_pages[]` / `__emule_cb_waited_pages[]` (maintained by
+`cb_reserve_back`/`cb_push_back` and `cb_wait_front`/`cb_pop_front` in
+`[emule] include/jit_hw/api/cb_api.h`).
+**What it catches:** a kernel that leaves a CB **un-flushed** — a `cb_reserve_back`
+that was never committed with a matching `cb_push_back`, or a `cb_wait_front` that
+was never released with a matching `cb_pop_front`. The producer claimed write space
+(or the consumer claimed read access) it never handed off, so the CB's write/read
+pointers desync from their committed state.
+**How it works:** `__emule_cb_reserved_pages[cb]` is bumped by `cb_reserve_back` and
+shrunk by `cb_push_back`; `__emule_cb_waited_pages[cb]` is set by `cb_wait_front` and
+shrunk by `cb_pop_front`. Either holding a non-zero **net unmatched** count when the
+kernel exits means an un-flushed reserve/wait. This is a per-kernel property (reserve
+pairs with push inside the producer, wait with pop inside the consumer), so it is
+checked at **each kernel's exit** (right after its variants run, before the
+thread-locals are cleared) — not post-join. Note this is **not** about leftover
+occupancy: a producer that reserves+pushes but is never consumed ends with pages
+occupied yet fully flushed (`reserved==0, waited==0`) and is correctly **not** flagged
+(globally-allocated/sharded output CBs, producer-only programs that DMA their result out).
+*Diagnostic:* `Dirty CB Detected: Core (x, y) CB <id> was not flushed! Kernel (processor P) exited with <N> page(s) reserved … without … cb_push_back, and <M> page(s) waited … without … cb_pop_front`.
+*Exercised by:* `test_cb_leak.cpp` (reserve-without-push, wait-without-pop, and a balanced no-violation control).
 
 ### 12. Object Intent Violation
 **Lives in:** `[metal] tt_metal/impl/emulation/emulated_program_runner.cpp` (the
@@ -246,19 +286,16 @@ into — its "intended write set". After the kernel exits, the runner `memcmp`s 
 snapshot vs current L1 for every buffer **not** in the resolved set; any change is
 an unintended write. (Exact attribution requires one kernel per core; multi-kernel
 programs hit a friendlier early-out.)
+**Exempt buffers (never snapshotted, so writes to them never flag):** (1) *persistent
+buffers* — globally-allocated CB backing buffers (`cb_impl->globally_allocated()`); the
+CB *is* the tensor, so the kernel owns it. (2) *I/O tensors handed to this kernel* — any
+live-tensor whose L1 start address appears in the kernel's runtime args. A buffer passed
+in as a runtime arg is one the kernel was explicitly told to operate on (in-place ops,
+fused producers/consumers), even if it "belongs" to another kernel's context, so writing
+to it is legitimate. The base address passed as a runtime arg equals the buffer's start
+offset (same address space, no normalization), so the match is exact.
 *Diagnostic:* `Object Intent Violation: Attempted to modify memory belonging to an adjacent object context — L1 buffer [start, end) … changed but no pointer was resolved into it`.
 *Exercised by:* `test_valid_mem_wrong_alloc.cpp` (adjacent + non-adjacent violations + a control).
-
-### 13. Fabric Access Violation
-**Lives in:** `__emule_resolve_noc_addr` in
-`[metal] tt_metal/impl/emulation/emulated_program_runner.cpp`.
-**What it catches:** a NoC transfer whose target NOC X/Y doesn't map to any
-allocated core (an off-grid / unallocated-coordinate access).
-**How it works:** `__emule_resolve_noc_addr` decodes the NOC X/Y from the address
-and looks it up in the core map. No core registered at those coordinates → abort,
-instead of dereferencing a null/garbage backing pointer.
-*Diagnostic:* `Fabric Access Violation: Attempted to access unallocated Core at NOC coordinates (x, y)`.
-*Exercised by:* `test_fabric_allocation.cpp`.
 
 ---
 
@@ -274,8 +311,7 @@ instead of dereferencing a null/garbage backing pointer.
 | Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |
-| NoC pending on push | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_push_back` while `__emule_pending_noc_reads > 0` |
+| NoC pending on pop | `[emule] api/cb_api.h` + `dataflow_api.h` | `cb_pop_front` while `__emule_pending_noc_reads > 0` |
 | NOC Transfer Alignment | `[emule] api/dataflow/dataflow_api.h` | each endpoint vs its own absolute alignment (16 / 32 / 64 B) |
-| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] cb_sync_state.hpp`) | `occupied > 0 && total_popped > 0` after join |
+| Dirty CB | `[metal] emulated_program_runner.cpp` (+ `[emule] api/cb_api.h`) | `reserved_pages > 0 \|\| waited_pages > 0` at kernel exit |
 | Object Intent | `[metal] emulated_program_runner.cpp` | post-launch `memcmp` of buffers never resolved into |
-| Fabric Access | `[metal] emulated_program_runner.cpp` | NOC X/Y not in the core map |
