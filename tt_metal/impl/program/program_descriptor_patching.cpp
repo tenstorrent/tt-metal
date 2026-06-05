@@ -5,8 +5,19 @@
 // Implementation of the fast cache-hit patching helpers declared in
 // tt-metalium/experimental/program_descriptor_patching.hpp.
 //
-// This is a temporary shim. Metal 2.0 solves the same problem at the framework
-// level with native Tensor/Buffer bindings. Remove once op factories migrate.
+// ⚠️ TEMPORARY SHIM — DO NOT BUILD ON THIS, DO NOT ADD CALLERS. ⚠️
+//
+// These helpers (resolve_bindings / apply_resolved_bindings / apply_dynamic_runtime_args)
+// are a stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the
+// handful of hash-excluded scalar runtime args on a program-cache hit — standing in for the
+// legacy override_runtime_arguments() path until Metal 2.0 lands.
+//
+// Metal 2.0 solves this at the framework level with native Tensor/Buffer bindings, at which
+// point THIS ENTIRE FILE AND ITS HEADER ARE DELETED. Do not extend the API, do not depend on
+// it outside the mesh-device-operation adapter. New code almost certainly wants the Metal 2.0
+// binding instead.
+//
+// CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -26,23 +37,42 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
+    Program& program,
+    const ProgramDescriptor& desc,
+    std::span<Buffer* const> tensor_buffers,
+    size_t num_input_buffers) {
     ResolvedBindings result;
 
-    // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
-    // or an output that aliases an input), every binding for that buffer would map to
-    // the first occurrence via std::find below.  At cache hit, all of those bindings
-    // would be patched with current_buffers[first_slot].address(), so the second
-    // tensor's address would never get written.  The result is silent miscompute when
-    // a future call uses distinct tensors at the same shape/dtype.
+    // If the same Buffer* appears more than once, every binding for that buffer maps to the
+    // first occurrence via std::find below; at cache hit all of those bindings get patched with
+    // current_buffers[first_slot].address().  Whether that's safe depends on WHY it aliases:
     //
-    // We can't disambiguate which binding corresponds to which slot from Buffer* alone,
-    // so we fall back to the slow path (rebuild the descriptor) when this happens.
+    //   - Duplicate WITHIN the inputs (e.g. matmul(X, X)): the two slots are distinct logical
+    //     tensors that merely coincide on this call.  A future same-shape call with distinct
+    //     tensors would silently miscompute (the second tensor's address is never written).
+    //     We can't disambiguate from Buffer* alone, so bail to the slow path.
+    //
+    //   - An OUTPUT (or workload) buffer that aliases an INPUT: an in-place op writing back into
+    //     its input.  Both slots are the SAME buffer by construction, on every dispatch, so
+    //     mapping them to the one shared address is always correct.  Keep the fast path.
+    //
+    // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
     {
-        std::unordered_set<Buffer*> seen;
-        seen.reserve(tensor_buffers.size());
-        for (Buffer* buf : tensor_buffers) {
-            if (buf && !seen.insert(buf).second) {
+        std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
+        std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
+        for (size_t i = 0; i < tensor_buffers.size(); ++i) {
+            Buffer* buf = tensor_buffers[i];
+            if (!buf) {
+                continue;
+            }
+            const bool is_input = i < num_input_buffers;
+            // An output/workload buffer that aliases an input is the safe in-place case — skip it.
+            if (!is_input && input_buffers.contains(buf)) {
+                continue;
+            }
+            // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
+            auto& seen = is_input ? input_buffers : output_buffers;
+            if (!seen.insert(buf).second) {
                 return ResolvedBindings{};
             }
         }
@@ -119,10 +149,10 @@ ResolvedBindings resolve_bindings(
     // mechanism by which input/output addresses can change between dispatches.
     //
     // The CB-resolution gate (whether to use the result on cache hit) lives
-    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is contract-aware:
-    //   - contract 1: fast-path only when rt-arg bindings are present;
+    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is variant-aware:
+    //   - ProgramDescriptor variant: fast-path only when rt-arg bindings are present;
     //     otherwise rebuild the descriptor.
-    //   - contract 2: always fast-path; no rebuild fallback.
+    //   - WorkloadDescriptor variant: always fast-path; no rebuild fallback.
     {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
@@ -204,6 +234,27 @@ void apply_resolved_bindings(
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(
             program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);
+    }
+}
+
+void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args) {
+    // dynamic_args are not sorted (unlike resolved rt_args): the per-op get_dynamic_runtime_args()
+    // typically emits only a handful of slots, so re-deriving the RuntimeArgsData reference per
+    // entry is cheap and avoids imposing an ordering requirement on op authors.  The reference is
+    // taken fresh on each call so first-enqueue retargeting of rt_args_data is observed correctly.
+    for (const auto& d : dynamic_args) {
+        auto& data =
+            d.is_common ? GetCommonRuntimeArgs(program, d.kernel_idx) : GetRuntimeArgs(program, d.kernel_idx, d.core);
+        TT_FATAL(
+            d.arg_idx < data.size(),
+            "DynamicRuntimeArg for kernel {} {}arg[{}] is out of range (runtime args size {}). "
+            "The (kernel_idx, core, arg_idx) declared by get_dynamic_runtime_args() must match the "
+            "slot populated in create_descriptor().",
+            d.kernel_idx,
+            d.is_common ? "common " : "",
+            d.arg_idx,
+            data.size());
+        data[d.arg_idx] = d.value;
     }
 }
 

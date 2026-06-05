@@ -439,12 +439,12 @@ ALWI void power_iterative_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<true, DST_ACCUM_MODE>(idst))); }
+ALWI void exp2_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_exp2<APPROX, DST_ACCUM_MODE>(idst))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>())); }
+ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<APPROX, DST_ACCUM_MODE>())); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
