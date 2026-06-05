@@ -300,3 +300,49 @@ Correctness PCC ~1.0. Perf (two runs, vs prior committed):
 N18944-RoPE -> 1.68x composite (was 1.57x). NOTE: tuned on Wormhole; Blackhole
 likely needs its own sweep (different DRAM BW / NoC), hence two heuristics.
 Sweep harness (WAN_BARRIER_TILES + input_barrier_tiles CT arg) retained.
+
+## Does fused compute differ from composite compute? (N2368 gap investigation)
+
+Question: why do the small N2368 shapes barely beat / slightly lose to composite
+(self_sp32_N2368 RoPE 0.96x, cross_q 1.08x) despite fused keeping input resident
++ packed AG? Compared the fused compute kernel (wan_rmsnorm_fused_compute.cpp)
+to the composite pre/post kernels (rmsnorm_pre_allgather.cpp /
+rmsnorm_post_allgather.cpp).
+
+**1. POST math: IDENTICAL.** Same LLK ops, same order, same broadcast types:
+reduce<AVG,REDUCE_ROW>; rsqrt; mul_tiles_bcast_cols (x*1/rms, COL bcast);
+mul_tiles_bcast_rows (weight, ROW bcast); matmul_tiles (trans_mat); mul_tiles
+(*cos, *sin); add_tiles (rot+unrot). PRE is the same x^2 + l1-acc + reduce<SUM>.
+
+**2. Fidelity: IDENTICAL.** Both HiFi4, fp32_dest_acc_en=true, fp32
+intermediate/reduce_result CBs. eps: fused folds +eps (fp32 SFPU immediate) +
+rsqrt into the reduce's post_reduce_op (one DST cycle); composite does eps
+(add_tiles vs a possibly-bf16 eps tile) + rsqrt in a SEPARATE DST cycle. So the
+fused eps/rsqrt is slightly MORE efficient and at least as precise. Compute is
+NOT less precise and NOT arithmetically heavier.
+
+**3. POST loop STRUCTURE differs (the real difference):**
+  - FUSED = phase-major: per row, each sub-phase (norm-mul, weight, matmul, cos,
+    sin, add) sweeps ALL num_tile_cols, round-tripping the whole row through
+    intermediate CBs between sub-phases. ~7 flat passes/row.
+  - COMPOSITE = block-major: ONE `for col_tile += block_size` loop with weight +
+    RoPE NESTED inside (post_allgather.cpp:108,127,166), so each col-block flows
+    through all sub-phases staying warm; sub-phase reconfigs are per-block.
+  Different working-set/pipeline tradeoff; same total tile-ops.
+
+**4. Fused-only in-kernel structure** the composite POST never sees: the fused
+kernel ALSO runs the PRE sum-of-squares + the per-chunk AG-wait
+(cb_wait_front(stats_gathered_cb)) + chunk-loop bookkeeping on the SAME TRISC,
+serialized in front of POST. The composite splits PRE / AG / POST into 3
+separate ops/kernels.
+
+**Conclusion.** The compute math + fidelity are equivalent (fused eps is even a
+hair better). The fused does NOT do less-efficient arithmetic. N2368 is
+latency/fixed-overhead bound (~11.8 MB; ~23 us at peak BW vs ~200 us actual), so
+the input-resident DRAM saving is negligible there. The small-shape gap is
+structural fixed cost, not math: (a) the in-kernel PRE + AG-wait serialized
+before POST per chunk, and (b) the MUX-AG fixed setup (endpoint-ready wait +
+client-connect + sem handshake + DRAM round-trip, ~tens of us, documented in
+PERF_LOG.md) — both a large fraction when there are only ~3 rows/worker. The
+composite's separate well-tuned all_gather_async + dedicated POST kernel carry
+less fixed overhead at this size, which is why it stays ~even on N2368.
