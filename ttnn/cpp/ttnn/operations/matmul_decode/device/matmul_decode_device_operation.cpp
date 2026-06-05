@@ -148,7 +148,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
     int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
     CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
-        output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size());
+        output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
     int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
     std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
     auto shard_spec =
