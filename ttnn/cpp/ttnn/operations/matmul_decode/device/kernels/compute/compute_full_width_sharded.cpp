@@ -66,30 +66,9 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, out_cb_id);
+            pack_tile<true>(0, out_cb_id, 0);
             tile_regs_release();
             cb_push_back(out_cb_id, 1);
-            // for (uint32_t h = 0; h < block_h; ++h) {
-            //     const uint32_t mt = bh * out_block_h + h;
-            //     for (uint32_t w = 0; w < out_block_w; ++w) {
-            //         const uint32_t nt = bw + w;
-
-            //         tile_regs_acquire();
-            //         for (uint32_t kt = 0; kt < K_tiles; ++kt) {
-            //             const uint32_t sender_id = kt / inA_K_tiles_per_core;
-            //             const uint32_t kt_local = kt % inA_K_tiles_per_core;
-            //             const uint32_t in0_tile_index =
-            //                 sender_id * shard_num_tiles + mt * inA_K_tiles_per_core + kt_local;
-            //             const uint32_t in1_tile_index = kt * N_tiles_per_core + nt;
-            //             matmul_tiles(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, 0);
-            //         }
-            //         tile_regs_commit();
-            //         tile_regs_wait();
-            //         pack_tile(0, out_cb_id);
-            //         tile_regs_release();
-            //         cb_push_back(out_cb_id, 1);
-            //     }
-            // }
         }
     }
 
