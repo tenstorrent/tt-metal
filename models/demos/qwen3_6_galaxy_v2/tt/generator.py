@@ -1091,8 +1091,13 @@ class Generator(WarmupForwardMixin):
         }
         self.model.sampling.seed_manager.get_new_values()
         if reset_inputs and sampling_params is not None:
-            # If we have new inputs, we need to set up the sampling module again
-            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
+            # If we have new inputs, we need to set up the sampling module again.
+            # On-device sampling runs 32-wide (TTSampling rounds max_batch_size up to a
+            # multiple of 32), so format to the SAMPLER's batch, not model_args.max_batch_size
+            # (=1 for batch-1 serving) which would trip format_sampling_params' "% 32 == 0"
+            # assert. This is what lets batch-1 use the fast on-device sampling trace.
+            _sampling_bs = self.model.sampling.tt_sampling.max_batch_size
+            sampling_params = format_sampling_params(sampling_params, _sampling_bs)
 
             sampling_module = self.model.sampling
             sampling_module.reset_sampling_params(sampling_params)

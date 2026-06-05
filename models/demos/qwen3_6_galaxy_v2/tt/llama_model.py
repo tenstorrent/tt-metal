@@ -1019,15 +1019,15 @@ class TtTransformer(LightweightModule):
             else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
             skip_negative_entries=True,
         )
-        if not self.is_qwen36:
-            # qwen3.6 rot_mat_idxs is a [32,32] partial-RoPE tile (plus_one's single-core
-            # grid does not match it); the eager server path rebuilds rot_idxs from the
-            # fresh current_pos every step (prepare_inputs_decode), so no in-place
-            # increment is needed.
-            ttnn.plus_one(
-                rot_mat_idxs,
-                sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-            )
+        # plus_one advances the rope index IN-PLACE for the self-contained on-device
+        # decode trace (matches text_demo_qwen36 / test_decode_perf_intrace: in-trace
+        # plus_one on rot_idxs). qwen3.6's rot_mat_idxs is a [32,32] tile and plus_one
+        # on this single-core grid handles it (the demo does exactly this). In the eager
+        # path the result is harmlessly overwritten by the next-step rebuild.
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
 
     def ttnn_decode_forward(
         self,
