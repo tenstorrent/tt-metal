@@ -400,10 +400,10 @@ _QUASAR_COUNTER_NAMES = {
 _arch = get_chip_architecture()
 if _arch == ChipArchitecture.WORMHOLE:
     COUNTER_NAMES = _WORMHOLE_COUNTER_NAMES
-elif _arch == ChipArchitecture.QUASAR:
-    COUNTER_NAMES = _QUASAR_COUNTER_NAMES
-else:
+elif _arch == ChipArchitecture.BLACKHOLE:
     COUNTER_NAMES = _BLACKHOLE_COUNTER_NAMES
+else:
+    COUNTER_NAMES = _QUASAR_COUNTER_NAMES
 
 # Reverse lookups for O(1) counter name -> id resolution (computed once at module load)
 _L1_NAME_TO_ID = {(name, mux): cid for (cid, mux), name in COUNTER_NAMES["L1"].items()}

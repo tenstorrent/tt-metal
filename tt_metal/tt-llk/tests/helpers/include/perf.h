@@ -9,15 +9,6 @@
 
 #include "ckernel.h"
 
-enum class PerfRunType
-{
-    L1_TO_L1,
-    UNPACK_ISOLATE,
-    MATH_ISOLATE,
-    PACK_ISOLATE,
-    L1_CONGESTION
-};
-
 // === L1 layout for perf tests ===
 //
 // Stimuli generator buffers and the perf-counter region are kept in this header
@@ -45,6 +36,15 @@ constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
     std::uint32_t address = buffer + (tile % 16) * 4096; // Loop every 16 tiles, to prevent escaping memory
     return address / 16 - 1;                             // Correct the L1 Address for Tensix
 }
+
+enum class PerfRunType
+{
+    L1_TO_L1,
+    UNPACK_ISOLATE,
+    MATH_ISOLATE,
+    PACK_ISOLATE,
+    L1_CONGESTION
+};
 
 inline void _perf_unpack_set_valid(std::uint32_t source)
 {

@@ -288,9 +288,10 @@ def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
     frames = [df for df in (unpack_stats, pack_stats) if not df.empty]
     if not frames:
         return pd.DataFrame()
-    if len(frames) == 1:
-        return frames[0]
-    return pd.merge(frames[0], frames[1], on="marker", how="outer", validate="1:1")
+    result = frames[0]
+    for df in frames[1:]:
+        result = pd.merge(result, df, on="marker", how="outer", validate="1:1")
+    return result
 
 
 class EntryType(Enum):
