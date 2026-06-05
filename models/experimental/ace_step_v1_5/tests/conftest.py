@@ -23,7 +23,7 @@ from models.experimental.ace_step_v1_5.conftest import _open_kwargs, require_ttn
 def device():
     """Open a single TTNN device per test (never a multi-device mesh)."""
     ttnn = require_ttnn()
-    from models.experimental.ace_step_v1_5.tt_device import close_ace_step_device
+    from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
 
     saved_mesh = os.environ.pop("MESH_DEVICE", None)
     saved_ace_mesh = os.environ.pop("ACE_STEP_MESH_DEVICE", None)

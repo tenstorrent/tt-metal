@@ -81,8 +81,8 @@ def build_instrumental_filtered(
     infer_steps: int = 8,
     guidance_scale: float = 7.0,
 ):
-    from models.experimental.ace_step_v1_5.acestep_preprocess_shim import GenerationConfig, GenerationParams
-    from models.experimental.ace_step_v1_5.official_lm_preprocess import build_filtered_dit_kwargs_for_handler
+    from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import GenerationConfig, GenerationParams
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import build_filtered_dit_kwargs_for_handler
 
     frames = max(1, int(round(float(duration_sec) * 25.0)))
     params = GenerationParams(
