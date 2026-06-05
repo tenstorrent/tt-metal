@@ -11,7 +11,7 @@
 #include "api/debug/ring_buffer.h"
 
 // Printing tiles from CBs requires reading CB config from generated files
-#if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED)
 #include "chlkc_descriptors.h"
 #endif
 #endif  // !defined(ENV_LLK_INFRA)
