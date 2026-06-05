@@ -805,13 +805,6 @@ jobs:
       platform: ${{ needs.resolve-inputs.outputs.platform }}
       enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
 
-  resolve-docker-pull-refs:
-    needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     needs: [resolve-inputs]
@@ -859,7 +852,7 @@ jobs:
 
   ttnn-generate-sweeps:
     name: Generate Sweep Vectors ${{ needs.resolve-inputs.outputs.arch }} ${{ needs.resolve-inputs.outputs.runner-label }}
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, generate-master-json-from-db]
+    needs: [resolve-inputs, build-artifact, generate-master-json-from-db]
     if: >-
       always() &&
       needs.build-artifact.result == 'success' &&
@@ -988,7 +981,7 @@ jobs:
 
   ttnn-run-single-sweep:
     name: Run single sweep
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-generate-sweeps]
+    needs: [resolve-inputs, build-artifact, ttnn-generate-sweeps]
     if: |
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
       needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
@@ -1132,7 +1125,7 @@ jobs:
 
   ttnn-sweeps-n150:
     name: ttnn sweeps N150
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1155,7 +1148,7 @@ jobs:
 
   ttnn-sweeps-n300:
     name: ttnn sweeps N300
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1178,7 +1171,7 @@ jobs:
 
   ttnn-sweeps-p150b:
     name: ttnn sweeps P150b
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1201,7 +1194,7 @@ jobs:
 
   ttnn-sweeps-t3k:
     name: ttnn sweeps T3K
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
@@ -1224,7 +1217,7 @@ jobs:
 
   ttnn-sweeps-galaxy:
     name: ttnn sweeps Galaxy
-    needs: [resolve-inputs, resolve-docker-pull-refs, build-artifact, ttnn-compute-module-matrix]
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
     if: |
       always() &&
       !cancelled() &&
