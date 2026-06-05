@@ -175,94 +175,6 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 }
 #endif
 
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
-// Self-contained, hazard-free BF16 reciprocal for the streaming SDPA normalize.
-//
-// Ported from the fixed Blackhole LLK fast path (tt-metal commit 15b16a4) and kept
-// local to the SDPA kernel so the determinism fix does not depend on the LLK header
-// version. The previous LLK _calculate_reciprocal_fast_8b_3c_ injected the BF16 low-bit
-// correction through the SFPLOADMACRO store side, creating a Dst write-to-read spacing
-// hazard: a Dst block written by the macro store could be read by a following
-// SFPLOAD/SFPLOADMACRO too soon. In chunked ring-joint SDPA the timing around the
-// row-normalization reciprocal made that surface as nondeterministic output.
-//
-// This keeps SFPLOADMACRO only for the source load + approximate reciprocal + x copy,
-// then does the 0x8000 BF16 correction, the Newton error step, and a single direct
-// SFPSTORE with normal HW instruction scoreboarding (no async macro store).
-inline void _sdpa_init_reciprocal_8b_3c_() {
-#ifndef DISABLE_SFPLOADMACRO
-    // InstructionTemplate[0]: y = arecip(y)
-    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
-    // InstructionTemplate[1]: x = y (copy via indirect VD)
-    TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, 0, 13, 8);  // SFPMAD_MOD1_INDIRECT_VD
-    {
-        constexpr std::uint32_t simple_bits = (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = (0 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0;  // Store unit unused: no macro store.
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-    // Simple + MAD use WaitForElapsedInstructions; Store/Round unused.
-    TTI_SFPCONFIG(0x300, 8, 1);
-#endif
-    // DISABLE_SFPLOADMACRO (e.g. ttsim, which does not model SFPLOADMACRO): no LOADMACRO
-    // registers to program; the non-macro calculate path below is self-contained.
-}
-
-template <int ITERATIONS>
-inline void _sdpa_calculate_reciprocal_8b_3c_() {
-#ifdef DISABLE_SFPLOADMACRO
-    // Non-macro fallback (matches the LLK DISABLE_SFPLOADMACRO path): same arecip + BF16
-    // low-bit correction issued as plain SFPU instructions, for targets where
-    // SFPLOADMACRO is unavailable/unmodeled (ttsim).
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-#else
-    constexpr int y = p_sfpu::LREG0;
-    constexpr int x = p_sfpu::LREG1;
-
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, x);
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOADMACRO((0 << 2) | y, 0, ADDR_MOD_7, 0);
-        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
-        // Wait before writing y's low 16 bits directly.
-        TTI_SFPNOP;
-        TTI_SFPLOADI(y, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
-        TTI_SFPMAD(x, y, p_sfpu::LCONST_neg1, x, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, x, x, 5);
-        TTI_SFPIADD(0, x, y, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(y, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-
-    TTI_SFPNOP;
-#endif
-}
-
-// idst-0 column reciprocal for the streaming normalize. Mirrors recip_tile<false>(idst,
-// VectorMode::C): same launcher (DST addr-mod setup + VectorMode::C face traversal), but
-// a hazard-free macro body.
-ALWI void recip_tile_streaming_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(_sdpa_init_reciprocal_8b_3c_);
-}
-ALWI void recip_tile_streaming(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(_sdpa_calculate_reciprocal_8b_3c_<8>, idst, VectorMode::C);
-}
-#endif
-
 // Raw pack: caller must have already called configure_row_pack_width(out_cb, pack_width).
 // Use this in tight loops after configuring once at the loop boundary.
 ALWI void pack_contiguous_rows_nocfg(
@@ -452,7 +364,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_commit();
 
     tile_regs_wait();
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
@@ -502,7 +414,7 @@ void sub_exp_block_bcast_cols(
     tile_regs_release();
 
     // Restore packer ReLU config after all exp operations complete
-    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::none())));
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
@@ -664,8 +576,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
-            MATH((recip_tile_streaming_init()));
-            MATH((recip_tile_streaming(0 /*dst_index*/)));
+            recip_tile_init<false>();
+            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
@@ -919,7 +831,8 @@ template <
     bool kv_pad_rotation_enabled = false,
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
-    uint32_t kv_pad_kv_local_padded_Nt = 0>
+    uint32_t kv_pad_kv_local_padded_Nt = 0,
+    uint32_t v_cb_physical_width_t = vDHt>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1164,7 +1077,7 @@ static void sdpa_inner_loop_step(
                 }
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                    cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+                    cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
                 }
                 if (kt_sub > 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1415,7 +1328,7 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
-        cb_pop_front(cb_v_in, KT_stride * vDHt);
+        cb_pop_front(cb_v_in, KT_stride * v_cb_physical_width_t);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
 }
@@ -1730,7 +1643,9 @@ template <
     bool local_n_mask_enabled = false,
     bool joint_n_mask_enabled = false,
     bool straddle_mask_enabled = false,
-    bool kv_pad_rotation_enabled = false>
+    bool kv_pad_rotation_enabled = false,
+    uint32_t v_cb_physical_width_t = vDHt,
+    bool v_shares_k_buffer = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1854,8 +1769,8 @@ void sdpa_ring_v2(
             if (is_causal_iter && k_chunk >= causal_k_limit) {
                 cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
                 sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
+                cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
                 KV_chunks_processed_in_iter++;
                 return true;
             }
@@ -2121,7 +2036,8 @@ void sdpa_ring_v2(
                 kv_pad_rotation_enabled,
                 q_local_padded_Nt,
                 chunk_size_t,
-                local_padded_Nt>(
+                local_padded_Nt,
+                v_cb_physical_width_t>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2186,11 +2102,13 @@ void sdpa_ring_v2(
         // On last ring_iter: normalized output already in cb_out from normalize_row_streaming
     }
 
-    // Dummy KV pop for double-buffer alignment (same as sdpa_inner_loop for RING)
-    if (KV_chunks_processed_in_iter % 2 == 0) {
+    // Dummy KV pop for CB write-pointer phase alignment across chained reader cores.
+    for (uint32_t dummy_chunk = 0;
+         dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
+         ++dummy_chunk) {
         cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
+        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
     }
 }

@@ -91,12 +91,12 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_ba
 }
 
 class LayerNormBackwardOpTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
 };

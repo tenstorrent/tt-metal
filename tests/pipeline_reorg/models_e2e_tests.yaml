@@ -18,27 +18,64 @@
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   skus:
     wh_n150:
       timeout: 11
       tier: 1
+    bh_p150:
+      timeout: 11
+      tier: 1
     wh_llmbox_perf:
+      timeout: 11
+      tier: 2
+    bh_quietbox_2:
       timeout: 11
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# bh_p300 runs in LFC mode: per-job impl yaml mounts the host's local-disk
+# cache (/localdev/blackhole_demos/huggingface_data) onto /mnt/MLPerf/huggingface
+# inside the container, so the wget below pulls weights from the LFC server
+# into the cache and the test reads them via the standard /mnt/MLPerf/...
+# path. Kept as a separate entry (rather than added to the main Llama 3.1-8B
+# DP entries above) so the LFC-specific commands stay co-located with the
+# test definition instead of leaking into the workflow yamls. Mirrors the
+# legacy `llama3.1-8b data-parallel tests (LFC)` entry from
+# tests/pipeline_reorg/blackhole_demo_tests.yaml.
+- name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
+  cmd: |
+    set -e
+    mkdir -p /mnt/MLPerf/huggingface/meta-llama
+    wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+    export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+  model: llama3.1-8b-dp
+  skus:
+    bh_p300:
+      timeout: 25
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.1-8B data-parallel e2e tests (T3K)
+- name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
   skus:
     wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+    # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
+    # is below the DP factor, so it effectively runs the DP-4 case only.
+    # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
+    bh_quietbox_2:
       timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -116,6 +153,9 @@
     wh_llmbox_perf:
       timeout: 30
       tier: 2
+    bh_quietbox_2:
+      timeout: 30
+      tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -160,6 +200,9 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -183,6 +226,9 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+    bh_quietbox_2:
       timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -236,6 +282,9 @@
     wh_llmbox_perf:
       timeout: 20
       tier: 2
+    bh_quietbox_2:
+      timeout: 20
+      tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -247,6 +296,9 @@
   model: qwen2.5-vl-32b
   skus:
     wh_llmbox_perf:
+      timeout: 15
+      tier: 3
+    bh_quietbox_2:
       timeout: 15
       tier: 3
   owner_id: U07RY6B5FLJ # Gongyu Wang
@@ -314,11 +366,11 @@
   model: gemma-4-e2b
   skus:
     wh_n150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_p150:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -335,13 +387,13 @@
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 15
-    #   tier: 2
+    #   tier: 3
     bh_p300:
-      timeout: 15
-      tier: 2
+      timeout: 5
+      tier: 3
     bh_quietbox_2:
       timeout: 15
-      tier: 2
+      tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -356,13 +408,10 @@
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 15
-      tier: 2
-    bh_loudbox:
-      timeout: 15
+      timeout: 25
       tier: 2
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
@@ -386,13 +435,10 @@
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 15
-      tier: 2
-    bh_loudbox:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
@@ -469,9 +515,6 @@
     bh_p150:
       timeout: 15
       tier: 2
-    bh_loudbox:
-      timeout: 15
-      tier: 2
     bh_quietbox_2:
       timeout: 15
       tier: 2
@@ -493,9 +536,9 @@
       timeout: 30
       tier: 1
     bh_quietbox_2:
-      timeout: 25
+      timeout: 35
       tier: 1
-    bh_galaxy_perf:
+    bh_galaxy:
       timeout: 30
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -510,6 +553,9 @@
   model: whisper
   skus:
     wh_n150:
+      timeout: 10
+      tier: 1
+    bh_p150:
       timeout: 10
       tier: 1
     # wh_n300:
@@ -560,4 +606,19 @@
       timeout: 5
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+# ── UNet ───────────────────────────────────────────────────────────
+
+# Trace-perf (end-to-end) test. The correctness counterpart lives in
+# models_unit_tests.yaml as "Shallow UNet unit tests".
+- name: Shallow UNet e2e tests
+  cmd: |
+    pytest -sv --timeout 600 models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
+  model: shallow-unet
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 2
+  owner_id: U06ECNVR0EN # Evan Smal
   team: models

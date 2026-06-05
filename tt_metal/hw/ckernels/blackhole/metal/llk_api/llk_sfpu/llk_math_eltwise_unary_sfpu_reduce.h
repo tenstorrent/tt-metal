@@ -11,8 +11,8 @@
 namespace ckernel {
 
 template <PoolType pool_type, DataFormat format>
-inline void llk_math_eltwise_unary_sfpu_reduce_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reduce>(sfpu::init_reduce<pool_type, format>);
+inline void llk_math_eltwise_unary_sfpu_reduce_init(uint32_t ct_dim = 1) {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::reduce>(sfpu::init_reduce<pool_type, format>, ct_dim);
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
