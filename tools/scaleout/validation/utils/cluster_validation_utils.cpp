@@ -58,7 +58,7 @@ struct ConnectionInfo {
     std::string host;
     tt::tt_metal::TrayID tray_id;
     tt::tt_metal::ASICLocation asic_location;
-    tt::scaleout_tools::PortType port_type;
+    tt::tt_metal::PortType port_type;
     tt::scaleout_tools::PortId port_id;
     tt::tt_metal::AsicID connected_asic_id;
     uint8_t connected_channel;
@@ -1011,7 +1011,7 @@ void log_link_metrics(
         std::cout << std::left << std::setw(9) << row.channel_id.port_id;
 
         // Print Port Type
-        auto port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
+        auto port_type = static_cast<tt::tt_metal::PortType>(row.channel_id.port_type);
         std::cout << std::left << std::setw(15) << enchantum::to_string(port_type);
 
         // Print Unique ID in hex
@@ -1068,7 +1068,7 @@ void log_link_metrics(
 
         // CSV rows
         for (const auto& row : metric_rows) {
-            auto port_type = static_cast<tt::scaleout_tools::PortType>(row.channel_id.port_type);
+            auto port_type = static_cast<tt::tt_metal::PortType>(row.channel_id.port_type);
             csv_file << row.channel_id.host << "," << *row.channel_id.tray_id << "," << *row.channel_id.asic_location
                      << "," << static_cast<int>(row.channel_id.channel) << "," << row.channel_id.port_id << ","
                      << enchantum::to_string(port_type) << ","

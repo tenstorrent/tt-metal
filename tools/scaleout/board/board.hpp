@@ -10,7 +10,6 @@
 #include <vector>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Forward declaration and hash specialization for AsicChannel
@@ -31,7 +30,22 @@ namespace tt::scaleout_tools {
 using PortId = ttsl::StrongType<uint32_t, struct PortIdTag>;
 using ChanId = ttsl::StrongType<uint32_t, struct ChanIdTag>;
 
-using PortType = tt::tt_metal::PortType;
+// Physical port / cable type for a board's ethernet ports.
+// NOTE: kept in sync with tt::tt_metal::PortType in
+// tt-metalium/experimental/fabric/fabric_types.hpp. The two enums are deliberately
+// duplicated (rather than aliased) to avoid a circular dependency between
+// ScaleoutTools and Metalium. Conversion happens at the discovery boundary in
+// tt_metal/fabric/physical_system_discovery.cpp.
+enum class PortType {
+    UNKNOWN,
+    TRACE,
+    QSFP_DD,
+    WARP100,
+    WARP400,
+    LINKING_BOARD_1,
+    LINKING_BOARD_2,
+    LINKING_BOARD_3,
+};
 
 struct AsicChannel {
     uint32_t asic_location = 0;

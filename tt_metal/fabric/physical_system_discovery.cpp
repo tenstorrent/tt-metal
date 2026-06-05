@@ -31,6 +31,24 @@ namespace tt::tt_metal {
 
 namespace {
 
+// Maps scaleout's board-cabling PortType onto Metal's public PortType. The two enums
+// are intentionally duplicated to keep ScaleoutTools and Metalium free of a circular
+// dependency; this is the single conversion point. The switch has no default case so
+// adding a value to either enum surfaces as a compile-time warning here.
+PortType to_metal_port_type(tt::scaleout_tools::PortType pt) {
+    switch (pt) {
+        case tt::scaleout_tools::PortType::TRACE: return PortType::TRACE;
+        case tt::scaleout_tools::PortType::QSFP_DD: return PortType::QSFP_DD;
+        case tt::scaleout_tools::PortType::WARP100: return PortType::WARP100;
+        case tt::scaleout_tools::PortType::WARP400: return PortType::WARP400;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_1: return PortType::LINKING_BOARD_1;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_2: return PortType::LINKING_BOARD_2;
+        case tt::scaleout_tools::PortType::LINKING_BOARD_3: return PortType::LINKING_BOARD_3;
+        case tt::scaleout_tools::PortType::UNKNOWN: return PortType::UNKNOWN;
+    }
+    return PortType::UNKNOWN;
+}
+
 std::string get_mobo_name() {
     std::ifstream file("/sys/class/dmi/id/board_name");
     std::string motherboard;
@@ -628,10 +646,10 @@ PhysicalSystemDescriptor run_local_discovery(
             src_chan,
             dst_chan,
             is_local,
-            tt::scaleout_tools::resolve_port_type(
+            to_metal_port_type(tt::scaleout_tools::resolve_port_type(
                 psd.get_asic_descriptors().at(src_asic).board_type,
                 *psd.get_asic_descriptors().at(src_asic).asic_location,
-                src_chan),
+                src_chan)),
         };
     };
 

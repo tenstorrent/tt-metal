@@ -14,7 +14,7 @@ struct PortLookupCase {
     BoardType board_type;
     uint32_t asic_location;
     uint8_t channel;
-    tt::tt_metal::PortType expected_port_type;
+    PortType expected_port_type;
     uint32_t expected_port_id;
 };
 
@@ -35,21 +35,21 @@ INSTANTIATE_TEST_SUITE_P(
     PortLookupTest,
     ::testing::Values(
         // N150
-        PortLookupCase{BoardType::N150, 0, 6, tt::tt_metal::PortType::QSFP_DD, 1},
-        PortLookupCase{BoardType::N150, 0, 0, tt::tt_metal::PortType::QSFP_DD, 2},
-        PortLookupCase{BoardType::N150, 0, 14, tt::tt_metal::PortType::WARP100, 1},
+        PortLookupCase{BoardType::N150, 0, 6, PortType::QSFP_DD, 1},
+        PortLookupCase{BoardType::N150, 0, 0, PortType::QSFP_DD, 2},
+        PortLookupCase{BoardType::N150, 0, 14, PortType::WARP100, 1},
         // N300
-        PortLookupCase{BoardType::N300, 0, 8, tt::tt_metal::PortType::TRACE, 1},
-        PortLookupCase{BoardType::N300, 1, 0, tt::tt_metal::PortType::TRACE, 2},
-        PortLookupCase{BoardType::N300, 0, 0, tt::tt_metal::PortType::QSFP_DD, 2},
+        PortLookupCase{BoardType::N300, 0, 8, PortType::TRACE, 1},
+        PortLookupCase{BoardType::N300, 1, 0, PortType::TRACE, 2},
+        PortLookupCase{BoardType::N300, 0, 0, PortType::QSFP_DD, 2},
         // UBB_BLACKHOLE (Galaxy tray)
-        PortLookupCase{BoardType::UBB_BLACKHOLE, 5, 0, tt::tt_metal::PortType::TRACE, 1},
-        PortLookupCase{BoardType::UBB_BLACKHOLE, 1, 2, tt::tt_metal::PortType::QSFP_DD, 2},
-        PortLookupCase{BoardType::UBB_BLACKHOLE, 5, 6, tt::tt_metal::PortType::LINKING_BOARD_1, 1},
-        PortLookupCase{BoardType::UBB_BLACKHOLE, 8, 4, tt::tt_metal::PortType::LINKING_BOARD_3, 1}));
+        PortLookupCase{BoardType::UBB_BLACKHOLE, 5, 0, PortType::TRACE, 1},
+        PortLookupCase{BoardType::UBB_BLACKHOLE, 1, 2, PortType::QSFP_DD, 2},
+        PortLookupCase{BoardType::UBB_BLACKHOLE, 5, 6, PortType::LINKING_BOARD_1, 1},
+        PortLookupCase{BoardType::UBB_BLACKHOLE, 8, 4, PortType::LINKING_BOARD_3, 1}));
 
 TEST(PortLookupTest, UnknownChannelReturnsUnknownPortType) {
-    EXPECT_EQ(resolve_port_type(BoardType::N150, 0, 42), tt::tt_metal::PortType::UNKNOWN);
+    EXPECT_EQ(resolve_port_type(BoardType::N150, 0, 42), PortType::UNKNOWN);
     EXPECT_FALSE(try_get_port(BoardType::N150, 0, 42).has_value());
 }
 
