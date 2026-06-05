@@ -2,13 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Per-layer parity: TTNN GemmaEncoder vs HF reference (mirrors test_t5_encoder_all_layers).
-
-For each of the first ``N_LAYERS`` decoder layers, compares the device hidden state
-to the HF reference over the real (non-pad) token positions and asserts PCC. Bounded
-to ``N_LAYERS`` because the full 12B encoder does not fit one chip at tp=1; raise
-``N_LAYERS`` (env) or run on a TP mesh to cover more.
+"""Per-layer parity: TTNN GemmaEncoder vs HF reference, real-token PCC over the first
+``N_LAYERS`` decoder layers (the full 12B encoder doesn't fit one chip at tp=1).
 
     pytest models/tt_dit/tests/encoders/gemma/test_gemma_encoder_all_layers.py -s
 """
@@ -35,9 +30,10 @@ from models.tt_dit.utils.check import assert_quality
 
 N_LAYERS = int(os.environ.get("N_LAYERS", "6"))
 SEQ_LEN = 128  # must be >= SDPA q/k chunk size (128) in model_gemma to avoid a device hang
-# Per-layer parity floor. Mirrors the T5 all-layers bar (0.947); bf16 over depth drifts,
-# so this is the floor each layer's real-token PCC must clear, not a tight equality bar.
-PCC_BAR = 0.94
+# Per-state real-token PCC floor at the default N_LAYERS=6 (measured min ~0.9963 at the final
+# norm; shallower states ride ~0.9998). bf16 drifts with depth, so a much larger N_LAYERS may
+# need a lower floor.
+PCC_BAR = 0.995
 # Long enough to fill all SEQ_LEN slots with real tokens (no padding), so the reference
 # runs pure-causal and the device is_causal path matches exactly — no mask confound.
 PROMPT = (
@@ -136,17 +132,17 @@ def test_gemma_layers_individually(*, mesh_device):
 
     # Pure-causal path (no mask): all positions real, so the device is_causal path
     # matches the reference exactly.
-    hs = encoder(tt_ids, attention_mask=None)  # [embed, layer0..layerN-1, final_norm]
-    for i in range(min(len(hs) - 1, len(ref_hs))):
-        dev = ttnn.to_torch(ttnn.get_device_tensors(hs[i])[0]).float()
+    hs = encoder(tt_ids, attention_mask=None)  # device: [embed, L0..L_{N-1}, final_norm]
+    # HF output_hidden_states is [embed, L0..L_{N-2}, final_norm(L_{N-1})] — its last entry is
+    # post-final-norm, not the raw last layer. Align the shared prefix directly and the final
+    # norm at [-1]; the device's raw last-layer state has no HF counterpart.
+    device_states = list(hs[: len(ref_hs) - 1]) + [hs[-1]]
+    for i, (ref, dev_tt) in enumerate(zip(ref_hs, device_states)):
+        dev = ttnn.to_torch(ttnn.get_device_tensors(dev_tt)[0]).float()
         if dev.dim() == 4:
             dev = dev[0]
-        assert torch.isfinite(dev).all(), f"layer {i}: device output has NaN/Inf"
-        logger.info(f"  L{i:02d}")
-        assert_quality(ref_hs[i][:, real_slice, :], dev[:, real_slice, :], pcc=PCC_BAR)
+        assert torch.isfinite(dev).all(), f"state {i}: device output has NaN/Inf"
+        logger.info("  final_norm" if i == len(ref_hs) - 1 else f"  L{i:02d}")
+        assert_quality(ref[:, real_slice, :], dev[:, real_slice, :], pcc=PCC_BAR)
     for h in hs:
         ttnn.deallocate(h)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-s", "-v"])
