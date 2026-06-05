@@ -146,6 +146,33 @@ uint32_t force_num_workers() {
     }();
     return v;
 }
+// Input-read push+barrier granularity (in tiles). A WH-Galaxy sweep
+// (WAN_BARRIER_TILES) showed the optimum here is governed by compute-overlap
+// (how finely PRE is fed), NOT by the DRAM-contention model of the reference
+// reader (tests/.../interleaved_to_sharded_hardcoded, (512/num_readers)*1152/
+// tile_bytes) — that formula regresses the no-rope shapes (which want the whole
+// row in one push). Empirical heuristic instead:
+//   - no-rope: whole row (one push) — finer push only adds overhead.
+//   - RoPE: finer push the more rows/worker a shape has (deeper pipeline);
+//     rows_per_worker >= 4 -> 2 tiles, else block_size. Captures N18944-RoPE
+//     (9.3 rows/wkr) -6.6% with no regression on N9472/N2368-RoPE.
+// WAN_BARRIER_TILES overrides for re-sweeps (0/unset = heuristic). NOTE: tuned
+// on Wormhole; Blackhole likely wants its own sweep.
+uint32_t input_barrier_tiles(bool fuse_rope, uint32_t rows_per_worker, uint32_t block_size, uint32_t num_tile_cols) {
+    const char* env = std::getenv("WAN_BARRIER_TILES");
+    if (env != nullptr) {
+        const long v = std::strtol(env, nullptr, 10);
+        if (v > 0) {
+            return std::min<uint32_t>(static_cast<uint32_t>(v), num_tile_cols);
+        }
+    }
+    if (!fuse_rope) {
+        return num_tile_cols;  // whole-row push
+    }
+    const uint32_t t = (rows_per_worker >= 4u) ? 2u : block_size;
+    return std::min<uint32_t>(std::max(1u, t), num_tile_cols);
+}
+
 // DIAGNOSTIC ABLATIONS (WAN_ABLATION env): inject a per-ablation -D into the
 // reader/writer kernels so we can selectively skip NoC traffic and measure
 // where kernel time goes. These BREAK correctness — perf attribution only.
@@ -781,6 +808,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // scalars / epsilon / trans_mat CBs, so the reader skips them and starts
         // the input read immediately.
         static_cast<uint32_t>(use_mux ? 1u : 0u),
+        // Input-read push+barrier granularity (tiles): no-rope whole-row, RoPE
+        // finer for deep workers (compute-overlap heuristic; see function).
+        input_barrier_tiles(fuse_rope, num_tile_rows_per_worker, block_size, num_tile_cols),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
