@@ -10,6 +10,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -48,6 +49,16 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat data_format = get_dataformat(cb_ex_partial_id);
 
+    // mcast_pipe: receiver side of the reduce mcast. The mcast sender broadcasts the global reduce
+    // result + a VALID flag; this core acks (consumed) then waits the flag. Note the GN naming is
+    // flipped vs matmul: reduce_sender_sem is the S->R data-ready FLAG (cleared+waited here), and
+    // reduce_receiver_sem is the R->S consumed COUNTER (up'd here). Degenerate 1x1 rect -> sender.
+    dataflow_kernel_lib::Pipe<> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect::single_core(mcast_sender_noc_x, mcast_sender_noc_y),
+        reduce_sender_sem,     // data ready (S->R level flag)
+        reduce_receiver_sem);  // consumed (R->S counter)
+
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
@@ -73,10 +84,9 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_batch_group; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
             cb_ex_partial.wait_front(1);
-            reduce_sender_sem.set(INVALID);
             cb_ex_global.reserve_back(1);
-            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
-            reduce_sender_sem.wait(VALID);
+            // mcast_pipe: ack sender (consumed) + wait reduce-result VALID flag + clear for next round.
+            reduce_pipe.receive();
             cb_ex_global.push_back(1);
             cb_ex_partial.pop_front(1);
         }
