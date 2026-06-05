@@ -1319,64 +1319,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-        sampling_params_list = None
-        if sampling_params is not None:
-            # sampling_dp may differ from data_parallel for models that internally
-            # shard users across mesh rows (users_row_sharded) — each row samples
-            # 32 users independently, so sampling params must be chunked by the
-            # number of rows even though data_parallel=1 for the forward pass.
-            sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
-            assert (
-                len(set(sampling_dp_values)) == 1
-            ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
-            # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
-            # (one is always 1). If a future model needs both DP>1 and row-sharded
-            # sampling, this should become data_parallel * sampling_dp_values[0].
-            sampling_dp = max(self.data_parallel, sampling_dp_values[0])
-
-            sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
-
-            prompt_chunks = (
-                torch.chunk(prompt_tokens, sampling_dp, 0) if prompt_tokens is not None else [None] * sampling_dp
-            )
-            output_chunks = (
-                torch.chunk(output_tokens, sampling_dp, 0) if output_tokens is not None else [None] * sampling_dp
-            )
-
-            for i in range(self.data_parallel):
-                sampling_module = getattr(self.model[i], "sampling", None)
-                assert sampling_module is not None, "Sampling module not found in model for sampling on device."
-                assert (
-                    sampling_dp % self.data_parallel == 0
-                ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
-                cpm = sampling_dp // self.data_parallel
-                start = i * cpm
-                model_chunks = sampling_params_list[start : start + cpm]
-
-                model_prompt = (
-                    torch.cat([c for c in prompt_chunks[start : start + cpm] if c is not None], 0)
-                    if prompt_tokens is not None
-                    else None
-                )
-                model_output = (
-                    torch.cat([c for c in output_chunks[start : start + cpm] if c is not None], 0)
-                    if output_tokens is not None
-                    else None
-                )
-
-                sampling_module.apply_decode_state(
-                    model_chunks,
-                    reset_batch=reset_batch,
-                    prompt_tokens=model_prompt,
-                    output_tokens=model_output,
-                )
-                # Apply slot remap from condense before advancing seeds.
-                if slot_remap is not None:
-                    sm_bs = sampling_module.seed_manager.max_batch_size
-                    rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
-                    sampling_module.seed_manager.apply_slot_remap(rank_remap)
-                sampling_module.seed_manager.get_new_values()
-
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -1625,10 +1567,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         slot_remap=None,
         enable_trace=False,
     ):
+        # sampling_dp may differ from data_parallel for models that internally
+        # shard users across mesh rows (users_row_sharded) — each row samples
+        # 32 users independently, so sampling params must be chunked by the
+        # number of rows even though data_parallel=1 for the forward pass.
         sampling_dp_values = [getattr(self.model[i], "sampling_dp", 1) for i in range(self.data_parallel)]
         assert (
             len(set(sampling_dp_values)) == 1
         ), f"All model instances must have the same sampling_dp, got {sampling_dp_values}"
+        # NOTE: This assumes data_parallel and sampling_dp are mutually exclusive
+        # (one is always 1). If a future model needs both DP>1 and row-sharded
+        # sampling, this should become data_parallel * sampling_dp_values[0].
         sampling_dp = max(self.data_parallel, sampling_dp_values[0])
         sampling_params_list = chunk_sampling_params(sampling_params, sampling_dp)
         prompt_chunks = (
@@ -1640,8 +1589,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
-            if sampling_module is None:
-                continue
+            assert sampling_module is not None, "Sampling module not found in model for sampling on device."
             assert (
                 sampling_dp % self.data_parallel == 0
             ), f"sampling_dp ({sampling_dp}) must be divisible by data_parallel ({self.data_parallel})"
@@ -1665,6 +1613,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prompt_tokens=model_prompt,
                 output_tokens=model_output,
             )
+            # Apply slot remap from condense before advancing seeds.
             if slot_remap is not None:
                 sm_bs = sampling_module.seed_manager.max_batch_size
                 rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
