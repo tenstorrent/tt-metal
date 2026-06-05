@@ -226,7 +226,9 @@ public:
      */
     tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_window(target.chip, target_coord);
+        tt::umd::TlbWindow* window = driver_->get_static_tlb_window(target.chip, target_coord);
+        window->set_io_options(tt::umd::IoOptions{.snoop = true});
+        return window;
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
