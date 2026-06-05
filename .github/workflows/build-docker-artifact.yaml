@@ -461,7 +461,7 @@ jobs:
       needs.metadata.outputs.llk-ci-exists != 'true' &&
       inputs.skip-llk-build != true
     timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
