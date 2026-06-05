@@ -1931,7 +1931,8 @@ class TTSeamlessM4Tv2TextToUnitEncoder:
 
         self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else None
 
-        hidden = inputs_embeds
+        enc_in = ttnn.clone(inputs_embeds, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden = enc_in
         sdpa_cfg = self._sdpa_program_config(seq, seq)
         token_m = batch * seq
         # For TP>1 fc1 is column-parallel → local ffn_dim = ffn_dim // tp.
@@ -2500,7 +2501,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         hidden_size: int,
         sdpa_cfg: ttnn.SDPAProgramConfig,
     ) -> ttnn.Tensor:
-        residual = hidden
+        residual = ttnn.clone(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out = self._decoder_self_attention(
             hidden,
             layer.self_attn,
@@ -2520,7 +2521,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             bias=layer.self_attn_layer_norm.bias,
         )
 
-        residual = hidden
+        residual = ttnn.clone(hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mask_bc = ttnn.reshape(padding_mask_1d, (batch, seq, 1))
         hidden = ttnn.multiply(hidden, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
