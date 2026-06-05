@@ -23,7 +23,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.matmul_sweep import generate_tile_dims
-from helpers.pack import pack_int8, pack_int32
+from helpers.pack import pack_int8
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
@@ -44,7 +44,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.unpack import unpack_int8, unpack_int32
+from helpers.unpack import unpack_int8
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
@@ -302,10 +302,6 @@ def test_matmul(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    if format.output_format == DataFormat.Int32:
-        golden_tensor = torch.tensor(
-            unpack_int32(list(pack_int32(golden_tensor))), dtype=torch_format
-        )
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
     # math/pack_src format the result was produced in) so the comparison validates the
     # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-

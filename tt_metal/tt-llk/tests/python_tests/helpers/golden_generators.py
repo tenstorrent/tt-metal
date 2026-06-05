@@ -1286,15 +1286,13 @@ class MatmulGolden(FidelityMasking):
         input_B_format: DataFormat = None,
     ):
         torch_format = format_dict[data_format]
-        operand_a_format = input_A_format
-        operand_b_format = input_B_format
 
         M, K1, K2, N, _ = self._resolve_matmul_dimensions(
             input_A_dimensions, input_B_dimensions
         )
 
-        t1 = to_tensor(operand1, operand_a_format).view(M, K1)
-        t2 = to_tensor(operand2, operand_b_format).view(K2, N)
+        t1 = to_tensor(operand1, input_A_format).view(M, K1)
+        t2 = to_tensor(operand2, input_B_format).view(K2, N)
 
         res = saturate_integer(
             torch.matmul(t1.to(torch.int64), t2.to(torch.int64)).view(M * N),
