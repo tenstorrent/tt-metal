@@ -344,19 +344,24 @@ def _replicate_pad_t(x_BTC: ttnn.Tensor, pad_left: int, pad_right: int, mesh_dev
 
 
 def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache):
-    """Cached sharded validity mask ``(1, T, 1)``: 1.0 for real rows, 0.0 for the trailing
-    ``tpad_image`` rows. Sharded across T so each chip masks its own rows; the zeros land
-    on the last shard, where the tile-align pad image lives."""
+    """Cached sharded validity mask ``M`` and its complement ``inv``, each ``(1, T, 1)``: ``M`` is
+    1.0 for real rows and 0.0 for the trailing ``tpad_image`` rows, ``inv`` the reverse. Sharded
+    across T so each chip masks its own rows; the zeros land on the last shard(s), where the
+    tile-align pad image lives. Both built on host (0/1 are exact in bf16) so replicate fill is a
+    cache fetch, not a per-call device complement."""
     key = (global_T, tpad_image, dtype)
-    M = cache.get(key)
-    if M is None:
+    cached = cache.get(key)
+    if cached is None:
         m = torch.ones(1, global_T, 1, dtype=torch.float32)
         m[:, global_T - tpad_image :, :] = 0.0
-        M = ttnn.from_torch(m, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-        M = _partition_t(M, parallel_config)
-        M = ttnn.to_layout(M, ttnn.ROW_MAJOR_LAYOUT)
-        cache[key] = M
-    return M
+        pair = []
+        for t in (m, 1.0 - m):
+            mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+            mt = _partition_t(mt, parallel_config)
+            pair.append(ttnn.to_layout(mt, ttnn.ROW_MAJOR_LAYOUT))
+        cached = tuple(pair)
+        cache[key] = cached
+    return cached
 
 
 def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache):
@@ -370,25 +375,28 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
 
     CCL-free: a cached validity mask zeros the pad image (body rows multiply by exactly 1.0,
     so they stay bit-identical); replicate adds the real-last row, sliced at a uniform local
-    index real only on the last shard. Called ~100x per forward, so a gather here would
-    dominate runtime.
+    index. Called ~100x per forward, so a gather here would dominate runtime.
     """
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
-    M = _tpad_mask(mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache)
+    M, inv = _tpad_mask(
+        mesh_device, parallel_config, x_BTC.get_dtype(), local_T * parallel_config.factor, tpad_image, cache
+    )
     xm = ttnn.multiply(x_BTC, M)
     if mode == "zeros":
         return xm
     if mode != "replicate":
         raise ValueError(f"unknown mode {mode!r}")
-    idx = local_T - tpad_image - 1  # real-last row, uniform local index (real only on the last shard)
-    assert idx >= 0, (
-        f"replicate tail fill needs the pad image ({tpad_image}) to fit the last shard "
-        f"(local T {local_T}); only pathological mel lengths (t_pad ≈ T_frames) violate this"
-    )
+    # Local index of the real-last row, uniform across shards. When the pad image spans more
+    # than one shard (high factor + short mel), the real->pad boundary is on an interior shard,
+    # not the last; mod local_T lands the slice on it. Shards fully past the boundary get a
+    # garbage fill, but they are trimmed at output and sit beyond every replicate consumer's
+    # (local, halo-bounded) receptive field, and every gather op re-masks them to zeros first.
+    global_T = local_T * parallel_config.factor
+    assert tpad_image < global_T, f"pad image ({tpad_image}) leaves no real rows (global T {global_T})"
+    idx = (global_T - tpad_image - 1) % local_T
     last = ttnn.slice(x_BTC, [0, idx, 0], [x_BTC.shape[0], idx + 1, x_BTC.shape[2]])
-    inv = ttnn.add(ttnn.multiply(M, -1.0), 1.0)
     fill = ttnn.multiply(last, inv)
     ttnn.deallocate(last)
     out = ttnn.add(xm, fill)
