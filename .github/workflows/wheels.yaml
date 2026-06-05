@@ -39,7 +39,7 @@ jobs:
     name: 🐍 Build wheel (Python ${{ inputs.python-version }})
     timeout-minutes: 30
     runs-on: tt-ubuntu-2204-large-stable
-    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    environment: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable') && 'mainline' || '' }}
     outputs:
       artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
     defaults:
@@ -57,7 +57,8 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        # Only enforce on main/stable where the mainline environment provides ccache credentials
+        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
             echo "Redis password is missing. Did you forget 'secrets: inherit'?"
