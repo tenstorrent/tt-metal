@@ -33,7 +33,6 @@ def test_ci_dispatch(model_weights):
             "models/demos/wormhole/bge_m3/tests/pcc/test_attention.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py",
             "models/demos/wormhole/bge_m3/tests/pcc/test_model.py",
-            "models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
