@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE.
 //
@@ -55,16 +59,24 @@ void kernel_main() {
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
     constexpr auto kv_args = TensorAccessorArgs<trans_mat_args.next_compile_time_args_offset()>();
 
+    Noc noc;
+    CircularBuffer input_cb(input_cb_id);
+    CircularBuffer cos_cb(cos_cb_id);
+    CircularBuffer sin_cb(sin_cb_id);
+    CircularBuffer trans_mat_cb(trans_mat_cb_id);
+    CircularBuffer kv_cb(kv_cb_id);
+
     // Read the single on-device kv_actual_global datum (prior valid global KV length in tokens) into
     // a CB and convert to tiles. Its buffer address is patched on cache hits; value is not hashed.
     const auto s_kv = TensorAccessor(kv_args, kv_addr);
-    cb_reserve_back(kv_cb_id, 1);
-    uint32_t kv_l1_write_addr = get_write_ptr(kv_cb_id);
-    noc_async_read_page(0, s_kv, kv_l1_write_addr);
-    noc_async_read_barrier();
-    cb_push_back(kv_cb_id, 1);
-    volatile tt_l1_ptr uint32_t* kv_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_l1_write_addr);
-    const uint32_t kv_actual_global_t = kv_ptr[0] / tile_height;
+    const uint32_t kv_page_bytes = get_tile_size(kv_cb_id);
+    kv_cb.reserve_back(1);
+    uint32_t kv_l1_write_addr = kv_cb.get_write_ptr();
+    noc.async_read(s_kv, CoreLocalMem<uint32_t>(kv_l1_write_addr), kv_page_bytes, {.page_id = 0}, {});
+    noc.async_read_barrier();
+    kv_cb.push_back(1);
+    CoreLocalMem<uint32_t> kv_mem(kv_l1_write_addr);
+    const uint32_t kv_actual_global_t = kv_mem[0] / tile_height;
 
     // Derive this chip's tile-row offset into its (block-cyclic) cos/sin shard from the global
     // valid KV length. Ht == chunk_local_t (per-device new chunk in tiles); chunk_global == sp*Ht.
@@ -93,26 +105,28 @@ void kernel_main() {
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
     const auto s2 = TensorAccessor(sin_args, sin_addr);
 
+    const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
     const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr);
 
     uint32_t trans_mat_curr_idx = 0;
 
     // Read transformation matrix in CB (only once, because it will be reused)
-    cb_reserve_back(trans_mat_cb_id, onetile);
-    uint32_t trans_mat_l1_write_addr = get_write_ptr(trans_mat_cb_id);
-    noc_async_read_page(trans_mat_curr_idx, s3, trans_mat_l1_write_addr);
-    noc_async_read_barrier();
-    cb_push_back(trans_mat_cb_id, onetile);
+    trans_mat_cb.reserve_back(onetile);
+    uint32_t trans_mat_l1_write_addr = trans_mat_cb.get_write_ptr();
+    noc.async_read(
+        s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = trans_mat_curr_idx}, {});
+    noc.async_read_barrier();
+    trans_mat_cb.push_back(onetile);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         uint32_t sin_l1_write_addr = 0;
         uint32_t cos_l1_write_addr = 0;
 #if RELOAD_IMPL == 0
         if (my_cos_sin_tiles > 0) {
-            cb_reserve_back(sin_cb_id, my_cos_sin_tiles);
-            cb_reserve_back(cos_cb_id, my_cos_sin_tiles);
-            sin_l1_write_addr = get_write_ptr(sin_cb_id);
-            cos_l1_write_addr = get_write_ptr(cos_cb_id);
+            sin_cb.reserve_back(my_cos_sin_tiles);
+            cos_cb.reserve_back(my_cos_sin_tiles);
+            sin_l1_write_addr = sin_cb.get_write_ptr();
+            cos_l1_write_addr = cos_cb.get_write_ptr();
         }
 #endif
 
@@ -123,14 +137,14 @@ void kernel_main() {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
 #if RELOAD_IMPL == 1
-                cb_reserve_back(sin_cb_id, Wt);
-                cb_reserve_back(cos_cb_id, Wt);
-                uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-                uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+                sin_cb.reserve_back(Wt);
+                cos_cb.reserve_back(Wt);
+                uint32_t sin_l1_write_addr = sin_cb.get_write_ptr();
+                uint32_t cos_l1_write_addr = cos_cb.get_write_ptr();
 #endif
 
-                cb_reserve_back(input_cb_id, Wt);
-                uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
+                input_cb.reserve_back(Wt);
+                uint32_t input_l1_write_addr = input_cb.get_write_ptr();
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 // Offset the cos/sin source index by update_idxt: the input local tile `seq_tile`
                 // is rotated by the value at shard row (update_idxt + seq_tile).
@@ -146,13 +160,28 @@ void kernel_main() {
                 }
                 for (uint32_t j = 0; j < Wt; ++j) {
                     // Read input into CB
-                    noc_async_read_page(input_curr_idx, s0, input_l1_write_addr);
+                    noc.async_read(
+                        s0,
+                        CoreLocalMem<uint32_t>(input_l1_write_addr),
+                        input_tile_bytes,
+                        {.page_id = input_curr_idx},
+                        {});
                     input_curr_idx++;
                     input_l1_write_addr += input_tile_bytes;
 
                     if (!done_sin_cos) {
-                        noc_async_read_page(sin_curr_idx, s2, sin_l1_write_addr);
-                        noc_async_read_page(cos_curr_idx, s1, cos_l1_write_addr);
+                        noc.async_read(
+                            s2,
+                            CoreLocalMem<uint32_t>(sin_l1_write_addr),
+                            sin_tile_bytes,
+                            {.page_id = sin_curr_idx},
+                            {});
+                        noc.async_read(
+                            s1,
+                            CoreLocalMem<uint32_t>(cos_l1_write_addr),
+                            cos_tile_bytes,
+                            {.page_id = cos_curr_idx},
+                            {});
                         sin_curr_idx++;
                         cos_curr_idx++;
                         sin_l1_write_addr += sin_tile_bytes;
@@ -160,16 +189,16 @@ void kernel_main() {
                     }
                 }
 
-                noc_async_read_barrier();
-                cb_push_back(input_cb_id, Wt);
+                noc.async_read_barrier();
+                input_cb.push_back(Wt);
 #if RELOAD_IMPL == 1
-                cb_push_back(sin_cb_id, Wt);
-                cb_push_back(cos_cb_id, Wt);
+                sin_cb.push_back(Wt);
+                cos_cb.push_back(Wt);
 #else
 
                 if (!done_sin_cos) {
-                    cb_push_back(sin_cb_id, Wt);
-                    cb_push_back(cos_cb_id, Wt);
+                    sin_cb.push_back(Wt);
+                    cos_cb.push_back(Wt);
 
                     // Update sin_cos_row_cnt
                     sin_cos_row_cnt++;
