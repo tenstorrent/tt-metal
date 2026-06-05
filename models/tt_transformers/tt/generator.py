@@ -822,7 +822,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     per_request_params = format_sampling_params(
                         broadcast_sampling_params(sampling_params, idx, slot_len=total_batch), total_batch
                     )
-                    assert per_request_params is not None, "Sampling was executed but missing per-request sampling params"
+                    assert (
+                        per_request_params is not None
+                    ), "Sampling was executed but missing per-request sampling params"
                     # empty_slots uses max_batch_size_per_model (not total_batch) because
                     # the seed manager operates on per-row slots (0..31).  When sampling_dp > 1
                     # the params are already broadcast across all rows by broadcast_sampling_params.
@@ -1332,10 +1334,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # token/current_pos trace buffers stale, not just a prefill->decode
             # mode switch, so both must force a full traced-input reset.
             tt_decode_output = self._decode_forward_trace_text(
-                
                 **decode_kwargs,
                 reset_batch=reset_batch or mode_switched,
-            
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1454,10 +1454,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
-            sampling_trace_enabled = (
-                on_device_sampling
-                and sampling_module is not None
-            )
+            sampling_trace_enabled = on_device_sampling and sampling_module is not None
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -1515,9 +1512,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # or when sampling mode changes (different trace has stale inputs)
         prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
         self._prev_on_device_sampling = on_device_sampling
-        sampling_mode_changed = (
-            prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        )
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
         reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
         page_table_changed = page_table is not None and (
             self.prev_page_table is None

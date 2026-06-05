@@ -426,13 +426,13 @@ def run_generation(
             if on_device_sampling:
                 # Keep main behavior: decode sampling in this demo remains untraced.
                 sampled = model.sampling.sample(decode_output, enable_trace=False)
-                sampled_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]) if is_mesh else ttnn.to_torch(sampled)
-                )
+                sampled_cpu = ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]) if is_mesh else ttnn.to_torch(sampled)
                 return sampled_cpu.reshape(-1)[0].item()
             else:
                 output_cpu = (
-                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0]) if is_mesh else ttnn.to_torch(decode_output)
+                    ttnn.to_torch(ttnn.get_device_tensors(decode_output)[0])
+                    if is_mesh
+                    else ttnn.to_torch(decode_output)
                 )
                 return output_cpu.squeeze().argmax().item()
 
