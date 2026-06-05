@@ -142,7 +142,7 @@ jobs:
             {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 30,
+              "server-timeout": 15,
               "benchmark-timeout": 5,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
