@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 
-from ._ttnn import get_ttnn
+import ttnn
 from .config import AceConfigTTNN
 from .math_perf_env import ace_step_add_one, ace_step_nlp_concat_heads, ace_step_permute_kwargs, ace_step_reshape_kwargs
 
@@ -23,13 +23,6 @@ def _sdpa_head_dim_tile_padding(d_head: int) -> int:
     return (int(d_head) + _SDPA_HEAD_DIM_ALIGN - 1) // _SDPA_HEAD_DIM_ALIGN * _SDPA_HEAD_DIM_ALIGN
 
 
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl")
-    return ttnn
-
-
 class AdaLNZeroTTNN:
     """
     TTNN AdaLN-Zero.
@@ -40,7 +33,6 @@ class AdaLNZeroTTNN:
     """
 
     def __init__(self, cfg: AceConfigTTNN, *, mesh_device, dtype=None, weights=None):
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.d_model = int(cfg.d_model)
@@ -98,7 +90,6 @@ class GEGLUMLPTTNN:
     """
 
     def __init__(self, cfg: AceConfigTTNN, *, mesh_device, dtype=None, weights=None):
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.d_model = int(cfg.d_model)
@@ -169,7 +160,6 @@ class MultiHeadSelfAttentionTTNN:
     """
 
     def __init__(self, cfg: AceConfigTTNN, *, mesh_device, dtype=None, weights=None):
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.d_model = int(cfg.d_model)
@@ -277,7 +267,6 @@ class MultiHeadSelfAttentionSDPATTNN:
     """
 
     def __init__(self, cfg: AceConfigTTNN, *, mesh_device, dtype=None, weights=None):
-        ttnn = _require_ttnn()
         transformer = getattr(ttnn, "transformer", None)
         sdpa = getattr(transformer, "scaled_dot_product_attention", None) if transformer is not None else None
         if sdpa is None:

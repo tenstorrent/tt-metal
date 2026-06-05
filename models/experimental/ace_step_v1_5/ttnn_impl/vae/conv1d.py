@@ -23,7 +23,7 @@ import os
 
 import numpy as np
 
-from .._ttnn import get_ttnn
+import ttnn
 from ..math_perf_env import (
     ace_step_concat_kwargs,
     ace_step_dense_linear_program_config,
@@ -78,13 +78,6 @@ def _conv1_wants_tile_output(*, return_tile: bool, return_sharded: bool, use_sha
     return return_tile or return_sharded
 
 
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl.vae")
-    return ttnn
-
-
 def _to_float32_numpy(arr) -> np.ndarray:
     if isinstance(arr, np.ndarray):
         return arr.astype(np.float32, copy=False)
@@ -117,7 +110,6 @@ class TtConv1d:
         weights_dtype=None,
         math_fidelity=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
 
@@ -663,7 +655,6 @@ class TtConvTranspose1d:
         weights_dtype=None,
         math_fidelity=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
 
