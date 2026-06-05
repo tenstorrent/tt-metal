@@ -107,7 +107,7 @@ from models.experimental.ace_step_v1_5.utils.tt_device import (
     ace_step_synchronize_device,
 )
 
-from ._ttnn import get_ttnn
+import ttnn
 from .math_perf_env import (
     _mcast_1d_linear_program_config,
     ace_step_add_one,
@@ -140,13 +140,6 @@ from .math_perf_env import (
     ace_step_sdpa_mask_memory_config,
     ace_step_split_qkv_heads_bhsd,
 )
-
-
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl")
-    return ttnn
 
 
 def _to_numpy_host_array(x):
@@ -215,7 +208,6 @@ class TtTimestepEmbedding:
         dtype=None,
         linear_output_l1_memory_config=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.hidden_size = int(cfg.hidden_size)
@@ -396,7 +388,6 @@ class TtHfRotaryEmbedding:
         num_key_value_heads: int,
         dtype=None,
     ):
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.head_dim = int(head_dim)
@@ -606,7 +597,6 @@ class TtAceStepAttentionSDPA:
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
     ):
-        ttnn = _require_ttnn()
         transformer = getattr(ttnn, "transformer", None)
         sdpa = getattr(transformer, "scaled_dot_product_attention", None) if transformer is not None else None
         if sdpa is None:
@@ -1286,7 +1276,6 @@ class TtQwen3MLP:
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
     ):
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
@@ -1454,7 +1443,6 @@ class TtAceStepDiTLayer:
         activation_l1_memory_config=None,
         linear_output_l1_memory_config=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.layer_idx = int(layer_idx)
@@ -1732,7 +1720,6 @@ class TtAceStepDiTCore:
         mesh_device,
         dtype=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.mesh_device = mesh_device
         self.dtype = dtype or getattr(ttnn, "bfloat16", None) or getattr(ttnn, "float16", None)
