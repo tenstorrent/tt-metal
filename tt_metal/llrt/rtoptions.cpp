@@ -341,8 +341,16 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     InitializeFromEnvVars();
 
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
-        this->enable_2_erisc_mode = false;
+        // Escape hatch for up-front precompile: when using a mock/sim target purely to BUILD
+        // kernels (not run them), we want the same compile config as silicon so the on-disk JIT
+        // cache — keyed by build_key, which hashes enable_2_erisc_mode (see get_compile_hash_string)
+        // — matches the real run's cache. TT_METAL_KEEP_2_ERISC_MODE keeps it on for that case.
+        if (std::getenv("TT_METAL_KEEP_2_ERISC_MODE") == nullptr) {
+            log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+            this->enable_2_erisc_mode = false;
+        } else {
+            log_info(tt::LogMetal, "Keeping multi-erisc mode under mock/sim (TT_METAL_KEEP_2_ERISC_MODE set)");
+        }
     }
 
     TT_FATAL(
