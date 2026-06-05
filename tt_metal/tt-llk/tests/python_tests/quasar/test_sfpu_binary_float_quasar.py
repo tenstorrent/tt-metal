@@ -164,23 +164,27 @@ def _run_sfpu_binary_test(
 
     num_faces = 4
 
-    generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_full = generate_golden(
-        mathop,
-        src_A,
-        src0_idx,
-        src1_idx,
-        dst_idx,
-        32,  # num_iterations: 32 rows = 1 full tile
-        input_dimensions,
-        formats.input_format,
-    ).flatten()
-    dst_start = dst_idx * _ELEMENTS_PER_TILE
-    golden_tensor = golden_full[dst_start : dst_start + _ELEMENTS_PER_TILE]
-
     # Convert golden to output format for comparison.
     torch_format_out = format_dict[formats.output_format]
-    golden_tensor = golden_tensor.to(torch_format_out)
+
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    generate_golden = get_golden_generator(BinarySFPUGolden)
+
+    def _golden():
+        golden_full = generate_golden(
+            mathop,
+            src_A,
+            src0_idx,
+            src1_idx,
+            dst_idx,
+            32,  # num_iterations: 32 rows = 1 full tile
+            input_dimensions,
+            formats.input_format,
+        ).flatten()
+        dst_start = dst_idx * _ELEMENTS_PER_TILE
+        golden_tensor = golden_full[dst_start : dst_start + _ELEMENTS_PER_TILE]
+        return golden_tensor.to(torch_format_out)
 
     tile_count_res = 1  # we only pack the single output tile
 
@@ -216,7 +220,9 @@ def _run_sfpu_binary_test(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

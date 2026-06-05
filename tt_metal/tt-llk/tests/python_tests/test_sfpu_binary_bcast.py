@@ -134,10 +134,11 @@ def test_sfpu_binary_bcast(
         input_dimensions_B=input_dimensions,
     )
 
-    op = _BINARY_OPS[eltwise_op]
-    golden_tensor = _golden_sfpu_binary_bcast(
-        src_A, src_B, bcast_dim, op, formats.output_format
-    )
+    def _golden():
+        op = _BINARY_OPS[eltwise_op]
+        return _golden_sfpu_binary_bcast(
+            src_A, src_B, bcast_dim, op, formats.output_format
+        )
 
     # Only Float32 (plus dest_acc=Yes) can skip srcA/srcB and unpack straight to
     # DEST. Float16_b must flow through srcA for the SFPU to consume it.
@@ -168,7 +169,9 @@ def test_sfpu_binary_bcast(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

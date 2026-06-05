@@ -120,9 +120,12 @@ def test_pack_untilize(
         spec_B=sfpu_false_spec,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UntilizeGolden)
 
-    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    def _golden():
+        return generate_golden(src_A, formats.output_format, input_dimensions)
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -167,7 +170,9 @@ def test_pack_untilize(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

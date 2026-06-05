@@ -51,9 +51,11 @@ def test_unpack_untilize(
     )
 
     generate_golden = get_golden_generator(UntilizeGolden)
-    golden_tensor = generate_golden(
-        src_A, formats.output_format, dimensions=input_dimensions
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A, formats.output_format, dimensions=input_dimensions
+        )
 
     configuration = TestConfig(
         "sources/unpack_untilize_test.cpp",
@@ -77,7 +79,9 @@ def test_unpack_untilize(
         dest_acc=DestAccumulation.Yes,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

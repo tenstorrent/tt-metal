@@ -82,7 +82,9 @@ def test_fast_tilize(
     )
 
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
+
+    def _golden():
+        return generate_golden(src_A, input_dimensions, formats.output)
 
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
@@ -108,7 +110,9 @@ def test_fast_tilize(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
 

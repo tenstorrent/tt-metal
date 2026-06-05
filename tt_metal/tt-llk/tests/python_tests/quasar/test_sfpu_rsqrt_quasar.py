@@ -134,15 +134,19 @@ def test_sfpu_rsqrt_quasar(formats_dest_acc_sync_implied_math_input_dims):
 
     num_faces = 4
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Rsqrt,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+
+    def _golden():
+        return generate_golden(
+            MathOperation.Rsqrt,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
 
     configuration = TestConfig(
         "sources/quasar/sfpu_rsqrt_quasar_test.cpp",
@@ -177,7 +181,9 @@ def test_sfpu_rsqrt_quasar(formats_dest_acc_sync_implied_math_input_dims):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # Verify results match golden
     assert len(res_from_L1) == len(

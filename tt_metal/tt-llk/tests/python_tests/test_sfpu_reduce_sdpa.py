@@ -57,15 +57,18 @@ def test_sfpu_reduce_sdpa(
     # GOLDEN GENERATION
     # *******************************************************
 
-    # Undo tilization so src_A is standard [32, 32]
-    src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
+    def _golden():
+        # Undo tilization so src_A is standard [32, 32]
+        src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
 
-    # Take max along the height (dim=0) for each column
-    col_max = torch.max(src_A_untilized, dim=0).values
+        # Take max along the height (dim=0) for each column
+        col_max = torch.max(src_A_untilized, dim=0).values
 
-    # Construct golden tensor: first row is column max, others are zero
-    golden_tensor = torch.zeros_like(src_A_untilized)
-    golden_tensor[0, :] = col_max
+        # Construct golden tensor: first row is column max, others are zero
+        golden_tensor = torch.zeros_like(src_A_untilized)
+        golden_tensor[0, :] = col_max
+
+        return golden_tensor
 
     # *******************************************************
 
@@ -90,7 +93,9 @@ def test_sfpu_reduce_sdpa(
         unpack_to_dest=False,  # Must be False since math kernel does A2D copy
         dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)

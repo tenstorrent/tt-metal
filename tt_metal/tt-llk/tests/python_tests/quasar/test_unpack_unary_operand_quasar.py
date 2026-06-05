@@ -150,37 +150,43 @@ def test_unpack_unary_operand_quasar(
 
     num_faces = 4
 
-    golden_src = (
-        src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
-    )  # use A for UnpA and UnpDest
-    if transpose_en == Transpose.Yes:
-        if formats.input_format.is_mx_format():
-            golden_src = quantize_mx_tensor_chunked(golden_src, formats.input_format)
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        golden_src = (
+            src_B if unpacker_sel == UnpackerEngine.UnpB else src_A
+        )  # use A for UnpA and UnpDest
+        if transpose_en == Transpose.Yes:
+            if formats.input_format.is_mx_format():
+                golden_src = quantize_mx_tensor_chunked(
+                    golden_src, formats.input_format
+                )
 
-        generate_golden = get_golden_generator(TransposeGolden)
-        golden_tensor = generate_golden.transpose_faces_multi_tile(
-            golden_src,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            tilize=False,
-            input_dimensions=input_dimensions,
-        )
-        golden_tensor = generate_golden.transpose_within_faces_multi_tile(
-            golden_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            untilize=False,
-            input_dimensions=input_dimensions,
-        )
-    else:
-        generate_golden = get_golden_generator(DataCopyGolden)
-        golden_tensor = generate_golden(
-            golden_src,
-            formats.output_format,
-            num_faces=num_faces,
-            input_dimensions=input_dimensions,
-            input_format=formats.input_format,
-        )
+            generate_golden = get_golden_generator(TransposeGolden)
+            golden_tensor = generate_golden.transpose_faces_multi_tile(
+                golden_src,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                tilize=False,
+                input_dimensions=input_dimensions,
+            )
+            golden_tensor = generate_golden.transpose_within_faces_multi_tile(
+                golden_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                untilize=False,
+                input_dimensions=input_dimensions,
+            )
+        else:
+            generate_golden = get_golden_generator(DataCopyGolden)
+            golden_tensor = generate_golden(
+                golden_src,
+                formats.output_format,
+                num_faces=num_faces,
+                input_dimensions=input_dimensions,
+                input_format=formats.input_format,
+            )
+        return golden_tensor
 
     configuration = TestConfig(
         "sources/quasar/unpack_unary_operand_quasar_test.cpp",
@@ -223,7 +229,9 @@ def test_unpack_unary_operand_quasar(
         disable_format_inference=(formats.input_format.is_mx_format()),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

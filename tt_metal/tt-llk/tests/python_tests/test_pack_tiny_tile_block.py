@@ -63,7 +63,9 @@ def _make_config(
 
     # Golden: input round-tripped through the output format
     torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+
+    def _golden():
+        return src_A.to(torch_format)
 
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
     capacity_divisor = (
@@ -120,7 +122,7 @@ def _make_config(
         dest_acc=dest_acc,
     )
 
-    return configuration, golden_tensor, torch_format
+    return configuration, _golden, torch_format
 
 
 # ── Main test ───────────────────────────────────────────────────────────────
@@ -152,11 +154,13 @@ def test_pack_tiny_tile_block(
     tile_dims,
     num_tiles,
 ):
-    configuration, golden_tensor, torch_format = _make_config(
+    configuration, _golden, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -206,7 +210,9 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
     )
 
     torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+
+    def _golden():
+        return src_A.to(torch_format)
 
     capacity_divisor = (
         2
@@ -256,7 +262,9 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

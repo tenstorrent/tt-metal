@@ -74,50 +74,51 @@ def test_unp_bcast_sub_sdpa(
 
     src_A = src_A[: 1024 * reuse_factor]
 
-    reshaped_a = src_A.reshape(64 * reuse_factor, 16)
+    def _golden():
+        reshaped_a = src_A.reshape(64 * reuse_factor, 16)
 
-    b_tiles = [src_B[i : i + 1024].tolist() for i in range(0, len(src_B), 1024)]
-    b_tiles = b_tiles[:]
+        b_tiles = [src_B[i : i + 1024].tolist() for i in range(0, len(src_B), 1024)]
+        b_tiles = b_tiles[:]
 
-    take = []
-    for i in range(0, reshaped_a.shape[0], 64):
-        take.append(reshaped_a[i])
-        take.append(reshaped_a[i + 16])
+        take = []
+        for i in range(0, reshaped_a.shape[0], 64):
+            take.append(reshaped_a[i])
+            take.append(reshaped_a[i + 16])
 
-    # Reconstruct tiles with broadcasted data
+        # Reconstruct tiles with broadcasted data
 
-    reconstructed_tiles = []
-    for i in range(0, len(take), 2):
-        if i + 1 < len(take):
-            # Combine pair into 1x32 element
-            combined = torch.cat([take[i], take[i + 1]], dim=0)
-            # Replicate to create 32x32 tile
-            tile_32x32 = combined.repeat(32, 1)
-            reconstructed_tiles.append(tile_32x32.flatten())
+        reconstructed_tiles = []
+        for i in range(0, len(take), 2):
+            if i + 1 < len(take):
+                # Combine pair into 1x32 element
+                combined = torch.cat([take[i], take[i + 1]], dim=0)
+                # Replicate to create 32x32 tile
+                tile_32x32 = combined.repeat(32, 1)
+                reconstructed_tiles.append(tile_32x32.flatten())
 
-    tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
+        tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
 
-    golden = []
+        golden = []
 
-    for tile_idx, reconstructed_tile in enumerate(tilized_reconstructed_tiles):
-        start_b_idx = tile_idx * srca_reuse_count
-        for reuse_idx in range(srca_reuse_count):
-            b_tile_idx = start_b_idx + reuse_idx
-            if b_tile_idx < len(b_tiles):
-                b_tile = torch.tensor(b_tiles[b_tile_idx])
+        for tile_idx, reconstructed_tile in enumerate(tilized_reconstructed_tiles):
+            start_b_idx = tile_idx * srca_reuse_count
+            for reuse_idx in range(srca_reuse_count):
+                b_tile_idx = start_b_idx + reuse_idx
+                if b_tile_idx < len(b_tiles):
+                    b_tile = torch.tensor(b_tiles[b_tile_idx])
 
-                if mathop == MathOperation.Elwadd:
-                    result = reconstructed_tile + b_tile
-                elif mathop == MathOperation.Elwsub:
-                    result = reconstructed_tile - b_tile
-                elif mathop == MathOperation.Elwmul:
-                    result = reconstructed_tile * b_tile
+                    if mathop == MathOperation.Elwadd:
+                        result = reconstructed_tile + b_tile
+                    elif mathop == MathOperation.Elwsub:
+                        result = reconstructed_tile - b_tile
+                    elif mathop == MathOperation.Elwmul:
+                        result = reconstructed_tile * b_tile
 
-                golden.append(result)
+                    golden.append(result)
 
-    golden_tensor = torch.cat(golden).to(dtype=format_dict[formats.output_format])[
-        : 1024 * reuse_factor
-    ]
+        return torch.cat(golden).to(dtype=format_dict[formats.output_format])[
+            : 1024 * reuse_factor
+        ]
 
     configuration = TestConfig(
         "sources/unpack_a_bcast_eltwise_test.cpp",
@@ -145,7 +146,9 @@ def test_unp_bcast_sub_sdpa(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

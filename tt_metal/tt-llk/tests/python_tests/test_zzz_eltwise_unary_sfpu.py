@@ -398,15 +398,19 @@ def eltwise_unary_sfpu(
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+
+    def _golden():
+        return generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -449,7 +453,9 @@ def eltwise_unary_sfpu(
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # res_from_L1 = res_from_L1[:1024]
     # golden_tensor = golden_tensor[:1024]
@@ -487,15 +493,19 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
     tile_cnt_B = tile_cnt_A
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Exp,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
+
+    def _golden():
+        return generate_golden(
+            MathOperation.Exp,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -535,7 +545,9 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         unpack_to_dest=False,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

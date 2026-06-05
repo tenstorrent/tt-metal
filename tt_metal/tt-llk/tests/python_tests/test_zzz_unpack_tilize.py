@@ -123,10 +123,14 @@ def unpack_tilize(
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(
-        src_A, input_dimensions, formats.output_format, num_faces=num_faces
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A, input_dimensions, formats.output_format, num_faces=num_faces
+        )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -161,7 +165,9 @@ def unpack_tilize(
         **({"dest_acc": dest_acc} if dest_acc is not None else {}),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # When num_faces < 4, hardware returns full tiles (1024 elements each) but only
     # the first (num_faces * 256) elements per tile contain valid data

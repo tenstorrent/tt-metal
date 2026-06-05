@@ -145,29 +145,33 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
         src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
         src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
 
-    generate_datacopy_golden = get_golden_generator(DataCopyGolden)
-    datacopy_tensor = generate_datacopy_golden(
-        src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        generate_datacopy_golden = get_golden_generator(DataCopyGolden)
+        datacopy_tensor = generate_datacopy_golden(
+            src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
+        )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        t_matrix = get_golden_generator(TransposeGolden)
-        golden_tensor = t_matrix.transpose_faces_multi_tile(
-            datacopy_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            tilize=False,
-            input_dimensions=input_dimensions,
-        )
-        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-            golden_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            untilize=False,
-            input_dimensions=input_dimensions,
-        )
-    else:
-        golden_tensor = []
+        if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+            t_matrix = get_golden_generator(TransposeGolden)
+            golden_tensor = t_matrix.transpose_faces_multi_tile(
+                datacopy_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                tilize=False,
+                input_dimensions=input_dimensions,
+            )
+            golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+                golden_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                untilize=False,
+                input_dimensions=input_dimensions,
+            )
+        else:
+            golden_tensor = []
+        return golden_tensor
 
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
@@ -201,7 +205,9 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

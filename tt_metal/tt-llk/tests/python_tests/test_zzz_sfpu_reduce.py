@@ -162,15 +162,18 @@ def test_sfpu_reduce(
         src_A, formats.input_format, dst_dim
     )  # Passed into golden since PyTorch library has no concept of tilization
 
-    golden_tensor = get_golden_generator(UnarySFPUGolden)(
-        mathop,
-        src_A_untilized,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        dst_dim,
-        reduce_pool=reduce_pool,
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        return get_golden_generator(UnarySFPUGolden)(
+            mathop,
+            src_A_untilized,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            dst_dim,
+            reduce_pool=reduce_pool,
+        )
 
     configuration = TestConfig(
         "sources/sfpu_reduce_test.cpp",
@@ -200,7 +203,9 @@ def test_sfpu_reduce(
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
@@ -269,15 +274,18 @@ def test_reduce_row_max(
     src_A = tilize_block(src_A, dst_dim, stimuli_format=formats.input_format).flatten()
     src_A_untilized = untilize_block(src_A, formats.input_format, dst_dim)
 
-    golden_tensor = get_golden_generator(UnarySFPUGolden)(
-        mathop,
-        src_A_untilized,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        dst_dim,
-        reduce_pool=reduce_pool,
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        return get_golden_generator(UnarySFPUGolden)(
+            mathop,
+            src_A_untilized,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            dst_dim,
+            reduce_pool=reduce_pool,
+        )
 
     configuration = TestConfig(
         "sources/sfpu_reduce_test.cpp",
@@ -307,7 +315,9 @@ def test_reduce_row_max(
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)

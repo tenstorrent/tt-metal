@@ -108,29 +108,33 @@ def test_matmul_and_unary_sfpu(
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_matmul_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_matmul_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        math_fidelity,
-        input_A_dimensions=input_dimensions,
-        input_B_dimensions=input_dimensions,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    )
-    golden_tensor = tilize(golden_tensor, formats.output_format)
-
     generate_sfpu_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_sfpu_golden(
-        mathop,
-        golden_tensor,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
-    golden_tensor = golden_tensor.to(torch_format)
+
+    def _golden():
+        golden_tensor = generate_matmul_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            math_fidelity,
+            input_A_dimensions=input_dimensions,
+            input_B_dimensions=input_dimensions,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format,
+        )
+        golden_tensor = tilize(golden_tensor, formats.output_format)
+
+        golden_tensor = generate_sfpu_golden(
+            mathop,
+            golden_tensor,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+        )
+        return golden_tensor.to(torch_format)
 
     configuration = TestConfig(
         test_name,
@@ -156,7 +160,9 @@ def test_matmul_and_unary_sfpu(
         L1_to_L1_iterations=2,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 

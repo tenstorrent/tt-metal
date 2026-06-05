@@ -116,21 +116,28 @@ def _run_unary_datacopy_test(
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     if tilize == Tilize.No:
         generate_golden = get_golden_generator(DataCopyGolden)
         golden_kwargs = (
             {"input_format": formats.input_format} if quantize_golden_input else {}
         )
-        golden_tensor = generate_golden(
-            src_A,
-            formats.output_format,
-            num_faces,
-            input_dimensions,
-            **golden_kwargs,
-        )
+
+        def _golden():
+            return generate_golden(
+                src_A,
+                formats.output_format,
+                num_faces,
+                input_dimensions,
+                **golden_kwargs,
+            )
+
     else:
         generate_golden = get_golden_generator(TilizeGolden)
-        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+        def _golden():
+            return generate_golden(src_A, input_dimensions, formats.output_format)
 
     unpack_to_dest = (
         False
@@ -181,7 +188,9 @@ def _run_unary_datacopy_test(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(golden_tensor)
 

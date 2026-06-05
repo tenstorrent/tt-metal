@@ -91,33 +91,37 @@ def test_eltwise_binary_broadcast_quasar(
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-    bcast_src_B_tensor = generate_broadcast_golden(
-        broadcast_type,
-        src_B,
-        formats.output_format,
-        num_faces=4,
-        tile_cnt=tile_cnt_A,
-        face_r_dim=16,
-        input_format=formats.input_format,
-    )
-
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    input_format = formats.input_format
-    input_format_B = (
-        DataFormat.Float16_b
-        if formats.input_format.is_mx_format()
-        else formats.input_format
-    )
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        bcast_src_B_tensor,
-        formats.output_format,
-        math_fidelity,
-        input_format=input_format,
-        input_format_B=input_format_B,
-    )
+
+    def _golden():
+        bcast_src_B_tensor = generate_broadcast_golden(
+            broadcast_type,
+            src_B,
+            formats.output_format,
+            num_faces=4,
+            tile_cnt=tile_cnt_A,
+            face_r_dim=16,
+            input_format=formats.input_format,
+        )
+
+        input_format = formats.input_format
+        input_format_B = (
+            DataFormat.Float16_b
+            if formats.input_format.is_mx_format()
+            else formats.input_format
+        )
+        return generate_golden(
+            mathop,
+            src_A,
+            bcast_src_B_tensor,
+            formats.output_format,
+            math_fidelity,
+            input_format=input_format,
+            input_format_B=input_format_B,
+        )
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_broadcast_quasar_test.cpp",
@@ -152,7 +156,9 @@ def test_eltwise_binary_broadcast_quasar(
         disable_format_inference=formats.input_format.is_mx_format(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

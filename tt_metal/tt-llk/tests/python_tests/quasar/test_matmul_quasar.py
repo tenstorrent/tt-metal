@@ -175,20 +175,24 @@ def test_matmul(
     )[0]
     pack_src_format = formats_config.pack_src
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        src_A_golden,
-        src_B_golden,
-        format.output_format,
-        math_fidelity,
-        input_A_dimensions=input_A_dimensions,
-        input_B_dimensions=input_B_dimensions,
-        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
-        input_A_format=format.input_format,
-        input_B_format=format.input_format,
-        math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
-        dest_acc=dest_acc,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A_golden,
+            src_B_golden,
+            format.output_format,
+            math_fidelity,
+            input_A_dimensions=input_A_dimensions,
+            input_B_dimensions=input_B_dimensions,
+            tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+            input_A_format=format.input_format,
+            input_B_format=format.input_format,
+            math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
+            dest_acc=dest_acc,
+        )
 
     num_faces = 4
 
@@ -222,7 +226,9 @@ def test_matmul(
         disable_format_inference=format.input_format.is_mx_format(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"

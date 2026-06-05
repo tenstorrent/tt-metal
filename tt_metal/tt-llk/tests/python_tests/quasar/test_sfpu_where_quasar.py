@@ -160,10 +160,13 @@ def test_sfpu_where_quasar(
     tile_cnt_A = tile_cnt_single * 3
     num_faces = 4
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(WhereGolden)
-    golden_tensor = generate_golden(condition, true_val, false_val)
     torch_format_out = format_dict[formats.output_format]
-    golden_tensor = golden_tensor.to(torch_format_out)
+
+    def _golden():
+        return generate_golden(condition, true_val, false_val).to(torch_format_out)
 
     unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
     src_B_dummy = torch.zeros_like(condition)
@@ -202,7 +205,9 @@ def test_sfpu_where_quasar(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -247,10 +252,13 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
     tile_cnt_A = tile_cnt_single * 3
     num_faces = 4
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(WhereGolden)
-    golden_tensor = generate_golden(condition, true_val, false_val)
     torch_format_out = format_dict[formats.output_format]
-    golden_tensor = golden_tensor.to(torch_format_out)
+
+    def _golden():
+        return generate_golden(condition, true_val, false_val).to(torch_format_out)
 
     unpack_to_dest = _is_unpack_to_dest(formats, dest_acc)
     src_B_dummy = torch.zeros_like(condition)
@@ -289,7 +297,9 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

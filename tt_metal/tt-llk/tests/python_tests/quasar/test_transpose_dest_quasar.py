@@ -177,30 +177,34 @@ def test_transpose_dest_quasar(
         src_A = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_A)
         src_B = (torch.randn(n, dtype=torch.float32) * 10000.0).reshape_as(src_B)
 
-    generate_datacopy_golden = get_golden_generator(DataCopyGolden)
-    datacopy_tensor = generate_datacopy_golden(
-        src_A,
-        formats.output_format,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-    )
-
-    t_matrix = get_golden_generator(TransposeGolden)
-    golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-        datacopy_tensor,
-        formats.output_format,
-        num_tiles=tile_cnt_A,
-        untilize=False,
-        input_dimensions=input_dimensions,
-    )
-    if math_transpose_faces == Transpose.Yes:
-        golden_tensor = t_matrix.transpose_faces_multi_tile(
-            golden_tensor,
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        generate_datacopy_golden = get_golden_generator(DataCopyGolden)
+        datacopy_tensor = generate_datacopy_golden(
+            src_A,
             formats.output_format,
-            num_tiles=tile_cnt_A,
-            tilize=False,
+            num_faces=num_faces,
             input_dimensions=input_dimensions,
         )
+
+        t_matrix = get_golden_generator(TransposeGolden)
+        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+            datacopy_tensor,
+            formats.output_format,
+            num_tiles=tile_cnt_A,
+            untilize=False,
+            input_dimensions=input_dimensions,
+        )
+        if math_transpose_faces == Transpose.Yes:
+            golden_tensor = t_matrix.transpose_faces_multi_tile(
+                golden_tensor,
+                formats.output_format,
+                num_tiles=tile_cnt_A,
+                tilize=False,
+                input_dimensions=input_dimensions,
+            )
+        return golden_tensor
 
     unpack_to_dest = (
         True
@@ -240,7 +244,9 @@ def test_transpose_dest_quasar(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

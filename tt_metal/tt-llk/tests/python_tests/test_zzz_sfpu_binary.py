@@ -162,23 +162,27 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         input_dimensions_B=input_dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        0,
-        1,
-        0,
-        1,
-        input_dimensions,
-        formats.output_format,
-    )
 
-    golden_tensor = (
-        golden_tensor.view([32, 32])
-        if golden_tensor.shape == torch.Size([1024])
-        else golden_tensor.view(input_dimensions)
-    )
+    def _golden():
+        golden_tensor = generate_golden(
+            mathop,
+            src_A,
+            0,
+            1,
+            0,
+            1,
+            input_dimensions,
+            formats.output_format,
+        )
+
+        return (
+            golden_tensor.view([32, 32])
+            if golden_tensor.shape == torch.Size([1024])
+            else golden_tensor.view(input_dimensions)
+        )
 
     configuration = TestConfig(
         "sources/sfpu_binary_test.cpp",
@@ -205,7 +209,9 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).view(input_dimensions)
@@ -235,35 +241,39 @@ def sfpu_binary(
         input_dimensions_B=input_dimensions,
     )
 
-    golden_src = src_A
-    if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
-        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_src = generate_broadcast_golden(
-            broadcast_type,
-            src_A,
-            (
-                formats.input_format
-                if formats.input_format != DataFormat.Bfp8_b
-                else DataFormat.Float16_b
-            ),
-            tile_cnt=tile_cnt_A,
-        )
-
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        golden_src,
-        0,  # src1_idx: use tile 0
-        1,  # src2_idx: use tile 1
-        0,  # dst_idx: write to tile 0
-        32,  # num_iterations: 32 rows
-        input_dimensions,  # [64, 32] = 2 tiles
-        (
-            DataFormat.Float16_b
-            if formats.input_format == DataFormat.Bfp8_b
-            else formats.input_format
-        ),
-    ).flatten()
+
+    def _golden():
+        golden_src = src_A
+        if broadcast_type is not None and broadcast_type != LlkBroadcastType.None_:
+            generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+            golden_src = generate_broadcast_golden(
+                broadcast_type,
+                src_A,
+                (
+                    formats.input_format
+                    if formats.input_format != DataFormat.Bfp8_b
+                    else DataFormat.Float16_b
+                ),
+                tile_cnt=tile_cnt_A,
+            )
+
+        return generate_golden(
+            mathop,
+            golden_src,
+            0,  # src1_idx: use tile 0
+            1,  # src2_idx: use tile 1
+            0,  # dst_idx: write to tile 0
+            32,  # num_iterations: 32 rows
+            input_dimensions,  # [64, 32] = 2 tiles
+            (
+                DataFormat.Float16_b
+                if formats.input_format == DataFormat.Bfp8_b
+                else formats.input_format
+            ),
+        ).flatten()
 
     # ONLY Blackhole needs this for some reason
     if (
@@ -298,7 +308,9 @@ def sfpu_binary(
         unpack_to_dest=formats.input_format.is_32_bit(),
         compile_time_formats=True,
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
@@ -442,14 +454,17 @@ def test_sfpu_binary_bcast(
 
     # Bfp8_b stimuli are effectively Float16_b in dest after unpack; golden
     # computes and tilizes at that precision to match.
-    golden_format = (
-        DataFormat.Float16_b
-        if formats.input_format == DataFormat.Bfp8_b
-        else formats.input_format
-    )
-    golden_tensor = _golden_sfpu_binary_bcast(
-        src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
-    )
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        golden_format = (
+            DataFormat.Float16_b
+            if formats.input_format == DataFormat.Bfp8_b
+            else formats.input_format
+        )
+        return _golden_sfpu_binary_bcast(
+            src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
+        )
 
     # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
     # other float formats go through srcA + MATH datacopy into dest.
@@ -480,7 +495,9 @@ def test_sfpu_binary_bcast(
         unpack_to_dest=unpack_to_dest,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

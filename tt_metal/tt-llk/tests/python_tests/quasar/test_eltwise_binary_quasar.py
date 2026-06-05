@@ -130,18 +130,22 @@ def test_eltwise_binary(
         tile_shape.total_tile_size() * num_tiles_per_accumulation
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        src_B,
-        formats.output_format,
-        math_fidelity,
-        input_format=formats.input_format,
-        acc_to_dest=acc_to_dest,
-        tile_shape=tile_shape,
-        num_tiles_per_accumulation=num_tiles_per_accumulation,
-    )
+
+    def _golden():
+        return generate_golden(
+            mathop,
+            src_A,
+            src_B,
+            formats.output_format,
+            math_fidelity,
+            input_format=formats.input_format,
+            acc_to_dest=acc_to_dest,
+            tile_shape=tile_shape,
+            num_tiles_per_accumulation=num_tiles_per_accumulation,
+        )
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_test.cpp",
@@ -182,7 +186,9 @@ def test_eltwise_binary(
         disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # Verify results match golden
     assert len(res_from_L1) == len(

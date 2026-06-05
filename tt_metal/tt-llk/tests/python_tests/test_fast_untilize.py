@@ -141,12 +141,14 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
         )
 
     generate_golden = get_golden_generator(UntilizeGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        input_dimensions,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            formats.output_format,
+            input_dimensions,
+            input_format=formats.input_format,
+        )
 
     configuration = make_fast_untilize_test_config(
         formats,
@@ -161,7 +163,9 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
         PerfRunType.L1_TO_L1,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

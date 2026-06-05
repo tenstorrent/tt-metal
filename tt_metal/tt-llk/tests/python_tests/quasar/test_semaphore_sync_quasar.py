@@ -77,16 +77,20 @@ def test_semaphore_sync_quasar(
     # result in srcA should be multiplied by 1 for pool_type = sum
     src_B = torch.full((1024,), 1)
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(ReduceGapoolGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        src_B,
-        formats.output_format,
-        reduce_dim,
-        math_fidelity,
-        tile_cnt,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            src_B,
+            formats.output_format,
+            reduce_dim,
+            math_fidelity,
+            tile_cnt,
+            input_format=formats.input_format,
+        )
 
     configuration = TestConfig(
         "sources/quasar/semaphore_sync_quasar_test.cpp",
@@ -124,7 +128,9 @@ def test_semaphore_sync_quasar(
         ),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

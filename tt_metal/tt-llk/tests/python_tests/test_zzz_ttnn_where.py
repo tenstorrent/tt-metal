@@ -79,8 +79,12 @@ def test_ttnn_where(
         src_A = torch.zeros_like(src_A)
     # For "mixed" case, use the generated stimuli as-is
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(src_A, src_B, src_C)
+
+    def _golden():
+        return golden_generator(src_A, src_B, src_C)
 
     configuration = TestConfig(
         "sources/ttnn_where_test.cpp",
@@ -105,7 +109,9 @@ def test_ttnn_where(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden = outcome.golden
 
     res_from_L1 = res_from_L1[:1024]
     assert len(res_from_L1) == len(
@@ -175,8 +181,12 @@ def test_ttnn_where_mcw(
     T = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 2
     F = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 11
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(C, T, F)
+
+    def _golden():
+        return golden_generator(C, T, F)
 
     configuration = TestConfig(
         "sources/ttnn_where_test.cpp",
@@ -201,7 +211,9 @@ def test_ttnn_where_mcw(
         compile_time_formats=True,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden = outcome.golden
 
     res_from_L1 = res_from_L1[:1024]
 

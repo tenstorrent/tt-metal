@@ -75,20 +75,24 @@ def _run_sfpu_binary_quasar(
 
     num_faces = 4
 
-    elements_per_tile = 1024  # 4 faces * 16 rows * 16 cols
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(BinarySFPUGolden)
-    golden_full = generate_golden(
-        mathop,
-        src_A,
-        src0_idx,
-        src1_idx,
-        dst_idx,
-        32,  # num_iterations: 32 rows = 1 full tile
-        input_dimensions,
-        data_format,
-    ).flatten()
-    dst_start = dst_idx * elements_per_tile
-    golden_tensor = golden_full[dst_start : dst_start + elements_per_tile]
+
+    def _golden():
+        elements_per_tile = 1024  # 4 faces * 16 rows * 16 cols
+        golden_full = generate_golden(
+            mathop,
+            src_A,
+            src0_idx,
+            src1_idx,
+            dst_idx,
+            32,  # num_iterations: 32 rows = 1 full tile
+            input_dimensions,
+            data_format,
+        ).flatten()
+        dst_start = dst_idx * elements_per_tile
+        return golden_full[dst_start : dst_start + elements_per_tile]
 
     tile_count_res = 1
 
@@ -127,7 +131,9 @@ def _run_sfpu_binary_quasar(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

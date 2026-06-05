@@ -153,25 +153,29 @@ def test_pack_l1_acc_quasar(
         tile_dimensions=TILE_DIMENSIONS,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(PackGolden)
-    full_golden = generate_golden(
-        src_A,
-        formats.output_format,
-        num_faces=num_faces,
-        input_dimensions=input_dimensions,
-        face_r_dim=face_r_dim,
-    )
 
-    # This test accumulates the results of each block on top of each other
-    # Slice the full golden into per-block partials and accumulate
-    elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
-    partials = [
-        full_golden[block * elements_per_block : (block + 1) * elements_per_block]
-        for block in range(output_num_blocks)
-    ]
-    golden_tensor = generate_golden.accumulate_l1(
-        partials, data_format=formats.output_format
-    )
+    def _golden():
+        full_golden = generate_golden(
+            src_A,
+            formats.output_format,
+            num_faces=num_faces,
+            input_dimensions=input_dimensions,
+            face_r_dim=face_r_dim,
+        )
+
+        # This test accumulates the results of each block on top of each other
+        # Slice the full golden into per-block partials and accumulate
+        elements_per_block = output_tiles_in_block * num_faces * face_r_dim * FACE_C_DIM
+        partials = [
+            full_golden[block * elements_per_block : (block + 1) * elements_per_block]
+            for block in range(output_num_blocks)
+        ]
+        return generate_golden.accumulate_l1(
+            partials, data_format=formats.output_format
+        )
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -220,7 +224,9 @@ def test_pack_l1_acc_quasar(
         boot_mode=boot_mode,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

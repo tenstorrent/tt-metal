@@ -161,21 +161,24 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
 
     num_faces = 4
 
-    if is_int_fill:
-        # FILL_INT_VALUE must match FILL_INT_VALUE in sfpu_fill_quasar_test.cpp
-        FILL_INT_VALUE = 5
-        num_elements = src_A.numel()
-        golden_tensor = torch.full(
-            (num_elements,),
-            FILL_INT_VALUE,
-            dtype=format_dict[formats.output_format],
-        )
-    else:
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        if is_int_fill:
+            # FILL_INT_VALUE must match FILL_INT_VALUE in sfpu_fill_quasar_test.cpp
+            FILL_INT_VALUE = 5
+            num_elements = src_A.numel()
+            return torch.full(
+                (num_elements,),
+                FILL_INT_VALUE,
+                dtype=format_dict[formats.output_format],
+            )
+
         # FILL_CONST_VALUE must match FILL_CONST = 5.0f in sfpu_fill_quasar_test.cpp
         FILL_CONST_VALUE = 5.0
 
         generate_golden = get_golden_generator(UnarySFPUGolden)
-        golden_tensor = generate_golden(
+        return generate_golden(
             MathOperation.Fill,
             src_A,
             formats.output_format,
@@ -218,7 +221,9 @@ def test_sfpu_fill_quasar(formats_dest_acc_implied_math_input_dims):
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

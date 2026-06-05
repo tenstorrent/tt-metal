@@ -28,9 +28,11 @@ def test_risc_compute():
     )
 
     generate_golden = get_golden_generator(EltwiseBinaryGolden)
-    golden_tensor = generate_golden(
-        MathOperation.Elwadd, src_A, src_B, formats.output_format, MathFidelity.LoFi
-    )
+
+    def _golden():
+        return generate_golden(
+            MathOperation.Elwadd, src_A, src_B, formats.output_format, MathFidelity.LoFi
+        )
 
     configuration = TestConfig(
         "sources/risc_compute_test.cpp",
@@ -46,7 +48,9 @@ def test_risc_compute():
             tile_count_res=tile_cnt_A,
         ),
     )
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

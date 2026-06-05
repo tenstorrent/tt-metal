@@ -81,14 +81,18 @@ def test_pack_rows(
         input_dimensions_B=dimensions,
     )
 
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
     generate_golden = get_golden_generator(PackRowsGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        formats.output_format,
-        dimensions,
-        num_rows_to_pack=num_rows_to_pack,
-        tile_count=tile_cnt_A,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            formats.output_format,
+            dimensions,
+            num_rows_to_pack=num_rows_to_pack,
+            tile_count=tile_cnt_A,
+        )
 
     # Calculate expected output size per tile
     output_elements_per_tile = num_rows_to_pack * row_num_datums
@@ -118,7 +122,9 @@ def test_pack_rows(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 

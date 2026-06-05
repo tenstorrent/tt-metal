@@ -125,16 +125,18 @@ def test_reduce(
             )
 
     generate_golden = get_golden_generator(ReduceGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        reduce_dim,
-        pool_type,
-        formats.output_format,
-        tile_cnt_A,
-        reduce_to_one=is_reduce_to_one,
-        tile_shape=tile_shape,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            reduce_dim,
+            pool_type,
+            formats.output_format,
+            tile_cnt_A,
+            reduce_to_one=is_reduce_to_one,
+            tile_shape=tile_shape,
+            input_format=formats.input_format,
+        )
 
     # Float32 golden uses full FP32 accumulation; match that in HW whenever we
     # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
@@ -201,7 +203,9 @@ def test_reduce(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor
@@ -305,16 +309,18 @@ def test_reduce_bfp4_b(
             )
 
     generate_golden = get_golden_generator(ReduceGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        reduce_dim,
-        pool_type,
-        formats.output_format,
-        tile_cnt_A,
-        reduce_to_one=is_reduce_to_one,
-        tile_shape=tile_shape,
-        input_format=formats.input_format,
-    )
+
+    def _golden():
+        return generate_golden(
+            src_A,
+            reduce_dim,
+            pool_type,
+            formats.output_format,
+            tile_cnt_A,
+            reduce_to_one=is_reduce_to_one,
+            tile_shape=tile_shape,
+            input_format=formats.input_format,
+        )
 
     # Float32 golden uses full FP32 accumulation; match that in HW whenever we
     # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
@@ -381,7 +387,9 @@ def test_reduce_bfp4_b(
         dest_acc=dest_acc,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     assert len(res_from_L1) == len(
         golden_tensor

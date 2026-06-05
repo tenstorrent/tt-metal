@@ -188,67 +188,73 @@ def test_eltwise_binary_reuse_dest_quasar(
         src_B_t = quantize_mx_tensor_chunked(
             src_B_t.to(torch.bfloat16), formats.input_format
         )
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    internal_dtype = torch.bfloat16 if use_mx else torch_format
+    # Defer golden generation to a closure so run() can compute it while the
+    # tensixes execute, overlapping the host work with the device wait.
+    def _golden():
+        golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
-    eltwise_golden = (
-        EltwiseBinaryGolden()
-        if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
-        else None
-    )
+        internal_dtype = torch.bfloat16 if use_mx else torch_format
 
-    math_format_for_fidelity = (
-        (DataFormat.Float16_b if use_mx else formats.output_format)
-        if eltwise_golden is not None
-        else None
-    )
+        eltwise_golden = (
+            EltwiseBinaryGolden()
+            if (mathop == MathOperation.Elwmul and math_fidelity == MathFidelity.LoFi)
+            else None
+        )
 
-    for out_t in range(tile_cnt_output):
-        block_idx = out_t // output_tiles_in_block
-        tile_in_block = out_t % output_tiles_in_block
-        out_start = out_t * tile_elements
-        dest = src_A_t[out_start : out_start + tile_elements].to(internal_dtype)
+        math_format_for_fidelity = (
+            (DataFormat.Float16_b if use_mx else formats.output_format)
+            if eltwise_golden is not None
+            else None
+        )
 
-        for i in range(inner_dim):
-            input_tile_idx = (
-                block_idx * input_tiles_in_block
-                + i * output_tiles_in_block
-                + tile_in_block
-            )
-            start = input_tile_idx * tile_elements
-            end = start + tile_elements
-            a_tile = src_A_t[start:end].to(internal_dtype)
-            b_tile = src_B_t[start:end].to(internal_dtype)
-            srcA, srcB = (
-                (dest.clone(), b_tile)
-                if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA
-                else (a_tile, dest.clone())
-            )
+        for out_t in range(tile_cnt_output):
+            block_idx = out_t // output_tiles_in_block
+            tile_in_block = out_t % output_tiles_in_block
+            out_start = out_t * tile_elements
+            dest = src_A_t[out_start : out_start + tile_elements].to(internal_dtype)
 
-            if mathop == MathOperation.Elwadd:
-                dest = srcA + srcB
-            elif mathop == MathOperation.Elwsub:
-                dest = srcA - srcB
-            elif mathop == MathOperation.Elwmul:
-                if eltwise_golden is not None:
-                    mask_dtype = format_dict[math_format_for_fidelity]
-                    srcA_m, srcB_m = eltwise_golden._apply_fidelity_masking(
-                        math_format_for_fidelity,
-                        srcA.to(mask_dtype),
-                        srcB.to(mask_dtype),
-                        0,
-                    )
-                    product = (
-                        (srcA_m.to(torch.float32) * srcB_m.to(torch.float32))
-                        .to(srcA_m.dtype)
-                        .to(internal_dtype)
-                    )
-                    dest = product
-                else:
-                    dest = srcA * srcB
+            for i in range(inner_dim):
+                input_tile_idx = (
+                    block_idx * input_tiles_in_block
+                    + i * output_tiles_in_block
+                    + tile_in_block
+                )
+                start = input_tile_idx * tile_elements
+                end = start + tile_elements
+                a_tile = src_A_t[start:end].to(internal_dtype)
+                b_tile = src_B_t[start:end].to(internal_dtype)
+                srcA, srcB = (
+                    (dest.clone(), b_tile)
+                    if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+                    else (a_tile, dest.clone())
+                )
 
-        golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
+                if mathop == MathOperation.Elwadd:
+                    dest = srcA + srcB
+                elif mathop == MathOperation.Elwsub:
+                    dest = srcA - srcB
+                elif mathop == MathOperation.Elwmul:
+                    if eltwise_golden is not None:
+                        mask_dtype = format_dict[math_format_for_fidelity]
+                        srcA_m, srcB_m = eltwise_golden._apply_fidelity_masking(
+                            math_format_for_fidelity,
+                            srcA.to(mask_dtype),
+                            srcB.to(mask_dtype),
+                            0,
+                        )
+                        product = (
+                            (srcA_m.to(torch.float32) * srcB_m.to(torch.float32))
+                            .to(srcA_m.dtype)
+                            .to(internal_dtype)
+                        )
+                        dest = product
+                    else:
+                        dest = srcA * srcB
+
+            golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
+
+        return golden_tensor
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
@@ -297,7 +303,9 @@ def test_eltwise_binary_reuse_dest_quasar(
         disable_format_inference=disable_format_inference,
     )
 
-    res_from_L1 = configuration.run().result
+    outcome = configuration.run(golden_fn=_golden)
+    res_from_L1 = outcome.result
+    golden_tensor = outcome.golden
 
     # Verify results match golden
     assert len(res_from_L1) == len(
