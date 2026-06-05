@@ -215,3 +215,25 @@ Perf (fused µs/iter, two runs, vs Idea G):
 
 KEPT (committed). N2368-RoPE now ~0.96x composite (was 0.85x), N9472-RoPE 1.36x
 (was 1.27x). N18944-RoPE flat (most rows/worker → already amortized; input-bound).
+
+## Idea I — read weight BEFORE rope (compute consumes weight first) (KEPT)
+
+Extends Idea H: at the chunk boundary the reader now reads weight/bias first,
+then cos/sin — matching compute's POST order (sub-phase 2 weight mul, then
+sub-phase 3 rope). Broadcast weight was already chunk-gated (read once after the
+first chunk); just relocated before the cos/sin block. Lets POST sub-phase 2 get
+weight without waiting behind the chunk's cos/sin reads.
+
+Correctness: fused-vs-baseline PCC worst 0.999994. PASS.
+
+Perf (fused µs/iter, two runs, vs Idea H):
+
+| config | H | I | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 838.7 | 788.7 / 791.1 | **−5.9%** |
+| N9472 RoPE  | 447.0 | 429.4 / 428.5 | **−4.0%** |
+| N2368 RoPE  | 206.5 | 205.7 / 205.7 | ~flat |
+| no-rope (all) | — | unchanged | 0 |
+
+KEPT (committed). N18944-RoPE finally moved (was flat for H) -> 1.57x composite
+(was 1.48x); N9472-RoPE 1.42x (was 1.36x). Session arc N18944-RoPE: 982 -> 790 (-20%).
