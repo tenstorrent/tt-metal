@@ -198,17 +198,29 @@ def _build_render_plan(
         ridx = int(m.group(1))
         type_for_ridx.setdefault(ridx, m.group(2))
 
+    def _base_char(type_token: str) -> str:
+        return type_token[3] if type_token.startswith("/") else type_token
+
+    # dp_typed_array_t ('A') and TileSlice ('t') are variable-size.
+    # Size is only known at decode time, so we can't advance `cur`
+    # for any following args. Both are only ever emitted as the
+    # sole placeholder in their DEVICE_PRINT call, enforced here.
+    # Otherwise offset could go into negatives.
+    var_size = [r for r, t in type_for_ridx.items() if _base_char(t) in ("A", "t")]
+    if var_size and len(type_for_ridx) > 1:
+        raise ValueError(
+            "format string mixes a variable-size placeholder "
+            "(dp_typed_array_t/TileSlice) with other arguments. Such a "
+            f"placeholder must be the only one in the format: {fmt!r}"
+        )
+
     offsets: dict[int, int] = {}
     cur = 0
     for ridx in sorted(type_for_ridx):
         type_token = type_for_ridx[ridx]
-        base_char = type_token[3] if type_token.startswith("/") else type_token
+        base_char = _base_char(type_token)
         offsets[ridx] = cur
         if base_char in ("A", "t"):
-            # dp_typed_array_t ('A') and TileSlice ('t') are variable-size.
-            # Size is only known at decode time, so we can't advance `cur`
-            # for any following args. Both are only ever emitted as the
-            # sole placeholder in their DEVICE_PRINT call.
             cur = -1
             continue
         entry = type_table.get(base_char)
@@ -221,7 +233,7 @@ def _build_render_plan(
         literals.append(_cook(fmt[last_end : m.start()]))
         ridx = int(m.group(1))
         type_token = m.group(2)
-        base_char = type_token[3] if type_token.startswith("/") else type_token
+        base_char = _base_char(type_token)
         entry = type_table.get(base_char)
         spec = m.group("spec") or ""
 
