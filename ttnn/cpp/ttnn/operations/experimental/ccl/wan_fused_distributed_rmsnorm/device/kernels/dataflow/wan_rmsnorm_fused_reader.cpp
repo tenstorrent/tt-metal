@@ -221,52 +221,63 @@ void kernel_main() {
             cb_push_back(input_cb, num_tile_cols);
         }
 
-        // cos/sin reads issued AFTER the input push so they overlap compute PRE.
+        // cos/sin for the WHOLE chunk, read AFTER all the chunk's input rows
+        // (matches compute's PRE-over-chunk then POST loop structure). Keeping
+        // cos/sin out from between the input rows lets the chunk's input reads
+        // flow uninterrupted on the NoC (faster PRE feed); cos/sin aren't
+        // consumed until the post-AG RoPE phase, so reading them here still
+        // leaves them ready in time and overlaps the AG wait + POST. The reader
+        // still pushes per row, so compute's POST can start as each row lands.
         if constexpr (fuse_rope) {
-            // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim]. Read all
-            // heads' head_dim_tiles tiles for this tile_row, packed contiguously.
-            // Tile idx for head h, tile t, col c:
-            //   h * rope_seqlen_tiles * head_dim_tiles + t * head_dim_tiles + c
-            // Broadcast RoPE (per_head_rope=0): cos/sin shape [B, 1, N, head_dim],
-            // indexed by t * head_dim_tiles + c.
-            uint32_t rope_tiles_this_row = 0;
-            if constexpr (per_head_rope != 0) {
-                const uint32_t num_heads_per_device = num_tile_cols / head_dim_tiles;
-                rope_tiles_this_row = num_heads_per_device * head_dim_tiles;
-                cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
-                cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
-                uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
-                uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
-                for (uint32_t h = 0; h < num_heads_per_device; h++) {
-                    const uint32_t head_base = h * rope_seqlen_tiles * head_dim_tiles + tile_row * head_dim_tiles;
-                    for (uint32_t i = 0; i < head_dim_tiles; i++) {
+            const uint32_t pos_in_chunk = (tile_row - tile_row_start) % chunk_size_rows;
+            const bool chunk_input_done = (pos_in_chunk + 1 == chunk_size_rows) || (tile_row + 1 == tile_row_end);
+            if (chunk_input_done) {
+                const uint32_t chunk_first = tile_row - pos_in_chunk;
+                for (uint32_t r = chunk_first; r <= tile_row; r++) {
+                    // Per-head RoPE: cos/sin shape [B, num_heads, N, head_dim] — all
+                    // heads' head_dim_tiles tiles for row r, idx
+                    // h*rope_seqlen_tiles*head_dim_tiles + r*head_dim_tiles + c.
+                    // Broadcast (per_head_rope=0): [B,1,N,head_dim], idx r*head_dim_tiles+c.
+                    uint32_t rope_tiles_this_row = 0;
+                    if constexpr (per_head_rope != 0) {
+                        const uint32_t num_heads_per_device = num_tile_cols / head_dim_tiles;
+                        rope_tiles_this_row = num_heads_per_device * head_dim_tiles;
+                        cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
+                        cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
+                        uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                        uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                        for (uint32_t h = 0; h < num_heads_per_device; h++) {
+                            const uint32_t head_base = h * rope_seqlen_tiles * head_dim_tiles + r * head_dim_tiles;
+                            for (uint32_t i = 0; i < head_dim_tiles; i++) {
 #ifndef WAN_ABL_SKIP_ROPE_READ
-                        noc_async_read_tile(head_base + i, rope_cos_accessor, rope_cos_wr_ptr);
-                        noc_async_read_tile(head_base + i, rope_sin_accessor, rope_sin_wr_ptr);
+                                noc_async_read_tile(head_base + i, rope_cos_accessor, rope_cos_wr_ptr);
+                                noc_async_read_tile(head_base + i, rope_sin_accessor, rope_sin_wr_ptr);
 #endif
-                        rope_cos_wr_ptr += rope_cos_tile_bytes;
-                        rope_sin_wr_ptr += rope_sin_tile_bytes;
+                                rope_cos_wr_ptr += rope_cos_tile_bytes;
+                                rope_sin_wr_ptr += rope_sin_tile_bytes;
+                            }
+                        }
+                    } else {
+                        rope_tiles_this_row = head_dim_tiles;
+                        const uint32_t rope_tile_start_idx = r * head_dim_tiles;
+                        cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
+                        cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
+                        uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                        uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                        for (uint32_t i = 0; i < head_dim_tiles; i++) {
+#ifndef WAN_ABL_SKIP_ROPE_READ
+                            noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
+                            noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
+#endif
+                            rope_cos_wr_ptr += rope_cos_tile_bytes;
+                            rope_sin_wr_ptr += rope_sin_tile_bytes;
+                        }
                     }
-                }
-            } else {
-                rope_tiles_this_row = head_dim_tiles;
-                const uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
-                cb_reserve_back(rope_cos_cb, rope_tiles_this_row);
-                cb_reserve_back(rope_sin_cb, rope_tiles_this_row);
-                uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
-                uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
-                for (uint32_t i = 0; i < head_dim_tiles; i++) {
-#ifndef WAN_ABL_SKIP_ROPE_READ
-                    noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
-                    noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
-#endif
-                    rope_cos_wr_ptr += rope_cos_tile_bytes;
-                    rope_sin_wr_ptr += rope_sin_tile_bytes;
+                    noc_async_read_barrier();
+                    cb_push_back(rope_cos_cb, rope_tiles_this_row);
+                    cb_push_back(rope_sin_cb, rope_tiles_this_row);
                 }
             }
-            noc_async_read_barrier();
-            cb_push_back(rope_cos_cb, rope_tiles_this_row);
-            cb_push_back(rope_sin_cb, rope_tiles_this_row);
         }
 
         // Per-token weight / bias: push this row's slice now, in block_size
