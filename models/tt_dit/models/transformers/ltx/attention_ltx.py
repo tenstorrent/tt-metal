@@ -36,6 +36,15 @@ class LTXAttention(Module):
         (True, 8, 4, 38912): (192, 512),
     }
 
+    # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
+    # the per-device Q shard and full K. Misses fall back to sdpa_program_config.
+    sdpa_chunk_by_shape = {
+        (True, 1216, 32): (128, 128),  # video text cross-attn, stage 1
+        (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
+        (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
+        (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
+    }
+
     def __init__(
         self,
         *,
@@ -161,16 +170,19 @@ class LTXAttention(Module):
             for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
             if (b, sp, tp) == mesh_key
         }
+        self._sdpa_pc_by_shape = {
+            (q, kv): ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=full_grid,
+                q_chunk_size=chunk[0],
+                k_chunk_size=chunk[1],
+                exp_approx_mode=False,
+            )
+            for (b, q, kv), chunk in self.sdpa_chunk_by_shape.items()
+            if b == mesh_key[0]
+        }
 
+        # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        # Only the dominant video self-attn (ring SDPA) runs HiFi2; matches the Wan config.
-        self.ring_sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -478,7 +490,7 @@ class LTXAttention(Module):
                     joint_strategy="rear",
                     logical_n=N,
                     program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
-                    compute_kernel_config=self.ring_sdpa_compute_kernel_config,
+                    compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                         self.parallel_config.sequence_parallel.mesh_axis
@@ -523,7 +535,7 @@ class LTXAttention(Module):
                 v_BHNE,
                 attn_mask=attn_mask,
                 is_causal=False,
-                program_config=self.sdpa_program_config,
+                program_config=self._sdpa_pc_by_shape.get((q_BHNE.shape[2], k_BHNE.shape[2]), self.sdpa_program_config),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
