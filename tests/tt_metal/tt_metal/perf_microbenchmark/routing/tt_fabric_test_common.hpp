@@ -927,9 +927,15 @@ public:
         const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const override {
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        // Galaxy Ring/Torus uses coordinate-based neighbors, all others use control plane
+        // Only the Wormhole Galaxy uses coordinate-based neighbors for Ring/Torus; all others
+        // (including Blackhole Galaxy) use the control plane. The coordinate-based wraparound
+        // produces incorrect neighbors on Blackhole Galaxy. Only happens when no MGD pinnings
+        // Refer to issue #44446
+        const bool is_wormhole_galaxy =
+            is_galaxy && tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+                             tt::tt_metal::ClusterType::GALAXY;
         const bool use_coordinate_neighbors =
-            is_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
+            is_wormhole_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
 
         for (const auto& src_node : device_ids) {
             const auto src_coord = get_device_coord(src_node);
