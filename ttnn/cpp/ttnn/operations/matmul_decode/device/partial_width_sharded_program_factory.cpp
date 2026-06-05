@@ -307,61 +307,111 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
     }
 
+    // Record the NOC each core's reader (RISCV_1) uses so the writer (RISCV_0) on the same
+    // core can be assigned the opposite NOC -- two RISC cores can't share a NOC.
+    std::map<CoreCoord, NOC> reader_noc_by_core;
+    for (const auto& core : noc0_sender_cores) {
+        reader_noc_by_core[core] = NOC::NOC_0;
+    }
+    for (const auto& core : noc1_sender_cores) {
+        reader_noc_by_core[core] = NOC::NOC_1;
+    }
+    for (const auto& core : default_noc_cores) {
+        reader_noc_by_core[core] = NOC::RISCV_1_default;
+    }
+
     // ---- Writer kernel (cross-core K-reduction) ----
     //
     // Runs on every B core. Each core ships its partial to slot `k_idx` of the base
     // core's reduce CB and bumps that core's reduce semaphore. Base cores additionally
     // wait for all K_blocks partials and publish the reduce CB to the compute kernel.
     const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
+    log_info(tt::LogOp, "b_cores: {}", b_cores);
+    log_info(tt::LogOp, "output_core_range_set: {}", output_core_range_set);
+    log_info(tt::LogOp, "inputB_core_range_set: {}", inputB_core_range_set);
+    log_info(tt::LogOp, "inputA_core_range_set: {}", inputA_core_range_set);
     std::vector<CoreRange> b_core_ranges;
     b_core_ranges.reserve(b_cores.size());
     for (const auto& core : b_cores) {
         b_core_ranges.emplace_back(core, core);
     }
 
-    KernelDescriptor writer_kernel_desc;
-    writer_kernel_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/writer_partial_width_sharded.cpp";
-    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_kernel_desc.core_ranges = CoreRangeSet(b_core_ranges);
-    writer_kernel_desc.compile_time_args = {
-        partial_cb_index,
-        reduce_cb_index,
-        block_num_tiles,
-        out_tile_size,
-        K_blocks,
-        reduce_sem_id,
-    };
-    writer_kernel_desc.config = DataMovementConfigDescriptor{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
-    };
-    writer_kernel_desc.runtime_args.reserve(b_cores.size());
-    for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
-        const uint32_t k_idx = idx / N_blocks;
-        const uint32_t n_idx = idx % N_blocks;
-        const CoreCoord base_logical = b_cores[n_idx];  // k_idx == 0 core for this n_idx
-        const CoreCoord base_phys = device->worker_core_from_logical_core(base_logical);
-        const bool is_base = (k_idx == 0);
-        log_info(
-            tt::LogOp,
-            "Writer core {}, idx {}, k_idx: {}, n_idx: {}, base_logical: {}, base_phys: {}, is_base: {}",
-            b_cores[idx],
-            idx,
-            k_idx,
-            n_idx,
-            base_logical,
-            base_phys,
-            is_base);
-        writer_kernel_desc.runtime_args.emplace_back(
-            b_cores[idx],
-            KernelDescriptor::CoreRuntimeArgs{
+    auto build_writer_kernel = [&](const std::vector<uint32_t>& core_indices, NOC noc) {
+        std::vector<CoreRange> ranges;
+        ranges.reserve(core_indices.size());
+        for (const uint32_t idx : core_indices) {
+            ranges.emplace_back(b_cores[idx], b_cores[idx]);
+        }
+        KernelDescriptor writer_kernel_desc;
+        writer_kernel_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/writer_partial_width_sharded.cpp";
+        writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_kernel_desc.core_ranges = CoreRangeSet(ranges);
+        writer_kernel_desc.compile_time_args = {
+            partial_cb_index,
+            reduce_cb_index,
+            block_num_tiles,
+            out_tile_size,
+            K_blocks,
+            reduce_sem_id,
+        };
+        writer_kernel_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = noc,
+        };
+        writer_kernel_desc.runtime_args.reserve(core_indices.size());
+        for (const uint32_t idx : core_indices) {
+            const uint32_t k_idx = idx / N_blocks;
+            const uint32_t n_idx = idx % N_blocks;
+            const CoreCoord base_logical = b_cores[n_idx];  // k_idx == 0 core for this n_idx
+            const CoreCoord base_phys = device->worker_core_from_logical_core(base_logical);
+            const bool is_base = (k_idx == 0);
+            log_info(
+                tt::LogOp,
+                "Writer core {}, idx {}, k_idx: {}, n_idx: {}, base_logical: {}, base_phys: {}, is_base: {}",
+                b_cores[idx],
+                idx,
                 k_idx,
-                static_cast<uint32_t>(base_phys.x),
-                static_cast<uint32_t>(base_phys.y),
-                static_cast<uint32_t>(is_base)});
+                n_idx,
+                base_logical,
+                base_phys,
+                is_base);
+            writer_kernel_desc.runtime_args.emplace_back(
+                b_cores[idx],
+                KernelDescriptor::CoreRuntimeArgs{
+                    k_idx,
+                    static_cast<uint32_t>(base_phys.x),
+                    static_cast<uint32_t>(base_phys.y),
+                    static_cast<uint32_t>(is_base)});
+        }
+        return writer_kernel_desc;
+    };
+
+    // Assign each writer (RISCV_0) the NOC opposite to its core's reader (RISCV_1).
+    // NOC_0 == RISCV_0_default == 0 and NOC_1 == RISCV_1_default == 1, so a reader on
+    // NOC_0 pairs with a writer on NOC_1 and vice versa. Cores with no recorded reader
+    // NOC fall back to RISCV_1_default (NOC_1) readers, i.e. writers on NOC_0.
+    std::vector<uint32_t> writer_noc0_indices;
+    std::vector<uint32_t> writer_noc1_indices;
+    for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
+        NOC reader_noc = NOC::RISCV_1_default;
+        const auto it = reader_noc_by_core.find(b_cores[idx]);
+        if (it != reader_noc_by_core.end()) {
+            reader_noc = it->second;
+        }
+        log_info(tt::LogOp, "core {}, idx: {}, reader_noc: {}", b_cores[idx], idx, reader_noc);
+        if (reader_noc == NOC::NOC_0) {
+            writer_noc1_indices.push_back(idx);
+        } else {
+            writer_noc0_indices.push_back(idx);
+        }
     }
-    desc.kernels.push_back(std::move(writer_kernel_desc));
+    if (!writer_noc0_indices.empty()) {
+        desc.kernels.push_back(build_writer_kernel(writer_noc0_indices, NOC::NOC_0));
+    }
+    if (!writer_noc1_indices.empty()) {
+        desc.kernels.push_back(build_writer_kernel(writer_noc1_indices, NOC::NOC_1));
+    }
 
     // ---- Compute kernel (partial matmul + base-core reduction) ----
     KernelDescriptor compute_kernel_desc;
@@ -376,6 +426,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
     };
+    log_info(
+        tt::LogOp,
+        "M_tiles: {}, K_tiles: {}, Kc_tiles: {}, Nc_tiles: {}, K_blocks: {}",
+        M_tiles,
+        K_tiles,
+        Kc_tiles,
+        Nc_tiles,
+        K_blocks);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = MathFidelity::HiFi4,
         .math_approx_mode = false,
@@ -384,7 +442,19 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
         const uint32_t k_idx = idx / N_blocks;
         const bool is_base = (k_idx == 0);
-        log_info(tt::LogOp, "core {}, idx {}, k_idx: {}, is_base: {}", b_cores[idx], idx, k_idx, is_base);
+        if (is_base) {
+            TT_FATAL(
+                output_core_range_set.contains(b_cores[idx]),
+                "Base core {} is not in output core range set",
+                b_cores[idx]);
+        }
+        log_info(
+            tt::LogOp,
+            "core {}, idx {}, k_idx: {}, is_base: {}",
+            b_cores[idx],
+            idx,
+            k_idx,
+            static_cast<uint32_t>(is_base));
         compute_kernel_desc.runtime_args.emplace_back(
             b_cores[idx], KernelDescriptor::CoreRuntimeArgs{k_idx, static_cast<uint32_t>(is_base)});
     }
