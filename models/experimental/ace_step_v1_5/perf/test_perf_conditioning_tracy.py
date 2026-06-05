@@ -49,7 +49,7 @@ Optional environment variables:
 - ``ACE_STEP_PERF_MAX_SECONDS``: optional wall-time budget on the timed perf pass.
 
 If Tracy's merge step fails with ``Device data missing``, run without ``-p`` for host-only timelines, or
-post-process with ``python tools/tracy/process_ops_logs.py --date``.
+post-process with ``python models/experimental/ace_step_v1_5/perf/process_ace_tracy_ops_logs.py --date``.
 """
 
 from __future__ import annotations

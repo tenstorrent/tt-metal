@@ -51,7 +51,7 @@ Optional environment variables:
 - ``ACE_STEP_LM_NARROW_AUDIO_VOCAB``: narrow ``LMHead`` column band in codes phase (default ``1``).
 
 If Tracy merge reports ``Device data missing``, run without ``-p`` or post-process with
-``python tools/tracy/process_ops_logs.py --date``.
+``python models/experimental/ace_step_v1_5/perf/process_ace_tracy_ops_logs.py --date``.
 """
 
 from __future__ import annotations

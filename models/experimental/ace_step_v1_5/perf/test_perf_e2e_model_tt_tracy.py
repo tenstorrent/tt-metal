@@ -33,10 +33,11 @@ When weights are absent, this test pulls the same bundles as ``run_prompt_to_wav
 
 If Tracy's report step fails with ``Device data missing`` / CSV mismatch (known limitation when too many
 device ops are captured), prefer ``TT_METAL_DEVICE_PROFILER=1 pytest …`` followed by
-``python tools/tracy/process_ops_logs.py --date``, or drop Tracy's ``-p`` merge flags for host-only timelines.
+``python models/experimental/ace_step_v1_5/perf/process_ace_tracy_ops_logs.py --date``, or drop Tracy's ``-p`` merge flags for host-only timelines.
 
-``tools/tracy/process_ops_logs.py`` keeps Tracy host-side rows when ``cpp_device_perf_report.csv`` omits an
-op (with a loguru warning). Set ``TRACY_STRICT_DEVICE_PERF_CSV=1`` to restore the old hard failure for debugging.
+``process_ace_tracy_ops_logs.py`` keeps Tracy host-side rows when ``cpp_device_perf_report.csv`` omits an
+op (with a loguru warning). Set ``TRACY_STRICT_DEVICE_PERF_CSV=1`` to restore the stock hard failure for debugging.
+Stock ``tools/tracy/process_ops_logs.py`` still aborts on missing device rows.
 Hosts-only capture: ``python -m tracy … --no-device`` (no ``TT_METAL_DEVICE_PROFILER``).
 """
 
