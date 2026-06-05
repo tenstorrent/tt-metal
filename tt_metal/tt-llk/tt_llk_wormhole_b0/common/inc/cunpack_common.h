@@ -221,6 +221,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
     return (input_df == DataFormat::Int32 || input_df == DataFormat::Float32) && (output_df == DataFormat::Int32 || output_df == DataFormat::Float32);
 }
 
+/*
+ * Single source of truth for whether _llk_unpack_A_ takes the "unpack to dest" (SrcA -> DEST) path.
+ * It is only taken for genuinely 32-bit input; otherwise the MOP falls through to the normal/broadcast
+ * path. Both _llk_unpack_A_init_ (which programs the X counter) and _llk_unpack_A_mop_config_ (which
+ * programs the MOP) gate on this, so they cannot diverge if the policy ever changes.
+ *
+ * \param unpack_to_dest    Whether the caller requested unpack-to-dest.
+ * \param unpack_src_format Unpacker input (L1) data format.
+ * \param unpack_dst_format Unpacker output (register) data format.
+ */
+inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
+}
+
 /**
  * \brief Checks if the unpacker conversion is supported w.r.t. the FP32 dest accumulation mode.
  *

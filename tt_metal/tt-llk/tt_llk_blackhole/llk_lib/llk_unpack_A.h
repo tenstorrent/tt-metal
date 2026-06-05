@@ -67,7 +67,7 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
-    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
         if (transpose_of_faces && num_faces == 4)
         {
@@ -254,8 +254,9 @@ inline void _llk_unpack_A_init_(
     // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
     // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
     // The unpack-to-dest (SrcA) path is only taken when the input is actually 32-bit; otherwise the MOP
-    // falls through to the normal/broadcast path, so gate on is_32bit_input here exactly like it does.
-    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
+    // falls through to the normal/broadcast path, so gate on the shared should_unpack_to_dest() predicate
+    // the MOP uses, so the two cannot diverge.
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
         // SrcA -> dest. ROW and SCALAR broadcast only unpack a single row; everything else a full face.
         if constexpr (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
