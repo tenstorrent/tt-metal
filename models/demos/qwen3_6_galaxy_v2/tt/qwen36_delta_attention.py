@@ -335,11 +335,19 @@ class TtQwen36DeltaAttention(LightweightModule):
         # Persistent recurrent state buffer: [B, H_per_row, K, V] sharded per
         # row by the per-row H dimension. The kernel reads/writes [B, H, K, V]
         # with H=n_v_per_row=6.
-        self.dn_state_buffer = self._build_dn_state_buffer()
+        self._dn_state_buffer_internal = self._build_dn_state_buffer()
 
         # Persistent conv state buffer: [B, K-1, D_per_row] ROW_MAJOR, sharded
         # across rows by D (since each row holds its own conv channels).
-        self.conv_state_buffer = self._build_conv_state_buffer()
+        self._conv_state_buffer_internal = self._build_conv_state_buffer()
+
+        # Mamba-cache rework hook: the vLLM server can point the DeltaNet state at
+        # a per-request mamba-cache slot (via set_active_state) before each forward;
+        # otherwise (demo / eager / tests) these stay None and the dn_state_buffer /
+        # conv_state_buffer properties fall back to the internal buffers — byte-
+        # identical to the original behaviour, so the demo is unaffected.
+        self._active_dn_state = None
+        self._active_conv_state = None
 
         # V2-16: tt-lang fused beta/g kernel state (persistent buffers + program
         # descriptor). Only constructed when the flag is on — keeps the safe
@@ -835,6 +843,29 @@ class TtQwen36DeltaAttention(LightweightModule):
         for p in parts:
             if p is not new_state:
                 p.deallocate(True)
+
+    @property
+    def dn_state_buffer(self):
+        """Active recurrent-state buffer: the vLLM mamba-cache slot when set
+        (server), else the internal persistent buffer (demo / eager / tests)."""
+        return self._active_dn_state if self._active_dn_state is not None else self._dn_state_buffer_internal
+
+    @property
+    def conv_state_buffer(self):
+        """Active conv-state buffer (vLLM mamba-cache slot when set, else internal)."""
+        return self._active_conv_state if self._active_conv_state is not None else self._conv_state_buffer_internal
+
+    def set_active_state(self, dn_state=None, conv_state=None):
+        """Point dn_state_buffer/conv_state_buffer at vLLM-managed per-request mamba
+        cache slots for the upcoming forward (server path). Pass None to revert to
+        the internal buffers (demo/eager)."""
+        self._active_dn_state = dn_state
+        self._active_conv_state = conv_state
+
+    def clear_active_state(self):
+        """Revert to the internal state buffers (demo/eager/tests)."""
+        self._active_dn_state = None
+        self._active_conv_state = None
 
     def clear_state(self):
         """Zero both persistent buffers (fresh-sequence entry point)."""
