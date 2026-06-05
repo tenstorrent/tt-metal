@@ -100,11 +100,15 @@ def _raw_ttnn(t):
 #                   column-parallel (no CCL) + down all-reduce.
 #   "col_fused"  -> TTNNDotsOCRMLPColParallelFusedGateUp: same as "col" but the
 #                   gate/up are a single fused column-parallel matmul + chunk.
+#   "col_fused_shardout" -> same fused col MLP, but down does reduce_scatter ONLY
+#                   (no all_gather) -> hidden-SHARDED out. The only CCL win on the
+#                   TP=4 stack (-14.8% decode MLP wall-time); output is hidden-sharded.
 @pytest.mark.parametrize("seq_len", [1], ids=["decoder"])
 # @pytest.mark.parametrize("seq_len", [1, 2816], ids=["decode", "prefill"])
-@pytest.mark.parametrize("scheme", ["col_fused"])
+@pytest.mark.parametrize("scheme", ["col_fused_shardout"])
+# @pytest.mark.parametrize("scheme", ["col_fused", "col_fused_shardout"])
 # @pytest.mark.parametrize("scheme", ["col", "col_fused"])
-# @pytest.mark.parametrize("scheme", ["row", "col", "col_fused"])
+# @pytest.mark.parametrize("scheme", ["row", "col", "col_fused", "col_fused_shardout"])
 @pytest.mark.parametrize("mesh_device", [(1, TP)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -129,6 +133,10 @@ def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len, scheme):
         tt_mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_mlp)
         # Column-parallel takes a replicated full-hidden activation on every device.
         in_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    elif scheme == "col_fused_shardout":
+        # reduce_scatter-only down -> hidden-sharded output (the CCL optimization).
+        tt_mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_mlp, replicated_output=False)
+        in_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         tt_mlp = TTNNDotsOCRMLPColParallel.from_torch(torch_mlp)
         # Column-parallel takes a replicated full-hidden activation on every device.
@@ -147,7 +155,7 @@ def test_dots_ocr_text_mlp_tp4(mesh_device, seq_len, scheme):
     out_tt = tt_mlp(x_tt)
     ttnn.synchronize_device(mesh_device)
 
-    if scheme == "row":
+    if scheme in ("row", "col_fused_shardout"):
         # Output is hidden-N-sharded; gather the per-device slices back to full hidden.
         out = ttnn.to_torch(_raw_ttnn(out_tt), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).to(
             torch.float32

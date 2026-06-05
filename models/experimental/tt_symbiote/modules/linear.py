@@ -400,6 +400,40 @@ def _decode_gate_up_dram_sharded_program_config(input_shape, weight_shape):
     )
 
 
+def _decode_gate_up_col_dram_sharded_program_config(k_per_dev: int, n_per_dev: int, num_cores: int = 16):
+    """DRAM-sharded decode config for the per-device COLUMN-PARALLEL fused gate_up.
+
+    Unlike the row-parallel ``_decode_gate_up_dram_sharded_program_config`` (which
+    pattern-matches the single-device N=17920 shape), this builds the config for an
+    arbitrary per-device ``n_per_dev = 2*intermediate/num_tp`` (e.g. 4480 at TP=4).
+
+    The column-parallel gate_up carries NO collective, so the per-device matmul is a
+    standalone DRAM-sharded problem on every chip. The weight is DRAM-WIDTH-sharded
+    across the device's DRAM banks (12 on Wormhole, 8 on Blackhole -- read from
+    ``device.dram_grid_size()`` inside ``_dram_sharded_mem_config_2d``); pairing it
+    with THIS kernel (rather than a generic mcast kernel) is what makes the
+    width-sharded read correct on both architectures.
+
+    ``num_cores`` is the L1 compute/output-shard grid (16 = 8x2), independent of the
+    DRAM-bank count. ``k_per_dev`` must be tile-divisible across ``num_cores`` so the
+    L1 input K-shard stays tile-aligned. ``n_per_dev`` need not divide ``num_cores``:
+    the output is padded up to ``num_cores*per_core_N`` tiles (padding lands at the
+    end and is dropped by the caller's logical gate/up slice).
+    """
+    tile = ttnn.TILE_SIZE
+    k_tiles = k_per_dev // tile
+    if k_tiles % num_cores != 0:
+        return None
+    in0_block_w = _largest_divisor_at_most(k_tiles // num_cores, 8)
+    per_core_n = math.ceil(n_per_dev / (tile * num_cores))
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fused_activation=None,
+    )
+
+
 def _decode_down_proj_input_memory_config(k: int = 8960) -> ttnn.MemoryConfig:
     """L1 width-sharded input layout for the 8c 8x1 DRAM-sharded down-proj matmul."""
     return _l1_width_sharded_mem_config(k=k, grid=_DOWN_PROJ_DRAM_SHARDED_GRID)

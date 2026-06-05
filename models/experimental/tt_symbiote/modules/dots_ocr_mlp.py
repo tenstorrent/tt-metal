@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
@@ -17,6 +19,8 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_down_proj_dram_sharded_program_config,
     _decode_down_proj_input_memory_config,
     _decode_gate_up_dram_sharded_program_config,
+    _decode_gate_up_col_dram_sharded_program_config,
+    _decode_gate_up_input_memory_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
     _tp_requires_ccl,
@@ -24,6 +28,8 @@ from models.experimental.tt_symbiote.modules.linear import (
     _linear_mesh_num_devices,
     _ccl_num_links,
 )
+
+_GATE_UP_COL_DRAM_SHARDED_NUM_CORES = 64
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -494,9 +500,99 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         # Hand the fused [2*intermediate, hidden] weight to the base column-shard
         # loader, which transposes to [hidden, 2*intermediate] and shards the
         # last (N) dim across the TP axis -- yielding the per-device interleave.
-        self.tt_weight_host = torch.cat(weight_chunks, dim=0)
-        self.tt_bias_host = torch.cat(bias_chunks, dim=0) if bias_chunks else None
+        fused_weight_torch = torch.cat(weight_chunks, dim=0)
+        fused_bias_torch = torch.cat(bias_chunks, dim=0) if bias_chunks else None
+        self.tt_weight_host = fused_weight_torch
+        self.tt_bias_host = fused_bias_torch
         super().move_weights_to_device_impl()
+
+        self._build_col_gate_up_dram_sharded(fused_weight_torch, fused_bias_torch, num_tp)
+
+    def _build_col_gate_up_dram_sharded(self, fused_weight_torch, fused_bias_torch, num_tp):
+        self._gate_up_col_dram_pc = None
+        self._gate_up_col_dram_weight = None
+        self._gate_up_col_dram_bias = None
+        self._gate_up_col_dram_input_cfg = None
+        self._gate_up_col_half = None
+
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # [2*intermediate, hidden] -> [hidden, 2*intermediate]; the mapper shards
+        # the last (N) dim across the TP axis, so each chip holds [hidden, n_per_dev].
+        weight_t = fused_weight_torch.T.contiguous()
+        k = int(weight_t.shape[-2])
+        n_global = int(weight_t.shape[-1])
+        n_per_dev = math.ceil(n_global / num_tp)
+
+        program_config = _decode_gate_up_col_dram_sharded_program_config(
+            k_per_dev=k, n_per_dev=n_per_dev, num_cores=_GATE_UP_COL_DRAM_SHARDED_NUM_CORES
+        )
+        if program_config is None:
+            # k not tile-divisible across the compute grid; keep the interleaved path.
+            return
+
+        # weight_dim == -1 for this class: both the [hidden, 2*inter] weight and the
+        # [1, 2*inter] bias are sharded on their last (N) dim across the TP axis.
+        weight_mapper = _tp_mesh_mapper(self.device, self.weight_dim)
+        bias_mapper = weight_mapper
+        self._gate_up_col_dram_weight = ttnn.as_tensor(
+            weight_t,
+            device=self.device,
+            dtype=weight_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=weight_mapper,
+            memory_config=_dram_sharded_mem_config_2d(self.device, k=k, n=n_per_dev),
+        )
+        if fused_bias_torch is not None:
+            bias_2d = fused_bias_torch.reshape((1, -1))
+            bias_n_per_dev = math.ceil(int(bias_2d.shape[-1]) / num_tp)
+            self._gate_up_col_dram_bias = ttnn.as_tensor(
+                bias_2d,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=bias_mapper,
+                memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_dev),
+            )
+        self._gate_up_col_dram_pc = program_config
+        self._gate_up_col_dram_input_cfg = _decode_gate_up_input_memory_config(k)
+        # Per-device logical width of each of gate_i / up_i (= intermediate/num_tp).
+        # The DRAM-sharded matmul pads N up to num_cores*per_core_N tiles; the MLP
+        # slices [0:half] and [half:2*half] to recover gate/up and drop the padding.
+        self._gate_up_col_half = n_per_dev // 2
+        self._gate_up_col_decode_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+
+        program_config = getattr(self, "_gate_up_col_dram_pc", None)
+        is_decode = int(input_shape[-2]) <= ttnn.TILE_SIZE
+        if is_decode and program_config is not None:
+            input_4d = ttnn.reshape(input_tensor, input_shape)
+            input_4d = ttnn.to_memory_config(input_4d, self._gate_up_col_dram_input_cfg)
+            tt_output = ttnn.linear(
+                input_4d,
+                self._gate_up_col_dram_weight,
+                bias=self._gate_up_col_dram_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                compute_kernel_config=self._gate_up_col_decode_ckc,
+                program_config=program_config,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+        # Prefill / fallback: base column-sharded interleaved matmul (no padding).
+        return super().forward(input_tensor)
 
 
 class TTNNDotsOCRMLPColParallel(TTNNModule):
@@ -562,37 +658,51 @@ class TTNNDotsOCRMLPColParallel(TTNNModule):
 
 
 class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
-    """Column-parallel text SwiGLU with FUSED gate+up: REPLICATED in -> REPLICATED out.
+    """Column-parallel text SwiGLU with FUSED gate+up.
 
     Fused-gate-up counterpart of ``TTNNDotsOCRMLPColParallel``. Instead of two
     separate column-parallel matmuls (gate and up), a single column-sharded
     matmul emits ``[*, 2*intermediate]`` (N-sharded), which is then split locally
     on each device into its matching ``[gate_i | up_i]`` shard via ``ttnn.chunk``.
 
-    Trade vs the unfused col MLP: one larger matmul (identical FLOPs) + one chunk
-    instead of two matmuls -- saves a device-op launch. down stays row-parallel
-    and all-reduces so the output returns replicated. Kept side by side with the
-    unfused col variant and the row-parallel default for perf comparison.
+    Two output contracts (the down all-reduce is the only CCL in this MLP, and a
+    TP=4 sweep showed it costs ~55 us = ~1/3 of the decode forward):
+
+    * ``replicated_output=True`` (default): down is row-parallel + all-reduce
+      (reduce_scatter + all_gather) -> REPLICATED full-hidden out. Safe drop-in
+      contract (replicated in -> replicated out).
+    * ``replicated_output=False``: down does reduce_scatter ONLY (no all_gather,
+      via ``TTNNDotsOCRRowShardedNoAllGather``) -> hidden-SHARDED out. This is the
+      only CCL win available on the dots_ocr TP=4 stack (Ring topology is
+      unroutable on the (1,4) line and num_links>1 deadlocks): it drops the
+      all_gather, measured at -14.8% decode MLP wall-time (164 -> 140 us/token,
+      CCL 55 -> 31 us) at identical PCC. The caller MUST then consume a
+      hidden-sharded residual (same contract the row-parallel default produces).
     """
 
     @classmethod
-    def from_torch(cls, torch_mlp):
+    def from_torch(cls, torch_mlp, replicated_output: bool = True):
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_mlp
         tt_module.intermediate_size = torch_mlp.gate_proj.out_features
+        tt_module.replicated_output = replicated_output
         tt_module.fused_gate_up_proj = TTNNDotsOCRFusedGateUpColParallel.from_two_torch(
             torch_mlp.gate_proj, torch_mlp.up_proj
         )
         # Kept for introspection parity with the unfused col variant; unused in forward.
         tt_module.gate_proj = None
         tt_module.up_proj = None
-        tt_module.down_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(torch_mlp.down_proj)
+        if replicated_output:
+            tt_module.down_proj = TTNNLinearLLamaIColShardedWAllReduced.from_torch(torch_mlp.down_proj)
+        else:
+            # reduce_scatter-only down -> hidden-sharded output (drops the all_gather).
+            tt_module.down_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(torch_mlp.down_proj)
         return tt_module
 
     def set_weight_dtype(self, dtype):
         self.fused_gate_up_proj.set_weight_dtype(dtype)
-        # down is the QKV-style all-reduced class; it hardcodes bfloat8_b and has
-        # no set_weight_dtype, so only forward the dtype when supported.
+        # The all-reduced down (replicated path) hardcodes bfloat8_b and has no
+        # set_weight_dtype; the reduce_scatter-only down does. Forward only when supported.
         if hasattr(self.down_proj, "set_weight_dtype"):
             self.down_proj.set_weight_dtype(dtype)
         return self
@@ -604,9 +714,23 @@ class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
         # Fused column-parallel gate/up: replicated activation in, 2N-sharded out, no CCL.
         gate_up = self.fused_gate_up_proj(hidden_states)
 
-        # Per-device the shard is [gate_i | up_i]; chunk on the last dim recovers
-        # the matching gate/up halves for this device's slice of intermediate.
-        gate, up = ttnn.chunk(gate_up, 2, dim=-1)
+        # The decode DRAM-sharded gate_up lands L1 width-sharded with N padded up to
+        # 16*per_core_N tiles. ``ttnn.chunk`` would split at the PADDED midpoint and
+        # corrupt the gate/up boundary, so sharded_to_interleaved first, then slice
+        # the two halves by their logical per-device width (dropping the padding).
+        half = getattr(self.fused_gate_up_proj, "_gate_up_col_half", None)
+        if gate_up.memory_config().is_sharded():
+            gate_up = ttnn.sharded_to_interleaved(gate_up, ttnn.L1_MEMORY_CONFIG)
+        if half is not None:
+            # Per-device the shard is [gate_i | up_i], each ``half`` wide; the matmul
+            # may have padded a few zero tiles past 2*half, which these slices drop.
+            shape = list(gate_up.shape)
+            rank = len(shape)
+            gate = ttnn.slice(gate_up, [0] * rank, shape[:-1] + [half])
+            up = ttnn.slice(gate_up, [0] * (rank - 1) + [half], shape[:-1] + [2 * half])
+        else:
+            # Interleaved fallback (prefill / non-DRAM-sharded): exact 2*half width.
+            gate, up = ttnn.chunk(gate_up, 2, dim=-1)
         ttnn.deallocate(gate_up)
 
         gate_up_mul = ttnn.mul(
@@ -620,5 +744,6 @@ class TTNNDotsOCRMLPColParallelFusedGateUp(TTNNModule):
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
 
-        # Row-parallel down: K-sharded in -> reduce_scatter + all_gather -> replicated.
+        # Down (K-sharded in): all-reduce -> replicated, or reduce_scatter-only ->
+        # hidden-sharded, depending on ``replicated_output``.
         return self.down_proj(gate_up_mul)
