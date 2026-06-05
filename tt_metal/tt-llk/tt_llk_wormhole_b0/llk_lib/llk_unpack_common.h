@@ -57,7 +57,6 @@ template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool 
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpack_num_faces  = 4)
 {
@@ -77,7 +76,11 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
+    // Refresh TILE_SIZE_A GPR with the per-tile L1 footprint in bytes derived
+    // from the new src format and face geometry. Mirrors the calculation in
+    // _llk_unpack_hw_configure_; see TILE_SIZE_BYTES in ckernel_defs.h and #34495.
+    const std::uint32_t tile_size = TILE_SIZE_BYTES(unpack_src_format, unpack_num_faces * unpack_face_r_dim * FACE_C_DIM);
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {
@@ -106,7 +109,6 @@ template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool 
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t unpack_face_r_dim = FACE_R_DIM,
     const std::uint32_t unpack_num_faces  = 4)
 {
@@ -126,7 +128,11 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32, 0, 0x0f>(unpack_src_format);
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
+    // Refresh TILE_SIZE_B GPR with the per-tile L1 footprint in bytes derived
+    // from the new src format and face geometry. Mirrors the calculation in
+    // _llk_unpack_hw_configure_; see TILE_SIZE_BYTES in ckernel_defs.h and #34495.
+    const std::uint32_t tile_size = TILE_SIZE_BYTES(unpack_src_format, unpack_num_faces * unpack_face_r_dim * FACE_C_DIM);
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
 
     if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
     {

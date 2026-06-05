@@ -176,11 +176,15 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     const std::uint32_t num_faces = get_operand_num_faces(srca_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srca_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    // Validate that the host-supplied per-tile L1 footprint (fifo_page_size,
+    // bytes) matches what the LLK now derives from src format + face geometry.
+    // See _llk_unpack_hw_configure_ in cunpack_common.h and #34495.
+    LLK_ASSERT(
+        get_local_cb_interface(srca_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[srca_operand_id], num_faces * face_r_dim * ckernel::FACE_C_DIM),
+        "srcA fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * FACE_C_DIM)");
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
-        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
+        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], face_r_dim, num_faces);
 }
 
 /**
@@ -200,11 +204,15 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     const std::uint32_t num_faces = get_operand_num_faces(srcb_operand_id);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(srcb_operand_id);
 
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
+    // Validate that the host-supplied per-tile L1 footprint (fifo_page_size,
+    // bytes) matches what the LLK now derives from src format + face geometry.
+    // See _llk_unpack_hw_configure_ in cunpack_common.h and #34495.
+    LLK_ASSERT(
+        get_local_cb_interface(srcb_operand_id).fifo_page_size ==
+            TILE_SIZE_BYTES(unpack_src_format[srcb_operand_id], num_faces * face_r_dim * ckernel::FACE_C_DIM),
+        "srcB fifo_page_size (bytes) must equal TILE_SIZE_BYTES(src_format, num_faces * face_r_dim * FACE_C_DIM)");
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
-        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
+        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], face_r_dim, num_faces);
 }
 
 /**

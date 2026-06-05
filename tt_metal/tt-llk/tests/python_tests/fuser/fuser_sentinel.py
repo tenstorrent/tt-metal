@@ -237,22 +237,16 @@ class FuserSentinel:
         if srca_changed:
             code += (
                 f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
-                f"    {self._fmt(new_fmt.unpack_A_src)}, {self._fmt(new_fmt.unpack_A_dst)}, {compute_node.src_a.tile_size}\n"
+                f"    {self._fmt(new_fmt.unpack_A_src)}, {self._fmt(new_fmt.unpack_A_dst)}\n"
                 f");\n"
             )
 
         if srcb_changed:
-            srcb_tile_size = (
-                compute_node.src_a.tile_size
-                if compute_node.reuse_dest is EltwiseBinaryReuseDestType.DEST_TO_SRCA
-                else (compute_node.src_b.tile_size if compute_node.src_b else None)
+            code += (
+                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
+                f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}\n"
+                f");\n"
             )
-            if srcb_tile_size is not None:
-                code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
-                    f"    {self._fmt(new_fmt.unpack_B_src)}, {self._fmt(new_fmt.unpack_B_dst)}, {srcb_tile_size}\n"
-                    f");\n"
-                )
 
         self._unpack_format = new_fmt
         return code

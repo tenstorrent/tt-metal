@@ -78,12 +78,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Start of second unpack kernel to perform unpack matmul on now tilized input data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
+    // Reconfigure unpack kernel data formats_array if they change in this run.
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-        formats_array[run].unpack_A_src,
-        formats_array[run].unpack_A_dst,
-        tile_size); // have to reconfigure unpack kernel data formats_array if they change in this run
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
-        formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, tile_size);
+        formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst);
     _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, 4 /* num_faces */, FACE_R_DIM);
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized), 0, 0, tile_size, tile_size);
