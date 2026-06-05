@@ -29,6 +29,13 @@ class LTXAttention(Module):
     }
     default_sdpa_chunk_size = (256, 256)
 
+    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
+    # sequence length passed to the op. Misses fall back to sdpa_chunk_size_map.
+    ring_sdpa_chunk_by_n = {
+        (True, 8, 4, 9728): (96, 256),
+        (True, 8, 4, 38912): (192, 512),
+    }
+
     def __init__(
         self,
         *,
@@ -132,29 +139,42 @@ class LTXAttention(Module):
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                self.parallel_config.sequence_parallel.factor,
-                self.parallel_config.tensor_parallel.factor,
-            ),
-            self.default_sdpa_chunk_size,
+        mesh_key = (
+            is_blackhole(),
+            self.parallel_config.sequence_parallel.factor,
+            self.parallel_config.tensor_parallel.factor,
         )
-
+        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(mesh_key, self.default_sdpa_chunk_size)
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
         )
+        self._ring_pc_by_n = {
+            n: ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=chunk[0],
+                k_chunk_size=chunk[1],
+                exp_approx_mode=False,
+            )
+            for (b, sp, tp, n), chunk in self.ring_sdpa_chunk_by_n.items()
+            if (b, sp, tp) == mesh_key
+        }
 
-        # SDPA runs HiFi4 + fp32 dest acc (A2V/V2A degrade to <=0.92 PCC on HiFi2).
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        # Only the dominant video self-attn (ring SDPA) runs HiFi2; matches the Wan config.
+        self.ring_sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
         )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -168,10 +188,11 @@ class LTXAttention(Module):
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
+        # Attention QKV/out matmuls run HiFi2, matching the Wan attention config.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
@@ -456,8 +477,8 @@ class LTXAttention(Module):
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self.ring_sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
+                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
+                    compute_kernel_config=self.ring_sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
                         self.parallel_config.sequence_parallel.mesh_axis
