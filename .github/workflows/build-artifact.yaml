@@ -410,22 +410,101 @@ jobs:
     steps:
       - name: Configure Garage S3 ccache
         run: |
-          # Silently skip when secrets are absent (forks without access) — build continues without remote cache
+          # Silently skip when secrets are absent — build continues without remote cache
           if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ]; then
             echo "GARAGE_S3_ACCESS_KEY not set — skipping remote ccache"
             exit 0
           fi
-          {
-            echo "CCACHE_REMOTE_STORAGE=s3://ccache|endpoint-url=http://garage.garage.svc.cluster.local:3900|aws-access-key-id=${{ secrets.GARAGE_S3_ACCESS_KEY }}|aws-secret-access-key=${{ secrets.GARAGE_S3_SECRET_KEY }}|aws-default-region=us-east-1"
-            echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
-            echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
-          } >> "$GITHUB_ENV"
 
-          echo "--- Garage HTTP probe (403 = reachable, proxy working) ---"
-          curl -s -o /dev/null -w "Garage root HTTP status: %{http_code}\n" \
-            -x "http://proxy.restricted-proxy.svc.cluster.local:3128" \
-            http://garage.garage.svc.cluster.local:3900/ || echo "Garage root: curl failed (unreachable)"
-          echo "ccache Garage S3 configured: s3://ccache @ garage.garage.svc.cluster.local:3900"
+          # ccache 4.10.2 has no native S3 backend (only redis:// and http://).
+          # Run a local HTTP bridge on 127.0.0.1:8765 that proxies ccache's
+          # HTTP protocol to Garage S3 via boto3.
+          cat > /tmp/ccache-s3-bridge.py << 'PYEOF'
+          #!/usr/bin/env python3
+          """HTTP bridge: ccache HTTP backend -> Garage S3"""
+          import os, threading, time
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import boto3, botocore
+
+          BUCKET = os.environ.get("CCACHE_S3_BUCKET", "ccache")
+          PORT = int(os.environ.get("CCACHE_S3_BRIDGE_PORT", "8765"))
+
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+              region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+              config=botocore.config.Config(s3={"addressing_style": "path"}),
+          )
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  key = self.path.lstrip("/")
+                  if not key:
+                      self.send_response(200); self.end_headers(); return
+                  try:
+                      obj = s3.get_object(Bucket=BUCKET, Key=key)
+                      data = obj["Body"].read()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/octet-stream")
+                      self.send_header("Content-Length", str(len(data)))
+                      self.end_headers()
+                      self.wfile.write(data)
+                  except botocore.exceptions.ClientError as e:
+                      code = e.response.get("Error", {}).get("Code", "")
+                      self.send_response(404 if code in ("NoSuchKey", "404") else 500)
+                      self.end_headers()
+                  except Exception:
+                      self.send_response(500)
+                      self.end_headers()
+
+              def do_PUT(self):
+                  key = self.path.lstrip("/")
+                  length = int(self.headers.get("Content-Length", 0))
+                  data = self.rfile.read(length)
+                  try:
+                      s3.put_object(Bucket=BUCKET, Key=key, Body=data)
+                      self.send_response(204)
+                  except Exception:
+                      self.send_response(500)
+                  self.end_headers()
+
+              def log_message(self, *a): pass
+
+          class ThreadedServer(HTTPServer):
+              def process_request(self, req, addr):
+                  threading.Thread(target=self._handle, args=(req, addr), daemon=True).start()
+              def _handle(self, req, addr):
+                  self.finish_request(req, addr); self.shutdown_request(req)
+
+          srv = ThreadedServer(("127.0.0.1", PORT), Handler)
+          print(f"ccache S3 bridge on :{PORT} -> s3://{BUCKET}", flush=True)
+          threading.Thread(target=srv.serve_forever, daemon=True).start()
+          while True:
+              time.sleep(3600)
+          PYEOF
+
+          # Install boto3 into the active Python env (same pattern as ctcache in clang-tidy)
+          uv pip install --quiet boto3
+
+          # Start bridge with credentials/proxy scoped to the subprocess only —
+          # NOT exported to GITHUB_ENV so other tools don't get proxy-routed unexpectedly
+          AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
+          AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
+          AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
+          AWS_DEFAULT_REGION="us-east-1" \
+          HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+          HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+          nohup python3 /tmp/ccache-s3-bridge.py >> /tmp/ccache-s3-bridge.log 2>&1 & disown $!
+
+          # Give the bridge a moment to bind and connect to Garage
+          sleep 2
+
+          # Point ccache at the local bridge
+          echo "CCACHE_REMOTE_STORAGE=http://127.0.0.1:8765/" >> "$GITHUB_ENV"
+          echo "Bridge PID: $! | log: /tmp/ccache-s3-bridge.log"
+          echo "ccache configured: http://127.0.0.1:8765/ -> garage.garage.svc.cluster.local:3900/ccache"
 
       - name: Set artifact name
         id: set-artifact-name
