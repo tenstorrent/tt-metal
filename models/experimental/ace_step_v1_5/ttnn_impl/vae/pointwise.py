@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from .._ttnn import get_ttnn
+import ttnn
 from ..math_perf_env import (
     ace_step_dense_linear_program_config,
     ace_step_init_vae_conv_compute_kernel_config,
@@ -14,13 +14,6 @@ from ..math_perf_env import (
     ace_step_vae_activation_memory_config,
 )
 from .conv1d import _to_float32_numpy
-
-
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl.vae")
-    return ttnn
 
 
 class TtVaePointwise1d:
@@ -37,7 +30,6 @@ class TtVaePointwise1d:
         activation_dtype=None,
         weights_dtype=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
         self.in_channels = int(in_channels)

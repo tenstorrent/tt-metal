@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .._ttnn import get_ttnn
+import ttnn
 from ..math_perf_env import (
     ace_step_vae_activation_compute_dtype,
     ace_step_vae_activation_memory_config,
@@ -28,13 +28,6 @@ from ..math_perf_env import (
     ace_step_vae_ensure_interleaved,
     ace_step_vae_typecast_kwargs,
 )
-
-
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl.vae")
-    return ttnn
 
 
 def _snake_param_to_btc(arr) -> np.ndarray:
@@ -62,7 +55,6 @@ class TtSnake1d:
         memory_config=None,
         output_memory_config=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
         self._storage_dtype = ace_step_vae_activation_storage_dtype(ttnn)

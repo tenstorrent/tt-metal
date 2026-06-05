@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from .._ttnn import get_ttnn
+import ttnn
 from ..math_perf_env import (
     ace_step_flush_device_profiler,
     ace_step_profiler_flush_every_layer,
@@ -28,13 +28,6 @@ def _vae_trace_enabled() -> bool:
     # in_buf clone has a different device address, making the L1-shard move program hash differ
     # from warmup.  Disable until the VAE conv path is made trace-compatible.
     return os.environ.get("ACE_STEP_VAE_TRACE", "0") not in ("0", "false", "False")
-
-
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl.vae")
-    return ttnn
 
 
 class TtOobleckDecoder:
@@ -59,7 +52,6 @@ class TtOobleckDecoder:
         activation_dtype=None,
         weights_dtype=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
         self.channels = int(channels)

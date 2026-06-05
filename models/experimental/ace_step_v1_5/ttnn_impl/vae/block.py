@@ -12,18 +12,11 @@ from __future__ import annotations
 
 import math
 
-from .._ttnn import get_ttnn
+import ttnn
 from ..math_perf_env import ace_step_vae_ensure_interleaved, ace_step_vae_synchronize
 from .conv1d import TtConvTranspose1d
 from .residual import TtOobleckResidualUnit
 from .snake import TtSnake1d
-
-
-def _require_ttnn():
-    ttnn = get_ttnn()
-    if ttnn is None:
-        raise RuntimeError("ttnn is required for ace_step_v1_5.ttnn_impl.vae")
-    return ttnn
 
 
 def _strip_prefix(d: dict, prefix: str) -> dict:
@@ -46,7 +39,6 @@ class TtOobleckDecoderBlock:
         activation_dtype=None,
         weights_dtype=None,
     ) -> None:
-        ttnn = _require_ttnn()
         self.ttnn = ttnn
         self.device = device
         self.input_dim = int(input_dim)
