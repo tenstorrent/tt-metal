@@ -113,29 +113,46 @@ inline void _llk_math_upk_to_dest_hw_configure_()
     }
 }
 
+// Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
+inline constexpr std::uint64_t df_bit(DataFormat df)
+{
+    return 1ULL << to_underlying(df);
+}
+
+// Set of Source register DataFormats compatible with Float32 Dest register format
+inline constexpr std::uint64_t kFp32DestCompatibleMask = df_bit(DataFormat::Float16_b) | df_bit(DataFormat::Float16) | df_bit(DataFormat::Tf32) |
+                                                         df_bit(DataFormat::Float32) | df_bit(DataFormat::MxFp4_2x_A) | df_bit(DataFormat::MxFp4_2x_B);
+
+// Set of Source register DataFormats compatible with Int32 Dest register format
+// Int16 is absent from the list because, for the FPU, it is supported only for MOV ops and is
+// not compatible with 32bit Dest register mode.
+inline constexpr std::uint64_t kInt32DestCompatibleMask =
+    df_bit(DataFormat::Int8) | df_bit(DataFormat::UInt8) | df_bit(DataFormat::Int32) | df_bit(DataFormat::Int8_2x) | df_bit(DataFormat::UInt8_2x);
+
 /**
  * @brief Determines whether the source register format and Float32 destination register format are a supported combination
  *
- * @param src_reg_fmt: The source register format
+ * @param src_reg_fmt: Source register format
+ * @return true if the bit corresponding to src_reg_fmt is set in kFp32DestCompatibleMask.
+ *         The mask is right-shifted by the enum value so the relevant bit lands at position 0,
+ *         then AND-ed with 1 to isolate it.
  */
 inline bool _is_src_fmt_fp32_dest_compatible_(const DataFormat src_reg_fmt)
 {
-    return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 || src_reg_fmt == DataFormat::Tf32 ||
-           src_reg_fmt == DataFormat::Float32 || src_reg_fmt == DataFormat::MxFp4_2x_A || src_reg_fmt == DataFormat::MxFp4_2x_B;
+    return (kFp32DestCompatibleMask >> to_underlying(src_reg_fmt)) & 1;
 }
 
 /**
  * @brief Determines whether the source register format and Int32 destination register format are a supported combination
  *
- * @param src_reg_fmt: The source register format
- *
- * Int16 is absent from the list because, for the FPU, it is supported only for MOV ops and is
- * not compatible with 32bit Dest register mode.
+ * @param src_reg_fmt: Source register format
+ * @return true if the bit corresponding to src_reg_fmt is set in kInt32DestCompatibleMask.
+ *         The mask is right-shifted by the enum value so the relevant bit lands at position 0,
+ *         then AND-ed with 1 to isolate it.
  */
 inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
 {
-    return src_reg_fmt == DataFormat::Int8 || src_reg_fmt == DataFormat::UInt8 || src_reg_fmt == DataFormat::Int32 || src_reg_fmt == DataFormat::Int8_2x ||
-           src_reg_fmt == DataFormat::UInt8_2x;
+    return (kInt32DestCompatibleMask >> to_underlying(src_reg_fmt)) & 1;
 }
 
 /**
