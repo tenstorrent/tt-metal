@@ -1373,6 +1373,30 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t fsdp_group_base = in1_idx - fsdp_worker_idx;
         uint32_t fsdp_backward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 2;
         uint32_t fsdp_forward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 1;
+        // Scheme 3 (single-row muxes): relay from the in1-chain core in the SAME column as the fsdp
+        // mux (odd col 2g+1), so the sender->mux write drops straight down the mux column instead of
+        // zig-zagging from the chain tail (col 6/7). All cores in a row hold the identical weight
+        // block / consume order, so any column works for relay-what-you-consume. Only the surviving
+        // uni-ring direction connects; point it at the column-matched core, disable the other.
+        // fsdp_uni_dir==0 -> backward sender relays (Dev 0 chain head); ==1 -> forward sender relays.
+        constexpr uint32_t NO_FSDP_SENDER = 0xFFFFFFFFu;
+        if (single_row_muxes) {
+            const uint32_t fsdp_mux_col = num_workers_per_link * (in1_idx / num_workers_per_link) + 1;
+            uint32_t col_matched_index = fsdp_forward_sender_index;  // fallback (tail) if not found
+            for (uint32_t i = 0; i < in1_core_order.size(); ++i) {
+                if (in1_core_order[i].x == fsdp_mux_col) {
+                    col_matched_index = i;
+                    break;
+                }
+            }
+            if (fsdp_uni_dir == 0) {
+                fsdp_backward_sender_index = col_matched_index;
+                fsdp_forward_sender_index = NO_FSDP_SENDER;
+            } else {
+                fsdp_forward_sender_index = col_matched_index;
+                fsdp_backward_sender_index = NO_FSDP_SENDER;
+            }
+        }
 
         // FSDP-only per-core args: kernel parses these under FSDP_FUSED. The two sender indices tell
         // the kernel which cores in this row's chain relay (backward / forward direction).
@@ -1422,9 +1446,13 @@ all_gather_minimal_matmul_async_factory_helper(
                 // fsdp_mux_in_column was wrong for the single-row case (transpose grid, column==false),
                 // which picked the swapped non-transpose form and pointed at non-client cores -> the mux
                 // never terminated. Mirror the in0 term-master, which already gates on transpose.
+                // Scheme 3: clients now sit in the mux's column (not the chain tail), so the
+                // worker-0 term master is the column-matched core at the group-base row.
                 CoreCoord fsdp_term_master_logical_backward =
-                    transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
-                                        : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
+                    single_row_muxes
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link) + 1, in1_idx - worker_idx)
+                    : transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
+                                          : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
                 CoreCoord fsdp_term_master_virtual_backward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
@@ -1447,9 +1475,11 @@ all_gather_minimal_matmul_async_factory_helper(
                 // Non-transpose: original bottom-row mux with the -1 shift. Term master = the group's
                 // worker-0 forward sender (chain tail) at the group-base row.
                 CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
-                CoreCoord fsdp_term_master_logical_forward = transpose_core_grid
-                                                                 ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
-                                                                 : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
+                CoreCoord fsdp_term_master_logical_forward =
+                    single_row_muxes
+                        ? CoreCoord(num_workers_per_link * (in1_idx / num_workers_per_link) + 1, in1_idx - worker_idx)
+                    : transpose_core_grid ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
+                                          : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
                 CoreCoord fsdp_term_master_virtual_forward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
