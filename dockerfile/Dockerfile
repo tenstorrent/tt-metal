@@ -147,7 +147,7 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
-COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+COPY --from=ccache-layer /install/ /usr/local/
 COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/

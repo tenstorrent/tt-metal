@@ -60,17 +60,21 @@ ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 # The install-sfpi.sh script sources these files directly.
 
 #############################################################
-# ccache - simple binary extraction
-# Outputs: /install/bin/ccache
+# ccache - binary extraction with install.sh
+# Outputs: /install/bin/ccache, /install/libexec/ccache
 #############################################################
 
-FROM alpine:3.19 AS ccache-builder
+FROM ubuntu:22.04 AS ccache-builder
 ARG CCACHE_VERSION
 ARG CCACHE_SHA256
-# Install bash first (required for SHELL directive)
-RUN apk add --no-cache bash wget
+
+ENV DEBIAN_FRONTEND=noninteractive
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# python3 is required by install.sh (runs patch-binary.py to bake libexecdir/sysconfdir into the binary)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY dockerfile/scripts/install-ccache.sh /tmp/install-ccache.sh
 RUN CCACHE_VERSION=${CCACHE_VERSION} \
     CCACHE_SHA256=${CCACHE_SHA256} \

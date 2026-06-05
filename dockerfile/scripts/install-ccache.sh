@@ -28,15 +28,30 @@ if ! echo "${CCACHE_SHA256}  ${TMPFILE}" | sha256sum -c - ; then
     exit 1
 fi
 
-# Extract to install directory
-# The tarball contains ccache-X.Y.Z-linux-x86_64/ccache (binary at root, no bin/ subdir)
-mkdir -p "${INSTALL_DIR}/bin"
-tar -xf "${TMPFILE}" -C "${INSTALL_DIR}" --strip-components=1
+# Extract to temp dir and run upstream install.sh
+# install.sh uses patch-binary.py (requires python3) to bake the correct
+# libexecdir and sysconfdir paths into the binary at install time.
+# We pass the final on-disk paths (/usr/local/libexec, /usr/local/etc) so
+# ccache can locate its storage helper after the COPY --from stage lands
+# the /install tree at /usr/local/ in the final image.
+TMPDIR_EXTRACT=$(mktemp -d)
+tar -xf "${TMPFILE}" -C "${TMPDIR_EXTRACT}" --strip-components=1
 
-# Move binary to bin/ for standard layout
-mv "${INSTALL_DIR}/ccache" "${INSTALL_DIR}/bin/ccache"
+mkdir -p "${INSTALL_DIR}/bin"
+"${TMPDIR_EXTRACT}/install.sh" \
+    --prefix="${INSTALL_DIR}" \
+    --libexecdir=/usr/local/libexec \
+    --sysconfdir=/usr/local/etc
+
+# The storage helper is the ccache binary itself, invoked as a background
+# daemon for async remote storage.  ccache looks for it in libexec_dirs
+# (baked in above as /usr/local/libexec).  Place a copy there so it is
+# present after the COPY --from stage maps /install/ → /usr/local/.
+mkdir -p "${INSTALL_DIR}/libexec"
+cp "${INSTALL_DIR}/bin/ccache" "${INSTALL_DIR}/libexec/ccache"
 
 # Cleanup
+rm -rf "${TMPDIR_EXTRACT}"
 rm -f "${TMPFILE}"
 
 # Verify installation (skip if binary can't run, e.g., glibc binary on musl/Alpine)
