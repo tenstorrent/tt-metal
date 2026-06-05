@@ -201,6 +201,38 @@ Task order:
 
 ---
 
+## Performance (Blackhole BH QB, 2CQ + decode trace)
+
+End-to-end `generate()` timings measured by running [`demo/demo.py`](demo/demo.py) on a four-chip Blackhole QB host, using the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Inputs are **replicated** on all four devices (batch-1, TP=4), not data-parallel batched. Reported numbers exclude host pre/post-processing (token decode, WAV I/O). Each task opens its own mesh device with warmup before the timed iteration.
+
+**Per-unit latency** (`ms/tok`, `μs/sample`) is more stable than throughput when output length varies run-to-run.
+
+### BH QB — `MeshShape(1, 4)`, replicated batch-1
+
+| Task | Runtime | Throughput | Workload | Per-unit |
+|------|--------:|-----------:|----------|----------|
+| T2TT | 669.5 ms | 95.59 tokens/s | 64 tokens | 10.5 ms/tok |
+| T2ST | 4106.7 ms | 56492.72 samples/s | 232000 samples | 17.70 μs/smp |
+| S2TT | 1201.9 ms | 21.63 tokens/s | 26 tokens | 46.2 ms/tok |
+| S2ST | 4042.2 ms | 36336.83 samples/s | 146880 samples | 27.52 μs/smp |
+| ASR | 1495.0 ms | 19.40 tokens/s | 29 tokens | 51.6 ms/tok |
+
+Task notes:
+- **T2TT** — text encoder + traced text-decoder loop.
+- **T2ST** — text path + T2U + vocoder; vocoder dominates wall-clock but yields high samples/s.
+- **S2TT / ASR** — speech encoder prefill + text decoder; dominated by encoder prefill amortized over short outputs on the ~9.6 s preamble clip (~479 mel frames).
+- **S2ST** — speech encoder + decoder + T2U + vocoder.
+
+**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task, so the first speech-synthesis task in a run may still pay one-time compile cost if the disk cache is cold; the table above reflects a warm JIT cache.
+
+### Reproducing
+
+```bash
+python models/experimental/seamless_m4t_v2_large/demo/demo.py
+```
+
+---
+
 ## Running Tests
 
 ### PCC tests (functional correctness)
