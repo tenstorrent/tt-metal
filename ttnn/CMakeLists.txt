@@ -123,6 +123,9 @@ target_include_directories(
         api/ttnn
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        $<TARGET_PROPERTY:Metalium::Metal::Impl,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:Metalium::Metal::LLRT,INTERFACE_INCLUDE_DIRECTORIES>
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
 )
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(

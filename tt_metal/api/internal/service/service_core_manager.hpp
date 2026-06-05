@@ -148,9 +148,4 @@ private:
     std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
 
-// Convenience accessor for callers outside tt_metal (e.g. ttnn) that need the per-context
-// ServiceCoreManager without including the internal metal_context.hpp. Equivalent to
-// MetalContext::instance().get_service_core_manager().
-ServiceCoreManager& service_core_manager();
-
 }  // namespace tt::tt_metal::internal

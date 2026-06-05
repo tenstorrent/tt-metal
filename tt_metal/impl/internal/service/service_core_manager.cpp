@@ -244,6 +244,4 @@ void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const {
     tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
 }
 
-ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
-
 }  // namespace tt::tt_metal::internal
