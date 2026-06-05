@@ -25,7 +25,7 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
                 return desc;
             }
         }
-        TT_FATAL(false, "generic_op: no mesh_program entry contains mesh coordinate {}", coord);
+        return tt::tt_metal::ProgramDescriptor{};  // empty descriptor
     }
 
     TT_FATAL(
