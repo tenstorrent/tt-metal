@@ -90,12 +90,17 @@ std::vector<uint64_t> LiveDramRanges::snapshot(int device_id) {
 
 namespace {
 
-// `start` is the lookup key for clear(); the kernel-side check only consumes
-// (logical_end, physical_end).
+// `start` is the lookup key for clear() AND the buffer base the kernel-side check
+// subtracts to get a buffer-relative offset before the row/col modulo math.
 struct PaddingEntry {
     uint32_t start;
-    uint32_t logical_end;
     uint32_t physical_end;
+    uint32_t layout;  // 0 = row-major, 1 = tiled (see emule_live_ranges.hpp)
+    uint32_t elem_size;
+    uint32_t logical_rows;  // per-page logical height
+    uint32_t logical_cols;
+    uint32_t padded_cols;
+    uint32_t padded_page_rows;  // per-page padded height (row reset period); 0 = no paging
 };
 
 struct PaddingRegistry {
@@ -110,17 +115,27 @@ PaddingRegistry& padding_registry() {
 
 }  // namespace
 
-void LiveL1PaddingRanges::set(int device_id, uint32_t start, uint32_t logical_end, uint32_t physical_end) {
+void LiveL1PaddingRanges::set(
+    int device_id,
+    uint32_t start,
+    uint32_t physical_end,
+    uint8_t layout,
+    uint32_t elem_size,
+    uint32_t logical_rows,
+    uint32_t logical_cols,
+    uint32_t padded_cols,
+    uint32_t padded_page_rows) {
     auto& reg = padding_registry();
     std::lock_guard<std::mutex> g(reg.mu);
     auto& v = reg.per_device[device_id];
+    PaddingEntry entry{
+        start, physical_end, layout, elem_size, logical_rows, logical_cols, padded_cols, padded_page_rows};
     auto match = std::find_if(
         v.begin(), v.end(), [start](const PaddingEntry& e) { return e.start == start; });
     if (match != v.end()) {
-        match->logical_end = logical_end;
-        match->physical_end = physical_end;
+        *match = entry;
     } else {
-        v.push_back(PaddingEntry{start, logical_end, physical_end});
+        v.push_back(entry);
     }
 }
 
@@ -146,10 +161,16 @@ std::vector<uint64_t> LiveL1PaddingRanges::snapshot(int device_id) {
     if (it == reg.per_device.end()) {
         return {};
     }
+    // 4 packed words per descriptor; the kernel strides the flat array by 4 and
+    // its `count` is the number of descriptors. Keep this packing in lockstep with
+    // __emule_offset_in_padding's unpacking in the jit_hw headers.
     std::vector<uint64_t> out;
-    out.reserve(it->second.size());
+    out.reserve(it->second.size() * 4);
     for (const auto& e : it->second) {
-        out.push_back(pack(e.logical_end, e.physical_end));
+        out.push_back(pack(e.start, e.physical_end));            // w0
+        out.push_back(pack(e.layout, e.elem_size));              // w1
+        out.push_back(pack(e.logical_rows, e.logical_cols));     // w2
+        out.push_back(pack(e.padded_cols, e.padded_page_rows));  // w3
     }
     return out;
 }

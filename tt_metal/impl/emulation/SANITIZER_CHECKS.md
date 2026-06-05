@@ -39,7 +39,7 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 | Host L1 / DRAM Alignment | host | `[metal] host_sanitizers.hpp` + `host_api/tt_metal.cpp` | host poke address not aligned to the transfer's real requirement |
 | Metadata Overflow | host | `[metal] host_api/tt_metal.cpp` | program's static CB region overruns the reserved L1 window |
 | Out-of-Bounds Write (L1/DRAM) | kernel + runner | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (L1); `[metal] emulated_program_runner.cpp` (`__emule_dram_ptr`) | access lands in no live buffer extent |
-| Tensor Padding Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a buffer's `[logical_end, physical_end)` pad band |
+| Tensor Padding Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | write into a tensor's 2-D padding (right-edge strip + trailing rows, the "L") |
 | Illegal Semaphore Access | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` | scalar access into the reserved semaphore region |
 | CB Boundary Violation | kernel | `[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (counters in `api/cb_api.h`) | access to a CB page outside an **active** reserve/wait window |
 | CB Reservation Overflow | kernel | `[emule] include/jit_hw/api/cb_api.h` | `cb_reserve_back(n)` with `n` > the CB's total pages |
@@ -126,17 +126,37 @@ that offset against the live extents. In none → abort.
 *Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM).
 
 ### 5. Tensor Padding Violation
-**Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
-`dataflow_api.h`; padding bands registered in `[metal] emule_live_ranges.{hpp,cpp}`
-(`LiveL1PaddingRanges`) from `Buffer::set_logical_size` in `[metal] buffers/buffer.cpp`.
-**What it catches:** a kernel writing into the padding gap
-`[logical_end, physical_end)` of a buffer whose logical size is smaller than its
-allocated physical size.
-**How it works:** `set_logical_size` registers the padding band; the runner threads
-those `(logical_end, physical_end)` pairs into the kernel. After the OOB check, the
-normalized offset is tested against each padding band — inside one → abort.
-*Diagnostic:* `Tensor Padding Violation: Attempted to write to a padded memory region at 0x…`.
-*Exercised by:* `test_padded_write.cpp`.
+**Lives in:** `__emule_offset_in_padding` + `__emule_local_l1_to_ptr` in
+`[emule] jit_kernel_stubs.hpp` & `dataflow_api.h` (kept in sync); 2-D layout
+descriptors registered in `[metal] emule_live_ranges.{hpp,cpp}`
+(`LiveL1PaddingRanges`) from `Buffer::set_logical_size` / `Buffer::set_padded_layout`
+in `[metal] buffers/buffer.cpp`.
+**What it catches:** a kernel writing into the padding of a tensor whose logical
+extent is smaller than its padded (tile/alignment-rounded) extent.
+**Why it's 2-D, not a band:** padding is *interspersed*, not a single trailing
+block — there's a pad strip at the right edge of every data row PLUS the trailing
+pad rows (an "L" shape). A 1-D `[logical_end, physical_end)` band only models the
+trailing rows and silently misses the right-edge strip.
+**How it works:** registration stores a per-buffer descriptor
+`{start, physical_end, layout, elem_size, logical_rows, logical_cols, padded_cols,
+padded_page_rows}` (`layout` 0 = row-major, 1 = tiled — 32×32 tiles as 4 16×16
+nfaces). The runner threads it in (4 packed words/descriptor). Per access, after the
+OOB check, the kernel maps the offset → element → `(row, col)` with closed-form
+modulo math (row-major: divide by `padded_cols`; tiled: tile-index then face decode,
+inverting `nfaces.h`'s `rowmajor_to_nfaces`) and aborts if
+`(row % padded_page_rows) >= logical_rows || col >= logical_cols`. O(1) per access,
+no per-row range list.
+**N-D / batched:** an `[…, H, W]` tensor is stored as G stacked `H_padded × W_padded`
+pages; the row pad pattern repeats with period `padded_page_rows = H_padded`, so the
+`row % padded_page_rows` reset makes 3-D/4-D/N-D correct with the same single modulo
+(every dim above the last two just adds more pages of the same period). `logical_rows`
+is the per-page logical height. `set_logical_size` is the 1-D special case (one
+row-major row, `elem_size = 1`, `padded_page_rows = 1`).
+*Diagnostic:* `Tensor Padding Violation: Attempted to write to a padded memory region at 0x… (buffer base 0x…)`.
+*Exercised by:* `test_padded_write.cpp` — linear back-compat; tiled right-edge (the
+L-strip the old model missed) + a tiled positive control; **3-D stacked pages**: a
+page-1 data write (no abort — the regression the old single-global-row model
+mis-flagged) and a page-1 pad write (abort).
 
 ### 6. Illegal Semaphore Access
 **Lives in:** `__emule_local_l1_to_ptr` in `[emule] jit_kernel_stubs.hpp` &
@@ -278,7 +298,7 @@ instead of dereferencing a null/garbage backing pointer.
 | Host L1/DRAM Alignment | `[metal] host_sanitizers.hpp` | `address % get_alignment_requirements(device, size)` (1 ⇒ no-op on emule) |
 | Metadata Overflow | `[metal] host_api/tt_metal.cpp` | static CB region vs lowest L1 alloc, at configure time |
 | Out-of-Bounds Write | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h`; `[metal] emulated_program_runner.cpp` | normalized offset ∉ any live `LiveL1Ranges`/`LiveDramRanges` extent |
-| Tensor Padding | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ `[logical_end, physical_end)` padding band |
+| Tensor Padding | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset → `(row,col)` via modulo (row-major / tiled-nfaces); `(row % padded_page_rows)≥logical_rows ‖ col≥logical_cols` (page reset = N-D) |
 | Illegal Semaphore | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | offset ∈ reserved semaphore L1 range |
 | CB Boundary | `[emule] jit_kernel_stubs.hpp`/`dataflow_api.h` | accessed page outside an **active** reserve/wait window |
 | CB Reservation Overflow | `[emule] api/cb_api.h` | `cb_reserve_back(n)` with `n > num_pages` (always on) |

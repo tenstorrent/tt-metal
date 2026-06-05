@@ -245,7 +245,36 @@ public:
     // env var) any kernel access into that padded region aborts with a
     // "Tensor Padding Violation" message. Passing logical_size == size()
     // clears the declaration. Only meaningful for L1/L1_SMALL buffers today.
+    //
+    // This is the 1-D special case of set_padded_layout: a single trailing pad
+    // band. Prefer set_padded_layout for real (2-D) tensor padding.
     void set_logical_size(DeviceAddr logical_size);
+
+    // Layout of a padded tensor, used by set_padded_layout to model where the
+    // padding bytes actually live within the buffer.
+    enum class PaddingLayout : uint8_t {
+        RowMajor = 0,  // padded_cols-wide rows, row-major
+        Tile = 1,      // 32x32 tiles stored as 4 16x16 nfaces (see jit_hw/nfaces.h)
+    };
+
+    // Declare the full 2-D / N-D padded layout of this buffer's tensor so the emule
+    // sanitizer can flag writes into the interspersed padding (the right-edge strip
+    // of every data row PLUS the trailing pad rows — the "L" shape), not just a
+    // single trailing band. Dimensions are in elements (per-page): `logical_rows` /
+    // `logical_cols` are the unpadded H/W; `padded_cols` is the physical row width
+    // (RowMajor) or tile-grid width (Tile, must be a multiple of 32).
+    //
+    // `padded_page_rows` is the per-page padded height (the row pad pattern's repeat
+    // period) for N-D / batched tensors stored as stacked H_padded x W_padded pages;
+    // the check resets the row test per page. For a single 2-D matrix pass its
+    // padded height (or 0 = no row paging). Only meaningful for L1/L1_SMALL today.
+    void set_padded_layout(
+        PaddingLayout layout,
+        uint32_t elem_size,
+        uint32_t logical_rows,
+        uint32_t logical_cols,
+        uint32_t padded_cols,
+        uint32_t padded_page_rows);
 
     uint32_t num_pages() const;
     uint32_t num_dev_pages() const;

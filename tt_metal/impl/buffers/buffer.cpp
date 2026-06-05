@@ -555,12 +555,63 @@ void Buffer::set_logical_size(DeviceAddr logical_size) {
     if (logical_size == size_) {
         tt::tt_metal::emule::LiveL1PaddingRanges::clear(device_->id(), start);
     } else {
-        uint32_t logical_end = static_cast<uint32_t>(address_ + logical_size);
+        // 1-D trailing pad band expressed in the 2-D descriptor: one row-major
+        // "row" of `size_` bytes, of which the first `logical_size` bytes are
+        // data (elem_size = 1, logical_rows = 1, padded_cols = size_). The
+        // kernel's modulo math then reduces to `byte_off >= logical_size`.
         tt::tt_metal::emule::LiveL1PaddingRanges::set(
-            device_->id(), start, logical_end, physical_end);
+            device_->id(),
+            start,
+            physical_end,
+            /*layout=*/static_cast<uint8_t>(PaddingLayout::RowMajor),
+            /*elem_size=*/1,
+            /*logical_rows=*/1,
+            /*logical_cols=*/static_cast<uint32_t>(logical_size),
+            /*padded_cols=*/static_cast<uint32_t>(size_),
+            /*padded_page_rows=*/1);
     }
 #else
     (void)logical_size;
+#endif
+}
+
+void Buffer::set_padded_layout(
+    PaddingLayout layout,
+    uint32_t elem_size,
+    uint32_t logical_rows,
+    uint32_t logical_cols,
+    uint32_t padded_cols,
+    uint32_t padded_page_rows) {
+#ifdef TT_METAL_USE_EMULE
+    if (allocation_status_ != AllocationStatus::ALLOCATED) {
+        return;
+    }
+    if (buffer_type_ != BufferType::L1 && buffer_type_ != BufferType::L1_SMALL) {
+        return;
+    }
+    uint32_t start = static_cast<uint32_t>(address_);
+    uint32_t physical_end = static_cast<uint32_t>(address_ + size_);
+    // Register unconditionally: a descriptor whose logical extent fully covers the
+    // physical extent simply never fires (every in-buffer offset maps to a
+    // row/col inside the data region), so there's no separate "clear" case to
+    // special-case here. Deallocation clears the entry.
+    tt::tt_metal::emule::LiveL1PaddingRanges::set(
+        device_->id(),
+        start,
+        physical_end,
+        static_cast<uint8_t>(layout),
+        elem_size,
+        logical_rows,
+        logical_cols,
+        padded_cols,
+        padded_page_rows);
+#else
+    (void)layout;
+    (void)elem_size;
+    (void)logical_rows;
+    (void)logical_cols;
+    (void)padded_cols;
+    (void)padded_page_rows;
 #endif
 }
 

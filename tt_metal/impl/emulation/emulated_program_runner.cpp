@@ -2254,7 +2254,9 @@ inline OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     owner.padding_ranges = tt::tt_metal::emule::LiveL1PaddingRanges::snapshot(device_id);
     if (!owner.padding_ranges.empty()) {
         owner.state.l1_padding_ranges = owner.padding_ranges.data();
-        owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());
+        // snapshot() packs 4 words per descriptor; the kernel-side count is the
+        // number of descriptors, and it strides the flat array by 4.
+        owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size() / 4);
     }
     return owner;
 }
