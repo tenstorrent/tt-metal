@@ -61,15 +61,10 @@
 // Pack-thread SFPU op kernels invoked via the unary macros (silu/tanh/sigmoid
 // *_tile_pack helpers below). Quasar is out of scope for the unary macro
 // refactor, so these are BH/WH only.
-//
-// llk_math_eltwise_unary_sfpu_macros.h is included first so its transitive include
-// of sfpi.h (via llk_math_eltwise_unary_sfpu.h -> ckernel_sfpu.h) is in scope before
-// ckernel_sfpu_sigmoid_appx.h (pulled in by ckernel_sfpu_silu.h) does
-// `using namespace sfpi;` at file scope.
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 #define PACK(...) __VA_ARGS__
 #else

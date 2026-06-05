@@ -6,12 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
-// Macros header must come before ckernel_sfpu_hardtanh.h: ckernel_sfpu_hardtanh.h
-// uses sfpi:: names without including <sfpi.h> directly, and the macros header
-// pulls in sfpi.h transitively (via llk_math_eltwise_unary_sfpu_init.h ->
-// llk_math_eltwise_unary_sfpu.h -> ckernel_sfpu.h -> sfpi.h).
-#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_hardtanh.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
