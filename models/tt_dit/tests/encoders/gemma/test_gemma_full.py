@@ -93,6 +93,7 @@ def _encode_prompts_reference(checkpoint_path: str, gemma_root: str, prompts: li
     [
         pytest.param((1, 1), {"l1_small_size": 8192}, id="1x1"),
         pytest.param((2, 4), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
+        pytest.param((4, 8), {"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
