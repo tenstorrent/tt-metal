@@ -68,6 +68,9 @@ _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
 # by allocate_tensor_on_device (from_torch) + a meta stand-in (to_torch), valid because program
 # capture depends only on shapes/layout, not values. Falls back to real per-input on any edge case.
 _META_COLLECT = os.environ.get("UP_FRONT_META_COLLECT") == "1"
+# UP_FRONT_COLLECT_NO_COMPILE=1: collect/dedup only, skip the session-end parallel compile. Used to
+# isolate the body-run cost from the compile floor when benchmarking (e.g., fast vs meta collect).
+_NO_COMPILE = os.environ.get("UP_FRONT_COLLECT_NO_COMPILE") == "1"
 
 # Bodies that drive trace/graph capture can't run under NO_DISPATCH (it blocks the
 # dispatch + alloc that recording needs). Heuristic: scan the test function source.
@@ -351,6 +354,9 @@ def pytest_sessionfinish(session, exitstatus):
         )
     if n_unique == 0:
         print("UP_FRONT_COLLECT: nothing to compile", flush=True)
+        return
+    if _NO_COMPILE:
+        print(f"UP_FRONT_COLLECT: NO_COMPILE set — collected {n_unique}, skipping compile", flush=True)
         return
 
     device = None
