@@ -13,6 +13,7 @@ namespace cluster {
 
 tt::tt_metal::ClusterType get_cluster_type();
 std::string serialize_cluster_descriptor();
+bool get_enable_2_erisc_mode();
 
 }  // namespace cluster
 

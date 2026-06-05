@@ -344,12 +344,25 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         // Escape hatch for up-front precompile: when using a mock/sim target purely to BUILD
         // kernels (not run them), we want the same compile config as silicon so the on-disk JIT
         // cache — keyed by build_key, which hashes enable_2_erisc_mode (see get_compile_hash_string)
-        // — matches the real run's cache. TT_METAL_KEEP_2_ERISC_MODE keeps it on for that case.
-        if (std::getenv("TT_METAL_KEEP_2_ERISC_MODE") == nullptr) {
+        // — matches the real run's cache. On real HW this flag is resolved per-arch/firmware
+        // (firmware_capability.cpp: Blackhole can downgrade to single-erisc on old eth-fw), which
+        // mock cannot re-derive (no eth-fw query). So the precompile runner CAPTURES the resolved
+        // value on a real device (ttnn.cluster.get_enable_2_erisc_mode) and replays it here:
+        //   TT_METAL_FORCE_2_ERISC_MODE=0|1 — set the captured value verbatim (general: correct on
+        //                                     any arch, including a downgraded Blackhole).
+        //   TT_METAL_KEEP_2_ERISC_MODE      — back-compat: keep the default on (Wormhole-only, where
+        //                                     the resolver passes the default through unchanged).
+        if (const char* forced = std::getenv("TT_METAL_FORCE_2_ERISC_MODE")) {
+            this->enable_2_erisc_mode = (std::string(forced) == "1");
+            log_info(
+                tt::LogMetal,
+                "Forcing multi-erisc mode to {} under mock/sim (TT_METAL_FORCE_2_ERISC_MODE)",
+                this->enable_2_erisc_mode);
+        } else if (std::getenv("TT_METAL_KEEP_2_ERISC_MODE") != nullptr) {
+            log_info(tt::LogMetal, "Keeping multi-erisc mode under mock/sim (TT_METAL_KEEP_2_ERISC_MODE set)");
+        } else {
             log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
             this->enable_2_erisc_mode = false;
-        } else {
-            log_info(tt::LogMetal, "Keeping multi-erisc mode under mock/sim (TT_METAL_KEEP_2_ERISC_MODE set)");
         }
     }
 

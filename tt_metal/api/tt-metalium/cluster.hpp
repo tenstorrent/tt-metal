@@ -62,4 +62,17 @@ tt::tt_metal::ClusterType GetClusterType();
  */
 std::string SerializeClusterDescriptor();
 
+/**
+ * @brief Get the resolved multi-erisc (2-ERISC) mode flag for the current run.
+ *
+ * This is the value AFTER firmware-capability resolution (see firmware_capability.cpp): it reflects
+ * any arch/firmware-driven downgrade, not just the requested default. It is hashed into the JIT
+ * build_key (get_compile_hash_string), so an up-front precompile collect on a mock/sim target must
+ * replay this exact value to produce a matching cache. Mock cannot re-derive it (no eth-firmware
+ * query), so it is captured from a real device and replayed via TT_METAL_FORCE_2_ERISC_MODE.
+ *
+ * @return bool The resolved enable_2_erisc_mode value.
+ */
+bool GetEnable2EriscMode();
+
 }  // namespace tt::tt_metal

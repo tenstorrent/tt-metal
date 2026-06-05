@@ -52,6 +52,24 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
         )doc");
+
+    mod.def(
+        "get_enable_2_erisc_mode",
+        &ttnn::cluster::get_enable_2_erisc_mode,
+        R"doc(
+            Get the resolved multi-erisc (2-ERISC) mode flag for the current run.
+
+            This is the value after firmware-capability resolution (arch/firmware-driven downgrades
+            applied), which is hashed into the JIT build_key. Capture it on a real device to replay
+            under a mock/sim collect via TT_METAL_FORCE_2_ERISC_MODE so the build_key matches.
+
+            Returns:
+                bool: The resolved enable_2_erisc_mode value.
+
+            Example:
+                >>> import ttnn
+                >>> erisc2 = ttnn.cluster.get_enable_2_erisc_mode()
+        )doc");
 }
 
 }  // namespace
