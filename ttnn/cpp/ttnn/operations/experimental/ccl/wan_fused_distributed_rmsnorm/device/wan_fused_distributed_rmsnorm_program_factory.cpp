@@ -190,6 +190,19 @@ std::map<std::string, std::string> ablation_defines() {
             case 4: d["WAN_ABL_SKIP_FABRIC"] = "1"; break;
             case 5: d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1"; break;
             case 6: d["WAN_ABL_SKIP_WEIGHT_READ"] = "1"; break;
+            case 7: d["WAN_ABL_SKIP_COMPUTE"] = "1"; break;
+            // 8: pure-compute — stub ALL DRAM reads/writes + fabric/AG while
+            // keeping every CB reserve/push/wait/pop (they live outside the
+            // per-skip #ifndef guards), so compute runs full-speed LLKs on
+            // garbage. Inverse of case 7: isolates compute from all I/O.
+            case 8:
+                d["WAN_ABL_SKIP_INPUT_READ"] = "1";
+                d["WAN_ABL_SKIP_WEIGHT_READ"] = "1";
+                d["WAN_ABL_SKIP_ROPE_READ"] = "1";
+                d["WAN_ABL_SKIP_OUTPUT_WRITE"] = "1";
+                d["WAN_ABL_SKIP_FABRIC"] = "1";
+                d["WAN_ABL_SKIP_GATHER_SCATTER"] = "1";
+                break;
             default: break;
         }
     }
@@ -1023,6 +1036,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_args,
+            .defines = ablation_defines(),
         });
 
     // ------------------------------------------------------------------------
