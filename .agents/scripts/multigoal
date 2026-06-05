@@ -1,43 +1,220 @@
 #!/usr/bin/env python3
-"""Run a sequence of Codex /goal prompt files."""
+"""Run a sequence of Codex goals through app-server."""
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import pathlib
 import re
-import shlex
-import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 
-SESSION_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+MAX_GOAL_OBJECTIVE_CHARS = 4_000
+TERMINAL_GOAL_STATUSES = {"complete", "blocked", "usageLimited", "budgetLimited"}
+SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
 
 
-@dataclass(frozen=True)
-class GoalStatus:
-    status: str
+JsonObject = dict[str, Any]
+
+
+@dataclass
+class StageState:
+    thread_id: str
     objective: str
-    tokens_used: int
-    time_used_seconds: int
+    status: str = "active"
+    terminal_status: str | None = None
+    active_turns: set[str] = field(default_factory=set)
+    last_turn_status: str | None = None
+    last_turn_error: str | None = None
+
+
+class AppServerClient:
+    def __init__(
+        self,
+        codex_bin: str,
+        repo: pathlib.Path,
+        env: dict[str, str],
+        stderr_log: pathlib.Path,
+        config_overrides: list[str],
+    ) -> None:
+        self.codex_bin = codex_bin
+        self.repo = repo
+        self.env = env
+        self.stderr_log = stderr_log
+        self.config_overrides = config_overrides
+        self.proc: subprocess.Popen[str] | None = None
+        self._write_lock = threading.Lock()
+        self._stderr_tail: list[str] = []
+        self._stderr_thread: threading.Thread | None = None
+
+    def __enter__(self) -> AppServerClient:
+        args = [self.codex_bin]
+        for item in self.config_overrides:
+            args.extend(["--config", item])
+        args.extend(["app-server", "--enable", "goals", "--listen", "stdio://"])
+        self.proc = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            cwd=self.repo,
+            env=self.env,
+            bufsize=1,
+        )
+        self._start_stderr_drain_thread()
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        if self.proc is None:
+            return
+        proc = self.proc
+        self.proc = None
+        if proc.stdin:
+            proc.stdin.close()
+        try:
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=0.5)
+
+    def request(
+        self,
+        method: str,
+        params: JsonObject | None,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None = None,
+    ) -> JsonObject:
+        request_id = str(uuid.uuid4())
+        payload: JsonObject = {"id": request_id, "method": method}
+        if params is not None:
+            payload["params"] = params
+        self._send(payload, log)
+
+        while True:
+            message = self._read(log)
+            if message.get("id") == request_id and "error" in message:
+                raise RuntimeError(f"{method} failed: {message['error']}")
+            if message.get("id") == request_id:
+                result = message.get("result", {})
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"{method} returned non-object result: {result!r}")
+                return result
+            self._handle_non_response(message, log, on_event)
+
+    def read_event(
+        self,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None = None,
+    ) -> JsonObject:
+        while True:
+            message = self._read(log)
+            if "id" in message and "method" in message:
+                self._handle_server_request(message, log)
+                continue
+            if "method" in message:
+                if on_event is not None:
+                    on_event(message)
+                return message
+            if "error" in message:
+                raise RuntimeError(f"Unexpected app-server error response: {message['error']}")
+
+    def _handle_non_response(
+        self,
+        message: JsonObject,
+        log: Any,
+        on_event: Callable[[JsonObject], None] | None,
+    ) -> None:
+        if "id" in message and "method" in message:
+            self._handle_server_request(message, log)
+        elif "method" in message and on_event is not None:
+            on_event(message)
+
+    def _handle_server_request(self, message: JsonObject, log: Any) -> None:
+        method = message.get("method")
+        params = message.get("params")
+        result: JsonObject = {}
+        if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+            result = {"decision": "accept"}
+        elif method == "item/permissions/requestApproval" and isinstance(params, dict):
+            result = {"permissions": params.get("permissions", {}), "scope": "session"}
+        self._send({"id": message["id"], "result": result}, log)
+
+    def _send(self, payload: JsonObject, log: Any) -> None:
+        self._log(log, "send", payload)
+        if self.proc is None or self.proc.stdin is None:
+            raise RuntimeError("app-server process is not running")
+        with self._write_lock:
+            self.proc.stdin.write(json.dumps(payload) + "\n")
+            self.proc.stdin.flush()
+
+    def _read(self, log: Any) -> JsonObject:
+        if self.proc is None or self.proc.stdout is None:
+            raise RuntimeError("app-server process is not running")
+        line = self.proc.stdout.readline()
+        if not line:
+            tail = "\n".join(self._stderr_tail[-40:])
+            raise RuntimeError(f"app-server closed stdout; stderr tail:\n{tail}")
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid app-server JSON line: {line!r}") from exc
+        if not isinstance(message, dict):
+            raise RuntimeError(f"Invalid app-server JSON payload: {message!r}")
+        self._log(log, "recv", message)
+        return message
+
+    def _log(self, log: Any, direction: str, payload: JsonObject) -> None:
+        log.write(json.dumps({"ts": timestamp(), "direction": direction, "message": payload}) + "\n")
+        log.flush()
+
+    def _start_stderr_drain_thread(self) -> None:
+        if self.proc is None or self.proc.stderr is None:
+            return
+
+        def drain() -> None:
+            assert self.proc is not None
+            assert self.proc.stderr is not None
+            with self.stderr_log.open("a", encoding="utf-8") as stderr:
+                for line in self.proc.stderr:
+                    line = line.rstrip("\n")
+                    self._stderr_tail.append(line)
+                    del self._stderr_tail[:-80]
+                    stderr.write(line + "\n")
+                    stderr.flush()
+
+        self._stderr_thread = threading.Thread(target=drain, daemon=True)
+        self._stderr_thread.start()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run each prompt file as a separate Codex /goal. By default every "
-            "prompt starts a fresh non-interactive Codex session because Codex "
-            "currently allows one persistent goal per thread."
+            "Run each prompt file as an exact persisted Codex goal through "
+            "codex app-server. This runner requires the openai-codex Python "
+            "package unless --codex-bin points at a Codex binary explicitly."
         )
     )
     parser.add_argument("prompt_files", nargs="+", type=pathlib.Path)
     parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path.cwd())
     parser.add_argument("--codex-home", type=pathlib.Path)
-    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
+    parser.add_argument(
+        "--codex-bin",
+        default=os.environ.get("CODEX_BIN"),
+        help="Codex binary for app-server. Default: bundled binary from openai-codex.",
+    )
     parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
@@ -52,28 +229,24 @@ def parse_args() -> argparse.Namespace:
         help="Literal text replacement applied to every prompt before sending.",
     )
     parser.add_argument(
-        "--codex-arg",
-        action="append",
-        default=[],
-        metavar="ARG",
-        help="Extra argument token passed to every codex exec invocation. May be repeated.",
-    )
-    parser.add_argument("--no-goal-gate", action="store_true")
-    parser.add_argument(
         "--start-index",
         type=int,
         default=1,
         help="Stage number to use for the first prompt file, useful when continuing from a later stage.",
     )
     parser.add_argument(
-        "--same-thread",
-        action="store_true",
-        help=(
-            "Resume the same Codex thread after the first prompt. This preserves "
-            "conversation context, but later /goal commands may not create new "
-            "goal rows in current Codex releases."
-        ),
+        "--config",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Codex config override passed to app-server. May be repeated.",
     )
+    parser.add_argument("--approval-policy", default="never")
+    parser.add_argument("--sandbox", default="danger-full-access")
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--summary")
+    parser.add_argument("--service-tier")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.start_index < 1:
@@ -106,145 +279,75 @@ def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
     return text.rstrip() + "\n"
 
 
-def normalized_goal_text(prompt: str) -> str:
+def objective_from_prompt(prompt: str) -> str:
     text = prompt.lstrip()
     if not text.startswith("/goal"):
         raise SystemExit("prompt must start with /goal")
-    return " ".join(text[len("/goal") :].split())
+    objective = text[len("/goal") :].strip()
+    if not objective:
+        raise SystemExit("goal objective must not be empty")
+    chars = len(objective)
+    if chars > MAX_GOAL_OBJECTIVE_CHARS:
+        raise SystemExit(
+            f"goal objective is {chars} characters; Codex app-server limit is "
+            f"{MAX_GOAL_OBJECTIVE_CHARS}. Put long details in a prompt file and "
+            "make the objective point at that file."
+        )
+    return objective
 
 
-def normalize_for_match(text: str) -> str:
-    return " ".join(re.sub(r"[-_/]+", " ", text.lower()).split())
+def parse_skill_names(text: str) -> list[str]:
+    return sorted(set(SKILL_RE.findall(text)))
 
 
-def goal_match_terms(prompt: str) -> list[str]:
-    """Return flexible terms that should survive Codex goal summarization."""
-
-    first_line = prompt.lstrip().splitlines()[0]
-    if not first_line.startswith("/goal"):
-        raise SystemExit("prompt must start with /goal")
-    objective_line = first_line[len("/goal") :].strip()
-    normalized = normalize_for_match(objective_line)
-    terms: list[str] = []
-
-    # Skill names are the strongest signal that a later stage really got a new
-    # goal instead of reusing the previous thread goal.
-    terms.extend(match.group(1) for match in re.finditer(r"\$([A-Za-z0-9_-]+)", objective_line))
-
-    # Keep the target model as a second signal, but avoid requiring the whole
-    # first prompt line because Codex stores a concise objective, not verbatim
-    # prompt text, in goals_1.sqlite.
-    model_match = re.search(r"\bfor\s+(.+?)\s+in\s+the\s+current\b", objective_line)
-    if model_match:
-        target = model_match.group(1).strip()
-        if target.lower().startswith("the "):
-            target = target[4:].strip()
-        for suffix in [
-            " optimized multichip decoder",
-            " optimized decoder",
-            " optimized full model",
-            " multichip decoder",
-            " functional decoder",
-            " full model",
-        ]:
-            if target.lower().endswith(suffix):
-                target = target[: -len(suffix)].strip()
-                break
-        terms.append(target)
-
-    return [normalize_for_match(term) for term in terms if normalize_for_match(term) in normalized]
-
-
-def goal_matches_prompt(prompt: str, objective: str) -> bool:
-    actual = normalize_for_match(objective)
-    terms = goal_match_terms(prompt)
-    if not terms:
-        return False
-    return all(term in actual for term in terms)
-
-
-def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
-    if explicit is not None:
-        env["CODEX_HOME"] = str(explicit)
-        return explicit.expanduser()
-    return pathlib.Path(env.get("CODEX_HOME", "~/.codex")).expanduser()
-
-
-def session_files(home: pathlib.Path) -> list[pathlib.Path]:
-    sessions = home / "sessions"
-    if not sessions.exists():
-        return []
-    return sorted(sessions.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-
-def extract_session_id(path: pathlib.Path) -> str | None:
-    matches = SESSION_ID_RE.findall(path.name)
-    return matches[-1] if matches else None
-
-
-def newest_session_id(home: pathlib.Path, before: set[pathlib.Path]) -> str | None:
-    for path in session_files(home):
-        if path not in before:
-            session_id = extract_session_id(path)
-            if session_id:
-                return session_id
-    for path in session_files(home):
-        session_id = extract_session_id(path)
-        if session_id:
-            return session_id
+def skill_path(repo: pathlib.Path, name: str) -> pathlib.Path | None:
+    candidates = [
+        repo / ".agents" / "skills" / name / "SKILL.md",
+        pathlib.Path.home() / ".codex" / "skills" / name / "SKILL.md",
+        pathlib.Path.home() / ".codex" / "skills" / ".system" / name / "SKILL.md",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
     return None
 
 
-def latest_goal_status(home: pathlib.Path) -> GoalStatus | None:
-    db = home / "goals_1.sqlite"
-    if not db.exists():
-        return None
-    con = sqlite3.connect(db)
+def input_items_for_objective(repo: pathlib.Path, objective: str) -> tuple[list[JsonObject], list[str]]:
+    items: list[JsonObject] = [{"type": "text", "text": objective}]
+    missing: list[str] = []
+    for name in parse_skill_names(objective):
+        path = skill_path(repo, name)
+        if path is None:
+            missing.append(name)
+            continue
+        items.append({"type": "skill", "name": name, "path": str(path)})
+    return items, missing
+
+
+def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
+    # Mark's unattended bringup runs use ChatGPT auth in CODEX_HOME. Do not let
+    # an ambient API key silently switch the billing/auth path.
+    env.pop("OPENAI_API_KEY", None)
+    env.pop("CODEX_API_KEY", None)
+    if explicit is not None:
+        home = explicit.expanduser()
+        env["CODEX_HOME"] = str(home)
+        return home
+    return pathlib.Path(env.get("CODEX_HOME", "~/.codex")).expanduser()
+
+
+def resolve_codex_bin(explicit: str | None) -> str:
+    if explicit:
+        return explicit
     try:
-        row = con.execute(
-            """
-            select status, objective, tokens_used, time_used_seconds
-            from thread_goals
-            order by updated_at_ms desc
-            limit 1
-            """
-        ).fetchone()
-    finally:
-        con.close()
-    if row is None:
-        return None
-    return GoalStatus(row[0], row[1], int(row[2]), int(row[3]))
-
-
-def run_codex(cmd: list[str], prompt: str, log_path: pathlib.Path, env: dict[str, str], dry_run: bool) -> int:
-    print(f"+ {' '.join(shlex.quote(part) for part in cmd)}", file=sys.stderr)
-    print(f"+ log: {log_path}", file=sys.stderr)
-    if dry_run:
-        print(prompt, file=sys.stderr)
-        log_path.write_text(prompt)
-        return 0
-
-    with log_path.open("wb") as log:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        assert proc.stdin is not None
-        assert proc.stdout is not None
-        proc.stdin.write(prompt.encode())
-        proc.stdin.close()
-        while True:
-            chunk = proc.stdout.read(8192)
-            if not chunk:
-                break
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-            log.write(chunk)
-            log.flush()
-        return proc.wait()
+        from codex_cli_bin import bundled_codex_path
+    except ImportError as exc:
+        raise SystemExit(
+            "openai-codex is required for multigoal's app-server runner. "
+            "Install the repo-local agent dependencies in the active Python "
+            "environment with: python -m pip install -r .agents/requirements.txt"
+        ) from exc
+    return str(bundled_codex_path())
 
 
 def stage_name(index: int, path: pathlib.Path) -> str:
@@ -252,91 +355,322 @@ def stage_name(index: int, path: pathlib.Path) -> str:
     return f"{index:02d}-{safe}"
 
 
-def main() -> int:
-    args = parse_args()
-    repo = args.repo.expanduser().resolve()
-    env = os.environ.copy()
-    home = codex_home(env, args.codex_home)
-    default_log_root = pathlib.Path(
-        os.environ.get("RUN_MULTIGOAL_LOG_DIR", pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "codex-multigoal-runs")
-    )
-    log_dir = args.log_dir or default_log_root / timestamp()
-    log_dir.mkdir(parents=True, exist_ok=True)
-    replacements = parse_replacements(args.replace)
-    extra_args = shlex.split(os.environ.get("CODEX_EXEC_ARGS", "")) + args.codex_arg
+def turn_params(args: argparse.Namespace, repo: pathlib.Path) -> JsonObject:
+    params: JsonObject = {
+        "cwd": str(repo),
+        "approvalPolicy": args.approval_policy,
+        "sandboxPolicy": {"type": sandbox_policy_type(args.sandbox)},
+    }
+    if args.model:
+        params["model"] = args.model
+    if args.effort:
+        params["effort"] = args.effort
+    if args.summary:
+        params["summary"] = args.summary
+    if args.service_tier:
+        params["serviceTier"] = args.service_tier
+    return params
 
-    manifest = log_dir / "manifest.txt"
-    manifest.write_text(
+
+def sandbox_policy_type(value: str) -> str:
+    return {
+        "danger-full-access": "dangerFullAccess",
+        "workspace-write": "workspaceWrite",
+        "read-only": "readOnly",
+        "external-sandbox": "externalSandbox",
+    }.get(value, value)
+
+
+def thread_start_params(args: argparse.Namespace, repo: pathlib.Path) -> JsonObject:
+    params: JsonObject = {
+        "cwd": str(repo),
+        "approvalPolicy": args.approval_policy,
+        "sandbox": args.sandbox,
+    }
+    if args.model:
+        params["model"] = args.model
+    if args.service_tier:
+        params["serviceTier"] = args.service_tier
+    return params
+
+
+def goal_from_response(result: JsonObject) -> JsonObject:
+    goal = result.get("goal")
+    if not isinstance(goal, dict):
+        raise RuntimeError(f"app-server response did not include a goal object: {result!r}")
+    return goal
+
+
+def update_stage_state(state: StageState, message: JsonObject) -> None:
+    method = message.get("method")
+    params = message.get("params")
+    if not isinstance(method, str) or not isinstance(params, dict):
+        return
+    if params.get("threadId") != state.thread_id:
+        return
+
+    if method == "turn/started":
+        turn = params.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            state.active_turns.add(turn["id"])
+        return
+
+    if method == "turn/completed":
+        turn = params.get("turn")
+        if isinstance(turn, dict):
+            turn_id = turn.get("id")
+            if isinstance(turn_id, str):
+                state.active_turns.discard(turn_id)
+            status = turn.get("status")
+            if isinstance(status, str):
+                state.last_turn_status = status
+                if status == "failed":
+                    error = turn.get("error")
+                    state.last_turn_error = json.dumps(error) if error is not None else "turn failed"
+                    state.terminal_status = "turnFailed"
+        return
+
+    if method == "thread/goal/updated":
+        goal = params.get("goal")
+        if not isinstance(goal, dict):
+            return
+        objective = goal.get("objective")
+        if objective != state.objective:
+            raise RuntimeError(
+                "app-server goal objective changed unexpectedly.\n"
+                f"Expected: {state.objective!r}\nActual: {objective!r}"
+            )
+        status = goal.get("status")
+        if isinstance(status, str):
+            state.status = status
+            if status in TERMINAL_GOAL_STATUSES:
+                state.terminal_status = status
+
+
+def wait_for_stage_terminal(client: AppServerClient, log: Any, state: StageState) -> str:
+    last_notice = time.monotonic()
+    while state.terminal_status is None:
+        client.read_event(log, lambda msg: update_stage_state(state, msg))
+        now = time.monotonic()
+        if now - last_notice > 300:
+            print(
+                f"stage still active: status={state.status} active_turns={len(state.active_turns)}",
+                file=sys.stderr,
+            )
+            last_notice = now
+    return state.terminal_status
+
+
+def wait_for_turn_started(
+    client: AppServerClient,
+    log: Any,
+    state: StageState,
+    turn_id: str,
+) -> None:
+    while turn_id not in state.active_turns and state.terminal_status is None:
+        client.read_event(log, lambda msg: update_stage_state(state, msg))
+    if state.terminal_status is not None:
+        raise RuntimeError(f"stage reached terminal status {state.terminal_status} before turn {turn_id} started")
+
+
+def write_manifest_header(
+    path: pathlib.Path,
+    repo: pathlib.Path,
+    home: pathlib.Path,
+    codex_bin: str,
+    args: argparse.Namespace,
+) -> None:
+    path.write_text(
         "\n".join(
             [
                 f"started_at_utc={timestamp()}",
                 f"repo={repo}",
                 f"codex_home={home}",
-                f"codex_bin={args.codex_bin}",
-                f"goal_gate={not args.no_goal_gate}",
-                f"same_thread={args.same_thread}",
+                f"codex_bin={codex_bin}",
+                "runner=app-server",
+                f"approval_policy={args.approval_policy}",
+                f"sandbox={args.sandbox}",
                 "prompt_files:",
-                *[f"- {path}" for path in args.prompt_files],
+                *[f"- {prompt}" for prompt in args.prompt_files],
                 "",
             ]
         )
     )
 
-    session_id: str | None = None
-    for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
-        prompt = load_prompt(prompt_path, replacements)
-        expected_terms = goal_match_terms(prompt)
-        name = stage_name(index, prompt_path)
-        prompt_copy = log_dir / f"{name}.prompt.txt"
-        prompt_copy.write_text(prompt)
-        output_log = log_dir / f"{name}.jsonl"
 
-        before = set(session_files(home))
-        if index == 1 or not args.same_thread:
-            cmd = [args.codex_bin, "exec", "--json", "-C", str(repo), *extra_args, "-"]
-        else:
-            if session_id is None:
-                raise SystemExit("No session id found after first stage; cannot resume safely")
-            cmd = [args.codex_bin, "exec", "resume", "--json", *extra_args, session_id, "-"]
+def append_manifest(path: pathlib.Path, lines: list[str]) -> None:
+    with path.open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
 
-        print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
-        code = run_codex(cmd, prompt, output_log, env, args.dry_run)
-        if code != 0:
-            print(f"Stage {index} Codex process exited with {code}", file=sys.stderr)
-            return code
 
-        discovered_session_id = "dry-run-session" if args.dry_run else newest_session_id(home, before)
-        if discovered_session_id is None:
-            raise SystemExit(f"Could not discover Codex session id after stage {index}")
-        session_id = session_id if args.same_thread and index > 1 else discovered_session_id
-        with manifest.open("a") as f:
-            f.write(f"stage_{index}_session_id={discovered_session_id}\n")
+def run_stage(
+    client: AppServerClient,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    prompt_copy.write_text(prompt)
+    output_log = log_dir / f"{name}.jsonl"
+    input_items, missing_skills = input_items_for_objective(repo, objective)
 
-        if args.no_goal_gate or args.dry_run:
-            continue
+    print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    print(f"+ objective_chars: {len(objective)}", file=sys.stderr)
+    if missing_skills:
+        print(f"+ missing skill paths: {', '.join(missing_skills)}", file=sys.stderr)
 
-        status = latest_goal_status(home)
-        if status is None:
-            print(f"Stage {index} produced no goal status in {home / 'goals_1.sqlite'}", file=sys.stderr)
-            return 2
-        print(
-            f"goal_status={status.status} tokens={status.tokens_used} seconds={status.time_used_seconds}",
-            file=sys.stderr,
+    if args.dry_run:
+        output_log.write_text(objective)
+        append_manifest(
+            manifest,
+            [
+                f"stage_{index}_dry_run=true",
+                f"stage_{index}_objective_chars={len(objective)}",
+                f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+            ],
         )
-        if not goal_matches_prompt(prompt, status.objective):
-            print(
-                "Stopping after stage "
-                f"{index}: latest goal objective does not match this prompt. "
-                "This usually means the /goal command was not accepted as a new goal.",
-                file=sys.stderr,
+        return 0
+
+    with output_log.open("w", encoding="utf-8") as log:
+        started = client.request("thread/start", thread_start_params(args, repo), log)
+        thread = started.get("thread")
+        if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
+            raise RuntimeError(f"thread/start did not return a thread id: {started!r}")
+        thread_id = thread["id"]
+        state = StageState(thread_id=thread_id, objective=objective)
+
+        set_paused = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "objective": objective, "status": "paused"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        paused_goal = goal_from_response(set_paused)
+        if paused_goal.get("objective") != objective or paused_goal.get("status") != "paused":
+            raise RuntimeError(f"paused goal was not set exactly: {paused_goal!r}")
+
+        turn_payload = turn_params(args, repo)
+        turn_payload["input"] = input_items
+        turn_payload["threadId"] = thread_id
+        turn_started = client.request(
+            "turn/start",
+            turn_payload,
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        turn = turn_started.get("turn")
+        turn_id: str | None = None
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            turn_id = turn["id"]
+        if turn_id is not None:
+            wait_for_turn_started(client, log, state, turn_id)
+
+        active_goal = client.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "status": "active"},
+            log,
+            lambda msg: update_stage_state(state, msg),
+        )
+        goal = goal_from_response(active_goal)
+        if goal.get("objective") != objective or goal.get("status") != "active":
+            raise RuntimeError(f"active goal was not set exactly: {goal!r}")
+
+        append_manifest(
+            manifest,
+            [
+                f"stage_{index}_thread_id={thread_id}",
+                f"stage_{index}_objective_chars={len(objective)}",
+                f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+                f"stage_{index}_missing_skills={','.join(missing_skills)}",
+            ],
+        )
+
+        terminal = wait_for_stage_terminal(client, log, state)
+        append_manifest(manifest, [f"stage_{index}_terminal_status={terminal}"])
+        print(f"stage_terminal_status={terminal}", file=sys.stderr)
+        if terminal == "complete":
+            return 0
+        if terminal == "turnFailed":
+            print(f"Stopping after stage {index}: turn failed: {state.last_turn_error}", file=sys.stderr)
+            return 5
+        print(f"Stopping after stage {index}: goal is {terminal}", file=sys.stderr)
+        return 3
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.expanduser().resolve()
+    env = os.environ.copy()
+    home = codex_home(env, args.codex_home)
+    codex_bin = resolve_codex_bin(args.codex_bin)
+    default_log_root = pathlib.Path(
+        os.environ.get(
+            "RUN_MULTIGOAL_LOG_DIR",
+            pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "codex-multigoal-runs",
+        )
+    )
+    log_dir = args.log_dir or default_log_root / timestamp()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    replacements = parse_replacements(args.replace)
+    manifest = log_dir / "manifest.txt"
+    write_manifest_header(manifest, repo, home, codex_bin, args)
+
+    if args.dry_run:
+        client: AppServerClient | None = None
+        for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            code = run_stage(
+                client,  # type: ignore[arg-type]
+                args,
+                repo,
+                log_dir,
+                manifest,
+                index,
+                prompt_path,
+                replacements,
             )
-            print(f"Expected normalized terms: {expected_terms}", file=sys.stderr)
-            print(f"Actual objective: {status.objective}", file=sys.stderr)
-            return 4
-        if status.status != "complete":
-            print(f"Stopping after stage {index}: goal is {status.status}", file=sys.stderr)
-            print(f"Objective: {status.objective}", file=sys.stderr)
-            return 3
+            if code != 0:
+                return code
+        return 0
+
+    stderr_log = log_dir / "app-server.stderr.log"
+    with AppServerClient(codex_bin, repo, env, stderr_log, args.config) as client:
+        with (log_dir / "initialize.jsonl").open("w", encoding="utf-8") as init_log:
+            client.request(
+                "initialize",
+                {
+                    "clientInfo": {
+                        "name": "tt-metal-multigoal",
+                        "title": "TT Metal Multigoal Runner",
+                        "version": "1",
+                    },
+                    "capabilities": {"experimentalApi": True},
+                },
+                init_log,
+            )
+            client._send({"method": "initialized"}, init_log)
+
+        for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            code = run_stage(
+                client,
+                args,
+                repo,
+                log_dir,
+                manifest,
+                index,
+                prompt_path,
+                replacements,
+            )
+            if code != 0:
+                return code
 
     print(f"\nAll {len(args.prompt_files)} goals completed.", file=sys.stderr)
     print(f"Logs: {log_dir}", file=sys.stderr)
