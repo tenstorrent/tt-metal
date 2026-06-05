@@ -1949,7 +1949,7 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
     Full [`SeamlessM4Tv2Model`] weights for TTNN: ``text_encoder``, ``text_decoder``, ``speech_encoder``,
     main ``lm_head``, ``t2u_model``, and ``vocoder`` (same submodules as Hugging Face).
 
-    Automatically detects ``tp`` from ``device.get_num_devices()`` — 1 on P150, 4 on BH QB.
+    Automatically detects ``tp`` from ``device.get_num_devices()`` (4 on BH QB 1×4 mesh).
     TP sharding is applied to text encoder, text decoder, speech encoder, and T2U;
     vocoder (HiFiGAN) is always replicated.
     """
@@ -1977,8 +1977,7 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
     # ~4× less work per device at M=1 decode (memory-bound on the 256k-wide weight). The per-device
     # logits slice feeds the per-shard chunked argmax (see ``_decode_argmax_token``); only the tiny
     # per-chunk results are gathered, so no full-vocab all-gather is needed. The replicated ``weight``
-    # above is kept unchanged for the seed / non-traced paths. ``tp == 1`` (P150) degenerates to the
-    # replicated case (just tile-padded), so the path is general.
+    # above is kept unchanged for the seed / non-traced paths.
     h_dim, v_size = int(w_lm_torch.shape[0]), int(w_lm_torch.shape[1])
     v_pad = ((v_size + 32 * tp - 1) // (32 * tp)) * (32 * tp)  # per-device shard stays tile-aligned
     w_lm_pad = torch.zeros(h_dim, v_pad, dtype=torch.bfloat16)

@@ -395,7 +395,7 @@ class TTSeamlessM4Tv2Model:
         self.device = device
         self.parameters = parameters
         self.hidden_size = hidden_size
-        # TP degree: number of devices in the tensor-parallel group (1 on P150, 4 on BH QB).
+        # TP degree: number of devices in the tensor-parallel group (4 on BH QB 1×4 mesh).
         self._tp = get_tp(device)
         self.pad_token_id = pad_token_id
         self.decoder_start_token_id = decoder_start_token_id

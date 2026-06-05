@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Mesh setup for Seamless M4T v2: shapes, fabric, pytest params, replicated uploads, demo open.
+"""Mesh setup for Seamless M4T v2: BH QB shape, fabric, pytest params, replicated uploads, demo open.
 
-P150 (1 device): ``MeshShape(1, 1)`` — no fabric.
-BH QB (4 devices): ``MeshShape(1, 4)`` — ``FABRIC_1D`` for head-parallel CCL.
+Blackhole QB (4 devices): ``MeshShape(1, 4)`` with ``FABRIC_1D`` for head-parallel CCL.
 
 Tests::
 
@@ -22,10 +21,14 @@ import pytest
 import torch
 import ttnn
 
-
 # ---------------------------------------------------------------------------
 # Mesh runtime (replication, CCL axis)
 # ---------------------------------------------------------------------------
+
+MESH_SHAPE = (1, 4)
+_NUM_DEVICES = MESH_SHAPE[0] * MESH_SHAPE[1]
+
+_MESH_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
 def mesh_num_devices(device: ttnn.Device) -> int:
@@ -35,11 +38,7 @@ def mesh_num_devices(device: ttnn.Device) -> int:
 
 
 def get_tp(device: ttnn.Device) -> int:
-    """Tensor-parallelism degree = number of devices on the cluster axis.
-
-    On a 1×4 mesh all 4 devices participate in TP=4.  On a 1×1 mesh (P150)
-    TP=1 means no parallelism (replicated weights, no all_reduce needed).
-    """
+    """Tensor-parallelism degree = number of devices on the 1×4 mesh (TP=4)."""
     return mesh_num_devices(device)
 
 
@@ -63,7 +62,7 @@ def mesh_replicate_mapper(device: ttnn.Device):
 
 
 def mesh_mapper(device: ttnn.Device):
-    """Replicate batch-1 host tensors on every device in a multi-device mesh."""
+    """Replicate batch-1 host tensors on every device in the multi-device mesh."""
     return mesh_replicate_mapper(device)
 
 
@@ -83,52 +82,21 @@ def mesh_default_device(mesh: ttnn.Device):
 
 
 # ---------------------------------------------------------------------------
-# Pytest mesh shape + device_params (P150 vs BH QB)
+# Pytest mesh shape + device_params (BH QB only)
 # ---------------------------------------------------------------------------
 
-MESH_SHAPE_P150 = (1, 1)
-MESH_SHAPE_BH_QB = (1, 4)
-
-_MESH_FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
-
-DEVICE_PARAMS_P150_FULL = {"l1_small_size": 65536}
-DEVICE_PARAMS_BH_QB_FULL = {"l1_small_size": 65536, **_MESH_FABRIC}
+DEVICE_PARAMS_FULL = {"l1_small_size": 65536, **_MESH_FABRIC}
 
 # Demo / ``generate(use_decode_trace=True)``: KV-decode Metal trace replay.
-DEVICE_PARAMS_P150_FULL_DECODE_TRACE = {
-    "l1_small_size": 65536,
-    "trace_region_size": 450_000_000,
-}
-DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE = {
+DEVICE_PARAMS_FULL_DECODE_TRACE = {
     "l1_small_size": 65536,
     "trace_region_size": 450_000_000,
     **_MESH_FABRIC,
 }
 
-DEVICE_PARAMS_P150_TEXT = {"l1_small_size": 32768}
-DEVICE_PARAMS_BH_QB_TEXT = {"l1_small_size": 32768, "num_command_queues": 2, **_MESH_FABRIC}
+DEVICE_PARAMS_TEXT = {"l1_small_size": 32768, "num_command_queues": 2, **_MESH_FABRIC}
 
-DEVICE_PARAMS_P150_E2E_2CQ = {"l1_small_size": 32768, "num_command_queues": 2}
-DEVICE_PARAMS_BH_QB_E2E_2CQ = {"l1_small_size": 32768, "num_command_queues": 2, **_MESH_FABRIC}
-
-DEVICE_PARAMS_P150_E2E_2CQ_TRACE = {
-    "l1_small_size": 32768,
-    "trace_region_size": 450_000_000,
-    "num_command_queues": 2,
-}
-DEVICE_PARAMS_BH_QB_E2E_2CQ_TRACE = {
-    "l1_small_size": 32768,
-    "trace_region_size": 450_000_000,
-    "num_command_queues": 2,
-    **_MESH_FABRIC,
-}
-
-DEVICE_PARAMS_P150_E2E_2CQ_GENERATE = {
-    "l1_small_size": 65536,
-    "trace_region_size": 450_000_000,
-    "num_command_queues": 2,
-}
-DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE = {
+DEVICE_PARAMS_E2E_2CQ_GENERATE = {
     "l1_small_size": 65536,
     "trace_region_size": 450_000_000,
     "num_command_queues": 2,
@@ -136,70 +104,38 @@ DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE = {
 }
 
 
-def _requires_num_devices(n: int) -> bool:
+def _requires_bh_qb() -> bool:
     try:
-        return ttnn.get_num_devices() != n
+        return ttnn.get_num_devices() != _NUM_DEVICES
     except Exception:
         return True
 
 
-def _mesh_device_param(mesh_shape: tuple[int, int], device_params: dict, *, id_suffix: str):
-    n = mesh_shape[0] * mesh_shape[1]
+def _mesh_device_param(device_params: dict):
     return pytest.param(
-        mesh_shape,
+        MESH_SHAPE,
         device_params,
-        id=id_suffix,
+        id="1x4",
         marks=pytest.mark.skipif(
-            _requires_num_devices(n),
-            reason=f"requires exactly {n} device(s) (mesh {id_suffix})",
+            _requires_bh_qb(),
+            reason=f"requires exactly {_NUM_DEVICES} devices (MeshShape{MESH_SHAPE})",
         ),
     )
 
 
 MESH_DEVICE_PARAMETRIZE_FULL = (
     "mesh_device,device_params",
-    [
-        _mesh_device_param(MESH_SHAPE_P150, DEVICE_PARAMS_P150_FULL, id_suffix="1x1"),
-        _mesh_device_param(MESH_SHAPE_BH_QB, DEVICE_PARAMS_BH_QB_FULL, id_suffix="1x4"),
-    ],
+    [_mesh_device_param(DEVICE_PARAMS_FULL)],
 )
 
 MESH_DEVICE_PARAMETRIZE_TEXT = (
     "mesh_device,device_params",
-    [
-        _mesh_device_param(MESH_SHAPE_P150, DEVICE_PARAMS_P150_TEXT, id_suffix="1x1"),
-        _mesh_device_param(MESH_SHAPE_BH_QB, DEVICE_PARAMS_BH_QB_TEXT, id_suffix="1x4"),
-    ],
+    [_mesh_device_param(DEVICE_PARAMS_TEXT)],
 )
-
-MESH_DEVICE_PARAMETRIZE_E2E_2CQ = (
-    "mesh_device,device_params",
-    [
-        _mesh_device_param(MESH_SHAPE_P150, DEVICE_PARAMS_P150_E2E_2CQ, id_suffix="1x1"),
-        _mesh_device_param(MESH_SHAPE_BH_QB, DEVICE_PARAMS_BH_QB_E2E_2CQ, id_suffix="1x4"),
-    ],
-)
-
-MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE = (
-    "mesh_device,device_params",
-    [
-        _mesh_device_param(MESH_SHAPE_P150, DEVICE_PARAMS_P150_E2E_2CQ_TRACE, id_suffix="1x1"),
-        _mesh_device_param(MESH_SHAPE_BH_QB, DEVICE_PARAMS_BH_QB_E2E_2CQ_TRACE, id_suffix="1x4"),
-    ],
-)
-
-# T2U PCC with Metal trace replay (2 CQ + trace region; same params as E2E trace).
-MESH_DEVICE_PARAMETRIZE_T2U_TRACE = MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE
-
-# Vocoder PCC with Metal trace replay (2 CQ + trace region; same params as E2E trace).
-MESH_DEVICE_PARAMETRIZE_VOCODER_TRACE = MESH_DEVICE_PARAMETRIZE_E2E_2CQ_TRACE
 
 MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE = (
     "mesh_device,device_params",
-    [
-        _mesh_device_param(MESH_SHAPE_P150, DEVICE_PARAMS_P150_E2E_2CQ_GENERATE, id_suffix="1x1"),
-        _mesh_device_param(MESH_SHAPE_BH_QB, DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE, id_suffix="1x4"),
-    ],
+    [_mesh_device_param(DEVICE_PARAMS_E2E_2CQ_GENERATE)],
 )
 
 
@@ -246,7 +182,7 @@ def from_torch_bfloat16_tile(
 
 
 def open_seamless_mesh_device(*, enable_decode_trace: bool = False, enable_2cq: bool = False):
-    """Open mesh for ``demo.py``: (1,1) on P150, (1,4) on BH QB.
+    """Open ``MeshShape(1, 4)`` for ``demo.py`` on a Blackhole QB host.
 
     When ``enable_decode_trace=True``, reserve ``trace_region_size`` for
     ``TTSeamlessM4Tv2Model.generate(..., use_decode_trace=True)``.
@@ -255,26 +191,22 @@ def open_seamless_mesh_device(*, enable_decode_trace: bool = False, enable_2cq: 
     ``enable_2cq`` is only effective when combined with ``enable_decode_trace``.
     """
     num_devices = ttnn.get_num_devices()
-    if num_devices >= 4:
-        if enable_decode_trace and enable_2cq:
-            device_params = dict(DEVICE_PARAMS_BH_QB_E2E_2CQ_GENERATE)
-        elif enable_decode_trace:
-            device_params = dict(DEVICE_PARAMS_BH_QB_FULL_DECODE_TRACE)
-        else:
-            device_params = dict(DEVICE_PARAMS_BH_QB_FULL)
-        mesh_shape = ttnn.MeshShape(*MESH_SHAPE_BH_QB)
+    if num_devices < _NUM_DEVICES:
+        raise RuntimeError(
+            f"Seamless M4T v2 requires {_NUM_DEVICES} devices (MeshShape{MESH_SHAPE}), found {num_devices}"
+        )
+
+    if enable_decode_trace and enable_2cq:
+        device_params = dict(DEVICE_PARAMS_E2E_2CQ_GENERATE)
+    elif enable_decode_trace:
+        device_params = dict(DEVICE_PARAMS_FULL_DECODE_TRACE)
     else:
-        if enable_decode_trace and enable_2cq:
-            device_params = dict(DEVICE_PARAMS_P150_E2E_2CQ_GENERATE)
-        elif enable_decode_trace:
-            device_params = dict(DEVICE_PARAMS_P150_FULL_DECODE_TRACE)
-        else:
-            device_params = dict(DEVICE_PARAMS_P150_FULL)
-        mesh_shape = ttnn.MeshShape(*MESH_SHAPE_P150)
+        device_params = dict(DEVICE_PARAMS_FULL)
 
     fabric_config = device_params.pop("fabric_config", None)
     if fabric_config is not None:
         ttnn.set_fabric_config(fabric_config)
 
+    mesh_shape = ttnn.MeshShape(*MESH_SHAPE)
     mesh = ttnn.open_mesh_device(mesh_shape=mesh_shape, **device_params)
     return mesh, (int(mesh_shape[0]), int(mesh_shape[1]))

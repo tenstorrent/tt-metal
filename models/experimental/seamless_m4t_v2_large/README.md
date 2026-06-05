@@ -4,12 +4,11 @@
 
 | Device | Status | Notes |
 |--------|--------|-------|
-| P150 (Blackhole) | Supported | `MeshShape(1, 1)` — single chip, replicated batch-1, all five tasks, 2CQ + traced + `generate()` |
-| BH QB (Blackhole) | Supported | `MeshShape(1, 4)`, `FABRIC_1D` — four chips, replicated batch-1, same task coverage as P150 |
+| **BH QB (Blackhole)** | Supported | `MeshShape(1, 4)`, `FABRIC_1D` — four chips, replicated batch-1, all five tasks, 2CQ + per-step KV-decode trace + `generate()` |
 
-Mesh shape and `device_params` come from `tt/mesh_helpers.py` (pytest `1x1` / `1x4` parametrization; demo uses `open_seamless_mesh_device()`). On a 1-device host only `1x1` cases run; on a 4-device host only `1x4` cases run (the other parametrization is skipped).
+This port targets **Blackhole QB** hosts with **four** Tenstorrent devices. Mesh shape and `device_params` come from [`tt/mesh_helpers.py`](tt/mesh_helpers.py) (`open_seamless_mesh_device()` for the demo; pytest fixtures use `MeshShape(1, 4)`). There is no Wormhole, Grayskull, or single-chip path in the supported/tested configuration.
 
-All performance / E2E pipeline tests are gated with `@run_for_blackhole()`. PCC tests run on Blackhole with sufficient L1 (`l1_small_size=65536`) and the same mesh parametrization.
+All performance / E2E pipeline tests are gated with `@run_for_blackhole()`. PCC and generate perf tests use `l1_small_size=65536` (speech-generation paths) on the four-device mesh.
 
 ---
 
@@ -99,13 +98,32 @@ speech input ───►│  Speech Encoder (Conformer)│►│  Text Decoder 
 | S2ST | — | yes | yes | yes | yes |
 | ASR | — | yes | yes | — | — |
 
+### Supported input lengths
+
+Limits below are what the TT port exercises on **BH QB `MeshShape(1, 4)`**. HF config allows up to **4096** positions on the text side; per-module PCC tests pin the longest shapes that pass at **PCC ≥ 0.99**.
+
+| | **Text input** (T2TT, T2ST) | **Speech input** (S2TT, S2ST, ASR) |
+|---|---|---|
+| **Input unit** | Tokenized source tokens (`processor(text=..., src_lang=...)`) | Log-mel frames from 16 kHz audio (`processor(audios=..., sampling_rate=16000)`) |
+| **Design / HF maximum** | **4096** source tokens (`max_position_embeddings`) | **4096** mel frames |
+| **Longest shape validated (PCC)** | Text encoder forward @ **4096** tokens ([`test_text_encoder.py`](tests/pcc/test_text_encoder.py)); text-decoder cross-attention prefill @ **512** encoder frames ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)) | Speech encoder forward @ **4096** mel frames ([`test_speech_encoder.py`](tests/pcc/test_speech_encoder.py)); text-decoder cross-attention prefill @ **512** subsampled encoder frames (same decoder test, S2TT path) |
+| **Typical demo input** | Joyce-style English paragraph (~64 generated tokens in timed demo) | Preamble WAV resampled to 16 kHz: **~479** mel frames (~9.6 s) |
+
+Notes:
+
+- **Encoder timeline vs raw input.** For text tasks the encoder timeline equals the tokenized source length (1 token → 1 text-encoder frame). For speech tasks the Conformer stack plus length adaptor (kernel/stride **8**) subsamples mel into a shorter encoder timeline fed to the text decoder (~8× shorter than mel length at the upper bound).
+- **512 decoder cross-attention limit.** Text-decoder prefill is PCC-validated only up to **512** encoder frames on BH 1×4. The next tile-aligned length (**1024**) overflows L1 on cross-attention prefill, so longer source inputs are not yet validated end-to-end through `generate()` even though the text encoder alone supports **4096** tokens.
+- **Decoder KV budget.** `TTSeamlessM4Tv2Model` allocates text-decoder KV cache for **`max_text_seq_len=4096`** (seed + generated tokens). T2U is separately validated at **4096** encoder frames ([`test_text_to_unit.py`](tests/pcc/test_text_to_unit.py)).
+- **Utterance-level behavior.** SeamlessM4T v2 is trained on short clips; very long text or audio can degrade quality on both HF and TT (see **Known Limitations**). Segment long-form inputs for production use.
+
 ---
 
 ## Prerequisites
 
 1. Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal)
 2. Installed [TT-Metalium / TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-3. Optional HuggingFace login (the `facebook/seamless-m4t-v2-large` repo is public, but a token avoids rate limits):
+3. **Blackhole QB host** with four devices available to the runtime
+4. Optional HuggingFace login (the `facebook/seamless-m4t-v2-large` repo is public, but a token avoids rate limits):
 
    ```bash
    huggingface-cli login
@@ -165,38 +183,47 @@ export SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large
 python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
 
-The demo opens a mesh via `open_seamless_mesh_device()` — `MeshShape(1, 1)` on P150, `MeshShape(1, 4)` on BH QB — and runs in this self-contained order, with no external audio file required:
+The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device, runs untimed warmup `generate()` calls (two warmups for speech paths), then times one steady-state iteration — so reported runtimes are not affected by prior tasks' program-cache clears or L1 pressure. A throwaway T2TT preflight warms the global JIT cache before the timed tasks.
 
-1. **T2TT** — English text → Hindi text
-2. **T2ST** — English text → Hindi speech (saved to `demo/outputs/t2st_hindi_speech.wav`)
-3. **S2TT** — Hindi speech (from task 2) → English text
-4. **S2ST** — Hindi speech (from task 2) → Spanish speech (saved to `demo/outputs/s2st_spanish_speech.wav`)
-5. **ASR** — Hindi speech (from task 2) → Hindi text
+**Text input (tasks 1–2):** a long English paragraph hardcoded in [`demo/demo.py`](demo/demo.py) — a Joyce-style passage (`src_lang=eng`):
+
+> going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards
+
+**Speech input (tasks 3–5):** the US Constitution preamble read aloud, from [`preamble10.wav`](https://www.cs.kzoo.edu/cs107/MediaSources/preamble10.wav) (Kalamazoo College CS107 media). On first run `ensure_demo_audio()` downloads it to `demo/outputs/preamble10.wav` (raises if download fails). The WAV is mono, resampled from 22050 Hz to **16 kHz** before feature extraction (~9.6 s, ~479 mel frames).
+
+Task order:
+
+1. **T2TT** — text above (`eng`) → Hindi text
+2. **T2ST** — same text (`eng`) → Hindi speech (saved to `demo/outputs/t2st_hindi_speech.wav`)
+3. **S2TT** — preamble speech (`eng`) → Hindi text
+4. **S2ST** — preamble speech (`eng`) → Spanish speech (saved to `demo/outputs/s2st_spanish_speech.wav`)
+5. **ASR** — preamble speech (`eng`) → English text
 
 ---
 
-## Performance (Blackhole BH QB, 2CQ)
+## Performance (Blackhole BH QB, 2CQ + decode trace)
 
-End-to-end `generate()` throughput from the demo (`demo/demo.py`). The demo exercises the realistic long-audio path used in production — task 2 (T2ST) produces ~22 s of Hindi speech that tasks 3–5 consume, so the speech encoder runs at ~1100 mel frames (above `_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024` in [`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)). All five tasks run through `TTSeamlessM4Tv2Model.generate(...)` with 2CQ + per-step KV-decode trace.
+End-to-end `generate()` timings measured by running [`demo/demo.py`](demo/demo.py) on a four-chip Blackhole QB host, using the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Inputs are **replicated** on all four devices (batch-1, TP=4), not data-parallel batched. Reported numbers exclude host pre/post-processing (token decode, WAV I/O). Each task opens its own mesh device with warmup before the timed iteration.
+
+**Per-unit latency** (`ms/tok`, `μs/sample`) is more stable than throughput when output length varies run-to-run.
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
-Measured on a four-chip Blackhole QB host (`1x4` mesh, `FABRIC_1D`). Inputs are **replicated** on all four devices, not data-parallel batched — each device runs the same single-sample forward. Numbers are the median of two demo runs (2026-05-29).
+| Task | Runtime | Throughput | Workload | Per-unit |
+|------|--------:|-----------:|----------|----------|
+| T2TT | 669.5 ms | 95.59 tokens/s | 64 tokens | 10.5 ms/tok |
+| T2ST | 4106.7 ms | 56492.72 samples/s | 232000 samples | 17.70 μs/smp |
+| S2TT | 1201.9 ms | 21.63 tokens/s | 26 tokens | 46.2 ms/tok |
+| S2ST | 4042.2 ms | 36336.83 samples/s | 146880 samples | 27.52 μs/smp |
+| ASR | 1495.0 ms | 19.40 tokens/s | 29 tokens | 51.6 ms/tok |
 
-| Task | Output unit | Throughput | Per-unit time |
-|------|-------------|-----------:|--------------:|
-| T2TT | text tokens | 60.6 tok/s | 16.5 ms/tok |
-| T2ST | audio samples | 32.5 k smp/s | 30.7 μs/smp |
-| S2TT | text tokens | 3.03 tok/s | 330 ms/tok |
-| S2ST | audio samples | 13.3 k smp/s | 75.2 μs/smp |
-| ASR  | text tokens | 9.99 tok/s | 100 ms/tok |
+Task notes:
+- **T2TT** — text encoder + traced text-decoder loop.
+- **T2ST** — text path + T2U + vocoder; vocoder dominates wall-clock but yields high samples/s.
+- **S2TT / ASR** — speech encoder prefill + text decoder; dominated by encoder prefill amortized over short outputs on the ~9.6 s preamble clip (~479 mel frames).
+- **S2ST** — speech encoder + decoder + T2U + vocoder.
 
-Tasks ranked by output type / bottleneck dominance:
-- **T2TT** — text encoder + text decoder. Decoder-loop dominated.
-- **T2ST** — text path + T2U + vocoder. Vocoder dominates the wall-clock; per-sample throughput is highest because vocoder generates ~500 k samples per request.
-- **S2TT** — speech encoder + text decoder. **Speech-encoder dominated**; ms/tok is highest because the encoder prefill is amortized over only ~60–70 output tokens.
-- **S2ST** — speech encoder + text decoder + T2U + vocoder. Vocoder samples/s metric dominates.
-- **ASR** — speech encoder + text decoder. Like S2TT, but generally generates more tokens, so the prefill cost is amortized across more decode steps.
+**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task, so the first speech-synthesis task in a run may still pay one-time compile cost if the disk cache is cold; the table above reflects a warm JIT cache.
 
 ### Reproducing
 
@@ -204,28 +231,6 @@ Tasks ranked by output type / bottleneck dominance:
 python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
 
-The synthetic perf test (`tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_generate_perf`) uses a 1-second audio fixture (`_make_speech_inputs` at [test_e2e_perf_2cq.py:160](tests/perf/test_e2e_perf_2cq.py#L160)) and therefore does **not** exercise the long-audio path. Use it for regression CI, but use the demo's chained long-audio numbers above as the canonical real-world figure.
-
-### Recent optimizations (speech encoder)
-
-- **BFP8 activations on the Conformer FFN expand projection** ([`tt/tt_speech_encoder.py::_conformer_ffn`](tt/tt_speech_encoder.py)): the `intermediate_dense` matmul previously ran bf8 weights × bf16 activations; casting the input to `ttnn.bfloat8_b` makes it bf8×bf8, halving activation L1 footprint on the K=1024 → N=local_ff_dim hot path. Post-LN input is well-conditioned for bf8 quantization.
-- **Fused add + final_layer_norm per Conformer layer** via `residual_input_tensor` ([`tt/tt_speech_encoder.py::_conformer_encoder_layer`](tt/tt_speech_encoder.py)): saves one DRAM `add` dispatch per encoder layer in the long-audio path (24× per encoder forward). Short-audio path falls back to explicit add+LN so semantics stay identical.
-- Net impact (S2TT, demo, long-audio): **~1.18×** (~389 → ~330 ms/tok). Other tasks flat within run-to-run variance (T2TT/T2ST don't use the speech encoder; ASR is text-decoder-loop dominated; S2ST is vocoder-dominated). PCC ≥ 0.99 holds at `mel_seq=3000` (measured 0.9957).
-
-### Why PCC is measured on `forward()` (single prefill)
-
-Autoregressive `generate()` cascades bf16 round-off through (text decoder × N) → T2U → vocoder. The final waveform PCC sits well below 0.99 even with the fp32 duration-predictor path in `tt_text_to_unit._duration_predictor`, so a strict PCC bar against HF is not meaningful end-to-end. A single deterministic `forward()` step produces the same logits as HF to within fp32-accumulator precision, so **PCC ≥ 0.99** is the right bar (`tests/pcc/test_seamless_m4t_v2_model.py`). The perf tables above use `generate()` because that is the user-visible throughput; `tests/perf/test_e2e_perf_2cq.py` also exposes per-prefill `forward()` benchmarks for regression CI on the kernel-bound floor.
-
-### Why traced `generate()` is not provided
-
-A Metal trace captures a fixed sequence of device commands and forbids host writes during `begin_trace_capture` (`write_shard_to_device` raises). The autoregressive `generate()` loop has host-dependent control flow that cannot be captured end-to-end:
-
-1. **Per-step EOS readback.** Each step reads the predicted greedy token id back to host and breaks on `eos_token_id`. The next step's command sequence depends on that scalar, so the loop body cannot be one fixed trace (`tt/tt_seamless_m4t_v2_model.py:1413-1425`).
-2. **Per-step KV-cache position update.** `cur_pos` and the cache-write index advance per token; a trace captures a single fixed position, not a variable one.
-3. **Speech path host remap.** For `t2st` / `s2st`, between the text decoder and T2U the model does a host-side token-id → unit-vocabulary remap and pad-token substitution (string-table lookups in `generation_config`) before launching the vocoder. Neither table lookups nor variable-length T2U inputs are trace-safe.
-4. **Variable output lengths.** Both the text decoder sequence length and the T2U / vocoder output length vary per call. Trace replay requires fixed shapes; nothing currently pads them to a single canonical size.
-
-The text decoder does have a per-step KV-decode trace (`capture_text_decoder_decode_trace` at `tt/tt_seamless_m4t_v2_model.py:798`) that captures the **inner cell** of the loop, so individual decode steps run from trace even though the outer loop stays on the host. The full traced E2E paths (`forward_text_e2e_*_trace`, `forward_speech_e2e_*_trace`) all stop after the lm_head (or after T2U for `t2st` / `s2st`); they never try to capture the autoregressive loop itself.
 
 ---
 
@@ -233,7 +238,7 @@ The text decoder does have a per-step KV-decode trace (`capture_text_decoder_dec
 
 ### PCC tests (functional correctness)
 
-End-to-end, per-task (parametrized `1x1` / `1x4`; use `-k 1x1` or `-k 1x4` on multi-device hosts):
+End-to-end per-task generate PCC (requires four devices):
 
 ```bash
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_m4t_v2_model.py -v
@@ -249,30 +254,14 @@ pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_to_unit.py 
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_code_hifigan.py -v
 ```
 
-All PCC tests pass at `PCC_THRESHOLD = 0.99` (`tests/pcc/test_seamless_m4t_v2_model.py`).
+All PCC tests pass at `PCC_THRESHOLD = 0.99` ([`tests/pcc/test_seamless_m4t_v2_model.py`](tests/pcc/test_seamless_m4t_v2_model.py)).
 
 ### E2E performance tests (Blackhole)
 
-Tests are parametrized for **P150** (`1x1`) and **BH QB** (`1x4`) via `tt/mesh_helpers.py`; only the matching cases run on the current machine. Use `-k 1x1` or `-k 1x4` to select one platform.
-
-Non-traced 2CQ pipeline:
+Full autoregressive `generate()` pipeline (TP=4 + 2CQ + decode trace), one parametrized test per task:
 
 ```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_large_e2e_perf_2cq -v
-# P150 only:  ... -k 1x1
-# BH QB only: ... -k 1x4
-```
-
-Traced 2CQ pipeline (full encoder + decoder + optional T2U inside `use_trace=True`):
-
-```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_large_e2e_perf_2cq_trace -v
-```
-
-Full autoregressive `generate()` pipeline driven through 2CQ:
-
-```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_large_e2e_perf_2cq_generate -v
+pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_e2e_perf_2cq.py::test_seamless_m4t_v2_generate_perf -v
 ```
 
 ### Device-level performance (kernel-only)
@@ -282,7 +271,7 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
     -v -m models_device_performance_bare_metal
 ```
 
-Runs five parametrized tasks (`t2tt` … `asr`); the Tracy subprocess picks `1x1` or `1x4` from the PCC mesh parametrization. Reports `AVG DEVICE KERNEL SAMPLES/S` (see **Device-kernel throughput** above).
+The outer driver spawns eager forward-only inner tests in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy (`use_decode_trace=False`, `use_2cq=False`) and reports per-device kernel throughput. This is the device-bound floor that E2E perf approaches but cannot beat.
 
 ---
 
@@ -308,13 +297,15 @@ models/experimental/seamless_m4t_v2_large/
 │   │   ├── test_speech_encoder.py
 │   │   ├── test_text_decoder.py
 │   │   ├── test_text_to_unit.py
-│   │   └── test_code_hifigan.py
+│   │   ├── test_code_hifigan.py
+│   │   └── decoder_pcc_fixtures.py      # Shared decoder PCC inputs / helpers
 │   └── perf/
-│       ├── test_e2e_perf_2cq.py         # 2CQ E2E: non-traced + traced + generate
-│       └── test_seamless_device_perf.py # Device-kernel-only profiler wrapper
+│       ├── test_e2e_perf_2cq.py         # generate() perf (2CQ + decode trace)
+│       ├── test_seamless_device_perf.py # Tracy outer driver (kernel-only)
+│       └── test_device_perf_forwards.py # Inner eager forwards for device perf
 ├── tt/                                  # TTNN implementation
 │   ├── common.py
-│   ├── mesh_helpers.py                  # MeshShape (1,1)/(1,4), fabric, pytest params, demo open
+│   ├── mesh_helpers.py                  # MeshShape (1,4), fabric, pytest params, demo open
 │   ├── model_preprocessing.py           # HF state-dict → TTNN params
 │   ├── tt_seamless_m4t_v2_model.py
 │   ├── tt_text_encoder.py
@@ -330,12 +321,11 @@ models/experimental/seamless_m4t_v2_large/
 
 ## Known Limitations
 
-
 ### Hardware and deployment
 
-- **Blackhole only.** PCC and perf tests run on Blackhole (`@run_for_blackhole()`). There is no Wormhole or Grayskull path. Supported meshes are **P150** `MeshShape(1, 1)` and **BH QB** `MeshShape(1, 4)` with `FABRIC_1D` (see `tt/mesh_helpers.py`).
-- **Multi-device mode is replication, not batch parallelism.** On BH QB, batch-1 inputs and weights are replicated on all four chips; each device runs the same forward. Throughput scales via replication accounting in perf logs (`batch_size = 4`), not by sharding a larger user batch across devices.
-- **L1 budget.** Speech-generation paths (T2U + vocoder, and chained S2ST) require `l1_small_size=65536` in device params. Smaller L1 (e.g. 32768) is insufficient for the full speech pipeline (see demo comments). Long mel inputs (>128 frames) use chunked 1D matmul in the speech encoder; the demo chains full-length T2ST audio into S2TT/S2ST/ASR without trimming.
+- **Blackhole QB only.** PCC and perf tests run on Blackhole (`@run_for_blackhole()`). Supported mesh is **`MeshShape(1, 4)`** with `FABRIC_1D` (see [`tt/mesh_helpers.py`](tt/mesh_helpers.py)). Requires a host with four devices.
+- **Multi-device mode is replication, not batch parallelism.** Batch-1 inputs and weights are replicated on all four chips; each device runs the same forward. Throughput accounting in perf logs uses `batch_size = 4` for replication, not sharded user batches.
+- **L1 budget.** Speech-generation paths (T2U + vocoder) require `l1_small_size=65536` in device params. Long mel inputs use chunked 1D matmul in the speech encoder above `_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024` ([`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)).
 
 ### API scope versus Hugging Face
 
@@ -348,83 +338,28 @@ models/experimental/seamless_m4t_v2_large/
 
 ### Utterance-level model: long inputs degenerate (text and speech)
 
-SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or* audio) the model loses
-coherence — it drops content, repeats phrases, and emits EOS early — and on speech it tends to
-*translate* rather than transcribe. **This is the Hugging Face model's behavior, not a TTNN bug**: the
-bf16 reference degenerates the same way on the same input. The demo deliberately drives a long
-5-paragraph story to exercise the long-audio path, so it is visible directly: T2TT / T2ST translate
-only the first ~2 of the 5 paragraphs into Hindi and then loop (e.g. `… किताब की किताब की किताब`), and
-ASR on the full ~37 s clip flips Hindi→English (next section). The demo uses HF-aligned
-`repetition_penalty = 1.0`, which does not suppress these loops.
-
-The standard remedy used by production SeamlessM4T pipelines is **utterance segmentation**: split long
-audio at silences (VAD) or long text at sentences, run the model per chunk, and concatenate. A silence
-splitter is provided in [`long_audio.py`](long_audio.py) (`segment_by_silence`). Accuracy on long
-inputs should therefore be judged by **TT-vs-HF faithfulness** (chrF / CER versus the bf16 reference on
-the same input), not by absolute correctness.
-
-### Long-audio same-language ASR is precision-sensitive
-
-For ASR (`tgt_lang` = the source language) the model transcribes speech to text in the *same*
-language. On **very long** audio this is a knife-edge: the model can tip from transcribing (Hindi) to
-*translating* (English), and the boundary is sharp (a few mel frames). This is a property of the
-model itself, **not** a TTNN bug — the HuggingFace reference (run in bfloat16) flips Hindi→English on
-the same audio above ~1825 mel frames. The demo chains the full ~37 s T2ST audio (~1830 mel frames)
-into ASR, so it sits right at that boundary.
-
-Because the boundary is precision-sensitive, the speech-encoder conformer runs its linears at
-`HiFi4` math fidelity with `bfloat16` FFN-expand activations ([`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)).
-At lower precision (`LoFi` linears + `bfloat8_b` FFN, the original perf tuning) accumulated error over
-the 24 conformer layers tipped this transcribe→translate boundary ~20 mel frames **earlier** than the
-bf16 reference, which flipped demo ASR to English. With the higher precision, long-audio ASR
-transcribes Hindi (matching/exceeding the bf16 reference) and the seq-3000 speech-encoder PCC is
-0.9970 (vs 0.9966). Short audio is far below the boundary and unaffected.
+SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or* audio) the model loses coherence — it drops content, repeats phrases, and emits EOS early — and on speech it may *translate* rather than transcribe. **This is the Hugging Face model's behavior, not a TTNN bug**: the bf16 reference degenerates the same way on the same input. The demo uses a long English paragraph for T2TT/T2ST to stress the text path; speech-input tasks use the shorter ~9.6 s preamble clip. Accuracy on long inputs should be judged by **TT-vs-HF faithfulness** (chrF / CER versus the bf16 reference on the same input), not by absolute correctness. Production pipelines typically segment long audio/text into utterance-sized chunks.
 
 ### Greedy decode is not bit-reproducible run-to-run
 
-The TT `generate()` output **varies run-to-run even on a byte-identical input** (BH `MeshShape(1, 4)`).
-A tiny per-step floating-point difference in the multi-device (TP) compute — **mode-independent**:
-present in eager, traced, and 2CQ paths alike — flips the greedy `argmax` at near-tie decode steps and
-the T2U duration-predictor `round()`. Consequences:
+The TT `generate()` output **varies run-to-run even on a byte-identical input** on `MeshShape(1, 4)`. Tiny per-step floating-point differences in multi-device (TP) compute can flip the greedy `argmax` at near-tie decode steps and the T2U duration-predictor `round()`. Consequences:
 
-- S2TT / ASR **text content and length** vary between runs; T2ST / S2ST **audio sample counts** vary
-  (the T2U duration rounds differently), so any per-call output count is nondeterministic.
-- The demo's **performance numbers vary** run-to-run, because `tokens/s` and `samples/s` are
-  count-dependent and the output length is nondeterministic. Per-unit latency (`ms/tok`, `μs/smp`) is
-  more stable than the totals.
+- S2TT / ASR **text content and length** can vary between runs; T2ST / S2ST **audio sample counts** vary with T2U duration rounding.
+- Demo **performance numbers vary** run-to-run because throughput divides by nondeterministic output length. Per-unit latency (`ms/tok`, `μs/smp`) is more stable.
 
-This is not specific to this port's kernels — greedy decode on this multi-device hardware sees the same
-floating-point nondeterminism regardless of implementation. The right correctness metric is the
-**TT-vs-HF faithfulness gate** (chrF / CER), not exact reproducibility; truly deterministic output
-would require deterministic multi-device reductions at the TTNN / CCL level.
+The right correctness metric is the **TT-vs-HF faithfulness gate** (chrF / CER), not exact reproducibility.
 
 ### Speech-output throughput degrades on repeated runs (vocoder)
 
-T2ST and S2ST are ~5× slower on the **second and subsequent** `generate()` calls within a single
-process (e.g. ~6 s → ~31 s). The nondeterministic output length (above) hands the HiFi-GAN vocoder a
-**new `ttnn.conv1d` shape on almost every call**, forcing a cold kernel compile (~15 s) plus device
-program-cache growth — a byte-identical repeated shape runs in ~0.6 s. The **first** call of each task
-is the fast case, and the demo runs each task exactly once with a warm on-disk kernel cache, so the
-demo's per-task numbers above are *not* degraded; this bites **production / repeated** speech-output.
-Partially mitigated by length-bucketing the short single-shot vocoder convs (env
-`SEAMLESS_VOCODER_CONV1D_BUCKET`, default 256, in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py)) so
-they reuse a few stable shapes — PCC bit-identical, ~40% faster on repeated S2ST. The chunked
-(upsampled, **block-sharded**) convs still vary and need sharded-aware bucketing.
+T2ST and S2ST can be much slower on **second and subsequent** `generate()` calls within a single process when the vocoder sees a **new `ttnn.conv1d` shape** each time (~15 s cold compile). The demo mitigates this by opening a fresh device per task with warmup iterations and a warm on-disk kernel cache; the **first** speech-synthesis task in a cold process may still be an outlier. Partially mitigated by length-bucketing short vocoder convs (`SEAMLESS_VOCODER_CONV1D_BUCKET`, default 256, in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py)). Chunked upsampled convs still vary and need sharded-aware bucketing.
 
 ---
 
 ## To Do
 
-- **Full vocoder length-bucketing.** Extend the short-conv bucketing to the chunked (>4096, upsampled)
-  convs to remove the rest of the ~5× repeated-run slowdown. Blocked on a sharded-aware `ttnn.slice`
-  (the chunked convs keep `BLOCK_SHARDED` outputs in the resblock sharded chain; a plain bucketed slice
-  raises `TT_FATAL`, and un-sharding to work around it measured as a net loss).
-- **Deterministic decode.** Investigate deterministic multi-device reductions (TTNN / CCL) so greedy
-  `generate()` is bit-reproducible run-to-run (would also stabilize demo perf numbers and let the
-  single-length vocoder prewarm always hit).
-- **Demo VAD / segmentation.** Wire `long_audio.segment_by_silence` into the demo's chained
-  ASR / S2TT / S2ST so long-form inputs stay in the target language instead of degenerating.
-
+- **Full vocoder length-bucketing.** Extend short-conv bucketing to chunked (>4096, upsampled) convs to remove repeated-run slowdown on speech output. Blocked on a sharded-aware `ttnn.slice` for block-sharded resblock outputs.
+- **Deterministic decode.** Investigate deterministic multi-device reductions (TTNN / CCL) so greedy `generate()` is bit-reproducible run-to-run.
+- **Utterance segmentation in demo.** Optional VAD / sentence splitting for long-form inputs so chained tasks stay in the target language.
 
 ---
 
