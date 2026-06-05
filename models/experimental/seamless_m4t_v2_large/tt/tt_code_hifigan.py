@@ -719,8 +719,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
         timeline_chunked: bool = False,
         row_major_output: bool = False,
+        keep_sharded_output: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
-        """Single-shot ``ttnn.conv1d`` on row-major NLC activations."""
+        """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation."""
         conv_config = _vocoder_conv1d_config(
             fused_post_activation,
             input_length=input_length,
@@ -769,7 +770,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if deallocate_input:
             ttnn.deallocate(x_rm)
         out_len = int(out_len)
-        if ttnn.is_sharded(out):
+        if not keep_sharded_output and ttnn.is_sharded(out):
             out = ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.reshape(out, (batch, out_len, out_channels))
         return out, out_len
@@ -792,13 +793,17 @@ class TTSeamlessM4Tv2CodeHifiGan:
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
         row_major_output: bool = False,
+        keep_sharded_output: bool = False,
+        accept_sharded_input: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
         seq = int(input_length)
         x_in = x_nlc
         rm_buf: Optional[ttnn.Tensor] = None
-        if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        if accept_sharded_input and ttnn.is_sharded(x_nlc):
+            pass
+        elif x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
 
@@ -824,6 +829,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 shard_layout=shard_layout,
                 timeline_chunked=False,
                 row_major_output=row_major_output,
+                keep_sharded_output=keep_sharded_output,
             )
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
@@ -849,8 +855,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 shard_layout=shard_layout,
                 timeline_chunked=True,
                 row_major_output=False,
+                keep_sharded_output=keep_sharded_output,
             )
 
+        num_chunks = (seq + interior - 1) // interior
+        # Multi-chunk stitch concat requires interleaved RM chunk tensors.
+        chunk_keep_sharded = keep_sharded_output and num_chunks == 1
         chunks: list[ttnn.Tensor] = []
         for start in range(0, seq, interior):
             end = min(start + interior, seq)
@@ -901,6 +911,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 deallocate_input=True,
                 shard_layout=shard_layout,
                 timeline_chunked=True,
+                keep_sharded_output=chunk_keep_sharded,
             )
             out_start = start - in_start
             out_chunk = ttnn.slice(
@@ -1154,6 +1165,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 shard_layout=_resolve_conv_shard_layout(
                     _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c1p["kernel_size"])
                 ),
+                keep_sharded_output=True,
             )
             x_nlc, tlen = self._conv1d(
                 x_nlc,
@@ -1171,6 +1183,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 shard_layout=_resolve_conv_shard_layout(
                     _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c2p["kernel_size"])
                 ),
+                accept_sharded_input=True,
             )
             x_nlc = ttnn.add(x_nlc, residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x_nlc
