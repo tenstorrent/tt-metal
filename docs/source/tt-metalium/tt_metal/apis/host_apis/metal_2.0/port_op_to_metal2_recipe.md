@@ -257,7 +257,12 @@ For each resource type, construct the spec entry and its run-params entry as a p
 - **`TensorParameter` ↔ `TensorArgument`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArgument` to `ProgramRunArgs::tensor_args`.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_params`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_params)}`.
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_args = std::move(run_args)}`.
+
+**Hardware-config shortcuts.** Two helpers worth knowing for the `hw_config` field on `KernelSpec`:
+
+- *DM kernels*: prefer `DataMovementHardwareConfig::RoleHint::READER` or `RoleHint::WRITER` over manual `gen1_config` setup. The RoleHint auto-infers the Gen1 processor/NOC pair (and the Gen2 default config), so the construction is one line: `.hw_config = DataMovementHardwareConfig{.role = DataMovementHardwareConfig::RoleHint::READER}`. `UNSPECIFIED` permits a power-user override via explicit `gen1_config`.
+- *Compute kernels*: if the ported op carries a TTNN `ComputeKernelConfig`, use the converter helper (in `tt_metal/api/tt-metalium/experimental/`) to translate it to `ComputeHardwareConfig` rather than rebuilding field-by-field. The helper maps `math_fidelity`, `math_approx_mode`, `fp32_dest_acc_en`, `dst_full_sync_en` 1:1. **`unpack_to_dest_mode` is not part of the helper** — the factory must configure it separately when needed (e.g., for FP32 DFB consumers under `fp32_dest_acc_en`).
 
 **Stop signals**: any urge to —
 

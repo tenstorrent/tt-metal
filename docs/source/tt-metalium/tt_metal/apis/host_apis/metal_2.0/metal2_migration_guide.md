@@ -188,17 +188,13 @@ KernelSpec reader{
     },
     .runtime_arg_schema = {
         // Schema only — argument values are set per execution, on ProgramRunArgs.
-        .runtime_arg_values = {"start_page", "num_pages"},
+        .runtime_arg_names = {"start_page", "num_pages"},
     },
     .hw_config = DataMovementHardwareConfig{
-        // For WH/BH
-        .gen1_data_movement_config = DataMovementHardwareConfig::Gen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-        },
-        // For Quasar
-        .gen2_data_movement_config = DataMovementHardwareConfig::Gen2DataMovementConfig{}
-        // (Only one config is required; supply both for architecture portability)
+        // RoleHint is the primary intent knob — READER/WRITER auto-infers the
+        // Gen1 processor/NOC pair (and the Gen2 default config). UNSPECIFIED
+        // requires you to provide gen1_config explicitly (power-user override).
+        .role = DataMovementHardwareConfig::RoleHint::READER,
     },
 };
 
@@ -516,8 +512,8 @@ KernelSpec reader{
     .unique_id = READER,
     // ...
     .runtime_arg_schema = {
-        .runtime_arg_values = {"start_page", "num_tiles"},
-        .common_runtime_arg_values = {"bank_id"},
+        .runtime_arg_names = {"start_page", "num_tiles"},
+        .common_runtime_arg_names = {"bank_id"},
     },
 };
 
@@ -637,8 +633,8 @@ Suppose the host declared the following on `KernelSpec`:
 ```cpp
 .compile_time_args = {{"bank_id", 0}, {"entry_size", 1024}},
 .runtime_arg_schema = {
-    .runtime_arg_values = {"start_page"},
-    .common_runtime_arg_values = {"num_entries"},
+    .runtime_arg_names = {"start_page"},
+    .common_runtime_arg_names = {"num_entries"},
 },
 ```
 
@@ -677,8 +673,8 @@ Some kernels read a dynamic-count argument tail in a loop — e.g. an N-dimensio
 ```cpp
 .compile_time_args = {{"rank", rank}},
 .runtime_arg_schema = {
-    .runtime_arg_values = {"start_page"},
-    .common_runtime_arg_values = {"num_entries"},
+    .runtime_arg_names = {"start_page"},
+    .common_runtime_arg_names = {"num_entries"},
     .num_runtime_varargs = rank,  // shape: one entry per dimension
 },
 ```
@@ -965,7 +961,7 @@ KernelSpec reader{
     .unique_id = READER,
     .source = "kernels/reader.cpp",
     .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_values = {"num_pages"}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "out_dfb",
@@ -976,7 +972,7 @@ KernelSpec reader{
         .accessor_name = "input",   // kernel accesses as `ta::input`
     }},
     .hw_config = DataMovementHardwareConfig{
-        .gen1_data_movement_config = {.processor = DataMovementProcessor::RISCV_0},
+        .role = DataMovementHardwareConfig::RoleHint::READER,
     },
 };
 
@@ -984,7 +980,7 @@ KernelSpec writer{
     .unique_id = WRITER,
     .source = "kernels/writer.cpp",
     .compile_time_args = {{"page_size", page_size}},
-    .runtime_arg_schema = {.runtime_arg_values = {"num_pages"}},
+    .runtime_arg_schema = {.runtime_arg_names = {"num_pages"}},
     .dfb_bindings = {{
         .dfb_spec_name = DFB,
         .accessor_name = "in_dfb",
@@ -995,7 +991,7 @@ KernelSpec writer{
         .accessor_name = "output",  // kernel accesses as `ta::output`
     }},
     .hw_config = DataMovementHardwareConfig{
-        .gen1_data_movement_config = {.processor = DataMovementProcessor::RISCV_1},
+        .role = DataMovementHardwareConfig::RoleHint::WRITER,
     },
 };
 
@@ -1098,7 +1094,7 @@ KernelSpec reader{
     }},
     // RTA schema gains start_page so each node knows which slice it owns.
     // The buffer address is gone — the TensorBinding auto-injects it.
-    .runtime_arg_schema = {.runtime_arg_values = {"start_page", "num_pages"}},
+    .runtime_arg_schema = {.runtime_arg_names = {"start_page", "num_pages"}},
     // ...
 };
 
