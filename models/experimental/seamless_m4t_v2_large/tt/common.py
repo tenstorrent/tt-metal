@@ -350,7 +350,38 @@ _T2U_TUNED_MATMUL = {
     (1024, 2048): ("bs", "bs", 8, 8, 4),  # dec ffn fc1
     (2048, 1024): ("dram", "bs", 8, 8, 8),  # dec ffn fc2
     (4096, 1024): ("l1", "l1", 8, 8, 8),  # hard upsample H @ enc (enc_seq=4096)
+    # SDPA per-head 2D (batched 4D block-shard overflows); enc only at seq=4096 (dec seq≈16640
+    # regresses: per-head slice/concat/S2I overhead exceeds kernel wins — see t2u_forward9.txt).
+    (64, 4096): ("dram", "bs", 8, 8, 2),  # enc Q @ K^T
+    (4096, 64): ("bs", "bs", 2, 8, 8),  # enc probs @ V
 }
+
+# Decoder SDPA batched 4D: 1D fuse_batch on ``[B,H,M,K] @ [B,H,K,N]`` (no per-head slice/concat).
+# Populate from ``test_t2u_batched_matmul_perf_report_sweep``; auto 1D ibw hits 416 blocks > 110 cores.
+_T2U_TUNED_SDPA_BATCHED: dict[tuple[int, int], Optional[int]] = {}
+
+
+def t2u_tuned_sdpa_batched(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+) -> Optional[Tuple[ttnn.ProgramConfig, ttnn.MemoryConfig, ttnn.MemoryConfig]]:
+    """Tuned 1D fuse_batch matmul for decoder SDPA at long seq (native 4D, no per-head overhead)."""
+    force_ibw = _T2U_TUNED_SDPA_BATCHED.get((k, n))
+    if force_ibw is None and (k, n) not in _T2U_TUNED_SDPA_BATCHED:
+        return None
+    if m % TILE or k % TILE or n % TILE:
+        return None
+    program_config = matmul_multicast_1d_program_config(
+        device,
+        m=m,
+        k=k,
+        n=n,
+        force_in0_block_w=force_ibw,
+    )
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    return program_config, dram, dram
 
 
 def t2u_tuned_matmul(
