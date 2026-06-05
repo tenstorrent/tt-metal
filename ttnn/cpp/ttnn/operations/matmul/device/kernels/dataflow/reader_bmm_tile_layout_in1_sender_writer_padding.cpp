@@ -224,10 +224,10 @@ void kernel_main() {
             in1_mcast_dest_noc_start_x,
             in1_mcast_dest_noc_start_y,
             in1_mcast_dest_noc_end_x,
-            in1_mcast_dest_noc_end_y,
-            in1_mcast_num_cores},
-        receiver_sem,  // data ready (S->R level flag)
-        sender_sem);   // consumed (R->S counter)
+            in1_mcast_dest_noc_end_y},  // area() = in1_mcast_num_cores (the full mcast grid)
+        in1_mcast_num_dests,            // active-core ACK count (may be < num_cores when cores-without-work exist)
+        receiver_sem,                   // data ready (S->R level flag)
+        sender_sem);                    // consumed (R->S counter)
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = cb_in1.get_write_ptr();

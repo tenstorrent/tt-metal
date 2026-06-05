@@ -50,8 +50,9 @@ void kernel_main() {
     dataflow_kernel_lib::Pipe<> in0_pipe(
         noc,
         dataflow_kernel_lib::McastRect::single_core(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y),
-        receiver_sem,  // data ready (S->R level flag)
-        sender_sem);   // consumed (R->S counter)
+        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
+        receiver_sem,            // data ready (S->R level flag)
+        sender_sem);             // consumed (R->S counter)
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {

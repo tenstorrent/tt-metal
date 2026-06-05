@@ -117,8 +117,9 @@ void kernel_main() {
     dataflow_kernel_lib::Pipe<> in1_pipe(
         noc,
         dataflow_kernel_lib::McastRect::single_core(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y),
-        receiver_sem,  // data ready (S->R level flag)
-        sender_sem);   // consumed (R->S counter)
+        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
+        receiver_sem,            // data ready (S->R level flag)
+        sender_sem);             // consumed (R->S counter)
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);

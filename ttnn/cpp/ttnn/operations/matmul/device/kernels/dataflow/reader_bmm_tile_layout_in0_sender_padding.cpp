@@ -146,7 +146,8 @@ void kernel_main() {
 
     // mcast_pipe: the in0 block data-mcast + handshake is driven by a two-sided Pipe.
     //   data_ready = receiver_sem (S->R level flag, VALID/INVALID), consumed = sender_sem (R->S counter).
-    //   EXCLUDE_SRC: sender is not in the receiver rect. LINK=true: data;flag back-to-back + flush
+    //   The sender sits in the box corner but is NOT a recipient (num_dests < area) so the Pipe
+    //   infers EXCLUDE_SRC — it must not self-overwrite its own in0 source. LINK=true: data;flag + flush
     //   (matches the original linked data mcast + ARCH_BLACKHOLE flush). PRE_HANDSHAKE=true: dest L1
     //   is the receivers' reused in0 CB slot, so the R->S "consumed" wait gates each block.
     dataflow_kernel_lib::Pipe<> in0_pipe(
@@ -155,10 +156,10 @@ void kernel_main() {
             in0_mcast_dest_noc_start_x,
             in0_mcast_dest_noc_start_y,
             in0_mcast_dest_noc_end_x,
-            in0_mcast_dest_noc_end_y,
-            in0_mcast_num_cores},
-        receiver_sem,  // data ready (S->R level flag)
-        sender_sem);   // consumed (R->S counter)
+            in0_mcast_dest_noc_end_y},  // area() = in0_mcast_num_cores (the full mcast grid)
+        in0_mcast_num_dests,            // active-core ACK count (may be < num_cores when cores-without-work exist)
+        receiver_sem,                   // data ready (S->R level flag)
+        sender_sem);                    // consumed (R->S counter)
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = cb_in0.get_write_ptr();
