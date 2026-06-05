@@ -87,25 +87,25 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
 }
 
 // Push DM-written TL1 (cached-port offset) through L2 so host NOC and other agents see it.
-FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    flush_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
-#else
-    (void)cached_tl1_addr;
-#endif
-}
+// FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
+// #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+//     flush_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
+// #else
+//     (void)cached_tl1_addr;
+// #endif
+// }
 
 // Quasar: prefetch_q_rd_ptr is the uncached alias; load TL1 directly so host NOC-filled entries
 // are visible without stale L1 D$/L2 on the cached port (see quasar-noc-l1.mdc).
-template <typename T>
-FORCE_INLINE T fetchq_poll_load(volatile T tt_l1_ptr* rd_ptr) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    asm volatile("fence" ::: "memory");
-    return *rd_ptr;
-#else
-    return *rd_ptr;
-#endif
-}
+// template <typename T>
+// FORCE_INLINE T fetchq_poll_load(volatile T tt_l1_ptr* rd_ptr) {
+// #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+//     asm volatile("fence" ::: "memory");
+//     return *rd_ptr;
+// #else
+//     return *rd_ptr;
+// #endif
+// }
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 

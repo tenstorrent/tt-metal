@@ -130,68 +130,68 @@ static constexpr uint32_t quasar_cmddat_pre_retire_iters = 8;
 static constexpr uint32_t quasar_cmddat_pre_cmd_decode_iters = 32;
 
 // NOC fills cmddat at cached offsets; invalidate before uncached_l1_ptr decode sees fresh TL1.
-FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint32_t size_bytes) {
-    uintptr_t inv_addr = cached_start & ~uintptr_t(63);
-    const uintptr_t inv_end = cached_start + size_bytes;
-    for (; inv_addr < inv_end; inv_addr += 64) {
-        invalidate_l1_dcache(inv_addr);
-        invalidate_l2_cache_line(inv_addr);
-    }
-}
+// FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint32_t size_bytes) {
+//     uintptr_t inv_addr = cached_start & ~uintptr_t(63);
+//     const uintptr_t inv_end = cached_start + size_bytes;
+//     for (; inv_addr < inv_end; inv_addr += 64) {
+//         invalidate_l1_dcache(inv_addr);
+//         invalidate_l2_cache_line(inv_addr);
+//     }
+// }
 
-FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
-    asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
-        (void)delay;
-    }
-    (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
-    asm volatile("fence" ::: "memory");
-}
+// FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
+// asm volatile("fence" ::: "memory");
+// for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
+//     (void)delay;
+// }
+// (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
+// asm volatile("fence" ::: "memory");
+// }
 
 // After fetch_q_get_cmds returns committed cmddat; before uncached cmd header read in process_cmd.
 // Replaces removed prefetch_publish_phase + post-retire delay (Quasar RTL timing).
-FORCE_INLINE void quasar_cmddat_pre_cmd_decode_sync() {
-    asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_cmd_decode_iters); ++delay) {
-        (void)delay;
-    }
-    asm volatile("fence" ::: "memory");
-}
+// FORCE_INLINE void quasar_cmddat_pre_cmd_decode_sync() {
+// asm volatile("fence" ::: "memory");
+// for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_cmd_decode_iters); ++delay) {
+//     (void)delay;
+// }
+// asm volatile("fence" ::: "memory");
+// }
 
 // Production fetch retire chain (matches quasar_prefetch_retire_repro / tier-1 repro).
 // No prefetch_publish_phase in this path: repeated uncached marker writes after L2
 // flush/invalidate stall Quasar RTL (see quasar_prefetch_retire_repro for phased diag).
-FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t read_start, uint32_t size_bytes) {
-    while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
-    }
+// FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t read_start, uint32_t size_bytes) {
+//     while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
+//     }
 
-    quasar_cmddat_pre_retire_barrier_sync(trid);
+//     quasar_cmddat_pre_retire_barrier_sync(trid);
 
-    noc_async_read_barrier_with_trid(trid);
+//     noc_async_read_barrier_with_trid(trid);
 
-    cmddat_invalidate_after_noc_read(read_start, size_bytes);
-}
+//     // cmddat_invalidate_after_noc_read(read_start, size_bytes);
+// }
 #else
-FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t, uint32_t) {}
-FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t, uint32_t) {
-    noc_async_read_barrier_with_trid(trid);
-}
+// FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t, uint32_t) {}
+// FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t, uint32_t) {
+//     noc_async_read_barrier_with_trid(trid);
+// }
 #endif
 
 constexpr uint32_t is_d_variant = IS_D_VARIANT;
 constexpr uint32_t is_h_variant = IS_H_VARIANT;
 
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-// Quasar CreateSemaphore init is always 0; host cluster.write_core primes cached L1 only.
-// CBWriter acquire_pages reads the uncached alias — bootstrap dispatch CB credits on the device.
-FORCE_INLINE void quasar_bootstrap_prefetch_downstream_credits() {
-    if constexpr (is_d_variant != 0) {
-        Semaphore<fd_core_type>(my_downstream_cb_sem_id).set(downstream_cb_pages);
-    }
-}
-#else
-FORCE_INLINE void quasar_bootstrap_prefetch_downstream_credits() {}
-#endif
+// #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+// // Quasar CreateSemaphore init is always 0; host cluster.write_core primes cached L1 only.
+// // CBWriter acquire_pages reads the uncached alias — bootstrap dispatch CB credits on the device.
+// FORCE_INLINE void quasar_bootstrap_prefetch_downstream_credits() {
+//     if constexpr (is_d_variant != 0) {
+//         Semaphore<fd_core_type>(my_downstream_cb_sem_id).set(downstream_cb_pages);
+//     }
+// }
+// #else
+// FORCE_INLINE void quasar_bootstrap_prefetch_downstream_credits() {}
+// #endif
 
 constexpr uintptr_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uintptr_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -561,7 +561,7 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
-    const uintptr_t consumed_entry_cached = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
+    // const uintptr_t consumed_entry_cached = l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
     *prefetch_q_rd_ptr = 0U;
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
@@ -581,9 +581,9 @@ FORCE_INLINE uint32_t read_from_pcie(
             reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
     }
 
-    tl1_publish_flush(consumed_entry_cached);
-    tl1_publish_flush(prefetch_q_rd_ptr_addr);
-    tl1_publish_flush(prefetch_q_pcie_rd_ptr_addr);
+    // tl1_publish_flush(consumed_entry_cached);
+    // tl1_publish_flush(prefetch_q_rd_ptr_addr);
+    // tl1_publish_flush(prefetch_q_pcie_rd_ptr_addr);
     return pending_read_size;
 }
 
@@ -720,7 +720,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         }
 
         // Local helper for reading the current prefetch_q entry.
-        uint32_t prefetch_q_rd_ptr_local = fetchq_poll_load(prefetch_q_rd_ptr);
+        uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
         uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
         bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
 
@@ -830,7 +830,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 }
 
                 // Refresh host state for potential next issue.
-                prefetch_q_rd_ptr_local = fetchq_poll_load(prefetch_q_rd_ptr);
+                prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
             }
@@ -871,7 +871,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     fence,
                     cmd_ptr);
 #endif
-                quasar_cmddat_retire_fetch_read(retire_trid, retire_start, retire_reserved);
+                noc_async_read_barrier_with_trid(inflight[idx].trid);
 
 #if ENABLE_PREFETCH_DPRINTS
                 if (retire_start < cmd_ptr) {
@@ -909,18 +909,12 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 continue;
             } else {
                 // Nothing to fetch, nothing pending, nothing available, stall on host
-                DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr
-                       << " val=" << fetchq_poll_load(prefetch_q_rd_ptr) << ENDL();
                 WAYPOINT("HQW");
                 uint32_t heartbeat = 0U;
-                uint32_t prefetch_q_entry = fetchq_poll_load(prefetch_q_rd_ptr);
-                while (prefetch_q_entry == 0U) {
-                    DPRINT << "prefetch_q_rd_ptr=" << HEX() << (uintptr_t)prefetch_q_rd_ptr
-                           << " val=" << prefetch_q_entry << ENDL();
+                while ((fetch_size = *prefetch_q_rd_ptr) == 0U) {
+                    invalidate_l1_cache();
                     IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-                    prefetch_q_entry = fetchq_poll_load(prefetch_q_rd_ptr);
                 }
-                DPRINT << "fetch_q_entry=" << prefetch_q_entry << ENDL();
                 WAYPOINT("HQD");
                 // Host has work now; restart without recursion.
                 continue;
@@ -2239,9 +2233,9 @@ bool process_cmd(
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    quasar_cmddat_pre_cmd_decode_sync();
-#endif
+    // #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    //     quasar_cmddat_pre_cmd_decode_sync();
+    // #endif
     bool done = false;
 
     DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << " exec_buf=" << exec_buf
@@ -3033,7 +3027,7 @@ void kernel_main() {
     to_dev_id = get_arg_val<uint32_t>(OFFSETOF_TO_DEV_ID);
     router_direction = get_arg_val<uint32_t>(OFFSETOF_ROUTER_DIRECTION);
 
-    quasar_bootstrap_prefetch_downstream_credits();
+    // quasar_bootstrap_prefetch_downstream_credits();
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();
