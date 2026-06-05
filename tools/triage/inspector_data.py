@@ -24,7 +24,7 @@ Owner:
 """
 
 from triage import triage_singleton, ScriptConfig, TTTriageError, log_warning, run_script
-from parse_inspector_logs import get_data as get_logs_data, get_log_directory
+from parse_inspector_logs import get_data as get_log_directory
 import asyncio
 import atexit
 import capnp
@@ -129,7 +129,6 @@ class InspectorRpcController(InspectorData):
         if self.running:
             asyncio.run_coroutine_threadsafe(self.__async_stop(), self.loop).result()
             self.background_thread.join()
-        atexit.unregister(self.stop)
 
 
 class InspectorUnserializedMethod(InspectorException):
