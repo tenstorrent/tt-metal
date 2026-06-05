@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a sequence of Codex /goal prompt files in one resumed session."""
+"""Run a sequence of Codex /goal prompt files."""
 
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ class GoalStatus:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run each prompt file as a separate Codex /goal. The first file starts a "
-            "non-interactive Codex session; later files resume that session."
+            "Run each prompt file as a separate Codex /goal. By default every "
+            "prompt starts a fresh non-interactive Codex session because Codex "
+            "currently allows one persistent goal per thread."
         )
     )
     parser.add_argument("prompt_files", nargs="+", type=pathlib.Path)
@@ -58,6 +59,15 @@ def parse_args() -> argparse.Namespace:
         help="Extra argument token passed to every codex exec invocation. May be repeated.",
     )
     parser.add_argument("--no-goal-gate", action="store_true")
+    parser.add_argument(
+        "--same-thread",
+        action="store_true",
+        help=(
+            "Resume the same Codex thread after the first prompt. This preserves "
+            "conversation context, but later /goal commands may not create new "
+            "goal rows in current Codex releases."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -85,6 +95,13 @@ def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
     if not text.lstrip().startswith("/goal"):
         raise SystemExit(f"{path} must start with a /goal command")
     return text.rstrip() + "\n"
+
+
+def normalized_goal_text(prompt: str) -> str:
+    text = prompt.lstrip()
+    if not text.startswith("/goal"):
+        raise SystemExit("prompt must start with /goal")
+    return " ".join(text[len("/goal") :].split())
 
 
 def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
@@ -198,6 +215,7 @@ def main() -> int:
                 f"codex_home={home}",
                 f"codex_bin={args.codex_bin}",
                 f"goal_gate={not args.no_goal_gate}",
+                f"same_thread={args.same_thread}",
                 "prompt_files:",
                 *[f"- {path}" for path in args.prompt_files],
                 "",
@@ -208,13 +226,14 @@ def main() -> int:
     session_id: str | None = None
     for index, prompt_path in enumerate(args.prompt_files, start=1):
         prompt = load_prompt(prompt_path, replacements)
+        expected_objective = normalized_goal_text(prompt)
         name = stage_name(index, prompt_path)
         prompt_copy = log_dir / f"{name}.prompt.txt"
         prompt_copy.write_text(prompt)
         output_log = log_dir / f"{name}.jsonl"
 
-        if index == 1:
-            before = set(session_files(home))
+        before = set(session_files(home))
+        if index == 1 or not args.same_thread:
             cmd = [args.codex_bin, "exec", "--json", "-C", str(repo), *extra_args, "-"]
         else:
             if session_id is None:
@@ -227,12 +246,12 @@ def main() -> int:
             print(f"Stage {index} Codex process exited with {code}", file=sys.stderr)
             return code
 
-        if index == 1:
-            session_id = "dry-run-session" if args.dry_run else newest_session_id(home, before)
-            if session_id is None:
-                raise SystemExit("Could not discover Codex session id after first stage")
-            with manifest.open("a") as f:
-                f.write(f"session_id={session_id}\n")
+        discovered_session_id = "dry-run-session" if args.dry_run else newest_session_id(home, before)
+        if discovered_session_id is None:
+            raise SystemExit(f"Could not discover Codex session id after stage {index}")
+        session_id = session_id if args.same_thread and index > 1 else discovered_session_id
+        with manifest.open("a") as f:
+            f.write(f"stage_{index}_session_id={discovered_session_id}\n")
 
         if args.no_goal_gate or args.dry_run:
             continue
@@ -245,6 +264,18 @@ def main() -> int:
             f"goal_status={status.status} tokens={status.tokens_used} seconds={status.time_used_seconds}",
             file=sys.stderr,
         )
+        actual_objective = " ".join(status.objective.split())
+        expected_prefix = expected_objective[:120]
+        if expected_prefix not in actual_objective:
+            print(
+                "Stopping after stage "
+                f"{index}: latest goal objective does not match this prompt. "
+                "This usually means the /goal command was not accepted as a new goal.",
+                file=sys.stderr,
+            )
+            print(f"Expected prefix: {expected_prefix}", file=sys.stderr)
+            print(f"Actual objective: {status.objective}", file=sys.stderr)
+            return 4
         if status.status != "complete":
             print(f"Stopping after stage {index}: goal is {status.status}", file=sys.stderr)
             print(f"Objective: {status.objective}", file=sys.stderr)
