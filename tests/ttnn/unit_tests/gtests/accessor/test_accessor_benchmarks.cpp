@@ -126,9 +126,7 @@ void benchmark_args_combinations_single_core(
         auto cta = accessor_args.get_compile_time_args();
         // Pass page count (not element volume) — the kernel iterates page_ids from 0..N-1
         // and calls get_noc_addr(page_id), so it needs number of pages, not number of elements.
-        const auto num_pages =
-            params.physical_tensor_shape.volume() / (params.page_shape.height() * params.page_shape.width());
-        cta.push_back(num_pages);
+        cta.push_back(input_device_buffer->num_pages());
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         defines["INTERLEAVED_LAYOUT"] = is_interleaved ? "1" : "0";
