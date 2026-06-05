@@ -18,7 +18,7 @@ on:
       runner-label:
         required: false
         type: string
-        default: "BH-LLMBox"
+        default: "BH-LoudBox"
       fast-only:
         required: false
         type: boolean

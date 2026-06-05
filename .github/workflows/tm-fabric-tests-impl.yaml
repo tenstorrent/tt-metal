@@ -39,8 +39,8 @@ on:
       bh-runner-llmbox:
         required: false
         type: boolean
-        default: true
-        description: "Run tests on BH-LLMBox"
+        default: false
+        description: "Run tests on BH-LLMBox (disabled per MINFRA-742)"
       bh-runner-loudbox:
         required: false
         type: boolean
