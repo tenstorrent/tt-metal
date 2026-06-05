@@ -26,7 +26,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0_5.common.configs import PaliGemmaConfig
-from .ttnn_common import tensor_1d_to_2d_ttnn
+from .ttnn_common import get_ln_weight_memory_config, tensor_1d_to_2d_ttnn
 from .ttnn_gemma import (
     GemmaBlockTTNN,
     rms_norm_ttnn,
@@ -77,11 +77,13 @@ class PaliGemmaBackboneTTNN:
 
         # Convert norms - OPTIMIZATION: Pre-add Gemma-style +1 offset
         # Note: +1.0 is done on host (torch), unsqueeze done on device via tensor_1d_to_2d_ttnn
+        # PI0_LN_WEIGHTS_L1=1 places norm γ tensors in L1 (saves DRAM read per LN call).
+        _ln_mc = get_ln_weight_memory_config()
         self.vlm_norm = tensor_1d_to_2d_ttnn(
-            weights["vlm_language"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
+            weights["vlm_language"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16, memory_config=_ln_mc
         )
         self.expert_norm = tensor_1d_to_2d_ttnn(
-            weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16
+            weights["action_expert"]["model.norm.weight"] + 1.0, device, dtype=ttnn.bfloat16, memory_config=_ln_mc
         )
 
         # Initialize vision tower. When PI0_SIGLIP_HF=1, we run the SigLIP
@@ -227,7 +229,12 @@ class PaliGemmaBackboneTTNN:
 
                 # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
                 if len(value.shape) == 1:
-                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                    # PI0_LN_WEIGHTS_L1=1 places norm γ in L1; biases stay DRAM.
+                    is_norm_1d = "layernorm" in new_key or "norm" in new_key
+                    _mc = get_ln_weight_memory_config() if is_norm_1d else ttnn.DRAM_MEMORY_CONFIG
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(
+                        value, self.device, dtype=ttnn.bfloat16, memory_config=_mc
+                    )
                 else:
                     # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
                     # Norm weights stay bf16 (small and precision-sensitive).
@@ -307,7 +314,12 @@ class PaliGemmaBackboneTTNN:
 
                 # Handle 1D tensors (biases, norms) using tensor_1d_to_2d_ttnn (no torch.unsqueeze)
                 if len(value.shape) == 1:
-                    block_weights[new_key] = tensor_1d_to_2d_ttnn(value, self.device, dtype=ttnn.bfloat16)
+                    # PI0_LN_WEIGHTS_L1=1 places norm γ in L1; biases stay DRAM.
+                    is_norm_1d = "layernorm" in new_key or "norm" in new_key
+                    _mc = get_ln_weight_memory_config() if is_norm_1d else ttnn.DRAM_MEMORY_CONFIG
+                    block_weights[new_key] = tensor_1d_to_2d_ttnn(
+                        value, self.device, dtype=ttnn.bfloat16, memory_config=_mc
+                    )
                 else:
                     # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
                     # Norm weights stay bf16 (small and precision-sensitive).

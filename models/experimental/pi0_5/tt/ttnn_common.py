@@ -104,6 +104,19 @@ def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.Wo
     )
 
 
+def get_ln_weight_memory_config() -> "ttnn.MemoryConfig":
+    """Memory config for LN/RMSNorm weights (γ/β tensors).
+
+    Default DRAM. `PI0_LN_WEIGHTS_L1=1` opts into L1 placement —
+    eliminates the per-LN-call DRAM read of the weight tensor.
+    Total budget at full pi0.5 (VLM-2B + expert-300M + SigLIP-27):
+    ~14.7 MB of L1 (4.6 VLM + 2.3 expert + 7.8 SigLIP).
+    Risk: trace mode may OOM L1; opt-in only.
+    Per PERF_PLAYBOOKS/01 §6 + 06 §3 (layout matching).
+    """
+    return ttnn.L1_MEMORY_CONFIG if _env_bool("PI0_LN_WEIGHTS_L1", False) else ttnn.DRAM_MEMORY_CONFIG
+
+
 def denoise_loop_fp32() -> bool:
     """Whether to stage the flow-matching Euler integration loop in fp32.
 

@@ -32,6 +32,7 @@ from models.experimental.pi0_5.tt.ttnn_common import (
     get_sdpa_compute_kernel_config,
     get_sdpa_exp_approx_mode,
     sdpa_prefill_chunk_sizes,
+    get_ln_weight_memory_config,
     tensor_1d_to_2d_ttnn,
 )
 from models.experimental.pi0_5.tt.ttnn_gemma import build_matmul_pcfg, build_sharded_norm_pcfg, _RMS_NORM_COMPUTE_CONFIG
@@ -995,13 +996,14 @@ class SigLIPBlockTTNN:
         self.config = config
         self.device = device
 
-        # Layer norms
+        # Layer norms — PI0_LN_WEIGHTS_L1=1 opts into L1 placement.
+        _ln_mc = get_ln_weight_memory_config()
         self.ln1_weight = ttnn.from_torch(
             weights["layer_norm1.weight"].reshape(1, 1, -1),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_ln_mc,
         )
 
         if "layer_norm1.bias" in weights:
@@ -1010,7 +1012,7 @@ class SigLIPBlockTTNN:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_ln_mc,
             )
         else:
             self.ln1_bias = None
@@ -1020,7 +1022,7 @@ class SigLIPBlockTTNN:
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_ln_mc,
         )
 
         if "layer_norm2.bias" in weights:
@@ -1029,7 +1031,7 @@ class SigLIPBlockTTNN:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_ln_mc,
             )
         else:
             self.ln2_bias = None
@@ -1305,9 +1307,14 @@ class SigLIPVisionTowerTTNN:
         post_ln_bias = weights.get("post_layernorm.bias") or weights.get("vision_model.post_layernorm.bias")
 
         if post_ln_weight is not None:
-            self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat16)
+            _post_ln_mc = get_ln_weight_memory_config()
+            self.post_ln_weight = tensor_1d_to_2d_ttnn(
+                post_ln_weight, device, dtype=ttnn.bfloat16, memory_config=_post_ln_mc
+            )
             self.post_ln_bias = (
-                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16) if post_ln_bias is not None else None
+                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16, memory_config=_post_ln_mc)
+                if post_ln_bias is not None
+                else None
             )
         else:
             self.post_ln_weight = None
