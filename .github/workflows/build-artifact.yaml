@@ -460,6 +460,12 @@ jobs:
           # but not /work which is mounted from the host. Git commands from /work fail due to
           # ownership mismatch (host uid vs container root). Add /work to safe.directory.
           git config --global --add safe.directory /work
+          # The checkout action uses GIT_CONFIG_GLOBAL which overrides the Dockerfile's
+          # safe.directory='*'. Re-add '*' so git works in all CPM source cache subdirs
+          # (e.g. /work/.cpmcache/kissat/<hash>). Without this, third-party packages that
+          # call git from their own configure scripts (e.g. kissat's generate-build-header.sh)
+          # silently fail and break the build when the CPM cache is cold.
+          git config --global --add safe.directory '*'
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache

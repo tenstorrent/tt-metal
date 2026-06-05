@@ -42,6 +42,34 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// Mock devices reuse the on-disk firmware sources of a real arch's package.
+// We only ship sources for Wormhole and Blackhole today; Quasar mock has
+// no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
+// build_firmware() against a Quasar mock blows up in cc1plus with
+// "No such file or directory". Real silicon devices always have sources
+// available and bypass this check.
+bool mock_firmware_sources_available_for(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE: return true;
+        default: return false;
+    }
+}
+
+int firmware_wait_timeout_ms() {
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+    // llrt treats timeout_ms==0 on sim as infinite wait.
+    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
+        return 0;
+    }
+    return 10000;
+}
+
+}  // namespace
+
 RiscFirmwareInitializer::RiscFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor,
     const GetControlPlaneFn& get_control_plane,
@@ -139,10 +167,23 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
             BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-            if (!cluster_.is_mock_or_emulated()) {
-                // build_firmware ensures that the FW is built only once for a given build key
-                // (which captures the fw_compile_hash).
+            // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
+            // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
+            // depend on -- without them, JIT-compiling kernels on a mock device fails with
+            // "non constant or forward reference address expression". So we run it for mock as
+            // well as real devices, with two exceptions:
+            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
+            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
+            //      yet supported and would require a separate sources fix.
+            //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
+            //      riscv firmware ELFs are never linked or consumed.
+            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
+                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
+                                        !mock_firmware_sources_available_for(cluster_.arch()));
+            if (!skip_fw_build) {
                 BuildEnvManager::get_instance().build_firmware(device_id);
+            }
+            if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
@@ -419,7 +460,7 @@ void RiscFirmwareInitializer::reset_cores(tt::ChipId device_id) {
     }
 
     for (auto& id_and_cores : device_to_early_exit_cores) {
-        const int timeout_ms = 10000;
+        const int timeout_ms = firmware_wait_timeout_ms();
         if (!id_and_cores.second.empty()) {
             try {
                 llrt::internal_::wait_until_cores_done(
@@ -1353,7 +1394,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     log_debug(LogDevice, "Waiting for firmware init complete");
-    const int timeout_ms = 10000;
+    const int timeout_ms = firmware_wait_timeout_ms();
     try {
         llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, not_done_cores, timeout_ms);
     } catch (std::runtime_error&) {
