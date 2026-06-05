@@ -491,7 +491,57 @@ all_gather_minimal_matmul_async_factory_helper(
         return (group * 2 + (1 - dir) + num_mux_cores - 1) % num_mux_cores;
     };
 
-    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+    // Scheme 4 single-row interleave: when the fsdp ring is fused and BOTH axes are uni-rings
+    // (Linear), every device creates exactly one mux per (ring, link) — so all 8 muxes fit on the
+    // single row R = full_grid_size.y - 1, interleaved by parity: in0 link g -> even col (nwpl*g),
+    // fsdp link g -> odd col (nwpl*g + 1). This frees the fsdp column AND the second mux row the old
+    // fallback consumed, letting the matmul reclaim the full 8x8. Collision-free for nwpl==2 (4 links
+    // exactly fill cols 0..7). The create / RT-args / sender-wiring sites all route mux placement
+    // through these helpers so they stay in lockstep.
+    const bool single_row_muxes = persistent_weight_buffer.has_value() && topology == ttnn::ccl::Topology::Linear &&
+                                  fsdp_topology == ttnn::ccl::Topology::Linear;
+    TT_FATAL(
+        !single_row_muxes || num_workers_per_link == 2,
+        "Scheme-4 single-row mux interleave assumes num_workers_per_link==2 (got {})",
+        num_workers_per_link);
+    const uint32_t single_mux_row = full_grid_size.y - 1;
+    const auto in0_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+        if (single_row_muxes) {
+            return CoreCoord(num_workers_per_link * link, single_mux_row);  // even col 2g
+        }
+        uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
+        if (x >= full_grid_size.x) {
+            x -= full_grid_size.x;
+        }
+        return CoreCoord(x, full_grid_size.y - 1);
+    };
+    const auto fsdp_mux_logical = [&](uint32_t link, uint32_t dir) -> CoreCoord {
+        if (single_row_muxes) {
+            return CoreCoord(num_workers_per_link * link + 1, single_mux_row);  // odd col 2g+1
+        }
+        if (fsdp_mux_in_column) {
+            return CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
+        }
+        uint32_t x = (num_workers_per_link * (link + 1)) - (1 - dir);
+        if (x >= full_grid_size.x) {
+            x -= full_grid_size.x;
+        }
+        x = (x == 0) ? (full_grid_size.x - 1) : (x - 1);
+        return CoreCoord(x, full_grid_size.y - 2);
+    };
+
+    // Uni-ring (Linear): each device relays through exactly ONE mux direction — rank>0 (has a
+    // backward neighbor) short-hops backward (dir=1); rank 0 (no backward neighbor) long-wraps
+    // forward (dir=0). Create/wire only that direction so interior devices stop allocating an
+    // opposite-direction mux they never send through (collapses the 64/68/72 core spread to a
+    // flat 64). The same validity flag that already lets line-END devices skip their absent
+    // direction now applies to every device. Ring is genuinely bidirectional, so keep the
+    // neighbor-existence gate there.
+    const uint32_t in0_uni_dir = backward_coord.has_value() ? 1u : 0u;
+    const auto mux_connection_valid = [&backward_coord, &forward_coord, &topology, in0_uni_dir](const uint32_t dir) {
+        if (topology == ttnn::ccl::Topology::Linear) {
+            return dir == in0_uni_dir;
+        }
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
 
@@ -500,12 +550,7 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
-            mux_core_ranges.emplace_back(mux_logical_core);
+            mux_core_ranges.emplace_back(in0_mux_logical(link, dir));
         }
     }
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
@@ -619,9 +664,17 @@ all_gather_minimal_matmul_async_factory_helper(
     std::array<uint32_t, 2> fsdp_unicast_backward_args{};
     tt::tt_fabric::FabricMuxConfig fsdp_mux_kernel_config = mux_kernel_config;  // overwritten below if fsdp_fused
     tt::tt_metal::KernelHandle fsdp_mux_kernel_id{};
-    const auto fsdp_mux_connection_valid = [&fsdp_backward_coord, &fsdp_forward_coord](const uint32_t dir) {
-        return (dir && fsdp_backward_coord.has_value()) || (!dir && fsdp_forward_coord.has_value());
-    };
+    // Uni-ring (Linear): mirror the in0 gate on the fsdp axis — create/wire only the single
+    // direction each device relays through (rank>0 backward dir=1, rank 0 forward dir=0). Ring stays
+    // bidirectional via the neighbor-existence gate.
+    const uint32_t fsdp_uni_dir = fsdp_backward_coord.has_value() ? 1u : 0u;
+    const auto fsdp_mux_connection_valid =
+        [&fsdp_backward_coord, &fsdp_forward_coord, &fsdp_topology, fsdp_uni_dir](const uint32_t dir) {
+            if (fsdp_topology == ttnn::ccl::Topology::Linear) {
+                return dir == fsdp_uni_dir;
+            }
+            return (dir && fsdp_backward_coord.has_value()) || (!dir && fsdp_forward_coord.has_value());
+        };
     if (fsdp_fused) {
         std::tie(fsdp_num_targets_forward, fsdp_num_targets_backward) =
             ttnn::ccl::get_forward_backward_line_mcast_distance(fsdp_ring_size, fsdp_ring_index, fsdp_topology, false);
@@ -646,18 +699,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 // horizontal NOC_1 hop, instead of the old long vertical write down to a bottom mux
                 // row (which ran against NOC_1's up/left bias). Non-transpose keeps the bottom-row
                 // layout with the -1 NOC_1 shift.
-                CoreCoord fsdp_mux_logical_core;
-                if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
-                } else {
-                    uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-                    if (mux_x_index >= full_grid_size.x) {
-                        mux_x_index = mux_x_index - full_grid_size.x;
-                    }
-                    mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
-                    fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
-                }
-                fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical_core);
+                fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical(link, dir));
             }
         }
         CoreRangeSet fsdp_mux_core_range_set = CoreRangeSet(fsdp_mux_core_ranges);
@@ -1008,11 +1050,7 @@ all_gather_minimal_matmul_async_factory_helper(
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
         if (mux_connection_valid(dir)) {
             uint32_t link = mux_id / 2;  // 2 is the num directions
-            uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-            if (mux_x_index >= full_grid_size.x) {
-                mux_x_index = mux_x_index - full_grid_size.x;
-            }
-            auto mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 1);
+            auto mux_logical_core = in0_mux_logical(link, dir);
 
             std::vector<uint32_t> mux_rt_args = {};
             const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -1036,18 +1074,8 @@ all_gather_minimal_matmul_async_factory_helper(
             uint32_t dir = mux_id % 2;
             if (fsdp_mux_connection_valid(dir)) {
                 uint32_t link = mux_id / 2;
-                // Match the (transpose-conditional) column placement in the create loop above.
-                CoreCoord fsdp_mux_logical_core;
-                if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
-                } else {
-                    uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-                    if (mux_x_index >= full_grid_size.x) {
-                        mux_x_index = mux_x_index - full_grid_size.x;
-                    }
-                    mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
-                    fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
-                }
+                // Match the create-loop placement via the shared helper.
+                CoreCoord fsdp_mux_logical_core = fsdp_mux_logical(link, dir);
 
                 std::vector<uint32_t> fsdp_mux_rt_args;
                 const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -1229,12 +1257,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 CoreCoord termination_master_virtual_core_backward =
                     device->worker_core_from_logical_core(termination_master_logical_core_backward);
 
-                uint32_t mux_core_index_backward =
-                    ((in0_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-                if (mux_core_index_backward >= full_grid_size.x) {
-                    mux_core_index_backward = mux_core_index_backward - full_grid_size.x;
-                }
-                auto mux_logical_core_backward = CoreCoord(mux_core_index_backward, full_grid_size.y - 1);
+                auto mux_logical_core_backward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/0);
                 CoreCoord mux_virtual_core_backward = device->worker_core_from_logical_core(mux_logical_core_backward);
                 fabric_mux_connection_rt_args(
                     mux_connection_valid(0),
@@ -1257,12 +1280,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 CoreCoord termination_master_virtual_core_forward =
                     device->worker_core_from_logical_core(termination_master_logical_core_forward);
 
-                uint32_t mux_core_index_forward =
-                    ((in0_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-                if (mux_core_index_forward >= full_grid_size.x) {
-                    mux_core_index_forward = mux_core_index_forward - full_grid_size.x;
-                }
-                auto mux_logical_core_forward = CoreCoord(mux_core_index_forward, full_grid_size.y - 1);
+                auto mux_logical_core_forward = in0_mux_logical(in0_idx / num_workers_per_link, /*dir=*/1);
                 CoreCoord mux_virtual_core_forward = device->worker_core_from_logical_core(mux_logical_core_forward);
                 fabric_mux_connection_rt_args(
                     mux_connection_valid(1),
@@ -1358,23 +1376,16 @@ all_gather_minimal_matmul_async_factory_helper(
                 // The termination master is the group's worker-0 client — the backward sender of the
                 // group-base row, which sits in the chain-tail column on the in1 axis.
                 auto second_last_in1_core = in1_core_order[in1_core_order.size() - 2];
-                CoreCoord fsdp_mux_logical_backward;
-                CoreCoord fsdp_term_master_logical_backward;
-                if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_backward =
-                        CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(in1_idx / num_workers_per_link, 0));
-                    fsdp_term_master_logical_backward = CoreCoord(second_last_in1_core.x, in1_idx - worker_idx);
-                } else {
-                    uint32_t fsdp_sender_col_backward =
-                        ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-                    if (fsdp_sender_col_backward >= full_grid_size.x) {
-                        fsdp_sender_col_backward -= full_grid_size.x;
-                    }
-                    uint32_t fsdp_mux_index_backward =
-                        (fsdp_sender_col_backward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_backward - 1);
-                    fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
-                    fsdp_term_master_logical_backward = CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
-                }
+                CoreCoord fsdp_mux_logical_backward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/0);
+                // Term master = the group's worker-0 client. The layout follows the GRID orientation,
+                // not the mux placement: a transpose grid (in1 chain along X) indexes the client by its
+                // chain-tail column + group-base row; non-transpose swaps the axes. Gating on
+                // fsdp_mux_in_column was wrong for the single-row case (transpose grid, column==false),
+                // which picked the swapped non-transpose form and pointed at non-client cores -> the mux
+                // never terminated. Mirror the in0 term-master, which already gates on transpose.
+                CoreCoord fsdp_term_master_logical_backward =
+                    transpose_core_grid ? CoreCoord(second_last_in1_core.x, in1_idx - worker_idx)
+                                        : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
                 CoreCoord fsdp_term_master_virtual_backward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
@@ -1396,23 +1407,10 @@ all_gather_minimal_matmul_async_factory_helper(
                 // Transpose: mux in the last column at the group's forward row ((group)*2 + 1).
                 // Non-transpose: original bottom-row mux with the -1 shift. Term master = the group's
                 // worker-0 forward sender (chain tail) at the group-base row.
-                CoreCoord fsdp_mux_logical_forward;
-                CoreCoord fsdp_term_master_logical_forward;
-                if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_forward =
-                        CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(in1_idx / num_workers_per_link, 1));
-                    fsdp_term_master_logical_forward = CoreCoord(last_in1_core.x, in1_idx - worker_idx);
-                } else {
-                    uint32_t fsdp_sender_col_forward =
-                        ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-                    if (fsdp_sender_col_forward >= full_grid_size.x) {
-                        fsdp_sender_col_forward -= full_grid_size.x;
-                    }
-                    uint32_t fsdp_mux_index_forward =
-                        (fsdp_sender_col_forward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_forward - 1);
-                    fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
-                    fsdp_term_master_logical_forward = CoreCoord(in1_idx - worker_idx, last_in1_core.y);
-                }
+                CoreCoord fsdp_mux_logical_forward = fsdp_mux_logical(in1_idx / num_workers_per_link, /*dir=*/1);
+                CoreCoord fsdp_term_master_logical_forward = transpose_core_grid
+                                                                 ? CoreCoord(last_in1_core.x, in1_idx - worker_idx)
+                                                                 : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
                 CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
                 CoreCoord fsdp_term_master_virtual_forward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
