@@ -167,3 +167,6 @@ CLAUDE_PRESENTATION_GUIDE.md
 
 # Local-only generated presentations
 presentations/
+
+# Local-only Claude session reports (see CLAUDE_DOCUMENTATION_GUIDE.md)
+docs/claude_sessions/
