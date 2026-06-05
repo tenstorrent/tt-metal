@@ -54,6 +54,9 @@ install(
 )
 
 if(NOT ENABLE_TRACY)
+    if(ENABLE_TRACY_DEBUG)
+        message(WARNING "ENABLE_TRACY_DEBUG=ON has no effect with ENABLE_TRACY=OFF; debug zones are compiled out.")
+    endif()
     return()
 endif()
 
@@ -64,6 +67,10 @@ target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
 target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
 # Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
 target_link_options(TracyClient PUBLIC -rdynamic)
+
+if(ENABLE_TRACY_DEBUG)
+    target_compile_definitions(TracyClient PUBLIC TT_TRACY_DEBUG)
+endif()
 
 # TracyClient is a PUBLIC dependency of TT::Metalium, so its interface exports
 # $<INSTALL_INTERFACE:include/tracy>. Tracy's own header install rules are
