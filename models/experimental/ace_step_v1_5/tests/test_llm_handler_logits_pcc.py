@@ -59,7 +59,7 @@ def _experimental_lm_pcc_min() -> float:
     return _PCC_EXPERIMENTAL_LM_BF16
 
 
-_FIVE_HZ_LM_DIR_NAMES = ("acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-0.6B")
+_FIVE_HZ_LM_DIR_NAMES = ("acestep-5Hz-lm-1.7B", "acestep-5Hz-lm-0.6B", "acestep-5Hz-lm-4B")
 
 
 def _resolve_five_hz_lm_dir() -> Path | None:
@@ -79,9 +79,8 @@ def _resolve_five_hz_lm_dir() -> Path | None:
 
 
 _LM_SKIP = (
-    "5 Hz LM not found (tried acestep-5Hz-lm-1.7B then acestep-5Hz-lm-0.6B). "
-    "Set ACE_STEP_CHECKPOINT_DIR or ACESTEP_CHECKPOINTS_DIR, or populate e.g. "
-    "~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/acestep-5Hz-lm-1.7B/."
+    "5 Hz LM not found (tried acestep-5Hz-lm-1.7B, acestep-5Hz-lm-0.6B, acestep-5Hz-lm-4B). "
+    "Set ACE_STEP_CHECKPOINT_DIR or ACESTEP_CHECKPOINTS_DIR."
 )
 
 

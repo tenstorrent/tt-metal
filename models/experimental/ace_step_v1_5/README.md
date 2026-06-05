@@ -349,10 +349,14 @@ pytest models/experimental/ace_step_v1_5/tests \
 | **DiT patchify** | `test_patchify_pcc.py` | Patch embed + depatchify | `pytest models/experimental/ace_step_v1_5/tests/test_patchify_pcc.py -q` |
 | **DiT output head** | `test_output_head.py` | Output head vs torch | `pytest models/experimental/ace_step_v1_5/tests/test_output_head.py -q` |
 | **DiT HF parity** | `test_hf_parity_patch_output_head.py` | HF base patch embed + output head | `pytest models/experimental/ace_step_v1_5/tests/test_hf_parity_patch_output_head.py -q` |
-| **DiT denoise loop** | `test_dit_denoise_loop_pcc.py` | Full Euler loop vs torch (750/1500 frames) | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py -q` |
+| **DiT denoise loop** | `test_dit_denoise_loop_pcc.py` | Full Euler loop vs torch (375/750 frames) | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py -q` |
+| **DiT denoise + CFG** | `test_dit_denoise_loop_pcc_cfg.py` | APG + CFG vs torch @ 750 frames (30 s) | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc_cfg.py -q` |
 | **VAE Snake1D** | `test_vae_decoder_pcc.py` | Snake, residual, decoder block, tiny decoder | `pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py -q` |
-| **Condition encoder** | `test_condition_embedding_ttnn.py` | Text embed, Qwen3 TTT prefill, ctx latents | `pytest models/experimental/ace_step_v1_5/tests/test_condition_embedding_ttnn.py -q` |
-| **5 Hz LM logits** | `test_llm_handler_logits_pcc.py` | LM postprocess, CFG combine, prefill/decode | `pytest models/experimental/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py -q` |
+| **VAE decode_tiled** | `test_vae_decode_tiled_pcc.py` | HF Oobleck vs TTNN tiled decode @ 375/750 frames | `pytest models/experimental/ace_step_v1_5/tests/test_vae_decode_tiled_pcc.py -q` |
+| **Condition encoder (text)** | `test_condition_embedding_ttnn.py` | Qwen3 caption + text projector + ctx cat | `pytest models/experimental/ace_step_v1_5/tests/test_condition_embedding_ttnn.py -q` |
+| **Condition encoder (full)** | `test_condition_encoder_payload_pcc.py` | Lyric+timbre+text ``forward_payload`` vs HF @ 15s/30s | `pytest models/experimental/ace_step_v1_5/tests/test_condition_encoder_payload_pcc.py -q` |
+| **Audio-code detokenizer** | `test_audio_code_detokenizer_pcc.py` | 5 Hz codes → 25 Hz hints vs HF detokenizer | `pytest models/experimental/ace_step_v1_5/tests/test_audio_code_detokenizer_pcc.py -q` |
+| **5 Hz LM logits** | `test_llm_handler_logits_pcc.py` | LM postprocess, CFG combine, prefill/decode (0.6B/1.7B/4B) | `pytest models/experimental/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py -q` |
 | **LM memory patches** | `test_qwen_lm_mem_patches.py` | Prefill L1 / decode shard patches (unit) | `pytest models/experimental/ace_step_v1_5/tests/test_qwen_lm_mem_patches.py -q` |
 
 ### Run all DiT PCC tests
@@ -373,9 +377,62 @@ pytest models/experimental/ace_step_v1_5/tests/test_pcc_adaln.py \
 
 ```bash
 pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_vae_decode_tiled_pcc.py \
   models/experimental/ace_step_v1_5/tests/test_vae_matmul_program_config.py \
   models/experimental/ace_step_v1_5/tests/test_vae_tile_passthrough.py \
   --confcutdir=models/experimental/ace_step_v1_5/tests -q
+```
+
+### Run production-dimension module PCC tests (requires HF checkpoints)
+
+Run the device-backed tests **without** ``MESH_DEVICE`` set (single-chip 1×1 device). Run the
+CFG denoise test **in a separate process** with ``MESH_DEVICE=BH_QB`` so mesh open/close does
+not interfere with the module tests:
+
+```bash
+unset MESH_DEVICE ACE_STEP_MESH_DEVICE
+
+pytest models/experimental/ace_step_v1_5/tests/test_condition_encoder_payload_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_audio_code_detokenizer_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_vae_decode_tiled_pcc.py \
+  --confcutdir=models/experimental/ace_step_v1_5/tests -q -s
+
+export MESH_DEVICE=BH_QB
+pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc_cfg.py \
+  --confcutdir=models/experimental/ace_step_v1_5/tests -q -s
+```
+
+If setup fails with ``Query mappings failed on device 0``, reset the card and retry:
+``tt-smi -r 0`` (or ``tt-smi -r`` for all local chips).
+
+Pass ``-s`` so pytest prints every ``[ace_step_v1_5][PCC]`` line to stdout.
+
+#### Recorded PCC baselines (Blackhole QB, 2×2 mesh)
+
+Measured on local **BH_QB** (4× Blackhole, ``acestep-v15-base`` HF checkpoints, May 2026).
+Pearson PCC vs PyTorch/HF reference; thresholds are the test assert floors.
+
+| Module | Test / case | Production shape | PCC | Threshold | Device |
+|--------|-------------|------------------|-----|-----------|--------|
+| Condition encoder | ``condition_enc_15s`` | ``enc [1,187,2048]`` | **0.999882** | 0.97 | 1×1 |
+| Condition encoder | ``condition_ctx_15s`` | ``ctx [1,375,128]`` | **0.999999** | 0.99 | 1×1 |
+| Condition encoder | ``condition_enc_30s`` | ``enc [1,172,2048]`` | **0.999883** | 0.97 | 1×1 |
+| Condition encoder | ``condition_ctx_30s`` | ``ctx [1,750,128]`` | **0.999999** | 0.99 | 1×1 |
+| Audio-code detokenizer | ``audio_detokenizer_15s_75codes`` | ``[1,375,64]`` @ 25 Hz | **0.986272** | 0.97 | 1×1 |
+| Audio-code detokenizer | ``audio_detokenizer_30s_150codes`` | ``[1,750,64]`` @ 25 Hz | **0.986632** | 0.97 | 1×1 |
+| VAE ``decode_tiled`` | ``vae_decode_tiled_15s`` | 375 latent frames → 720k audio samples | **0.994937** | 0.98 | 1×1 |
+| VAE ``decode_tiled`` | ``vae_decode_tiled_30s`` | 750 latent frames (overlap=14) | **0.995019** | 0.98 | 1×1 |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_15s_no_cfg`` | 375 frames, 20 Euler steps | *run test* | 0.92 | BH_QB mesh |
+| DiT denoise loop (no CFG) | ``dit_denoise_loop_30s_no_cfg`` | 750 frames, 5 Euler steps† | **0.995483** | 0.90 | BH_QB mesh |
+| DiT denoise + CFG + APG | ``dit_denoise_loop_30s_cfg_apg`` | 750 frames, 5 steps, gs=7 | **0.992419** | 0.85 | BH_QB mesh |
+
+† ``test_dit_denoise_loop_pcc.py`` defaults to 20 steps; the 30 s value above used
+``ACE_STEP_DIT_DENOISE_PCC_STEPS=5``. ``test_dit_denoise_loop_pcc_cfg.py`` also defaults to 5 steps.
+Re-run with ``pytest … -s`` and grep ``[ace_step_v1_5][PCC]`` to refresh after code changes:
+
+```bash
+grep '\[ace_step_v1_5\]\[PCC\]'  # after any production PCC pytest -s run
 ```
 
 ### VAE trace diagnostics (opt-in, not production validation)
