@@ -775,6 +775,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         static_cast<uint32_t>(streaming_low_l1),
+        // scalars_in_writer: on the MUX path the writer populates the reduce
+        // scalars / epsilon / trans_mat CBs, so the reader skips them and starts
+        // the input read immediately.
+        static_cast<uint32_t>(use_mux ? 1u : 0u),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -894,6 +898,22 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
         // Persistent DRAM stats buffer accessor args (Phase 1).
         TensorAccessorArgs(stats_dram_buffer).append_to(writer_compile_args);
+        // Scalar/eps/trans_mat population args (writer populates these CBs so the
+        // reader starts the input read ASAP). Appended AFTER the accessors so the
+        // fixed/MUX/accessor CT indices above are unchanged; the kernel reads them
+        // at stats_dram_args.next_compile_time_args_offset().
+        writer_compile_args.push_back(reduce_scalar_sum_cb_id);
+        writer_compile_args.push_back(reduce_scalar_avg_cb_id);
+        writer_compile_args.push_back(epsilon_cb_id);
+        writer_compile_args.push_back(transformation_mat_cb_id);
+        writer_compile_args.push_back(reduce_factor);
+        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
+        if (fuse_rope) {
+            TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
+        } else {
+            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+        }
 
         writer_kernel_id = CreateKernel(
             program,
@@ -1135,6 +1155,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             stats_dram_addr_writer_arg_idx = writer_rt_args.size();
             writer_rt_args.push_back(stats_dram_buffer->address());
             writer_rt_args.push_back(worker_chunk_base);
+            // trans_mat addr for the writer-side scalar/trans_mat population.
+            // Sits at stats_dram_addr_writer_arg_idx + 2; refreshed there in
+            // override_runtime_arguments. 0 when no RoPE (writer won't read it).
+            writer_rt_args.push_back(fuse_rope ? trans_mat.value().buffer()->address() : 0u);
             ttnn::ccl::fabric_mux_connection_rt_args(
                 /*mux_connection_valid=*/fwd_mux_valid,
                 /*is_termination_master=*/is_term_master_of_link,
@@ -1253,7 +1277,11 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
             if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
-                writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
+                const size_t idx = shared.stats_dram_addr_writer_arg_idx.value();
+                writer_args[idx] = stats_dram_addr;
+                // trans_mat addr for the writer-side population sits at idx + 2
+                // (stats_dram, worker_chunk_base, trans_mat — see create_at).
+                writer_args[idx + 2] = trans_mat_addr;
             }
         }
     }

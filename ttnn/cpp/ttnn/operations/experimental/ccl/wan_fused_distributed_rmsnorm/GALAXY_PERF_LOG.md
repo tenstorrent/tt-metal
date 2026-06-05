@@ -163,3 +163,30 @@ N2368-RoPE -5% (A) net ~flat (D), no-rope shapes unchanged. Dead ends: B
 (dynamic dual-NoC blocked by program-wide noc_mode constraint + fabric MUX),
 C (deeper reads — L1-blocked / contention regression). Remaining levers need a
 fidelity decision (E-bf16) or a cross-op rewrite (F).
+
+## Idea G — move scalar/eps/trans_mat population reader -> writer (KEPT)
+
+The reader generated the reduce-scalar SUM/AVG + epsilon CBs and read the
+trans_mat tile (NoC read + barrier) BEFORE its input loop, so its first NoC op
+was trans_mat, not input. Moved this population to the MUX writer (runs before
+its fabric handshake, ready by the time compute starts), gated by a new
+`scalars_in_writer` reader CT flag (=use_mux). Reader's first op is now the
+input read. Legacy/TP=1 path unchanged (reader still populates).
+
+Correctness: fused-vs-baseline PCC ~1.0 (worst 0.999998). PASS.
+
+Perf (fused µs/iter, two runs, vs A+D):
+
+| config | A+D | +writer-pop | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 843.9 | 837.9 / 839.6 | −0.6% |
+| N9472 RoPE  | 480.5 | 478.1 / 478.1 | −0.5% |
+| N2368 RoPE  | 232.7 | 226.3 / 226.5 | **−2.7%** |
+| N18944 no-rope | 594.6 | 588.8 / 588.9 | −1.0% |
+| N9472 no-rope  | 324.9 | 321.0 / 321.1 | −1.2% |
+| N2368 no-rope  | 142.9 | 140.8 / 141.0 | −1.4% |
+| L512 no-rope   | 64.5  | 64.2 / 64.5   | ~0 |
+
+Small but consistent win on EVERY shape (no regressions) — reader starts input
+ASAP, improving pipeline fill. Biggest on small shapes (startup is a larger
+fraction). KEPT (committed).

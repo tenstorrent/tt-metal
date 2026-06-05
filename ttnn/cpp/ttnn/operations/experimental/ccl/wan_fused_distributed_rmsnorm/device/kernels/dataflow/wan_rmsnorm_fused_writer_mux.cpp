@@ -43,6 +43,10 @@
 // destination addresses (handles the Wormhole DRAM-coord -> noc0 flip the
 // fabric EDM expects; plain get_noc_addr() does not).
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+// For populating compute's reduce-scalar / epsilon / trans_mat CBs here (moved
+// off the reader so the reader starts input reads ASAP).
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
@@ -100,6 +104,20 @@ constexpr uint32_t num_mux_clients = get_compile_time_arg_val(19);
 constexpr auto output_args = TensorAccessorArgs<20>();
 // Packed-page DRAM scratch accessor.
 constexpr auto stats_dram_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+
+// Scalar/eps/trans_mat population args (appended after the accessors so the
+// fixed/MUX/accessor CT indices above are untouched). The writer populates
+// compute's reduce_scalar_*/epsilon/transformation_mat CBs so the reader can
+// start the input read immediately.
+constexpr uint32_t SCB_BASE = stats_dram_args.next_compile_time_args_offset();
+constexpr uint32_t w_reduce_scalar_sum_cb = get_compile_time_arg_val(SCB_BASE + 0);
+constexpr uint32_t w_reduce_scalar_avg_cb = get_compile_time_arg_val(SCB_BASE + 1);
+constexpr uint32_t w_epsilon_cb = get_compile_time_arg_val(SCB_BASE + 2);
+constexpr uint32_t w_transformation_mat_cb = get_compile_time_arg_val(SCB_BASE + 3);
+constexpr uint32_t w_reduce_factor = get_compile_time_arg_val(SCB_BASE + 4);
+constexpr uint32_t w_epsilon_bits = get_compile_time_arg_val(SCB_BASE + 5);
+constexpr uint32_t w_fuse_rope = get_compile_time_arg_val(SCB_BASE + 6);
+constexpr auto w_transmat_args = TensorAccessorArgs<SCB_BASE + 7>();
 
 // Tile layout after transpose_wh: real per-token data sits in row 0 of the
 // 32x32 tile = row 0 of face_00 (top-left, byte offsets 0..63) plus row 0 of
@@ -206,6 +224,9 @@ void kernel_main() {
     // chip-global so all workers share the same DRAM scratch — worker i owns
     // chunks [worker_chunk_base, worker_chunk_base + chunks_in_this_worker).
     const uint32_t worker_chunk_base = get_arg_val<uint32_t>(arg_idx++);
+    // trans_mat base address for the writer-side population (only read when
+    // w_fuse_rope). Refreshed by override_runtime_arguments on cache hits.
+    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
 
     // Two MUX rt blocks: forward first, then backward. Both blocks present
     // always (set by host), with `connection_valid=false` if that direction
@@ -217,6 +238,29 @@ void kernel_main() {
     const auto output_accessor = TensorAccessor(output_args, output_addr);
     const auto stats_dram_accessor = TensorAccessor(stats_dram_args, stats_dram_addr);
     const uint32_t num_tile_rows = tile_row_end - tile_row_start;
+
+    // Populate compute's reduce-scalar / epsilon / trans_mat CBs here (moved off
+    // the reader so the reader can start the input read ASAP). Done before the
+    // MUX handshake so the values are ready by the time compute starts; the
+    // trans_mat NoC read uses this writer's own NoC (independent of fabric).
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        w_reduce_scalar_sum_cb,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        w_reduce_scalar_avg_cb,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        w_reduce_factor>();
+    generate_bcast_col_scalar(w_epsilon_cb, w_epsilon_bits);
+    if constexpr (w_fuse_rope) {
+        const auto transformation_mat_accessor = TensorAccessor(w_transmat_args, transformation_mat_addr);
+        cb_reserve_back(w_transformation_mat_cb, 1);
+        const uint32_t transformation_mat_wr_ptr = get_write_ptr(w_transformation_mat_cb);
+        noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
+        noc_async_read_barrier();
+        cb_push_back(w_transformation_mat_cb, 1);
+    }
 
     // ---------- Build MUX senders + start zero-init ----------
     auto fwd_mux_conn = build_mux_sender(fwd_mux_args);
