@@ -322,9 +322,44 @@ models/experimental/seamless_m4t_v2_large/
 | HF capability | TTNN port |
 |---------------|-----------|
 | `output_attentions` / `output_hidden_states` | **Not supported** |
-| `generate()` beam search (`num_beams > 1`) | **Not supported** — raises `NotImplementedError` |
-| `generate()` sampling (`do_sample=True`, temperature, top-*p*, etc.) | **Not supported** — greedy `argmax` only |
+| `generate()` beam search (`num_beams > 1`) | **Supported** with KV cache — beam scoring runs on **host PyTorch** (log-softmax / top-*k*); not compatible with decode trace or 2CQ |
+| `generate()` sampling (`do_sample=True`, temperature, top-*p*, top-*k*) | **Supported** — sampling math runs on **host PyTorch** after a logits readback; not compatible with decode trace or 2CQ |
+| `generate()` `repetition_penalty` | **Supported** for greedy decode and beam search (host PyTorch, HF rule). **Not applied** when `do_sample=True`. Must be `>= 1.0`; default **1.0** (disabled) |
 | `generate()` `batch_size > 1` | **Not supported** — batch size 1 only |
+
+### Host / PyTorch work in `generate()`
+
+The TT model runs encoders, decoder, T2U, and vocoder on device, but **`TTSeamlessM4Tv2Model.generate()` is not a fully device-resident autoregressive loop**. Several steps still execute on the host CPU using Python and **PyTorch** (transport, scoring, or HF-parity string logic). This is intentional for HF alignment and for decode modes that cannot be captured in a Metal trace.
+
+**Autoregressive text decode (all tasks)**
+
+| Step | Where | Notes |
+|------|--------|-------|
+| Decode loop control | Host (Python) | One iteration per output token; EOS checked against a host-maintained `seq_host` list |
+| Per-step token / position upload | Host → device | Reused `torch.int32` staging buffers + `copy_host_to_device_tensor` (required while decode trace is active — no device writes during trace replay) |
+| Greedy token pick (TP=4, traced path, `repetition_penalty=1.0`) | Device + host | Device fused/chunked argmax; **chunk max + local index read back** and combined on host with PyTorch to match `torch.argmax` tie-breaking — **no logits row readback** |
+| Repetition penalty (`repetition_penalty > 1.0`) | Host (PyTorch) | HF **`RepetitionPenaltyLogitsProcessor`**: for each already-emitted token id, logits `< 0` are multiplied by penalty, logits `>= 0` are divided. Applied on a gathered **`[V]`** logits row in torch, then **`argmax`**. **Never runs on device.** With trace+2CQ, chunk-argmax is tried first; if the unpenalized winner is a repeat token, falls back to full-row D2H + penalty + argmax |
+| Greedy token pick (eager / no trace) | Device or host | Device `ttnn.argmax` when `repetition_penalty=1.0`; full logits row readback + host penalty + argmax when `repetition_penalty > 1.0` |
+| Beam search (`num_beams > 1`) | Host (PyTorch) | Per-beam logits read back; **`log_softmax`**, repetition penalty on emitted ids, and **`topk`** beam scoring on host; KV caches reordered with `ttnn.copy` |
+| Sampling (`do_sample=True`) | Host (PyTorch) | Logits row read back; temperature / top-*k* / top-*p* filtering and **`multinomial`** on host — **not traced**; **`repetition_penalty` is ignored** (HF applies it via logits processors before sampling) |
+| Sequence bookkeeping | Host (Python) | Token ids accumulated in Python lists; `ttnn.from_torch` used to rebuild `sequences_tt` after the loop |
+
+**Speech generation path (T2ST / S2ST only, after text decode)**
+
+| Step | Where | Notes |
+|------|--------|-------|
+| Trailing pad / EOS trim | Host (Python) | `_trim_seq_host_for_speech` before T2U |
+| Subword → character tables | Host (Python) | `generation_config.id_to_text`, `char_to_id`, and HF-style **`_char_count_per_subword`** string analysis |
+| T2U char ids / duration counts | Host (Python + torch transport) | Character id lists and `char_count_per_id` built on host, uploaded with `from_torch` |
+| T2U unit id → vocoder vocab remap | Host (PyTorch) | T2U **`argmax`** on device, then unit ids + padding mask read back; EOS/pad masking and **`vocoder_offset`** applied with `torch.where`, re-uploaded for the vocoder |
+
+**Other host touches**
+
+- **`generation_config` lookups** — target language code ids, EOS id sets, subword/char tables (string dict ops).
+- **Scalar readbacks** — subsampled speech-encoder length (for slice bounds), per-decode-step greedy token id (EOS), and optional profiler/signpost hooks in tests.
+- **Pre/post outside `generate()`** — demo and tests still run Hugging Face **`AutoProcessor`** tokenization and feature extraction on host before uploading tensors.
+
+**Production implication:** the demo and documented perf numbers use **greedy decode + per-step KV trace + 2CQ** with **`repetition_penalty=1.0`** (HF default, penalty disabled). That keeps decode on the fast device chunk-argmax path with only chunk-index readback and EOS checks on host. Setting **`repetition_penalty > 1.0`** adds per-step host logits gather + penalty work (and occasional full-row fallback on the traced path). Beam search and sampling disable trace/2CQ and move most decode scoring to host PyTorch. A full end-to-end Metal trace of `generate()` is not possible while these host-dependent control paths remain (see module docstring in [`tt/tt_seamless_m4t_v2_model.py`](tt/tt_seamless_m4t_v2_model.py)).
 
 ### Utterance-level model: long inputs degenerate (text and speech)
 
