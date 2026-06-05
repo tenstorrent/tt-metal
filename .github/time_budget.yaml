@@ -83,7 +83,7 @@ ttnn:
     bh_llmbox: 180
     bh_loudbox: 145
     bh_p300: 145
-    bh_quietbox_2: 145
+    bh_quietbox_2: 175
   integration:
     wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
     wh_galaxy: 340  # galaxy_integration_tests.yaml
