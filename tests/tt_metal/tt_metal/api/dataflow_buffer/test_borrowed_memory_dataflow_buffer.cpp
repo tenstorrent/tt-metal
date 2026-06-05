@@ -231,13 +231,11 @@ void run_borrowed_memory_dfb_program(
             .runtime_arg_values = {dm_rtas},
         });
     }
-    params.tensor_args.emplace(experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{src_tensor});
+    params.tensor_args.emplace(experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor});
     if (!cfg.tensix_consumer) {
-        params.tensor_args.emplace(
-            experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{*dst_tensor});
+        params.tensor_args.emplace(experimental::TensorParamName{"dst_tensor"}, TensorArgument{*dst_tensor});
     }
-    params.tensor_args.emplace(
-        experimental::TensorParamName{"dfb_ring_tensor"}, ProgramRunArgs::TensorArgument{ring_tensor});
+    params.tensor_args.emplace(experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor});
     SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
@@ -374,9 +372,9 @@ void run_update_address_test(
         },
     };
     params1.tensor_args = {
-        {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{src_tensor}},
-        {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{dst_tensor}},
-        {experimental::TensorParamName{"dfb_ring_tensor"}, ProgramRunArgs::TensorArgument{ring_tensor_a}},
+        {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+        {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+        {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     SetProgramRunArgs(program, params1);
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
@@ -397,10 +395,10 @@ void run_update_address_test(
 
     UpdateTensorArgs(
         program,
-        Table<experimental::TensorParamName, ProgramRunArgs::TensorArgument>{
-            {experimental::TensorParamName{"src_tensor"}, ProgramRunArgs::TensorArgument{src_tensor}},
-            {experimental::TensorParamName{"dst_tensor"}, ProgramRunArgs::TensorArgument{dst_tensor}},
-            {experimental::TensorParamName{"dfb_ring_tensor"}, ProgramRunArgs::TensorArgument{ring_tensor_b}},
+        Table<experimental::TensorParamName, TensorArgument>{
+            {experimental::TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+            {experimental::TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+            {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
         });
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

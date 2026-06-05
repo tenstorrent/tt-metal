@@ -378,10 +378,10 @@ void run_single_dfb_program(
     }
     run_params.kernel_run_args = {producer_params, consumer_params};
     if (need_in_tensor) {
-        run_params.tensor_args.emplace(IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{*in_tensor});
+        run_params.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{*in_tensor});
     }
     if (need_out_tensor) {
-        run_params.tensor_args.emplace(OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{*out_tensor});
+        run_params.tensor_args.emplace(OUT_TENSOR, experimental::TensorArgument{*out_tensor});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -727,8 +727,8 @@ void run_concurrent_dfbs_program(
         run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = name});
     }
     run_params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, experimental::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -890,7 +890,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         run_params.tensor_args.emplace(
             experimental::TensorParamName{"out_tensor_" + std::to_string(i)},
-            experimental::ProgramRunArgs::TensorArgument{out_tensors[i]});
+            experimental::TensorArgument{out_tensors[i]});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1129,11 +1129,9 @@ void run_sequential_dfbs_program(
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string idx = std::to_string(i);
         run_params.tensor_args.emplace(
-            experimental::TensorParamName{"in_tensor_" + idx},
-            experimental::ProgramRunArgs::TensorArgument{in_tensors[i]});
+            experimental::TensorParamName{"in_tensor_" + idx}, experimental::TensorArgument{in_tensors[i]});
         run_params.tensor_args.emplace(
-            experimental::TensorParamName{"out_tensor_" + idx},
-            experimental::ProgramRunArgs::TensorArgument{out_tensors[i]});
+            experimental::TensorParamName{"out_tensor_" + idx}, experimental::TensorArgument{out_tensors[i]});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1336,8 +1334,8 @@ void run_in_dfb_out_dfb_program(
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {producer_params, compute_params, consumer_params};
     run_params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, experimental::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -2159,7 +2157,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {dm_producer_params, compute_params};
-    run_params.tensor_args = {{IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}}};
+    run_params.tensor_args = {{IN_TENSOR, experimental::TensorArgument{in_tensor}}};
     experimental::SetProgramRunArgs(program, run_params);
 
     // L1 layout follows DFB creation order:

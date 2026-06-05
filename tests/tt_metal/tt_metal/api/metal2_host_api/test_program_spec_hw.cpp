@@ -622,8 +622,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
         },
     };
     params.tensor_args = {
-        {TensorParamName{"input_tensor"}, ProgramRunArgs::TensorArgument{input_tensor}},
-        {TensorParamName{"output_tensor"}, ProgramRunArgs::TensorArgument{output_tensor}},
+        {TensorParamName{"input_tensor"}, TensorArgument{input_tensor}},
+        {TensorParamName{"output_tensor"}, TensorArgument{output_tensor}},
     };
     SetProgramRunArgs(program, params);
 

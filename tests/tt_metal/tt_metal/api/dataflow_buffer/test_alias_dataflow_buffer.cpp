@@ -262,10 +262,10 @@ void run_alias_dfb_program(
         },
     };
     run_params.tensor_args = {
-        {experimental::TensorParamName{"in_tensor_a"}, ProgramRunArgs::TensorArgument{in_a}},
-        {experimental::TensorParamName{"in_tensor_b"}, ProgramRunArgs::TensorArgument{in_b}},
-        {experimental::TensorParamName{"out_tensor_a"}, ProgramRunArgs::TensorArgument{out_a}},
-        {experimental::TensorParamName{"out_tensor_b"}, ProgramRunArgs::TensorArgument{out_b}},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
     };
     SetProgramRunArgs(program, run_params);
 
@@ -599,11 +599,11 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
         },
     };
     run_params.tensor_args = {
-        {experimental::TensorParamName{"in_tensor_a"}, ProgramRunArgs::TensorArgument{in_a}},
-        {experimental::TensorParamName{"in_tensor_b"}, ProgramRunArgs::TensorArgument{in_b}},
-        {experimental::TensorParamName{"out_tensor_a"}, ProgramRunArgs::TensorArgument{out_a}},
-        {experimental::TensorParamName{"out_tensor_b"}, ProgramRunArgs::TensorArgument{out_b}},
-        {experimental::TensorParamName{"ring_tensor"}, ProgramRunArgs::TensorArgument{ring}},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
+        {experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
     SetProgramRunArgs(program, run_params);
 
@@ -657,11 +657,11 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
         },
     };
     run_params.tensor_args = {
-        {experimental::TensorParamName{"in_tensor_a"}, ProgramRunArgs::TensorArgument{in_a}},
-        {experimental::TensorParamName{"in_tensor_b"}, ProgramRunArgs::TensorArgument{in_b}},
-        {experimental::TensorParamName{"out_tensor_a"}, ProgramRunArgs::TensorArgument{out_a}},
-        {experimental::TensorParamName{"out_tensor_b"}, ProgramRunArgs::TensorArgument{out_b}},
-        {experimental::TensorParamName{"ring_tensor"}, ProgramRunArgs::TensorArgument{ring}},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
+        {experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
     SetProgramRunArgs(program, run_params);
 
