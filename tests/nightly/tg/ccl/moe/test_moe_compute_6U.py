@@ -170,8 +170,12 @@ def _expand_model_configs(
             for has_bias in bias_values_fn(cfg, test_mode):
                 for epd in cfg.experts_per_device_values:
                     for act in cfg.activation_types:
-                        for enable_trace in trace_values_fn(cfg, test_mode):
-                            for bh_ring_size in cfg.bh_ring_size_values:
+                        # enable_trace innermost so a shape's trace variants run back-to-back and the
+                        # second hits the host_data_cache (single-entry, evicted on every key miss).
+                        # bh_ring_size is part of the cache key (it changes the prepped weight layout),
+                        # so it must sit outside enable_trace or the trace pair would never be adjacent.
+                        for bh_ring_size in cfg.bh_ring_size_values:
+                            for enable_trace in trace_values_fn(cfg, test_mode):
                                 bias_tag = "bias" if has_bias else "no_bias"
                                 act_tag = act.name.lower()
                                 trace_tag = "enable_trace" if enable_trace else "disable_trace"
