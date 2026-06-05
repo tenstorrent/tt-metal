@@ -10,7 +10,6 @@
 #include <limits>
 
 #include "llk_assert.h"
-#include "sanitizer/assert.h"
 #include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
@@ -159,7 +158,7 @@ static inline void math_operand_configure_impl(
     }
     state.src_b.input_format = math_fmt_B;
 
-    state.is_configured      = true;
+    state.is_configured = true;
 }
 
 // State set + no hw config within kernel check
@@ -212,17 +211,24 @@ static inline void unpack_operand_check_impl(
     {
         const UnwindContext current = context.current;
 
-        operand_assert(state.dest_width_32, dest_acc_en, CTSTR("configured vs provided UNPACK DEST ACCUMULATION are mismatched"), context.configure_a, current);
-        operand_assert(state.src_a.input_format, src_fmt_A, CTSTR("configured vs provided UNPACK A L1 FORMAT are mismatched"), context.configure_a, current);
-        operand_assert(state.src_b.input_format, src_fmt_B, CTSTR("configured vs provided UNPACK B L1 FORMAT are mismatched"), context.configure_b, current);
-        operand_assert(state.src_a.output_format, dst_fmt_A, CTSTR("configured vs provided SRC A FORMAT are mismatched"), context.configure_a, current);
-        operand_assert(state.src_b.output_format, dst_fmt_B, CTSTR("configured vs provided SRC B FORMAT are mismatched"), context.configure_b, current);
-        operand_assert(
+        operand_assert<Trigger::ERROR>(
+            state.dest_width_32, dest_acc_en, CTSTR("configured vs provided UNPACK DEST ACCUMULATION are mismatched"), context.configure_a, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_a.input_format, src_fmt_A, CTSTR("configured vs provided UNPACK A L1 FORMAT are mismatched"), context.configure_a, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_b.input_format, src_fmt_B, CTSTR("configured vs provided UNPACK B L1 FORMAT are mismatched"), context.configure_b, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_a.output_format, dst_fmt_A, CTSTR("configured vs provided SRC A FORMAT are mismatched"), context.configure_a, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_b.output_format, dst_fmt_B, CTSTR("configured vs provided SRC B FORMAT are mismatched"), context.configure_b, current);
+        operand_assert<Trigger::ERROR>(
             state.src_b.face_height, face_height_B, CTSTR("configured vs provided UNPACK A L1 FACE HEIGHT are mismatched"), context.configure_b, current);
-        operand_assert(
+        operand_assert<Trigger::ERROR>(
             state.src_a.face_height, face_height_A, CTSTR("configured vs provided UNPACK B L1 FACE HEIGHT are mismatched"), context.configure_a, current);
-        operand_assert(state.src_a.num_faces, num_faces_A, CTSTR("configured vs provided UNPACK A L1 NUM FACES are mismatched"), context.configure_a, current);
-        operand_assert(state.src_b.num_faces, num_faces_B, CTSTR("configured vs provided UNPACK B L1 NUM FACES are mismatched"), context.configure_b, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_a.num_faces, num_faces_A, CTSTR("configured vs provided UNPACK A L1 NUM FACES are mismatched"), context.configure_a, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_b.num_faces, num_faces_B, CTSTR("configured vs provided UNPACK B L1 NUM FACES are mismatched"), context.configure_b, current);
     }
 }
 
@@ -233,10 +239,11 @@ static inline void math_operand_check_impl(
     if (!thread_silent_get_impl(context))
     {
         const UnwindContext current = context.current;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
 
-        operand_assert(state.src_a.input_format, math_fmt_A, CTSTR("configured vs provided FPU FORMAT are mismatched"), context.configure_fpu, current);
-        operand_assert(state.src_b.input_format, math_fmt_B, CTSTR("configured vs provided SFPU FORMAT are mismatched"), context.configure_sfpu, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_a.input_format, math_fmt_A, CTSTR("configured vs provided FPU FORMAT are mismatched"), context.configure_fpu, current);
+        operand_assert<Trigger::ERROR>(
+            state.src_b.input_format, math_fmt_B, CTSTR("configured vs provided SFPU FORMAT are mismatched"), context.configure_sfpu, current);
     }
 }
 
@@ -256,17 +263,22 @@ static inline void pack_operand_check_impl(
     if (!thread_silent_get_impl(context))
     {
         const UnwindContext current = context.current;
-        LLK_SAN_PEDANTIC_PANIC(!state.is_configured, "{:#x} : executing init/execute/uninit before hwconfigure", current.pc);
 
-        operand_assert(
+        operand_assert<Trigger::ERROR>(
             state.dest_width_32, dest_acc_en, CTSTR("configured vs provided PACK DEST ACCUMULATION are mismatched"), context.configure_pack, current);
-        operand_assert(state.input_format, src_fmt, CTSTR("configured vs provided PACK DEST FORMAT are mismatched"), context.configure_pack, current);
-        operand_assert(state.output_format, dst_fmt, CTSTR("configured vs provided PACK L1 FORMAT are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.input_format, src_fmt, CTSTR("configured vs provided PACK DEST FORMAT are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.output_format, dst_fmt, CTSTR("configured vs provided PACK L1 FORMAT are mismatched"), context.configure_pack, current);
         // sstanisic fixme: face_height check
-        operand_assert(state.tile_width, tile_width, CTSTR("configured vs provided PACK L1 TILE WIDTH are mismatched"), context.configure_pack, current);
-        operand_assert(state.num_faces, num_faces, CTSTR("configured vs provided PACK L1 NUM FACES are mismatched"), context.configure_pack, current);
-        operand_assert(state.partial_face, partial_face, CTSTR("configured vs provided PACK L1 PARTIAL FACE are mismatched"), context.configure_pack, current);
-        operand_assert(state.narrow_tile, narrow_tile, CTSTR("configured vs provided PACK L1 NARROW TILE are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.tile_width, tile_width, CTSTR("configured vs provided PACK L1 TILE WIDTH are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.num_faces, num_faces, CTSTR("configured vs provided PACK L1 NUM FACES are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.partial_face, partial_face, CTSTR("configured vs provided PACK L1 PARTIAL FACE are mismatched"), context.configure_pack, current);
+        operand_assert<Trigger::ERROR>(
+            state.narrow_tile, narrow_tile, CTSTR("configured vs provided PACK L1 NARROW TILE are mismatched"), context.configure_pack, current);
     }
 }
 
@@ -385,49 +397,57 @@ static inline void operation_init_impl(ThreadOutputContext& context, OperationSt
 template <Operation op, typename... Ts>
 void operation_check_impl(const ThreadOutputContext& context, OperationState& state, const Ts... args)
 {
-    if (!thread_silent_get_impl(context))
+    if (thread_silent_get_impl(context))
     {
-        // sstanisic todo: exit early if this fails.
-        operation_assert(state.operation, op, context.operation, context.current);
+        return;
+    }
 
-        constexpr std::uint8_t args_count = _args_count<Ts...>();
+    const bool passed = operation_assert<Trigger::ERROR>(state.operation, op, context.operation, context.current);
 
-        constexpr std::array<std::uint8_t, args_count> args_sizeof  = _args_sizeof<Ts...>();
-        constexpr std::array<std::uint8_t, args_count> args_alignof = _args_alignof<Ts...>();
-        constexpr std::array<size_t, args_count + 1> args_offsetof  = _args_offsetof(args_sizeof, args_alignof);
+    if (!passed)
+    {
+        return;
+    }
 
-        constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
+    constexpr std::uint8_t args_count = _args_count<Ts...>();
 
-        static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault    | operation entry will overflow the buffer");
+    constexpr std::array<std::uint8_t, args_count> args_sizeof  = _args_sizeof<Ts...>();
+    constexpr std::array<std::uint8_t, args_count> args_alignof = _args_alignof<Ts...>();
+    constexpr std::array<size_t, args_count + 1> args_offsetof  = _args_offsetof(args_sizeof, args_alignof);
 
-        // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
+    constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
 
-        char* ptr = state.buffer;
+    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault    | operation entry will overflow the buffer");
 
-        LLK_SAN_FAULT_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "saved vs provided args_count mismatch");
-        ptr += sizeof(args_count);
+    // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
 
-        if constexpr (args_count > 0)
-        {
-            LLK_SAN_FAULT_ASSERT(std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "saved vs provided args_sizeof mismatch");
-            ptr += args_count * sizeof(args_sizeof[0]);
+    char* ptr = state.buffer;
 
-            LLK_SAN_FAULT_ASSERT(std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "saved vs provided args_alignof mismatch");
-            ptr += args_count * sizeof(args_alignof[0]);
+    LLK_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "llk::san | fault   | saved vs provided args_count mismatch");
+    ptr += sizeof(args_count);
 
-            constexpr size_t max_align = alignof(max_align_t);
-            size_t padding             = (max_align - reinterpret_cast<uintptr_t>(ptr) % max_align) % max_align;
-            ptr += padding;
+    if constexpr (args_count > 0)
+    {
+        LLK_ASSERT(
+            std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "llk::san | fault   | saved vs provided args_sizeof mismatch");
+        ptr += args_count * sizeof(args_sizeof[0]);
 
-            [[maybe_unused]] size_t i = 0;
-            (
-                [&]([[maybe_unused]] const auto& arg)
-                {
-                    operation_argument_assert(ptr + args_offsetof[i], &arg, sizeof(arg), i, context.operation, context.current);
-                    ++i;
-                }(args),
-                ...);
-        }
+        LLK_ASSERT(
+            std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "llk::san | fault   | saved vs provided args_alignof mismatch");
+        ptr += args_count * sizeof(args_alignof[0]);
+
+        constexpr size_t max_align = alignof(max_align_t);
+        size_t padding             = (max_align - reinterpret_cast<uintptr_t>(ptr) % max_align) % max_align;
+        ptr += padding;
+
+        [[maybe_unused]] size_t i = 0;
+        (
+            [&]([[maybe_unused]] const auto& arg)
+            {
+                operation_argument_assert<Trigger::ERROR>(ptr + args_offsetof[i], &arg, sizeof(arg), i, context.operation, context.current);
+                ++i;
+            }(args),
+            ...);
     }
 }
 
@@ -438,7 +458,7 @@ void operation_uninit_impl(const ThreadOutputContext& context, OperationState& s
 {
     if (!thread_silent_get_impl(context))
     {
-        operation_assert(state.operation, op, context.operation, context.current);
+        operation_assert<Trigger::ERROR>(state.operation, op, context.operation, context.current);
     }
 
     state.expect_uninit = false;
@@ -449,7 +469,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
 {
     if (!thread_silent_get_impl(context))
     {
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::INITIAL || next == FsmState::CONFIGURED,
             CTSTR("First transition must be INITIAL -> CONFIGURED"),
             current,
@@ -458,7 +478,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             UnwindContext::UNKNOWN,
             context.current);
 
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::CONFIGURED || next == FsmState::INITIALIZED,
             CTSTR("Expected CONFIGURED -> INITIALIZED"),
             current,
@@ -467,7 +487,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.fsm,
             context.current);
 
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::INITIALIZED || !operation.expect_uninit || next == FsmState::EXECUTED,
             CTSTR("Operation UNINIT required, expected INITIALIZED -> EXECUTED"),
             current,
@@ -476,9 +496,9 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.fsm,
             context.current);
 
-        // fixme: this should be downgraded to a warning. Reconfig after init (without an intervening execute)
-        // is tolerated for operations that don't require uninit, but it is still likely indicative of a bug.
-        fsm_assert(
+        // Reconfig after init (without an intervening execute) is tolerated for operations that don't require
+        // uninit, but it is still likely indicative of a bug, hence WARN rather than ERROR.
+        fsm_assert<Trigger::WARN>(
             current != FsmState::INITIALIZED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::RECONFIGURED,
             CTSTR("Operation UNINIT not required, expected INITIALIZED -> [EXECUTED, RECONFIGURED]"),
             current,
@@ -487,7 +507,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.fsm,
             context.current);
 
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::EXECUTED || !operation.expect_uninit || next == FsmState::UNINITIALIZED || next == FsmState::EXECUTED,
             CTSTR("Operation UNINIT required, expected EXECUTED -> [UNINITIALIZED, EXECUTED]"),
             current,
@@ -496,7 +516,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.fsm,
             context.current);
 
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::EXECUTED || operation.expect_uninit || next == FsmState::EXECUTED || next == FsmState::INITIALIZED ||
                 next == FsmState::RECONFIGURED,
             CTSTR("Operation UNINIT not required, expected EXECUTED -> [EXECUTED, INITIALIZED, RECONFIGURED]"),
@@ -506,7 +526,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
             context.fsm,
             context.current);
 
-        fsm_assert(
+        fsm_assert<Trigger::ERROR>(
             current != FsmState::UNINITIALIZED || next == FsmState::INITIALIZED || next == FsmState::RECONFIGURED,
             CTSTR("Expected UNINITIALIZED -> [INITIALIZED, RECONFIGURED]"),
             current,
@@ -517,7 +537,7 @@ void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_u
     }
 
     // valid transition -> commit
-    current = next;
+    current     = next;
     context.fsm = context.current;
 }
 
