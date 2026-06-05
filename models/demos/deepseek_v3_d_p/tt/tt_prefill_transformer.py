@@ -98,6 +98,7 @@ class TtPrefillTransformer(LightweightModule):
         self,
         mesh_device: ttnn.MeshDevice,
         config: PretrainedConfig,
+        model_cfg: type,
         state_dict: dict,
         num_layers: int,
         seq_len: int,
@@ -158,6 +159,7 @@ class TtPrefillTransformer(LightweightModule):
             layer = TtPrefillBlock(
                 mesh_device=mesh_device,
                 config=config,
+                model_cfg=model_cfg,
                 state_dict=layer_state,
                 layer_idx=i,
                 seq_len=seq_len,
@@ -181,6 +183,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_device=mesh_device,
             emb_dim=config.hidden_size,
             torch_weight=state_dict.get("norm_weight"),  # None if cache exists
+            epsilon=config.rms_norm_eps,
             cluster_axis=tp_axis,
             num_links=num_links,
             topology=topology,
