@@ -19,6 +19,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
+#include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
@@ -28,11 +29,73 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 /**
+ * @brief Configures the unpacker MOP for reduction operations. Handles both tiny tiles (face_r_dim < 16) and standard tiles.
+ *
+ * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
+ * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ *
+ * @param tensor_shape The shape of the tensor, including face_r_dim and num_faces
+ *
+ * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs
+ * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
+ */
+template <PoolType pool_type, ReduceDim reduce_dim>
+inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor_shape)
+{
+    // Validate tensor shape for tile-dependent operations
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
+    // Data valid for clear instructions is set to 0 since the MATH kernel should not process this data.
+    // pool_type == PoolType::MAX sets the clear value to neginf if the pool-type is MAX and 0 if the pool-type is AVG/SUM
+    static constexpr std::uint32_t clear_pool_dep_srca =
+        TT_OP_UNPACR_NOP(Srcs::SrcA, 0, 0, 0 /* dvalid */, 0, 0 /* Stall_Clr_Cntrl */, 0, pool_type == PoolType::MAX /* 0 or neginf */, p_unpacr_nop::CLR_SRC);
+    static constexpr std::uint32_t clear_zero_srca =
+        TT_OP_UNPACR_NOP(Srcs::SrcA, 0, 0, 0 /* dvalid */, 0, 0 /* Stall_Clr_Cntrl */, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
+
+    // Unpack instructions for SrcA and SrcB. These always increment L1 by 1 face.
+    static constexpr std::uint32_t unpack_srca = TT_OP_UNPACR(Srcs::SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(Srcs::SrcB, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+
+    // MOP constants
+    constexpr std::uint32_t outerloop = 1;
+    const std::uint32_t innerloop     = tensor_shape.total_num_faces();
+
+    // Padding should only be done when using tiny tiles otherwise the entire face overwrites the data read in Math
+    if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces
+    {
+        // Fill SrcA with pool-type dependent padding value for tiny tiles before unpacking a face.
+        // Use outer loop per face so start_op (clear) runs before each face's unpacks.
+        ckernel_template tmp(innerloop, outerloop, unpack_srca, unpack_srcb);
+        tmp.set_start_op(clear_pool_dep_srca);
+        tmp.program();
+    }
+    else // Using standard faces (face_r_dim = FACE_R_DIM)
+    {
+        if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
+        {
+            // For scalar reduction, clear SrcA to zero before unpacking. SrcA is clobbered in Math kernel.
+            // Use outer loop per face so start_op (clear) runs before each face's unpacks.
+            ckernel_template tmp(innerloop, outerloop, unpack_srca, unpack_srcb);
+            tmp.set_start_op(clear_zero_srca);
+            tmp.program();
+        }
+        else
+        {
+            // For row/column reduction, no clearing needed
+            ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
+            tmp.program();
+        }
+    }
+}
+
+/**
  * @brief Initialize the unpacker for reduce operations
  *
- * Configures the unpacker hardware registers for reduction operations:
+ * Configures the unpacker hardware registers and MOP settings
+ * for reduction operations. This includes:
  * - Setting up haloize mode for row reductions (transpose)
  * - Configuring unpacker X dimension endpoints
+ * - Calling the MOP configuration routine
  *
  * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
  * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
@@ -63,16 +126,19 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
 
     // Sets up Unpacker 1 to read one row (16 datums) into SrcB register
     config_unpacker_x_end<p_setadc::UNP_B>(1);
+
+    // Configure unpack MOP
+    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
 }
 
 /**
- * @brief Execute the unpacker for reduction operations using raw instructions (no MOP/replay)
+ * @brief Execute the unpacker for reduction operations
  *
  * Performs the actual unpacking of data for reduction operations by:
  * 1. Resetting address counters
  * 2. Programming source A and B base addresses in hardware registers
  * 3. Synchronizing with Trisc using semaphores
- * 4. Issuing raw unpack instructions in a per-face loop
+ * 4. Running the configured MOP
  * 5. Switching unpacker configuration context
  *
  * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
@@ -80,19 +146,17 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
  *
  * @param address_a Base address for source A data in L1 memory
  * @param address_b Base address for source B data in L1 memory
- * @param tensor_shape The shape of the tensor (needed for face count and tiny-tile detection)
  *
  * @note This function manages dual-context switching for pipelined execution
  * @note Semaphores ensure proper synchronization between Trisc and unpacker
- * @note For tiny tiles (face_r_dim < 16), SrcA is cleared before each face to pad with pool-dependent values
- * @note For REDUCE_SCALAR with standard tiles, SrcA is cleared to zero before each face
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b, const ckernel::TensorShape &tensor_shape)
+inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uint32_t address_b)
 {
     // Reset address counters for both unpackers
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
+    // Program srcA and srcB base addresses
     // Get pointer to configuration registers for current state ID
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
 
@@ -108,26 +172,8 @@ inline void _llk_unpack_AB_reduce_(const std::uint32_t address_a, const std::uin
     // Stall unpacker until pending CFG writes from Trisc have completed
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-
-    for (std::uint32_t face = 0; face < num_faces; face++)
-    {
-        if (tensor_shape.face_r_dim < FACE_R_DIM)
-        {
-            // Tiny tiles: clear SrcA with pool-type dependent value (0 or neginf) to pad unused rows
-            TTI_UNPACR_NOP(Srcs::SrcA, 0, 0, 0 /* dvalid */, 0, 0, 0, pool_type == PoolType::MAX, p_unpacr_nop::CLR_SRC);
-        }
-        else if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR)
-        {
-            // Scalar reduction: clear SrcA to zero (SrcA is clobbered in Math kernel)
-            TTI_UNPACR_NOP(Srcs::SrcA, 0, 0, 0 /* dvalid */, 0, 0, 0, p_unpacr_nop::CLR_SRC_0, p_unpacr_nop::CLR_SRC);
-        }
-
-        // Unpack SrcA — increments L1 address by 1 face
-        TTI_UNPACR(Srcs::SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        // Unpack SrcB — increments L1 address by 1 face
-        TTI_UNPACR(Srcs::SrcB, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    }
+    // Execute the configured MOP
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
