@@ -382,7 +382,10 @@ class TtRoutedExpert(LightweightModule):
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (max_dispatch_buffer_token_size, emb_dim)
+                shape: (max_dispatch_buffer_token_size, emb_dim), optionally with leading
+                singleton dims, e.g. (1, 1, max_dispatch_buffer_token_size, emb_dim). The
+                extract/insert ops treat it as effectively 2D and preserve its rank, so the
+                returned expert_outputs has the same rank as the input.
             expert_token_counts: Token counts per expert per chip
                 Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert

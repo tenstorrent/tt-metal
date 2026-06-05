@@ -79,10 +79,20 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
         "global_tensor must be TILE layout, got {}",
         global_tensor.layout());
     TT_FATAL(is_dram_interleaved(global_tensor), "global_tensor must be DRAM interleaved");
+    // Accept rank >= 2 as long as every leading dim is 1 — we treat the buffer
+    // as effectively 2D (rows, hidden) using logical_shape[-2:]. This lets the
+    // caller pass e.g. (1, 1, rows, hidden) without an explicit squeeze.
     TT_FATAL(
-        global_tensor.logical_shape().rank() == 2,
-        "global_tensor must be 2D, got rank {}",
+        global_tensor.logical_shape().rank() >= 2,
+        "global_tensor must have rank >= 2, got rank {}",
         global_tensor.logical_shape().rank());
+    for (int i = 0; i < static_cast<int>(global_tensor.logical_shape().rank()) - 2; ++i) {
+        TT_FATAL(
+            global_tensor.logical_shape()[i] == 1,
+            "global_tensor leading dim {} must be 1, got {}",
+            i,
+            global_tensor.logical_shape()[i]);
+    }
 
     // start, counts, and global_expert_idx_table share the same static invariants.
     validate_index_tensor(start, "start");
@@ -111,7 +121,7 @@ void ExtractDeviceOperation::validate_on_program_cache_miss(
     // Tile-alignment checks.
     const uint32_t tile_height = tt::constants::TILE_HEIGHT;
     const uint32_t tile_width = tt::constants::TILE_WIDTH;
-    const auto global_rows = global_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
     const auto hidden_dim = global_tensor.logical_shape()[-1];
     TT_FATAL(
         global_rows % tile_height == 0,

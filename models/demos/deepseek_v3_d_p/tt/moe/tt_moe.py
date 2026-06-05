@@ -159,6 +159,7 @@ class TtMoe(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        overlap_routed_expert_with_combine: bool = True,
     ):
         """
         Initialize TtMoe module.
@@ -197,6 +198,8 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            overlap_routed_expert_with_combine: If True, overlap the routed expert compute
+                with the combine. If False, run them sequentially.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -212,6 +215,7 @@ class TtMoe(LightweightModule):
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
+        self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -577,16 +581,19 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 3: Routed experts (enabled)
         # ========================================
-        # Dispatch output is (1, dispatch_group_size_per_device, experts_per_chip, max_tokens, emb_dim)
-        # Routed expert expects (experts_per_chip, max_tokens, emb_dim)
-        # Squeeze the first two dimensions
+        # Dispatch output is (1, 1, max_dispatch_buffer_token_size, emb_dim) — a flat token
+        # buffer with two leading singleton dims. The routed expert's extract/insert ops
+        # treat it as effectively 2D (rows, emb_dim) and accept the leading singleton dims
+        # directly, so no squeeze is needed; the buffer keeps its rank end-to-end and comes
+        # back out the same shape, ready for combine without re-adding batch dims.
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
         dispatched_buffer_tiled = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
+            dispatched_buffer,
             ttnn.TILE_LAYOUT,
             dtype=self.routed_expert.activations_dtype,
         )
+        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
         # Free the original ROW_MAJOR DRAM buffer before entering routed_expert for clear state.
         # When return_intermediates=True, keep it so the PCC check can compare against the
@@ -594,29 +601,21 @@ class TtMoe(LightweightModule):
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
 
-        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
-
         # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
         # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
         # in-place via deepseek_prefill.insert. The two names point at the same device buffer.
         # Therefore we must NOT call ttnn.deallocate(dispatched_buffer_tiled) here; doing so
         # would free the storage that expert_outputs still depends on, and the subsequent
-        # ttnn.unsqueeze / combine_module calls would raise "Tensor is not allocated".
+        # combine_module call would raise "Tensor is not allocated".
+        # expert_outputs keeps the dispatch buffer's (1, 1, max_dispatch_buffer_token_size,
+        # emb_dim) rank, which is exactly what combine expects — no unsqueeze needed.
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
-
-        # Add back the batch dimensions for combine
-        # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects TILE_LAYOUT input
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
-
         combined_output = self.combine_module(
             expert_outputs,
             metadata,

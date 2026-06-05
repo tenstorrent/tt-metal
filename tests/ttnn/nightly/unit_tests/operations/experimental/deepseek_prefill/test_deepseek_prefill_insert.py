@@ -119,6 +119,41 @@ def test_valid_inputs_2d_index_first_dim_one(device):
     assert out is not None
 
 
+@pytest.mark.parametrize(
+    "global_shape",
+    [
+        (1, GLOBAL_ROWS, HIDDEN_DIM),
+        (1, 1, GLOBAL_ROWS, HIDDEN_DIM),
+    ],
+)
+def test_valid_global_tensor_leading_singleton_dims(device, global_shape):
+    """global_tensor may carry leading singleton dims; it is treated as effectively
+    2D (rows, hidden) using the last two dims, so no squeeze is required from callers."""
+    g = _make_global(device, shape=global_shape)
+    l = _make_local(device)
+    s = _make_index(device, shape=(NUM_EXPERTS,))
+    c = _make_index(device, shape=(NUM_EXPERTS,))
+    out = _run(g, l, s, c)
+    assert out is not None
+
+
+@pytest.mark.parametrize(
+    "local_shape",
+    [
+        (1, LOCAL_ROWS, HIDDEN_DIM),
+        (1, 1, LOCAL_ROWS, HIDDEN_DIM),
+    ],
+)
+def test_valid_local_tensor_leading_singleton_dims(device, local_shape):
+    """local_tensor may also carry leading singleton dims (same 2D-effective rule)."""
+    g = _make_global(device)
+    l = _make_local(device, shape=local_shape)
+    s = _make_index(device, shape=(NUM_EXPERTS,))
+    c = _make_index(device, shape=(NUM_EXPERTS,))
+    out = _run(g, l, s, c)
+    assert out is not None
+
+
 # ---------------------------------------------------------------------------
 # Global tensor constraints.
 # ---------------------------------------------------------------------------
@@ -133,12 +168,14 @@ def test_global_tensor_wrong_dtype(device, expect_error):
         _run(g, l, s, c)
 
 
-def test_global_tensor_must_be_2d(device, expect_error):
-    g = _make_global(device, shape=(1, GLOBAL_ROWS, HIDDEN_DIM))
+def test_global_tensor_leading_dim_not_one_rejected(device, expect_error):
+    # rank >= 2 is allowed, but every dim beyond the last two must be 1. A leading
+    # dim != 1 means the buffer is not effectively 2D and must be rejected.
+    g = _make_global(device, shape=(2, GLOBAL_ROWS, HIDDEN_DIM))
     l = _make_local(device)
     s = _make_index(device)
     c = _make_index(device)
-    with expect_error(RuntimeError, "global_tensor must be 2D"):
+    with expect_error(RuntimeError, "global_tensor leading dim 0 must be 1"):
         _run(g, l, s, c)
 
 
@@ -165,12 +202,12 @@ def test_local_tensor_wrong_dtype(device, expect_error):
         _run(g, l, s, c)
 
 
-def test_local_tensor_must_be_2d(device, expect_error):
+def test_local_tensor_leading_dim_not_one_rejected(device, expect_error):
     g = _make_global(device)
-    l = _make_local(device, shape=(1, LOCAL_ROWS, HIDDEN_DIM))
+    l = _make_local(device, shape=(2, LOCAL_ROWS, HIDDEN_DIM))
     s = _make_index(device)
     c = _make_index(device)
-    with expect_error(RuntimeError, "local_tensor must be 2D"):
+    with expect_error(RuntimeError, "local_tensor leading dim 0 must be 1"):
         _run(g, l, s, c)
 
 
@@ -482,6 +519,50 @@ def test_insert_2d_indices_matches_torch_slice(device):
     original = global_torch.clone()
     original[starts[expert_id] : starts[expert_id] + rows, :] = local_torch[:rows, :]
     assert_with_pcc(original.float(), out_torch.float(), pcc=0.9999)
+
+
+@pytest.mark.parametrize(
+    "leading_dims",
+    [
+        (1,),
+        (1, 1),
+    ],
+)
+def test_insert_leading_singleton_dims_matches_2d(device, leading_dims):
+    """A global_tensor with leading singleton dims inserts the same slice as the flat
+    2D form, and the in-place result preserves the input rank."""
+    global_rows, local_rows, hidden_dim = 128, 32, 64
+    starts = [0, 32, 64, 96]
+    counts = [32, 32, 32, 32]
+    expert_id = 2
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    local_torch = torch.randn(local_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+
+    # global_tensor reshaped to carry leading singleton dims, e.g. (1, 1, rows, hidden).
+    g = _to_tile_bfp8(device, global_torch.reshape(*leading_dims, global_rows, hidden_dim))
+    l = _to_tile_bfp8(device, local_torch)
+    global_q = ttnn.to_torch(g).reshape(global_rows, hidden_dim).clone()
+    local_q = ttnn.to_torch(l)
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out = _run(g, l, s, c, global_expert_id=expert_id)
+    out_torch = ttnn.to_torch(out)
+
+    # In-place: the returned tensor keeps the input's (leading-singleton) rank/shape.
+    assert tuple(out_torch.shape) == (*leading_dims, global_rows, hidden_dim)
+    out_2d = out_torch.reshape(global_rows, hidden_dim)
+
+    rows = _ceil_to_tile(counts[expert_id])
+    start = starts[expert_id]
+    expected = global_q.clone()
+    expected[start : start + rows, :] = local_q[:rows, :]
+    torch.testing.assert_close(out_2d.float(), expected.float(), atol=0.0, rtol=0.0)
+    original = global_torch.clone()
+    original[start : start + rows, :] = local_torch[:rows, :]
+    assert_with_pcc(original.float(), out_2d.float(), pcc=0.9999)
 
 
 # ---------------------------------------------------------------------------

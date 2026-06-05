@@ -104,6 +104,23 @@ def test_valid_inputs_2d_index_first_dim_one(device):
     assert out is not None
 
 
+@pytest.mark.parametrize(
+    "global_shape",
+    [
+        (1, GLOBAL_ROWS, HIDDEN_DIM),
+        (1, 1, GLOBAL_ROWS, HIDDEN_DIM),
+    ],
+)
+def test_valid_global_tensor_leading_singleton_dims(device, global_shape):
+    """global_tensor may carry leading singleton dims; it is treated as effectively
+    2D (rows, hidden) using the last two dims, so no squeeze is required from callers."""
+    g = _make_global(device, shape=global_shape)
+    s = _make_index(device, shape=(NUM_EXPERTS,))
+    c = _make_index(device, shape=(NUM_EXPERTS,))
+    out = _run(g, s, c)
+    assert out is not None
+
+
 # ---------------------------------------------------------------------------
 # Global tensor constraints.
 # ---------------------------------------------------------------------------
@@ -117,11 +134,13 @@ def test_global_tensor_wrong_dtype(device, expect_error):
         _run(g, s, c)
 
 
-def test_global_tensor_must_be_2d(device, expect_error):
-    g = _make_global(device, shape=(1, GLOBAL_ROWS, HIDDEN_DIM))
+def test_global_tensor_leading_dim_not_one_rejected(device, expect_error):
+    # rank >= 2 is allowed, but every dim beyond the last two must be 1. A leading
+    # dim != 1 means the buffer is not effectively 2D and must be rejected.
+    g = _make_global(device, shape=(2, GLOBAL_ROWS, HIDDEN_DIM))
     s = _make_index(device)
     c = _make_index(device)
-    with expect_error(RuntimeError, "global_tensor must be 2D"):
+    with expect_error(RuntimeError, "global_tensor leading dim 0 must be 1"):
         _run(g, s, c)
 
 
@@ -376,6 +395,43 @@ def test_extract_2d_indices_matches_torch_slice(device):
     expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
     torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     # PCC against the original (pre-quantization) bfloat16 source.
+    original = global_torch[starts[expert_id] : starts[expert_id] + rows, :]
+    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.9999)
+
+
+@pytest.mark.parametrize(
+    "leading_dims",
+    [
+        (1,),
+        (1, 1),
+    ],
+)
+def test_extract_leading_singleton_dims_matches_2d(device, leading_dims):
+    """A global_tensor presented with leading singleton dims must extract the same
+    slice as the equivalent flat 2D buffer (the op treats it as effectively 2D)."""
+    hidden_dim = 128
+    starts = [0, 32, 64, 96]
+    counts = [32, 17, 32, 32]
+    expert_id = 1
+    max_tokens = 32
+    global_rows = 128
+
+    torch.manual_seed(0)
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    # Same data, but reshaped to carry leading singleton dims, e.g. (1, 1, rows, hidden).
+    g = _make_global_from_torch(device, global_torch.reshape(*leading_dims, global_rows, hidden_dim))
+    s = _make_index_from_values(device, starts)
+    c = _make_index_from_values(device, counts)
+
+    out = _run(g, s, c, global_expert_id=expert_id, max_tokens=max_tokens)
+    out_torch = ttnn.to_torch(out)
+
+    # Output is always flat 2D [max_tokens, hidden] regardless of input rank.
+    assert out_torch.shape == (max_tokens, hidden_dim)
+    rows = _ceil_to_tile(counts[expert_id])
+    global_quantized = ttnn.to_torch(g).reshape(global_rows, hidden_dim)
+    expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
+    torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     original = global_torch[starts[expert_id] : starts[expert_id] + rows, :]
     assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.9999)
 

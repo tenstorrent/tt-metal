@@ -28,7 +28,7 @@ ExtractProgramFactory::cached_program_t ExtractProgramFactory::create(
 
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     const auto hidden_dim = global_tensor.logical_shape()[-1];
-    const auto global_rows = global_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
     const uint32_t tiles_per_row = hidden_dim / tile_width;
     // Total tiles available in global_tensor — passed to the reader so it can
     // assert (at runtime) that start[id] + ceil_tile(counts[id]) stays within

@@ -33,8 +33,8 @@ InsertProgramFactory::cached_program_t InsertProgramFactory::create(
 
     constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
     const auto hidden_dim = global_tensor.logical_shape()[-1];
-    const auto global_rows = global_tensor.logical_shape()[0];
-    const auto local_rows = local_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
+    const auto local_rows = local_tensor.logical_shape()[-2];
     const uint32_t tiles_per_row = hidden_dim / tile_width;
     // Upper bounds used for runtime asserts in the kernels.
     const uint32_t global_num_tiles = (global_rows / tt::constants::TILE_HEIGHT) * tiles_per_row;
