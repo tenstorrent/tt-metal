@@ -27,7 +27,7 @@ inline void _llk_packer_wait_for_math_done_()
 }
 
 /**
- * @brief Signal (increment) the MATH_PACK semaphore to release the math thread.
+ * @brief Signal the MATH_PACK semaphore (decrement via SEMGET) to release the math thread.
  *
  * Tells math it may overwrite the destination register again now that the packer has consumed it.
  *
