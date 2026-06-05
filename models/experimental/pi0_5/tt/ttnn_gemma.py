@@ -948,9 +948,28 @@ class GemmaMLPTTNN:
 
         # Chunk size must be tile-aligned (multiple of 32).
         # Scale chunk size with core count: more cores can process larger chunks
-        # in parallel. P150 (~130 cores) uses 544 (full seq, no chunking needed),
-        # N150 (64 cores) uses 256.
-        if num_cores >= 100:
+        # in parallel. P150 (~130 cores) uses 544 (full seq for bs=1 production:
+        # 256 img + ≤256 lang ≤ 512). N150 (64 cores) uses 256.
+        #
+        # IMPORTANT: pi0.5 LIBERO production is bs=3 (3 image slots — see
+        # [[pi05-siglip-bs3-production]]). At bs=3, prefix = 3·256 + lang_seq =
+        # up to 1024 tokens, which forces 2 chunks through this MLP. Each chunk
+        # is a full 18-layer forward dispatch — doubles the VLM MLP dispatch
+        # count (36 calls → 72 calls per inference). Override via
+        # PI0_VLM_CHUNK_SIZE=N to test merging into a single pass:
+        #   1024 → single-pass at bs=3 production
+        #   768  → single-pass at bs=2
+        # The default (544) preserves historical behavior.
+        import os as _os
+
+        _user_chunk = _os.environ.get("PI0_VLM_CHUNK_SIZE", "").strip()
+        if _user_chunk:
+            try:
+                self.chunk_size = int(_user_chunk)
+                assert self.chunk_size % 32 == 0, f"PI0_VLM_CHUNK_SIZE={self.chunk_size} must be tile-aligned (mod 32)"
+            except (ValueError, AssertionError) as e:
+                raise RuntimeError(f"Invalid PI0_VLM_CHUNK_SIZE={_user_chunk!r}: {e}") from e
+        elif num_cores >= 100:
             self.chunk_size = 544
         else:
             self.chunk_size = 256
