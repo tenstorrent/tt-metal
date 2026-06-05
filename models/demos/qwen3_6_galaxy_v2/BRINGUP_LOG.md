@@ -3,6 +3,37 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-05 (cont.4) — SERVER DECODE COHERENT (batch-1) ✅
+
+The vLLM server now produces coherent, advancing decode AND survives across requests.
+
+Request 1: "The ocean is the lifeblood of our planet... generates more than half of the
+world's oxygen through phytoplankton, regulates global climate..." Request 2 (same prompt,
+cross-request test): equally coherent. Decode advances; no repetition; no cross-request
+corruption.
+
+Three things landed it (on top of the earlier rope/embedding/paged fixes):
+1. **Missing decode flags** from `demo/run_text_demo.sh` added to the catalog env_vars —
+   the correctness-critical ones were `QWEN36_LM_HEAD_PLAIN_DECODE=1` (decode lm_head
+   ring->minimal_matmul; ring = garbage logits) and `QWEN36_RESIDUAL_BUF_BF16=1` (bf16
+   residual buffer the decode rms_allgather norm requires). Plus FORCE_SWITCH_DECODE=1,
+   DECODE_L1_RESIDUAL=1, GDN_SEQ_PREFILL=0, and the demo's perf trio.
+2. **Eager decode** (`override_tt_config.trace_mode: false`). The server's TRACE path
+   (host sampling + reset_inputs to update trace buffers) was STUCK repeating the first
+   decode token; the demo's trace loop is self-contained (on-device argmax + in-trace
+   plus_one), which the server doesn't use. Eager rebuilds inputs each step -> advances.
+3. **Per-request state reset** in `generator.prefill_forward_text` (qwen36 guard):
+   `clear_state()` on every DeltaNet layer (zeros dn_state_buffer/conv_state_buffer) +
+   `tt_ccl.reset_gather_and_buffer_idx()`. The GDN buffers are internal + persistent; the
+   demo runs one sequence so never resets, but the server reuses the model -> request 1
+   coherent, request 2+ garbage without the reset.
+
+NOTE: `tests/test_decode_eager_64L_pcc.py` is unreliable for the switch_decode path (fails
+even in the demo's known-good config); trust the demo / live server curl.
+
+REMAINING: run benchmarks up to ISL 256k (catalog max_context=262144); >128k decode
+coherence is not yet validated per run_text_demo.sh note. README + final perf numbers.
+
 ## 2026-06-04 (cont.3) — server decode runs e2e; output GARBAGE; bug = use_paged_kv_cache=True path
 
 The server now runs the FULL prefill + decode loop end-to-end and returns tokens.
