@@ -200,38 +200,19 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::ten
 AllGatherDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
     // =========================================================================
-    // AllGather Roofline Performance Model (First-Principles)
+    // AllGather roofline performance model
     //
-    // AllGather is pure data movement — no compute. The roofline is the
-    // hardware ceiling: the minimum time given the physical topology and
-    // memory bandwidth, independent of any particular algorithm.
+    // Fabric perf (bandwidth + latency):
+    //   bandwidth: the worst-connected device must still receieve the (N-1) slices
+    //       it lacks, i.e. (N-1)*S bytes, pulled in over its K inbound links. A
+    //       wrapped axis (Ring/Torus) gives that node 2 links on that axis, else 1.
+    //   latency: the gather finishes only once the farthest slice has crossed the
+    //       network diameter; for a grid/torus that is the sum of per-axis diameters.
+    // Computed per-axis, so line / ring / mesh / torus_x / torus_y / torus_xy all
+    // share one code path.
     //
-    // Performance is bounded by:
-    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
-    //
-    // --- Fabric term (bottleneck link analysis) ---
-    //
-    // For any topology the roofline is set by the most-loaded link.
-    // N devices, each contributing S bytes. Every device must receive
-    // the other (N-1) chunks.
-    //
-    // LINE topology:
-    //   The edge device has a single link to the rest of the network.
-    //   All (N-1) chunks must pass through that one link — no topology
-    //   can avoid this.
-    //   bottleneck_bytes = (N-1) * S.  Max hops = N-1.
-    //
-    // RING topology:
-    //   A bisection cut crosses 2 links. Data from N/2 devices on one
-    //   side must reach N/2 devices on the other, and vice-versa. Each
-    //   direction carries at most half the total load.
-    //   bottleneck_bytes = ceil((N-1) * S / 2).  Max hops = ceil((N-1)/2).
-    //
-    // --- DRAM term (memory bandwidth ceiling) ---
-    //
-    // Each device reads S bytes and writes N*S bytes. The roofline
-    // assumes all compute cores can drive DRAM concurrently (hardware
-    // maximum parallelism), so DRAM time = bytes / peak_aggregate_BW.
+    // DRAM perf (memory bandwidth ceiling):
+    // Each device reads S bytes and writes N*S bytes.
     // =========================================================================
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -248,26 +229,27 @@ AllGatherDeviceOperation::create_op_performance_model(
     const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
 
     const uint32_t num_devices = args.num_devices;
-    // TODO: unimplemented for 2D, right now we assume only one axis is active
-    const uint32_t active_axis = (args.axis_num_devices[0] > 1) ? 0u : 1u;
-    const tt::tt_fabric::Topology topology = args.axis_topology[active_axis];
-    const uint32_t num_links = args.axis_num_links[active_axis];
-    double fabric_time_ns = 0.0f;
-    if (num_devices <= 1) {
-        // Single device: no fabric communication
-        fabric_time_ns = 0.0f;
-    } else if (tt::tt_fabric::is_ring_or_torus(topology)) {
-        // Ring topology: bisection cuts 2 links, so each direction carries
-        // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
-        const uint64_t bottleneck_bytes = tt::div_up((num_devices - 1) * input_size_bytes, 2);
-        fabric_time_ns =
-            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(num_devices - 1, 2u));
-    } else {
-        // Line/Linear/Mesh topology: edge device has one link and must
-        // receive all (N-1) slices through it.
-        const uint64_t bottleneck_bytes = (num_devices - 1) * input_size_bytes;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_devices - 1);
+
+    // --- Fabric roofline: fold every axis into K (cabling) and the diameter (hops). ---
+    // K    = inbound links at the worst-connected node: wrapped axis -> 2 links, open -> 1.
+    // hops = network diameter = sum of per-axis diameters.
+    // Computed per-axis, so line/ring/mesh/torus_x/torus_y/torus_xy share same formula.
+    uint32_t bottleneck_links = 0;
+    uint32_t diameter_hops = 0;
+    for (size_t axis = 0; axis < args.axis_num_devices.size(); ++axis) {
+        const uint32_t axis_devices = args.axis_num_devices[axis];
+        if (axis_devices <= 1) {
+            continue;  // inactive axis: no links, no hops (reduces to 1D)
+        }
+        const bool axis_wraps = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
+        bottleneck_links += (axis_wraps ? 2u : 1u) * args.axis_num_links[axis];
+        diameter_hops += axis_wraps ? (axis_devices / 2u) : (axis_devices - 1u);
     }
+
+    // (N-1)*S bytes must be received over K links, having travelled `diameter_hops` hops
+    const uint64_t fabric_bytes = static_cast<uint64_t>(num_devices - 1) * input_size_bytes;
+    const double fabric_time_ns =
+        ttnn::ccl::estimate_fabric_transfer_ns(arch, fabric_bytes, bottleneck_links, diameter_hops);
 
     // Convert fabric time (ns) to device clock cycles.
     // clock_rate_ghz cycles/ns * ns = cycles
