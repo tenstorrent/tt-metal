@@ -7,6 +7,7 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_dram_print_output.cpp
     device_print/test_eth_cores.cpp
     device_print/test_format_updates.cpp
+    device_print/test_uintptr_t_print.cpp
     device_print/test_invalid_print_core.cpp
     device_print/test_mesh_coords.cpp
     device_print/test_mute_device.cpp

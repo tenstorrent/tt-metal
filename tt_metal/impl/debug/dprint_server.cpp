@@ -275,6 +275,42 @@ private:
 
 // DEVICE_PRINT implementations — single shared buffer per core.
 
+namespace {
+
+// Match device_print_detail::align_device_print_message_size() in device_print.h.
+uint32_t device_print_message_align_bytes(
+    const tt::tt_metal::Hal& hal, tt::tt_metal::HalProgrammableCoreType programmable_core_type, uint32_t risc_id) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && programmable_core_type == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
+        auto [processor_class, processor_type_idx] =
+            hal.get_processor_class_and_type_from_index(programmable_core_type, risc_id);
+        (void)processor_type_idx;
+        if (processor_class == tt::tt_metal::HalProcessorClassType::DM) {
+            return 8;
+        }
+    }
+    return 4;
+}
+
+uint32_t align_device_print_message_size(uint32_t size, uint32_t align_bytes) {
+    const uint32_t mask = align_bytes - 1;
+    return (size + mask) & ~mask;
+}
+
+uint32_t device_print_message_size_bytes(
+    const DevicePrintHeader& header,
+    const tt::tt_metal::Hal& hal,
+    tt::tt_metal::HalProgrammableCoreType programmable_core_type) {
+    constexpr uint32_t header_size = sizeof(DevicePrintHeader);
+    const uint32_t align_bytes = device_print_message_align_bytes(hal, programmable_core_type, header.risc_id);
+    uint32_t raw_size = header_size;
+    if (!(header.is_kernel && header.message_payload == DevicePrintHeader::max_message_payload_size)) {
+        raw_size += header.message_payload;
+    }
+    return align_device_print_message_size(raw_size, align_bytes);
+}
+
+}  // namespace
+
 void DPrintServer::Impl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, std::span<uint32_t> data) {
     std::size_t word_index = 0;
@@ -289,8 +325,13 @@ void DPrintServer::Impl::print_buffer_data(
 
     while (word_index < data.size()) {
         // New data always starts with a DevicePrintHeader, so lets parse it.
+        const std::size_t message_start_word = word_index;
         const DevicePrintHeader* header = reinterpret_cast<const DevicePrintHeader*>(data.data() + word_index);
-        word_index++;
+
+        const auto advance_to_next_message = [&]() {
+            const uint32_t message_size_bytes = device_print_message_size_bytes(*header, hal, programmable_core_type);
+            word_index = message_start_word + message_size_bytes / sizeof(uint32_t);
+        };
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
@@ -312,6 +353,7 @@ void DPrintServer::Impl::print_buffer_data(
             RiscData& risc_data = risc_data_[risc_key];
             if (risc_data.last_loaded_kernel_id == static_cast<int>(header->info_id)) {
                 // We have already loaded this kernel, no need to do load it again.
+                advance_to_next_message();
                 continue;
             }
 
@@ -334,6 +376,7 @@ void DPrintServer::Impl::print_buffer_data(
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
             risc_data.kernel_elf_path = elf_path.string();
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
+            advance_to_next_message();
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
             header->info_id == DevicePrintHeader::max_info_id_value) {
@@ -385,20 +428,10 @@ void DPrintServer::Impl::print_buffer_data(
             // Check if we found elf file for this print message.
             if (elf_parser != nullptr) {
                 // Format message
-                auto buffer_remaining_bytes = std::as_bytes(data.subspan(word_index));
+                auto buffer_remaining_bytes = std::as_bytes(data.subspan(message_start_word + 1));
                 if (buffer_remaining_bytes.size() < header->message_payload) {
-                    log_error(
-                        tt::LogMetal,
-                        "Data corruption detected in device print buffer while processing message: message payload "
-                        "size {} exceeds remaining buffer size {}. Parsed message: is_kernel={}, risc_id={}, "
-                        "message_payload={}, info_id={}. Ignoring rest of the buffer.",
-                        header->message_payload,
-                        buffer_remaining_bytes.size(),
-                        header->is_kernel,
-                        header->risc_id,
-                        header->message_payload,
-                        header->info_id);
-                    return;
+                    // Incomplete message at the end of this read chunk; stop and wait for more data.
+                    break;
                 }
                 auto payload_bytes = buffer_remaining_bytes.subspan(0, header->message_payload);
                 auto formatted_message =
@@ -464,8 +497,7 @@ void DPrintServer::Impl::print_buffer_data(
                 }
             }
 
-            // Move to the next message
-            word_index += (header->message_payload + 3) / 4;  // round up to nearest word
+            advance_to_next_message();
         }
     }
 }
