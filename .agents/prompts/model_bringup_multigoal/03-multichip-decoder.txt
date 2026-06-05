@@ -2,7 +2,7 @@
 
 This goal creates the multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed optimized decoder and work only on models/autoports/<model>/tt/multichip_decoder.py plus its tests and docs; do not begin full-model or vLLM work in this goal. Your target is to make the best possible use of TT mesh available on this machine. Your code does not have to support multiple/smaller mesh configurations.
 
-Transition completion requirements:
+Goal completion requirements:
 - models/autoports/<model>/tt/multichip_decoder.py exists and uses the optimized decoder as the single-chip baseline.
 - A sensible parallelization scheme for all tensors that matches the model to the hardware as optimally as possible. If this means a small amount of load-time manual padding of tensors that's normal and ok, for example, if it allows more parallelism to be brought to bear.
 - The report names the target mesh/hardware and gives the chosen tensor, activation, KV-cache, collective, and MoE/expert strategy with calculated per-device shapes, shard specs, padding, and rejected alternatives.
@@ -12,7 +12,8 @@ Transition completion requirements:
 - Warmed single-chip baseline latency and multi-chip latency, speedup, and efficiency are reported.
 - tt-perf-report human-readable tables and CSV/provenance logs exist, with communication, DRAM, compute, CCL, and data-movement findings summarized.
 - Runtime fallback audit is clean, determinism or stress coverage matches the implementation risk, and watcher-clean evidence exists.
-- For MoE models, the final path keeps gate-selected active-expert execution; dense all-expert execution is only acceptable as a documented blocked fallback with evidence.
+- For MoE models, the final completed path keeps gate-selected active-expert execution; dense all-expert execution is not a final implementation and does not satisfy completion. It is only acceptable as a temporary diagnostic or as evidence in a blocked result after active-expert paths have been debugged with exact evidence.
 - models/autoports/<model>/doc/multichip_decoder/README.md and work_log.md summarize commands, PCC, perf, mesh plan, limitations, and exact artifacts.
+- The decoder has a real multichip implementation that is correct and suitable as the full-model layer stack baseline. If the mesh strategy cannot fit the full model's weights/KV-cache expectations, choose one that can.
 
-Mark this goal complete only when the decoder has a real multichip implementation that is correct and suitable as the full-model layer stack baseline. If the mesh strategy cannot fit the full model's weights/KV-cache expectations, choose one that can. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.
+Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
