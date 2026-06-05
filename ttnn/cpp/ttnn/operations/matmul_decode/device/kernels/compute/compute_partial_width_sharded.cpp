@@ -71,7 +71,7 @@ void kernel_main() {
     if (is_base == 0) {
         return;
     }
-
+    return;
     // ---- Phase 2: reduce K_blocks partials (base cores only) ----
     // reduce_cb holds K_blocks contiguous blocks; pairwise accumulate into DST.
     cb_wait_front(reduce_cb_id, reduce_num_tiles);

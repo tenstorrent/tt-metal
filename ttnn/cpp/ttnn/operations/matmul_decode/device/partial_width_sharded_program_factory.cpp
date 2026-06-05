@@ -55,8 +55,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     IDevice* device = input_tensor_a.device();
 
     // ---- Recover the 2D (K x N) block-sharding geometry ----
+    // Operation attributes M,N,K are the real matmul dimensions. Weights tensor has been reshaped, so its logical shape
+    // is no longer [K, N].
     const uint32_t M_tiles = div_up(operation_attributes.M, tt::constants::TILE_HEIGHT);
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
+    const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
     const std::array<uint32_t, 2> inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
     TT_FATAL(
@@ -71,6 +74,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     const std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
+    // Shard shape correctly maps to the per core K and N dimensions.`
     const uint32_t Kc = inputB_shard_shape[0];
     const uint32_t Nc = inputB_shard_shape[1];
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_WIDTH;
@@ -81,11 +85,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
+    const uint32_t num_B_cores_along_N = N_tiles / Nc_tiles;
+    TT_FATAL(
+        num_B_cores % num_B_cores_along_N == 0,
+        "num_B_cores {} must be divisible by num_B_cores_along_N {}",
+        num_B_cores,
+        num_B_cores_along_N);
+    const uint32_t num_B_cores_along_K = num_B_cores / num_B_cores_along_N;
     const uint32_t K_blocks = K_tiles / Kc_tiles;
     TT_FATAL(
-        K_blocks > 0 && num_B_cores % K_blocks == 0,
-        "num_B_cores {} must be divisible by K_blocks {}",
-        num_B_cores,
+        num_B_cores_along_K == K_blocks,
+        "num_B_cores_along_K {} must equal K_blocks {}",
+        num_B_cores_along_K,
         K_blocks);
     const uint32_t N_blocks = num_B_cores / K_blocks;
     TT_FATAL(
@@ -95,10 +106,24 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         output_core_range_set.num_cores());
 
     // A is multicast onto every B core; senders are the A-holding cores.
-    const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set);
+    log_info(
+        tt::LogOp,
+        "num_B_cores: {}, num_B_cores_along_N: {}, num_B_cores_along_K: {}, K_blocks: {}, N_blocks: {}",
+        num_B_cores,
+        num_B_cores_along_N,
+        num_B_cores_along_K,
+        K_blocks,
+        N_blocks);
+    log_info(
+        tt::LogOp,
+        "inputA_num_cores: {}, inputB_num_cores: {}, output_num_cores: {}",
+        inputA_core_range_set.num_cores(),
+        inputB_core_range_set.num_cores(),
+        output_core_range_set.num_cores());
+    const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set).merge(output_core_range_set);
     const auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
 
-    log_debug(
+    log_info(
         tt::LogOp,
         "MatmulDecode(partial): M_tiles={}, K_tiles={}, Kc_tiles={}, Nc_tiles={}, K_blocks={}, N_blocks={}",
         M_tiles,
@@ -240,7 +265,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }
         KernelDescriptor reader_kernel_desc;
         reader_kernel_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/reader_full_width_sharded.cpp";
+            "ttnn/cpp/ttnn/operations/matmul_decode/device/kernels/dataflow/reader_partial_width_sharded.cpp";
         reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_kernel_desc.core_ranges = CoreRangeSet(ranges);
         reader_kernel_desc.compile_time_args = reader_compile_time_args;
@@ -318,6 +343,16 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         const CoreCoord base_logical = b_cores[n_idx];  // k_idx == 0 core for this n_idx
         const CoreCoord base_phys = device->worker_core_from_logical_core(base_logical);
         const bool is_base = (k_idx == 0);
+        log_info(
+            tt::LogOp,
+            "Writer core {}, idx {}, k_idx: {}, n_idx: {}, base_logical: {}, base_phys: {}, is_base: {}",
+            b_cores[idx],
+            idx,
+            k_idx,
+            n_idx,
+            base_logical,
+            base_phys,
+            is_base);
         writer_kernel_desc.runtime_args.emplace_back(
             b_cores[idx],
             KernelDescriptor::CoreRuntimeArgs{
@@ -349,6 +384,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
         const uint32_t k_idx = idx / N_blocks;
         const bool is_base = (k_idx == 0);
+        log_info(tt::LogOp, "core {}, idx {}, k_idx: {}, is_base: {}", b_cores[idx], idx, k_idx, is_base);
         compute_kernel_desc.runtime_args.emplace_back(
             b_cores[idx], KernelDescriptor::CoreRuntimeArgs{k_idx, static_cast<uint32_t>(is_base)});
     }
