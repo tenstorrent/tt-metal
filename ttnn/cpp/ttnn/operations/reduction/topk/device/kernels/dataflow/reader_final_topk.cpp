@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // Compile time args
@@ -28,6 +29,17 @@ void kernel_main() {
     CircularBuffer final_values_cb(final_values_cb_index);
     CircularBuffer final_indices_cb(final_indices_cb_index);
 
+    // mcast_pipe: this aggregator broadcasts a readiness flag to the rectangle of local-topk sender
+    // cores (a flag-only control signal, R2), then waits a fan-in counter (sender_sem) for all Wt_final
+    // tiles to land. Only the readiness broadcast is a Pipe op (send_signal); the fan-in counter wait
+    // is a separate multi-producer channel the (single-sender) Pipe does not own (INV9), kept raw.
+    // data_ready=receiver_sem (the flag we broadcast); consumed unused on this control path.
+    dataflow_kernel_lib::Pipe<> ready_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests},
+        receiver_sem,
+        sender_sem);
+
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
         // Reserve space for incoming data from all local cores
@@ -37,14 +49,12 @@ void kernel_main() {
         // Initialize semaphores for this height row
         // Reset synchronization state for this height row
         sender_sem.set(INVALID);  // Mark data as not yet sent
-        receiver_sem.set(VALID);  // Signal readiness to receive
 
         // Coordinate multicast reception
-        // Enable all local cores to send their data simultaneously by broadcasting
-        // the receiver semaphore state. This allows for efficient parallel transmission.
-        receiver_sem.set_multicast<Noc::McastMode::EXCLUDE_SRC>(
-            noc, noc_start_x, noc_start_y, noc_end_x, noc_end_y, num_dests);
-        noc.async_write_barrier();
+        // mcast_pipe: broadcast the readiness flag (VALID) to all local-topk sender cores. send_signal
+        // sets the local cell + mcasts it to the rect + fences (flush). This replaces the explicit
+        // set(VALID) + set_multicast + async_write_barrier readiness broadcast.
+        ready_pipe.send_signal(VALID);
 
         // Wait for all data to arrive
         // Block until all expected data (Wt_final tiles) has been received from
