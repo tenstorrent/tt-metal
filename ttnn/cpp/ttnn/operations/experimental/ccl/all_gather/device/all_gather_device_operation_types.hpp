@@ -5,6 +5,7 @@
 #pragma once
 #include <tt_stl/reflection.hpp>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -16,35 +17,45 @@ namespace ttnn::experimental::prim {
 
 struct AllGatherParams {
     int32_t dim = 0;
-    uint32_t num_links = 0;
-    uint32_t ring_size = 0;
     MemoryConfig output_mem_config;
-    tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
+    // Per-axis info.
+    // An inactive axis has num_devices = 1, num_links = 0, and Linear topology.
+    std::array<tt::tt_fabric::Topology, 2> axis_topology{};
+    std::array<uint32_t, 2> axis_num_devices{};
+    std::array<uint32_t, 2> axis_num_links{};
+    // Number of devices participating in the collective
+    uint32_t num_devices = 0;
 
     AllGatherParams(
         int32_t dim,
-        uint32_t num_links,
-        uint32_t ring_size,
         MemoryConfig output_mem_config,
-        tt::tt_fabric::Topology topology,
-        std::optional<uint32_t> cluster_axis) :
+        std::optional<uint32_t> cluster_axis,
+        std::array<tt::tt_fabric::Topology, 2> axis_topology,
+        std::array<uint32_t, 2> axis_num_devices,
+        std::array<uint32_t, 2> axis_num_links,
+        uint32_t num_devices) :
         dim(dim),
-        num_links(num_links),
-        ring_size(ring_size),
         output_mem_config(std::move(output_mem_config)),
-        topology(topology),
-        cluster_axis(cluster_axis) {}
+        cluster_axis(cluster_axis),
+        axis_topology(axis_topology),
+        axis_num_devices(axis_num_devices),
+        axis_num_links(axis_num_links),
+        num_devices(num_devices) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("dim", dim);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("topology", topology);
         attrs.emplace_back("cluster_axis", cluster_axis);
+        attrs.emplace_back("axis0_topology", axis_topology[0]);
+        attrs.emplace_back("axis1_topology", axis_topology[1]);
+        attrs.emplace_back("axis0_num_devices", axis_num_devices[0]);
+        attrs.emplace_back("axis1_num_devices", axis_num_devices[1]);
+        attrs.emplace_back("axis0_num_links", axis_num_links[0]);
+        attrs.emplace_back("axis1_num_links", axis_num_links[1]);
+        attrs.emplace_back("num_devices", num_devices);
         return attrs;
     }
 };

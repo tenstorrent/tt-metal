@@ -5,9 +5,6 @@
 #include "all_gather_factory.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
-
-#include <bit>
-
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -100,7 +97,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // Fabric setup
     ////////////////////////////////////////////////////////////////
 
-    uint32_t num_devices = operation_attributes.ring_size;
+    const uint32_t num_devices = operation_attributes.num_devices;
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
     // TODO verify row-major device_idx matches ShardTensorToMesh order under 2D no-cluster_axis;
@@ -109,9 +106,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // Compute hops + neighbors for each mesh axis.
     // Each axis ∈ {0, 1} contributes a forward/backward pair: axis 1 -> (E=fwd, W=bwd),
     // axis 0 -> (S=fwd, N=bwd). In 1D only one axis is active; in 2D both can be.
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
-    const auto mesh_shape = input_tensor.device()->shape();
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
 
     std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
     uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
@@ -119,31 +114,13 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     bool ns_load_balance = false;
 
     for (uint32_t axis = 0; axis < 2; ++axis) {
-        const bool is_axis_active = mesh_shape[axis] > 1 && operation_attributes.cluster_axis.value_or(axis) == axis;
+        const uint32_t axis_size = operation_attributes.axis_num_devices[axis];
+        const bool is_axis_active = axis_size > 1;
         if (!is_axis_active) {
             continue;
         }
 
-        // Ring detection: fabric config wraps this axis AND the device set spans [0..size-1].
-        // TODO consider resolving this (and replace `topology`) in device_operation.cpp
-        bool axis_can_wrap;
-        if (fabric_is_2d) {
-            if (axis == 1) {
-                axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
-                                fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
-            } else {
-                axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
-                                fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
-            }
-        } else {
-            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
-        }
-        const bool axis_is_ring =
-            axis_can_wrap && ::ttnn::ccl::get_boundary_mode(input_tensor, tt::tt_fabric::Topology::Torus, axis) ==
-                                 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
-        const auto axis_topology = axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
-
-        const uint32_t axis_size = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        const auto axis_topology = operation_attributes.axis_topology[axis];
         const uint32_t axis_index = sender_device_coord[axis];
         auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             axis_size, axis_index, axis_topology, /*static_alternate=*/false);
@@ -152,7 +129,9 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, sender_device_coord, -1, axis_topology, axis);
 
-        const bool axis_load_balance = axis_is_ring && (axis_size % 2 == 0);
+        // A load-balancing technique (alternating between two imbalanced routes) is used
+        // in even-sized rings.
+        const bool axis_load_balance = tt::tt_fabric::is_ring_or_torus(axis_topology) && (axis_size % 2 == 0);
         if (axis == 1) {
             e_hops = fwd_hops;
             w_hops = bwd_hops;
@@ -171,11 +150,15 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
 
+    // TODO: num_links should be handled correctly for 2D (per-axis link counts can differ).
+    const uint32_t links0 = operation_attributes.axis_num_links[0];
+    const uint32_t links1 = operation_attributes.axis_num_links[1];
+    const uint32_t min_num_links = std::min(links0 > 0 ? links0 : links1, links1 > 0 ? links1 : links0);
+
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
-    auto sender_worker_core_range =
-        get_cores_close_to_erisc(operation_attributes.num_links * num_workers_per_link, true);
+    auto sender_worker_core_range = get_cores_close_to_erisc(min_num_links * num_workers_per_link, true);
     auto sender_worker_cores = corerange_to_cores(sender_worker_core_range);
 
     const uint32_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -355,7 +338,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
                                 // semaphore
     auto* mesh_device = input_tensor.device();
     CoreCoord barrier_core;
-    for (uint32_t link = 0; link < operation_attributes.num_links; link++) {
+    for (uint32_t link = 0; link < min_num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
@@ -365,8 +348,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         barrier_core = mesh_device->worker_core_from_logical_core(core);
 
         // Set runtime args
-        uint32_t input_pages_per_link = num_input_pages / operation_attributes.num_links;
-        uint32_t remainder = num_input_pages % operation_attributes.num_links;
+        uint32_t input_pages_per_link = num_input_pages / min_num_links;
+        uint32_t remainder = num_input_pages % min_num_links;
         uint32_t input_tile_id_start = (link * input_pages_per_link) + std::min(link, remainder);
         uint32_t input_tile_id_end = ((link + 1) * input_pages_per_link) + std::min(link + 1, remainder);
 
@@ -398,7 +381,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         uint32_t barrier_wait_value = num_devices - 1;
         // Per-link out_ready fan-in at link-0 drain_sync_core:
         //   num_links * (N-1 remote mcast hits + 2 local incs from reader and writer).
-        uint32_t out_ready_sem_wait_value = operation_attributes.num_links * (num_devices + 1);
+        uint32_t out_ready_sem_wait_value = min_num_links * (num_devices + 1);
 
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address

@@ -74,6 +74,29 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
 }
 
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis) {
+    // Whether the fabric wraps this axis into a ring/torus.
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    bool axis_can_wrap;
+    if (fabric_is_2d) {
+        if (axis == 1) {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        } else {
+            axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+        }
+    } else {
+        axis_can_wrap = fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING;
+    }
+
+    // Ring only if the fabric can wrap this axis AND the device set spans [0..size-1].
+    const bool axis_is_ring = axis_can_wrap && get_boundary_mode(tensor, tt::tt_fabric::Topology::Torus, axis) ==
+                                                   tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+    return axis_is_ring ? tt::tt_fabric::Topology::Ring : tt::tt_fabric::Topology::Linear;
+}
+
 tt::tt_fabric::Topology get_usable_topology(
     const Tensor& tensor,
     const std::optional<tt::tt_fabric::Topology>& topology,

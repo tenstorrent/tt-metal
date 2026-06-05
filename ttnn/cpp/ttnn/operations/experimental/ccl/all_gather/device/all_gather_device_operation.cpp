@@ -33,7 +33,8 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // Constraints on other inputs
     int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     TT_FATAL(args.dim >= -rank && args.dim < rank, "Invalid gather dim {} for {}D input tensor", args.dim, rank);
-    TT_FATAL(args.ring_size > 1, "all_gather collective will only work for num_devices > 1, got {}", args.ring_size);
+    TT_FATAL(
+        args.num_devices > 1, "all_gather collective will only work for num_devices > 1, got {}", args.num_devices);
 
     // If mesh_device shape is 2D but !FABRIC_2D, then must specify cluster_axis
     const auto mesh_shape = input_tensor.device()->shape();
@@ -72,7 +73,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         auto output_shape = output_tensor.padded_shape();
         auto input_shape = input_tensor.padded_shape();
         auto expected_output_shape = input_shape;
-        expected_output_shape[args.dim] *= args.ring_size;
+        expected_output_shape[args.dim] *= args.num_devices;
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -106,7 +107,6 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto output_spec = compute_output_specs(args, tensor_args);
     const uint32_t output_page_size = static_cast<uint32_t>(output_spec.compute_page_size_bytes());
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t num_devices = args.ring_size;
 
     TT_FATAL(
         std::max(output_page_size, input_page_size) % std::min(output_page_size, input_page_size) == 0,
@@ -128,10 +128,10 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
     // Concat mode needs concat_factor to divide num_devices (so N/concat_factor
     // output positions per row is integer).
     TT_FATAL(
-        concat_factor == 1 || num_devices % concat_factor == 0,
+        concat_factor == 1 || args.num_devices % concat_factor == 0,
         "all-gather: concat_factor={} must divide num_devices={}.",
         concat_factor,
-        num_devices);
+        args.num_devices);
 
     // Concat mode with multi-shard input would need a different byte offset per
     // input page. The kernel currently takes a single byte_offset value, so reject.
@@ -157,7 +157,7 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto shape = input_tensor.logical_shape();
-    shape[args.dim] *= args.ring_size;
+    shape[args.dim] *= args.num_devices;
     return TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -183,11 +183,14 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         args.dim,
-        args.num_links,
-        args.ring_size,
         args.output_mem_config,
-        args.topology,
         args.cluster_axis,
+        args.axis_topology[0],
+        args.axis_topology[1],
+        args.axis_num_devices[0],
+        args.axis_num_devices[1],
+        args.axis_num_links[0],
+        args.axis_num_links[1],
         tensor_args.persistent_output_tensor.has_value(),
         subdevice_core_range_set,
         tensor_args);
@@ -244,23 +247,26 @@ AllGatherDeviceOperation::create_op_performance_model(
     // Data size: bytes each device contributes
     const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
 
-    const uint32_t N = args.ring_size;
-    const uint32_t num_links = args.num_links;
+    const uint32_t num_devices = args.num_devices;
+    // TODO: unimplemented for 2D, right now we assume only one axis is active
+    const uint32_t active_axis = (args.axis_num_devices[0] > 1) ? 0u : 1u;
+    const tt::tt_fabric::Topology topology = args.axis_topology[active_axis];
+    const uint32_t num_links = args.axis_num_links[active_axis];
     double fabric_time_ns = 0.0f;
-    if (N <= 1) {
+    if (num_devices <= 1) {
         // Single device: no fabric communication
         fabric_time_ns = 0.0f;
-    } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
+    } else if (tt::tt_fabric::is_ring_or_torus(topology)) {
         // Ring topology: bisection cuts 2 links, so each direction carries
         // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
-        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        const uint64_t bottleneck_bytes = tt::div_up((num_devices - 1) * input_size_bytes, 2);
         fabric_time_ns =
-            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
+            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(num_devices - 1, 2u));
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
-        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
+        const uint64_t bottleneck_bytes = (num_devices - 1) * input_size_bytes;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_devices - 1);
     }
 
     // Convert fabric time (ns) to device clock cycles.
@@ -282,7 +288,7 @@ AllGatherDeviceOperation::create_op_performance_model(
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;
 
-    const int64_t output_size_bytes = N * input_size_bytes;
+    const int64_t output_size_bytes = num_devices * input_size_bytes;
     const uint32_t read_pages = tt::div_up(input_size_bytes, read_page_size);
     const uint32_t write_pages = tt::div_up(output_size_bytes, write_page_size);
     const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
@@ -311,9 +317,25 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     // Query the machine and Fabric setup
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor should be on device for all_gather operation");
-    uint32_t num_links = ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis);
-    auto topology = ::ttnn::ccl::get_usable_topology(input_tensor, std::nullopt, cluster_axis);
-    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const auto mesh_shape = mesh_device->shape();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    // Axis 0 is N/S, and axis 1 is E/W.
+    // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
+    std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::array<uint32_t, 2> axis_num_devices{1u, 1u};
+    std::array<uint32_t, 2> axis_num_links{0u, 0u};
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        const bool is_axis_active = mesh_shape[axis] > 1 && cluster_axis.value_or(axis) == axis;
+        if (!is_axis_active) {
+            continue;
+        }
+        axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
+        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
+        axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
+    }
+    // Devices participating in the collective
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
 
     // Resolve negative gather dim
     uint32_t rank = input_tensor.logical_shape().rank();
@@ -322,11 +344,12 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     return {
         AllGatherParams(
             gather_dim,
-            num_links,
-            num_devices,
             memory_config.value_or(input_tensor.memory_config()),
-            topology,
-            cluster_axis),
+            cluster_axis,
+            axis_topology,
+            axis_num_devices,
+            axis_num_links,
+            num_devices),
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 

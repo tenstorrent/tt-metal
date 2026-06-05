@@ -30,8 +30,9 @@ tt::tt_fabric::Topology get_usable_topology(
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& cluster_axis = std::nullopt);
 
-tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
-    const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis = std::nullopt);
+// Resolve the topology (Ring vs Linear) for a single mesh axis
+tt::tt_fabric::Topology get_axis_topology(
+    const Tensor& tensor, tt::tt_fabric::FabricConfig fabric_config, uint32_t axis);
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology);
 
