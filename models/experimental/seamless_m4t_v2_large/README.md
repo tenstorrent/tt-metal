@@ -346,6 +346,23 @@ models/experimental/seamless_m4t_v2_large/
 | `generate()` sampling (`do_sample=True`, temperature, top-*p*, etc.) | **Not supported** — greedy `argmax` only |
 | `generate()` `batch_size > 1` | **Not supported** — batch size 1 only |
 
+### Utterance-level model: long inputs degenerate (text and speech)
+
+SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or* audio) the model loses
+coherence — it drops content, repeats phrases, and emits EOS early — and on speech it tends to
+*translate* rather than transcribe. **This is the Hugging Face model's behavior, not a TTNN bug**: the
+bf16 reference degenerates the same way on the same input. The demo deliberately drives a long
+5-paragraph story to exercise the long-audio path, so it is visible directly: T2TT / T2ST translate
+only the first ~2 of the 5 paragraphs into Hindi and then loop (e.g. `… किताब की किताब की किताब`), and
+ASR on the full ~37 s clip flips Hindi→English (next section). The demo uses HF-aligned
+`repetition_penalty = 1.0`, which does not suppress these loops.
+
+The standard remedy used by production SeamlessM4T pipelines is **utterance segmentation**: split long
+audio at silences (VAD) or long text at sentences, run the model per chunk, and concatenate. A silence
+splitter is provided in [`long_audio.py`](long_audio.py) (`segment_by_silence`). Accuracy on long
+inputs should therefore be judged by **TT-vs-HF faithfulness** (chrF / CER versus the bf16 reference on
+the same input), not by absolute correctness.
+
 ### Long-audio same-language ASR is precision-sensitive
 
 For ASR (`tgt_lang` = the source language) the model transcribes speech to text in the *same*
@@ -363,9 +380,50 @@ bf16 reference, which flipped demo ASR to English. With the higher precision, lo
 transcribes Hindi (matching/exceeding the bf16 reference) and the seq-3000 speech-encoder PCC is
 0.9970 (vs 0.9966). Short audio is far below the boundary and unaffected.
 
+### Greedy decode is not bit-reproducible run-to-run
+
+The TT `generate()` output **varies run-to-run even on a byte-identical input** (BH `MeshShape(1, 4)`).
+A tiny per-step floating-point difference in the multi-device (TP) compute — **mode-independent**:
+present in eager, traced, and 2CQ paths alike — flips the greedy `argmax` at near-tie decode steps and
+the T2U duration-predictor `round()`. Consequences:
+
+- S2TT / ASR **text content and length** vary between runs; T2ST / S2ST **audio sample counts** vary
+  (the T2U duration rounds differently), so any per-call output count is nondeterministic.
+- The demo's **performance numbers vary** run-to-run, because `tokens/s` and `samples/s` are
+  count-dependent and the output length is nondeterministic. Per-unit latency (`ms/tok`, `μs/smp`) is
+  more stable than the totals.
+
+This is not specific to this port's kernels — greedy decode on this multi-device hardware sees the same
+floating-point nondeterminism regardless of implementation. The right correctness metric is the
+**TT-vs-HF faithfulness gate** (chrF / CER), not exact reproducibility; truly deterministic output
+would require deterministic multi-device reductions at the TTNN / CCL level.
+
+### Speech-output throughput degrades on repeated runs (vocoder)
+
+T2ST and S2ST are ~5× slower on the **second and subsequent** `generate()` calls within a single
+process (e.g. ~6 s → ~31 s). The nondeterministic output length (above) hands the HiFi-GAN vocoder a
+**new `ttnn.conv1d` shape on almost every call**, forcing a cold kernel compile (~15 s) plus device
+program-cache growth — a byte-identical repeated shape runs in ~0.6 s. The **first** call of each task
+is the fast case, and the demo runs each task exactly once with a warm on-disk kernel cache, so the
+demo's per-task numbers above are *not* degraded; this bites **production / repeated** speech-output.
+Partially mitigated by length-bucketing the short single-shot vocoder convs (env
+`SEAMLESS_VOCODER_CONV1D_BUCKET`, default 256, in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py)) so
+they reuse a few stable shapes — PCC bit-identical, ~40% faster on repeated S2ST. The chunked
+(upsampled, **block-sharded**) convs still vary and need sharded-aware bucketing.
+
 ---
 
 ## To Do
+
+- **Full vocoder length-bucketing.** Extend the short-conv bucketing to the chunked (>4096, upsampled)
+  convs to remove the rest of the ~5× repeated-run slowdown. Blocked on a sharded-aware `ttnn.slice`
+  (the chunked convs keep `BLOCK_SHARDED` outputs in the resblock sharded chain; a plain bucketed slice
+  raises `TT_FATAL`, and un-sharding to work around it measured as a net loss).
+- **Deterministic decode.** Investigate deterministic multi-device reductions (TTNN / CCL) so greedy
+  `generate()` is bit-reproducible run-to-run (would also stabilize demo perf numbers and let the
+  single-length vocoder prewarm always hit).
+- **Demo VAD / segmentation.** Wire `long_audio.segment_by_silence` into the demo's chained
+  ASR / S2TT / S2ST so long-form inputs stay in the target language instead of degenerating.
 
 
 ---
