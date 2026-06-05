@@ -1,0 +1,14 @@
+/goal Use $tt-lang to fuse primitive ttnn ops and avoid DRAM/L1 round-trips for any complex kernels or sequences of ttnn ops in the optimized decoder.
+
+This goal creates the fused-decoder state for the repo-local TTNN autoport pipeline. Start from the completed optimized decoder and work only on models/autoports/<model>/tt/fused_decoder.py plus its tests and docs.
+
+Goal completion requirements:
+- models/autoports/<model>/tt/fused_decoder.py exists and the delivered tests exercise the optimized path with any fused kernels.
+- The fused decoder preserves the optimized decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
+- Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
+- Warmed prefill and traced warmed decode latency are reported before and after optimization.
+- Stress or repeated-run coverage and a watcher-clean optimized correctness run exist.
+- models/autoports/<model>/doc/fused_decoder/README.md and work_log.md summarize commands, before/after PCC and perf, chosen configs, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
+- The decoder uses genuinely fused tt-lang kernels for suitable sequences of ttnn ops and these are more performant than the original ttnn ops were - if the performance decreases, reject this sequence with evidence. If remaining optimization work exists, keep working; do not defer it to a later stage.
+
+Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
