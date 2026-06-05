@@ -113,6 +113,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 ## Trace And Profiling
 
+- The final decode pass must use traced TTNN execution. If trace capture, replay, stale inputs, event synchronization, or trace-safe input setup becomes tricky, use `$tt-enable-tracing` before accepting an eager-only decode path.
 - Open the device with a zero trace region, for example `trace_region_size=0`, TTNN can auto-detect the right size these days.
 - Use the pattern: compile/warmup, synchronize, signpost start, execute warmed trace or warmed measured path, synchronize once, signpost end.
 - Copy the newest Tracy ops CSV into the evidence directory and run `tt-perf-report` with start/end signposts for the measured window.
