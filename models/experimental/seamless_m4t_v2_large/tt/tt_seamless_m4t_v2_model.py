@@ -16,7 +16,6 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, Union
 
@@ -96,8 +95,6 @@ class TextDecoderKvDecodeRuntime:
     tok_tt_by_cache_seq_len: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = field(default_factory=dict)
     tok_li_host: Optional[ttnn.Tensor] = None
     tok_cm_host: Optional[ttnn.Tensor] = None
-    token_read_host_a: Optional[ttnn.Tensor] = None
-    token_read_host_b: Optional[ttnn.Tensor] = None
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
     trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
@@ -475,20 +472,6 @@ class TTSeamlessM4Tv2Model:
         self._lm_local_vocab = int(getattr(parameters.lm_head, "local_vocab_size", 0) or 0)
         self._lm_num_devices = max(1, self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1)
         self._lm_cluster_axis = mesh_cluster_axis(self.device)
-        # Phase-1b host-out-of-loop decode: the trace itself runs the cross-shard greedy argmax combine
-        # and writes the next token into ``token_tt`` (self-feed), so the greedy loop replays the decode
-        # trace back-to-back with no per-step token readback→combine→upload roundtrip (rep<=1.0 greedy
-        # + TP only; rep>1.0/sampling/beam keep the host path).
-        #
-        # DEFAULT OFF — NOT token-exact with the host path on speech-input decode. The self-feed's global
-        # argmax is ``ttnn.argmax`` over the per-chunk maxes; the host combine is ``torch.argmax``. They
-        # compare identical values but tie-break differently, so on the noisier speech-decode logits
-        # (S2TT/ASR) they pick different tokens at near-ties, flipping the greedy trajectory early — ASR
-        # cascaded to English instead of Hindi, S2TT diverged from HF (verified: with self-feed off,
-        # S2TT/ASR match HF for ~50+ tokens). It was token-exact on text-input (T2TT) where ties are
-        # rare. Demo gain is ~nil anyway (decode-bound tasks run rep=1.1 → host path), so leave it off
-        # until the on-device argmax tie-break is made first-index (matching ``torch.argmax``).
-        self._ondevice_decode_feedback = os.environ.get("SEAMLESS_ONDEVICE_DECODE_FEEDBACK", "0") != "0"
         self._argmax_off_sharded: Optional[ttnn.Tensor] = None  # cached [nd,1,nch] global-offset table
         self._argmax_tok_mesh_composer: Optional[ttnn.MeshComposer] = None
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
@@ -511,24 +494,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def prewarm_speech_encoder(self, mel_seq_lens: List[int]) -> None:
-        """Warm the JIT/disk cache for the speech-encoder kernels at the given mel-sequence lengths.
-
-        The speech-encoder kernels are shape-specialized by (bucketed) mel length, so the first encode
-        of a given bucket pays a cold compile (~7-20 s) while a warm one is ~1-2 s. Running a throwaway
-        ``_encode_speech`` here compiles each bucket once (persisted to the on-disk JIT cache), so a
-        later real encode — even after ``clear_runtime_program_cache`` wipes the in-memory device cache
-        — rebuilds from the warm disk cache quickly. Each length is bucketed internally. Caller decides
-        which lengths to warm (e.g. derived from the actual audio) — nothing here is input-specific.
-
-        Warm the *live* length only: warming a larger neighbour bucket compiles an oversized encoder
-        program whose static CBs clash with the text-decoder decode CB budget on a later task (seen as
-        an L1 ``circular buffers clash`` on the last speech task). Don't pad past the real length here.
-
-        Idempotent per process (``_speech_prewarmed_buckets``): a bucket already warmed is skipped, so
-        this is safe to call before *every* speech task — each task stays self-contained (a single task
-        run warms its own bucket and hits the steady-state number) while a chained run does the warm
-        only once.
-        """
+        """Warm speech-encoder JIT cache for the given mel lengths (bucketed to 256 frames)."""
         n_mels = self.feature_projection_input_dim
         for sl in mel_seq_lens:
             sl = int(sl)
@@ -572,16 +538,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def clear_runtime_program_cache(self) -> None:
-        """Release the decode trace + per-shape prep caches and reset the device program cache.
-
-        Resetting the device program cache between modalities is a major perf lever: it grows
-        unboundedly across the demo's task chain (≈560 entries after T2TT → ≈6200 by S2ST), and a
-        large program cache slows *every* device op on the BH mesh by ~10× (a 31 s vocoder went
-        132 s → 10 s purely by clearing here). ``clear_program_cache`` empties it but keeps it
-        *enabled* so the next modality recompiles once (disk-cache warm) then reuses, and the
-        decode trace can still be captured. With the wide vocoder conv window the cache is small,
-        so the clear itself is sub-second (the old multi-minute clear was an interior=512 artifact).
-        """
+        """Release decode trace, per-module prep caches, and reset the device program cache."""
         # A captured decode trace hard-codes this modality's programs *and* KV/encoder buffer
         # addresses; release it (before clearing programs) so a later ``generate()`` re-captures
         # against its own buffers instead of replaying a stale trace (hangs in ``execute_trace``).
@@ -625,8 +582,6 @@ class TTSeamlessM4Tv2Model:
 
     # Number of vocab chunks for the fused decode argmax (tile-aligned so multicore argmax is valid).
     _ARGMAX_CHUNKS = 32
-    # Host tie-break bias (lowest flat index wins on equal chunk maxes); used by argmax parity tests.
-    _ARGMAX_TIE_BREAK_UPL = 1e-6
 
     def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
@@ -688,9 +643,7 @@ class TTSeamlessM4Tv2Model:
         return self._argmax_off_sharded
 
     def _ondevice_global_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        """On-device greedy argmax over the width-sharded ``[1,1,V/tp]`` logits → ``[1,1]`` uint32 global
-        token id (replicated). Bit-exact mirror of the host combine in ``_greedy_next_token_id`` (validated
-        25/25 vs ``torch.argmax`` and token-exact end-to-end). Feeds the self-fed decode trace."""
+        """Device-side greedy argmax over width-sharded ``[1,1,V/tp]`` logits → global token id."""
         nch = self._ARGMAX_CHUNKS
         nd = self._lm_num_devices
         off = self._argmax_off_table(int(logits.shape[-1]))
@@ -738,7 +691,7 @@ class TTSeamlessM4Tv2Model:
     @staticmethod
     def _free_kv_host_readback_buffers(rt: TextDecoderKvDecodeRuntime) -> None:
         """Release host mirrors for chunk-argmax D2H (avoids PinnedMemoryCache errors on device close)."""
-        for attr in ("tok_li_host", "tok_cm_host", "token_read_host_a", "token_read_host_b"):
+        for attr in ("tok_li_host", "tok_cm_host"):
             host_t = getattr(rt, attr, None)
             if host_t is not None:
                 ttnn.deallocate(host_t)
@@ -773,13 +726,6 @@ class TTSeamlessM4Tv2Model:
             return None
         return ttnn.record_event(self.device, cq_id)
 
-    @staticmethod
-    def _host_greedy_argmax_requested(*, hf_exact_greedy: bool) -> bool:
-        """Host ``torch.argmax`` on the full logits row (opt-in parity / rep-penalty fallback)."""
-        if hf_exact_greedy:
-            return True
-        return os.environ.get("SEAMLESS_HOST_ARGMAX", "").strip().lower() in ("1", "true", "yes")
-
     def _ttnn_greedy_token_id(
         self,
         logits: ttnn.Tensor,
@@ -790,7 +736,7 @@ class TTSeamlessM4Tv2Model:
     ) -> int:
         """Greedy next token via device ``ttnn`` ops; scalar readback only (no host ``argmax``)."""
         hf_exact = getattr(self, "_decode_hf_exact_greedy", False)
-        if repetition_penalty > 1.0 or self._host_greedy_argmax_requested(hf_exact_greedy=hf_exact):
+        if repetition_penalty > 1.0 or hf_exact:
             return self._host_argmax_from_logits_row(
                 logits,
                 dec_len,
@@ -1383,13 +1329,8 @@ class TTSeamlessM4Tv2Model:
         *,
         batch_size: int = 1,
         cache_seq_len: Optional[int] = None,
-        selffeed: bool = False,
     ) -> None:
-        """Capture Metal trace for one KV decode step (single max SDPA bucket on BH).
-
-        ``selffeed=True`` (only the on-device self-feed loop) bakes the cross-shard combine + token
-        self-write into the trace. The host token path passes ``False`` so its trace stays lean — it
-        reads ``tok_tt`` and uploads the next token itself, so an in-trace self-write would be wasted."""
+        """Capture Metal trace for one KV decode step (decoder + lm_head + chunk argmax)."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         config_cache_len = int(cache_seq_len) if cache_seq_len is not None else self._fixed_decode_trace_sdpa_len()
         if config_cache_len in rt.trace_ids_by_cache_seq_len:
@@ -1416,12 +1357,6 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
         for _t in compile_tok:
             ttnn.deallocate(_t)
-        if selffeed:
-            # Phase-1b: pre-compile the on-device combine + token self-write so they don't JIT in capture.
-            compile_self = self._ondevice_global_argmax_token(compile_logits)
-            ttnn.copy(compile_self, rt.token_tt)
-            ttnn.deallocate(compile_self)
-            ttnn.synchronize_device(self.device)
         ttnn.deallocate(compile_logits)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
@@ -1442,16 +1377,7 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 cache_seq_len=config_cache_len,
             )
-            if selffeed:
-                # Self-feed: combine to the global token and write it into the buffer the decoder reads
-                # at the top of the next replay. The read (embedding) precedes this write within the
-                # trace, so back-to-back replays consume their predecessor's token with no host roundtrip.
-                self_tok = self._ondevice_global_argmax_token(capture_logits)
-                ttnn.copy(self_tok, rt.token_tt)
-                ttnn.deallocate(self_tok)
-                capture_tok = self._decode_argmax_token(capture_logits)
-            else:
-                capture_tok = self._decode_argmax_token(capture_logits)
+            capture_tok = self._decode_argmax_token(capture_logits)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         traced_step_capture()
@@ -1522,110 +1448,6 @@ class TTSeamlessM4Tv2Model:
         self._reset_kv_decode_cur_pos(position, batch_size)
         return self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
 
-    def _decode_step_selffed(
-        self,
-        token_id: int,
-        position: int,
-        encoder_hidden: ttnn.Tensor,
-        cross_4d: ttnn.Tensor,
-        kv_cache: list,
-        cross_attn_cache: list,
-        *,
-        batch_size: int = 1,
-    ) -> None:
-        """Phase-1b self-feed decode step. On capture, uploads the seed token; thereafter the token lives
-        in ``rt.token_tt`` (written on-device by the previous trace replay), so only the token-independent
-        position counter is uploaded. The next token id is read afterwards from ``rt.token_tt``."""
-        cache_seq_len = self._fixed_decode_trace_sdpa_len()
-        rt = self._ensure_kv_decode_runtime(batch_size)
-        if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
-            ttnn.synchronize_device(self.device)
-            self.capture_text_decoder_decode_trace(
-                token_id,
-                position,
-                encoder_hidden,
-                cross_4d,
-                kv_cache,
-                cross_attn_cache,
-                batch_size=batch_size,
-                cache_seq_len=cache_seq_len,
-                selffeed=True,
-            )
-            return
-        self._upload_pos_only(position, batch_size)
-        self._reset_kv_decode_cur_pos(position, batch_size)
-        self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
-
-    def _decode_loop_selffed_ondevice(
-        self,
-        enc_tt: ttnn.Tensor,
-        cross_4d: ttnn.Tensor,
-        kv_cache: list,
-        cross_attn_cache: list,
-        seq_host: list,
-        cur_pos: int,
-        max_steps: int,
-        eos_ids: set,
-        batch_size: int,
-    ) -> list:
-        """Experimental on-device token self-feed (``SEAMLESS_ONDEVICE_DECODE_FEEDBACK=1`` only).
-
-        Step 0 captures the trace and seeds ``token_tt`` from the host combine; thereafter the trace runs
-        back-to-back on CQ0 (token self-fed on-device, position host-uploaded) while the next-token readback
-        is issued on CQ1 (gated by the execute event) and collected one step late. Not HF-exact on
-        speech-input near-ties — use :meth:`_decode_loop_selffed` for production."""
-        rt = self._ensure_kv_decode_runtime(batch_size)
-        dev = self.device
-
-        # --- Step 0: capture (compile + record trace), take this token from the host combine, prime token_tt.
-        cur_tok = int(seq_host[cur_pos])
-        self._decode_step_selffed(cur_tok, cur_pos, enc_tt, cross_4d, kv_cache, cross_attn_cache, batch_size=batch_size)
-        next_id = self._greedy_next_token_id(rt.logits_tt, 1, tok_tt=rt.tok_tt)
-        self._upload_single_token_to_decode_rt(next_id, batch_size)
-        seq_host.append(next_id)
-        cur_pos += 1
-        if eos_ids and next_id in eos_ids:
-            return seq_host
-
-        # --- Pipelined replay: execute back-to-back; read the self-fed token on CQ1 one step late.
-        if rt.token_read_host_a is None:
-            rt.token_read_host_a = ttnn.allocate_tensor_on_host(rt.token_tt.spec, dev)
-            rt.token_read_host_b = ttnn.allocate_tensor_on_host(rt.token_tt.spec, dev)
-        host_bufs = [rt.token_read_host_a, rt.token_read_host_b]
-        bi = 0
-        pending: Optional[Tuple[Any, Any]] = None  # (host_buf, read_event) from the previous step
-        stop = False
-
-        def _read(pbuf) -> int:
-            return int(to_torch_replicated_first_shard(pbuf).reshape(-1)[0].item())
-
-        for _ in range(max_steps - 1):
-            self._upload_pos_only(cur_pos, batch_size, cq_id=0)
-            self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=0)
-            ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=False)
-            exec_event = ttnn.record_event(dev, 0)
-            # CQ1 reads this step's self-fed token AFTER the execute wrote it; overlaps the next trace.
-            ttnn.wait_for_event(1, exec_event)
-            ttnn.copy_device_to_host_tensor(rt.token_tt, host_bufs[bi], blocking=False, cq_id=1)
-            read_event = ttnn.record_event(dev, 1)
-            if pending is not None:
-                pbuf, pev = pending
-                ttnn.event_synchronize(pev)
-                nid = _read(pbuf)
-                seq_host.append(nid)
-                if eos_ids and nid in eos_ids:
-                    stop = True
-            pending = (host_bufs[bi], read_event)
-            bi ^= 1
-            cur_pos += 1
-            if stop:
-                break
-        if pending is not None and not stop:
-            pbuf, pev = pending
-            ttnn.event_synchronize(pev)
-            seq_host.append(_read(pbuf))
-        return seq_host
-
     def _decode_loop_selffed(
         self,
         enc_tt: ttnn.Tensor,
@@ -1642,28 +1464,7 @@ class TTSeamlessM4Tv2Model:
         repetition_penalty: float = 1.0,
         prev_token_ids: Optional["Collection[int]"] = None,
     ) -> list:
-        """HF-exact traced greedy decode: 2CQ trace replay + pipelined chunk D2H + host combine + token upload.
-
-        When ``use_2cq``, CQ1 stages position (and token) H2D while CQ0 replays the trace; chunk scalar D2H
-        on CQ1 starts after each trace completes and can overlap the next step's position staging.
-        """
-        import os as _os_prof
-        import time as _t_prof
-
-        _profile = bool(
-            _os_prof.environ.get("SEAMLESS_SELFFEED_PROFILE") or _os_prof.environ.get("SEAMLESS_DECODE_PROFILE")
-        )
-        _sums = {
-            "h2d_pos_ms": 0.0,
-            "trace_ms": 0.0,
-            "chunk_d2h_ms": 0.0,
-            "ttnn_argmax_ms": 0.0,
-            "host_combine_ms": 0.0,
-            "token_h2d_ms": 0.0,
-            "total_ms": 0.0,
-        }
-        _prof_n = 0
-
+        """Traced greedy decode on TP>1: trace replay, chunk D2H, host argmax combine, token upload."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         dev = self.device
         prev_set = prev_token_ids if prev_token_ids is not None else set(seq_host)
@@ -1681,7 +1482,6 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 batch_size=batch_size,
                 cache_seq_len=cache_seq_len,
-                selffeed=False,
             )
         else:
             self._upload_kv_decode_step_inputs(cur_tok, cur_pos, batch_size, cq_id=h2d_cq)
@@ -1691,7 +1491,6 @@ class TTSeamlessM4Tv2Model:
                 ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
 
-        t0 = _t_prof.perf_counter() if _profile else 0.0
         next_id = self._greedy_token_after_traced_step(
             rt.logits_tt,
             1,
@@ -1699,57 +1498,32 @@ class TTSeamlessM4Tv2Model:
             prev_token_ids=prev_set,
             read_cq_id=0,
         )
-        if _profile:
-            _sums["chunk_d2h_ms"] += (_t_prof.perf_counter() - t0) * 1000.0
-            _sums["host_combine_ms"] += _sums["chunk_d2h_ms"]
         prev_set.add(next_id)
         seq_host.append(next_id)
         cur_pos += 1
         if eos_ids and next_id in eos_ids:
-            if _profile:
-                self._print_selffeed_profile(_sums, _prof_n)
             return seq_host
 
-        t_upload = _t_prof.perf_counter() if _profile else 0.0
         self._upload_single_token_to_decode_rt(next_id, batch_size, cq_id=h2d_cq)
-        if _profile:
-            _sums["token_h2d_ms"] += (_t_prof.perf_counter() - t_upload) * 1000.0
-
         cq0_idle = ttnn.record_event(dev, 0) if use_2cq else None
 
         for _ in range(max_steps - 1):
-            step_t0 = _t_prof.perf_counter() if _profile else 0.0
             d2h_event = None
             if use_2cq:
                 if cq0_idle is not None:
                     ttnn.wait_for_event(1, cq0_idle)
-                t_h2d = _t_prof.perf_counter() if _profile else 0.0
                 self._upload_pos_only(cur_pos, batch_size, cq_id=1)
                 self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=1)
-                if _profile:
-                    _sums["h2d_pos_ms"] += (_t_prof.perf_counter() - t_h2d) * 1000.0
                 write_event = ttnn.record_event(dev, 1)
                 ttnn.wait_for_event(0, write_event)
-                t_tr = _t_prof.perf_counter() if _profile else 0.0
-                # Blocking trace: non-blocking replay + H2D while a trace is active can trip the
-                # allocator warning and corrupt trace-backed logits/tok buffers on BH.
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
                 cq0_idle = ttnn.record_event(dev, 0)
-                if _profile:
-                    _sums["trace_ms"] += (_t_prof.perf_counter() - t_tr) * 1000.0
-                t_d2h = _t_prof.perf_counter() if _profile else 0.0
                 d2h_event = self._start_chunk_argmax_d2h(rt.tok_tt, cq_id=1, blocking=False)
-                if _profile:
-                    _sums["chunk_d2h_ms"] += (_t_prof.perf_counter() - t_d2h) * 1000.0
             else:
                 self._upload_pos_only(cur_pos, batch_size)
                 self._reset_kv_decode_cur_pos(cur_pos, batch_size)
-                t_tr = _t_prof.perf_counter() if _profile else 0.0
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
-                if _profile:
-                    _sums["trace_ms"] += (_t_prof.perf_counter() - t_tr) * 1000.0
 
-            t_cmb = _t_prof.perf_counter() if _profile else 0.0
             next_id = self._greedy_token_after_traced_step(
                 rt.logits_tt,
                 1,
@@ -1758,47 +1532,14 @@ class TTSeamlessM4Tv2Model:
                 read_cq_id=0,
                 d2h_event=d2h_event,
             )
-            if _profile:
-                _sums["host_combine_ms"] += (_t_prof.perf_counter() - t_cmb) * 1000.0
-                _sums["total_ms"] += (_t_prof.perf_counter() - step_t0) * 1000.0
-                _prof_n += 1
             prev_set.add(next_id)
             seq_host.append(next_id)
             cur_pos += 1
             if eos_ids and next_id in eos_ids:
                 break
-            t_up = _t_prof.perf_counter() if _profile else 0.0
             self._upload_single_token_to_decode_rt(next_id, batch_size, cq_id=h2d_cq)
-            if _profile:
-                _sums["token_h2d_ms"] += (_t_prof.perf_counter() - t_up) * 1000.0
 
-        if _profile:
-            self._print_selffeed_profile(_sums, _prof_n)
         return seq_host
-
-    @staticmethod
-    def _print_selffeed_profile(sums: dict, n_steps: int) -> None:
-        if n_steps <= 0:
-            return
-        avg = {k: v / n_steps for k, v in sums.items() if k != "total_ms"}
-        tot = sums["total_ms"] / n_steps if sums["total_ms"] else sum(avg.values())
-        print("\n=== Selffeed decode profile (ms/step, steady) ===", flush=True)
-        print(f"steps: {n_steps}", flush=True)
-        print(f"  h2d_pos      : {avg.get('h2d_pos_ms', 0):.3f}", flush=True)
-        print(f"  trace_exec   : {avg.get('trace_ms', 0):.3f}", flush=True)
-        print(f"  ttnn_argmax  : {avg.get('ttnn_argmax_ms', 0):.3f}", flush=True)
-        print(f"  token_h2d    : {avg.get('token_h2d_ms', 0):.3f}", flush=True)
-        print(f"  total (wall) : {tot:.3f}", flush=True)
-        if tot > 0:
-            argmax_ms = avg.get("ttnn_argmax_ms", 0) + avg.get("chunk_d2h_ms", 0) + avg.get("host_combine_ms", 0)
-            print(
-                f"  share        : trace={avg.get('trace_ms', 0) / tot * 100:.1f}%  "
-                f"argmax={argmax_ms / tot * 100:.1f}%  "
-                f"h2d={avg.get('h2d_pos_ms', 0) / tot * 100:.1f}%  "
-                f"token={avg.get('token_h2d_ms', 0) / tot * 100:.1f}%",
-                flush=True,
-            )
-        print("=" * 50, flush=True)
 
     def _prefill_text_decoder_kv_cache(
         self,
@@ -2197,23 +1938,9 @@ class TTSeamlessM4Tv2Model:
             prev_token_ids=prev_token_ids,
         )
 
-    def _fused_global_greedy_token_id(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        """On-device global greedy token tensor (no active trace). Used by argmax parity tests."""
-        return self._ondevice_global_argmax_token(logits)
-
     @staticmethod
     def _read_kv_decode_token_tt(token_tt: ttnn.Tensor) -> int:
         return _read_int_scalar(token_tt)
-
-    @staticmethod
-    def _torch_greedy_from_width_sharded_logits(logits_tt: ttnn.Tensor, mesh_device: ttnn.Device) -> int:
-        """Host ``torch.argmax`` on concatenated width-sharded ``[1,1,V/tp]`` logits."""
-        import torch as _torch
-
-        nd = int(mesh_device.get_num_devices())
-        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
-        row = ttnn.to_torch(logits_tt, mesh_composer=composer).reshape(nd, -1).to(_torch.float32)
-        return int(row.reshape(-1).argmax().item())
 
     def _greedy_next_token(
         self,
@@ -2386,14 +2113,7 @@ class TTSeamlessM4Tv2Model:
         repetition_penalty = float(kwargs_text.get("repetition_penalty", 1.0) or 1.0)
         if repetition_penalty < 1.0:
             raise ValueError(f"repetition_penalty must be >= 1.0 (got {repetition_penalty})")
-        # Default greedy: on-device ``ttnn`` argmax + scalar readback. Set ``hf_exact_greedy=True`` or
-        # ``SEAMLESS_HOST_ARGMAX=1`` for host ``torch.argmax`` on the full logits row.
-        self._decode_hf_exact_greedy = bool(
-            kwargs_text.get(
-                "hf_exact_greedy",
-                os.environ.get("SEAMLESS_HOST_ARGMAX", "").strip().lower() in ("1", "true", "yes"),
-            )
-        )
+        self._decode_hf_exact_greedy = bool(kwargs_text.get("hf_exact_greedy", False))
         eos_ids = _eos_id_set(kwargs_text.get("eos_token_id"))
         if self.generation_config is not None:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
@@ -2416,18 +2136,6 @@ class TTSeamlessM4Tv2Model:
                 if lang_map is None or tgt_lang not in lang_map:
                     raise ValueError(f"`tgt_lang={tgt_lang}` missing from generation_config.{key}.")
 
-        import os as _os_gt, time as _t_gt
-
-        _gt_on = bool(_os_gt.environ.get("GEN_TIMING"))
-        _gt_state = {"t": _t_gt.time()}
-
-        def _gt_mark(name: str) -> None:
-            if _gt_on:
-                ttnn.synchronize_device(self.device)
-                now = _t_gt.time()
-                print(f"[GEN-TIMING] {name}: {now - _gt_state['t']:.1f}s", flush=True)
-                _gt_state["t"] = now
-
         # ---- First encode ----
         if input_features is not None:
             # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
@@ -2435,7 +2143,6 @@ class TTSeamlessM4Tv2Model:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
         else:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_text(input_ids, attn_tt_text)  # type: ignore[arg-type]
-        _gt_mark("encode")
 
         reuse_text_sequences = text_sequences is not None
 
@@ -2561,44 +2268,9 @@ class TTSeamlessM4Tv2Model:
                 # CQ0 is idle after prefill; record the initial "done" event.
                 _2cq_op_event = ttnn.record_event(self.device, 0)
 
-            import os as _os_dbg
-
-            _decode_path_dbg = bool(_os_dbg.environ.get("DECODE_PATH_DBG"))
-            _decode_step_profile = bool(_os_dbg.environ.get("SEAMLESS_DECODE_PROFILE"))
-            _dp = {"capture": 0, "trace2cq": 0, "trace1cq": 0, "eager": 0, "fallback": 0}
-            _prof_records: list = []  # (t_setup_ms, t_trace_ms, t_readback_ms, t_total_ms, path)
-            if _decode_step_profile:
-                import time as _t_prof
-
-            # Persistent prev-token set for the rep-penalty membership test (updated on append) so the
-            # traced decode path doesn't rebuild ``set(seq_host)`` (O(n)) every step.
             seq_host_set = set(seq_host)
 
-            # Fast traced greedy on TP>1: host-exact selffeed (chunk D2H + torch combine) with optional 2CQ
-            # overlap. Experimental on-device token self-write only when
-            # ``SEAMLESS_ONDEVICE_DECODE_FEEDBACK=1`` (greedy + rep<=1.0; not HF-exact on speech near-ties).
-            host_selffeed = decode_trace_ready and self._tp > 1 and not do_sample
-            ondevice_selffeed = (
-                self._ondevice_decode_feedback
-                and host_selffeed
-                and repetition_penalty <= 1.0
-                and not self._decode_hf_exact_greedy
-            )
-
-            if ondevice_selffeed:
-                seq_host = self._decode_loop_selffed_ondevice(
-                    enc_tt,
-                    decode_cross_4d,
-                    kv_cache,
-                    cross_attn_cache,
-                    seq_host,
-                    cur_pos,
-                    decode_steps_remaining,
-                    eos_ids,
-                    batch_size,
-                )
-                decode_steps_remaining = 0
-            elif host_selffeed:
+            if decode_trace_ready and self._tp > 1 and not do_sample:
                 seq_host = self._decode_loop_selffed(
                     enc_tt,
                     decode_cross_4d,
@@ -2616,8 +2288,6 @@ class TTSeamlessM4Tv2Model:
                 decode_steps_remaining = 0
 
             for _decode_step in range(decode_steps_remaining):
-                if _decode_step_profile:
-                    _t_step_start = _t_prof.perf_counter()
                 cur_tok = int(seq_host[cur_pos])
                 # Sampling does not use the trace (random token breaks the traced path).
                 # Trace path: greedy only; eager path: greedy or sampling.
@@ -2626,7 +2296,6 @@ class TTSeamlessM4Tv2Model:
                         # 2CQ pipelined decode: CQ1 uploads H2D while CQ0 executes trace.
                         trace_id = self._select_decode_trace_for_position(cur_pos, batch_size)
                         if trace_id is None:
-                            _dp["capture"] += 1
                             logits = self._decode_token_with_kv_cache_traced(
                                 cur_tok,
                                 cur_pos,
@@ -2637,11 +2306,7 @@ class TTSeamlessM4Tv2Model:
                                 batch_size=batch_size,
                             )
                             _2cq_op_event = ttnn.record_event(self.device, 0)
-                            _prof_path = "capture"
-                            if _decode_step_profile:
-                                _t_setup = _t_trace = _t_prof.perf_counter() - _t_step_start
                         else:
-                            _dp["trace2cq"] += 1
                             rt = self._kv_decode_rt
                             # CQ1 waits until CQ0 has finished the previous trace
                             # (decode input buffers are free to be overwritten).
@@ -2654,19 +2319,11 @@ class TTSeamlessM4Tv2Model:
                             write_event = ttnn.record_event(self.device, 1)
                             # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
-                            if _decode_step_profile:
-                                _t_setup_end = _t_prof.perf_counter()
                             ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
                             # Update op_event: CQ0 has finished this trace step.
                             _2cq_op_event = ttnn.record_event(self.device, 0)
                             logits = rt.logits_tt
-                            _prof_path = "trace2cq"
-                            if _decode_step_profile:
-                                _t_trace_end = _t_prof.perf_counter()
-                                _t_setup = _t_setup_end - _t_step_start
-                                _t_trace = _t_trace_end - _t_setup_end
                     else:
-                        _dp["trace1cq"] += 1
                         logits = self._decode_token_with_kv_cache_traced(
                             cur_tok,
                             cur_pos,
@@ -2676,12 +2333,7 @@ class TTSeamlessM4Tv2Model:
                             cross_attn_cache,
                             batch_size=batch_size,
                         )
-                        _prof_path = "trace1cq"
-                        if _decode_step_profile:
-                            _t_setup = 0.0
-                            _t_trace = _t_prof.perf_counter() - _t_step_start
                 else:
-                    _dp["eager"] += 1
                     logits = self._decode_token_with_kv_cache(
                         cur_tok,
                         cur_pos,
@@ -2693,10 +2345,6 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
-                    _prof_path = "eager"
-                    if _decode_step_profile:
-                        _t_setup = 0.0
-                        _t_trace = _t_prof.perf_counter() - _t_step_start
                 # Guard against occasional invalid traced logits buffer; fall back to eager decode.
                 if (
                     use_decode_trace
@@ -2715,11 +2363,8 @@ class TTSeamlessM4Tv2Model:
                         cross_4d=decode_cross_4d,
                         batch_size=batch_size,
                     )
-                    _dp["fallback"] += 1
                     use_decode_trace = False
                     decode_trace_ready = False
-                if _decode_step_profile:
-                    _t_readback_start = _t_prof.perf_counter()
                 if do_sample:
                     next_tt, next_id = self._sample_next_token(
                         logits, 1, temperature=temperature, top_k=top_k, top_p=top_p
@@ -2750,60 +2395,8 @@ class TTSeamlessM4Tv2Model:
                 cur_pos += 1
                 if not cross_valid:
                     cross_valid = True
-                if _decode_step_profile:
-                    _t_step_end = _t_prof.perf_counter()
-                    _t_readback = _t_step_end - _t_readback_start
-                    _t_total = _t_step_end - _t_step_start
-                    _prof_records.append(
-                        (_t_setup * 1000.0, _t_trace * 1000.0, _t_readback * 1000.0, _t_total * 1000.0, _prof_path)
-                    )
                 if eos_ids and next_id in eos_ids:
                     break
-            if _decode_step_profile and _prof_records:
-                import statistics as _stat
-
-                # Drop step 0 (capture/cold) for steady-state — but keep its number visible.
-                cold = _prof_records[0]
-                hot = _prof_records[1:] if len(_prof_records) > 1 else _prof_records
-                hot_setup = [r[0] for r in hot if r[4] == "trace2cq"]
-                hot_trace = [r[1] for r in hot if r[4] == "trace2cq"]
-                hot_readb = [r[2] for r in hot if r[4] == "trace2cq"]
-                hot_total = [r[3] for r in hot if r[4] == "trace2cq"]
-
-                def _stats(xs):
-                    if not xs:
-                        return "n/a"
-                    if len(xs) == 1:
-                        return f"{xs[0]:.3f}"
-                    return f"min={min(xs):.3f} med={_stat.median(xs):.3f} max={max(xs):.3f} mean={_stat.mean(xs):.3f}"
-
-                print("\n=== Per-step decode profile (ms) ===", flush=True)
-                print(f"steps total: {len(_prof_records)} (cold={cold[4]})", flush=True)
-                print(
-                    f"cold step[0]: setup={cold[0]:.3f}  trace={cold[1]:.3f}  readback={cold[2]:.3f}  total={cold[3]:.3f}",
-                    flush=True,
-                )
-                print("steady-state (trace2cq, step[1:]):", flush=True)
-                print(f"  setup    : {_stats(hot_setup)}", flush=True)
-                print(f"  trace    : {_stats(hot_trace)}", flush=True)
-                print(f"  readback : {_stats(hot_readb)}", flush=True)
-                print(f"  total    : {_stats(hot_total)}", flush=True)
-                if hot_total:
-                    print(
-                        f"  share    : setup={sum(hot_setup) / sum(hot_total) * 100.0:.1f}%  "
-                        f"trace={sum(hot_trace) / sum(hot_total) * 100.0:.1f}%  "
-                        f"readback={sum(hot_readb) / sum(hot_total) * 100.0:.1f}%",
-                        flush=True,
-                    )
-                print("=" * 50, flush=True)
-            if _decode_path_dbg:
-                _trace_steps = _dp["capture"] + _dp["trace2cq"] + _dp["trace1cq"]
-                print(
-                    f"[DECODE-PATH] tp={self._tp} use_2cq={use_2cq} steps={_dp} "
-                    f"=> traced={_trace_steps} (incl. 2cq={_dp['trace2cq']}) eager={_dp['eager']} "
-                    f"fallback={_dp['fallback']}",
-                    flush=True,
-                )
             ttnn.deallocate(decode_cross_4d)
             sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         else:
@@ -2842,7 +2435,6 @@ class TTSeamlessM4Tv2Model:
         if gen_causal is not None:
             ttnn.deallocate(gen_causal)
             ttnn.deallocate(gen_cross)
-        _gt_mark(f"decode({len(seq_host)} tok)")
 
         # ---- Text-only generation: return tokens ----
         if not generate_speech:
@@ -2877,7 +2469,6 @@ class TTSeamlessM4Tv2Model:
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = self._encode_speech(input_features, attn_enc)
         else:
             enc_tt2, enc_attn_tt2, enc_attn_owned2 = enc_tt, enc_attn_tt, enc_attn_owned
-        _gt_mark("speech re-encode")
 
         # T2U decoder hidden states come from running text-decoder on ``sequences[:, :-1]`` (HF
         # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
@@ -2888,7 +2479,6 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
-        _gt_mark("decoder_hidden")
 
         # T2U prep: characters & char counts come from the generated text-token sequence.
         seq_full_ints = list(seq_host)
@@ -2930,7 +2520,6 @@ class TTSeamlessM4Tv2Model:
             cc_list,
             reference_discrete_durations=None,
         )
-        _gt_mark("t2u.forward")
         ttnn.deallocate(dec_hidden_padded)
         ttnn.deallocate(t2u_mask_4d)
         ttnn.deallocate(char_ids_tt)
@@ -3049,12 +2638,10 @@ class TTSeamlessM4Tv2Model:
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
         self.clear_runtime_program_cache()
         ttnn.synchronize_device(self.device)
-        _gt_mark("argmax+unit-remap(host)")
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         ttnn.deallocate(vocoder_input)
         ttnn.deallocate(voc_tt)
         ttnn.deallocate(spk_tt)
-        _gt_mark("vocoder.forward")
 
         # Vocoder lengths is 1D ``[B]``; standardise to ``[1, B]`` for callers / tests.
         if len(tuple(lengths_tt.shape)) == 1:

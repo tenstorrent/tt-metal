@@ -59,26 +59,11 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 T2ST_WAV = OUTPUT_DIR / "t2st_hindi_speech.wav"
-# The speech encoder uses a DRAM residual/LN path above ``_LONG_AUDIO_RES_DRAM_THRESHOLD``
-# (1024 mel frames ≈ 20 s) and falls back to uncached relative-position tables above 32 MB —
-# both unlock the full ~43 s T2ST audio for the chain tasks (matches HF semantics, no trim).
+# None = use full T2ST WAV for chained speech tasks (S2TT/S2ST/ASR).
 MAX_CHAIN_AUDIO_SEC: Optional[float] = None
 S2ST_WAV = OUTPUT_DIR / "s2st_spanish_speech.wav"
 
-# Per-task warmup + measurement iteration counts.
-#
-# Background: the first ``generate()`` for a fresh task hits trace capture + program-cache compile
-# + ``_conv1d_prepared_cache`` build, which is non-trivial and makes the single-call wall-clock
-# vary by tens of percent run-to-run. qwen3-tts solves this by timing each AR step separately and
-# averaging steps[1:] (excluding the compile spike on step 0). Our analogous lever for a single
-# ``generate()`` call would be one untimed warmup, but at ``gen_max_new=128`` the L1 state after a
-# back-to-back replay sometimes fragments enough that a downstream ``slice`` op clashes with a
-# static CB region (seen empirically on BH QB). The e2e perf test works around this by using
-# ``gen_max_new=10``, but the demo's larger workload doesn't tolerate it cleanly.
-#
-# Default behaviour here: 0 in-task warmups (avoids the L1 clash) but ``_DEMO_MEASURE_ITERS`` is
-# still a knob — bump it to read ``min(times)`` across N runs (qwen3's "steady" reading), which is
-# the closest the host can get to the device-limited floor for a single ``generate()`` call.
+# Untimed warmups before timed runs; min() over measure_iters drops host jitter.
 _DEMO_WARMUP_ITERS = 0
 _DEMO_MEASURE_ITERS = 1
 
@@ -153,21 +138,16 @@ def make_tt_model(device: ttnn.Device, model: torch.nn.Module, cfg, t2u_cfg) -> 
     )
 
 
-def _readback_first_shard(t: ttnn.Tensor) -> torch.Tensor:
-    """Read replicated mesh tensor; delegate to ``to_torch_replicated_first_shard`` in ``tt/common.py``."""
-    return to_torch_replicated_first_shard(t)
-
-
 def _waveform_to_mono_fp32(waveform_tt: ttnn.Tensor, lengths_tt: ttnn.Tensor) -> np.ndarray:
     """Read a TT vocoder waveform back to host as a 1-D fp32 numpy array, trimmed to valid length.
 
     TT vocoder output shape: ``[B, T_max, 1]`` (right-padded with zeros to the batch max). The valid
     sample count per row is in ``lengths_tt`` — we trim to that to drop trailing silence padding.
     """
-    arr = _readback_first_shard(waveform_tt).float().squeeze().cpu().numpy()
+    arr = to_torch_replicated_first_shard(waveform_tt).float().squeeze().cpu().numpy()
     if arr.ndim > 1:
         arr = arr.reshape(-1)
-    valid_len = int(_readback_first_shard(lengths_tt).long().reshape(-1)[0].item())
+    valid_len = int(to_torch_replicated_first_shard(lengths_tt).long().reshape(-1)[0].item())
     if 0 < valid_len <= arr.size:
         arr = arr[:valid_len]
     return arr
@@ -212,18 +192,18 @@ def _hf_gen_kwargs(gen_common: dict) -> dict:
 
 def _decode(tokenizer: Any, sequences_tt: ttnn.Tensor) -> str:
     """Read a TT decoder sequence back to host and decode to a single string (special tokens skipped)."""
-    ids = _readback_first_shard(sequences_tt).to(torch.int64).cpu()
+    ids = to_torch_replicated_first_shard(sequences_tt).to(torch.int64).cpu()
     return tokenizer.batch_decode(ids, skip_special_tokens=True)[0]
 
 
 def _tt_row_length(t: ttnn.Tensor) -> int:
     """Logical length of a 1-D or ``[1, L]`` int sequence on device."""
-    return int(_readback_first_shard(t).long().reshape(-1).numel())
+    return int(to_torch_replicated_first_shard(t).long().reshape(-1).numel())
 
 
 def _valid_unit_frames(unit_tt: ttnn.Tensor, *, pad_id: int) -> int:
     """Count non-pad unit ids in the vocoder input timeline."""
-    u = _readback_first_shard(unit_tt).long().reshape(-1)
+    u = to_torch_replicated_first_shard(unit_tt).long().reshape(-1)
     return int((u != int(pad_id)).sum().item())
 
 
@@ -257,16 +237,7 @@ def _warmup_and_time(
     warmup_iters: int = _DEMO_WARMUP_ITERS,
     measure_iters: int = _DEMO_MEASURE_ITERS,
 ):
-    """Run untimed warmup ``generate()`` calls, then return the last timed call's output + min
-    elapsed across ``measure_iters`` runs.
-
-    Why min over avg/median: with greedy decoding the workload is fixed (same prompt → same token
-    counts → same trace replays), so any inter-run variance is host noise (GC, IO, dispatch
-    jitter). The minimum is the closest the host gets to the device-limited steady-state floor.
-
-    The final timed output is kept (caller post-processes it for text/WAV); warmup outputs and
-    earlier timed outputs are released via ``release_fn``.
-    """
+    """Optional untimed warmups, then timed runs; return last output and min elapsed seconds."""
     for _ in range(warmup_iters):
         warm_out = generate_fn()
         ttnn.synchronize_device(device)
@@ -290,7 +261,7 @@ def _text_tokens_generated(sequences_tt: ttnn.Tensor, *, seed_len: int = 2) -> i
 
 def _samples_generated(lengths_tt: ttnn.Tensor) -> int:
     """Valid audio-sample count from the TT vocoder ``waveform_lengths`` tensor."""
-    return int(_readback_first_shard(lengths_tt).long().reshape(-1)[0].item())
+    return int(to_torch_replicated_first_shard(lengths_tt).long().reshape(-1)[0].item())
 
 
 def _record_text_perf(
@@ -305,7 +276,7 @@ def _record_text_perf(
     n_tokens = _text_tokens_generated(sequences_tt)
     tps = n_tokens / elapsed_s if elapsed_s > 0 else 0.0
     perf.append((task, "tokens/s", tps, n_tokens, elapsed_s))
-    ids = _readback_first_shard(sequences_tt).long().reshape(-1).tolist()
+    ids = to_torch_replicated_first_shard(sequences_tt).long().reshape(-1).tolist()
     last_id = int(ids[-1]) if ids else -1
     if last_id == int(eos_token_id):
         stop = f"EOS (id {eos_token_id})"
@@ -363,14 +334,8 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     input_ids = text_inputs["input_ids"]
     input_text_attn = text_inputs["attention_mask"]
 
-    # KV-decode Metal trace (single-capture, valid for all decode positions).
-    # Requires ``trace_region_size`` in device params — ``open_seamless_mesh_device`` with
-    # ``enable_decode_trace=True`` sets ``trace_region_size=450_000_000`` automatically.
     use_decode_trace = True
-    # 2CQ: CQ1 stages next-step H2D while CQ0 executes the trace.
-    # Requires ``num_command_queues=2`` — set when ``enable_2cq=True`` in ``open_seamless_mesh_device``.
     use_2cq = True
-    # HF ``GenerationConfig`` defaults for text decode; TT-only perf flags appended below.
     gen_common = hf_aligned_generation_kwargs(
         model.generation_config,
         use_kv_cache=True,
@@ -382,20 +347,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         original_default = ttnn.GetDefaultDevice()
     except Exception:
         original_default = None
-    # 65536 B L1_SMALL is the value used by the speech-generation PCC tests
-    # (``test_code_hifigan.py`` and ``test_seamless_m4t_v2_model.py``). 32768 B works for the
-    # text-only path but is not enough for S2ST: speech-encoder + T2U + vocoder chained back-to-back
-    # exhausts L1_SMALL before the vocoder's ``_resblock`` conv1d can allocate.
-    #
-    # Open a 1×N mesh over every visible P150 (N=1 on P150, N=4 on BH QB). All ``ttnn.from_torch``
-    # uploads without an explicit mesh_mapper take the auto-replicate path (1×1 host tensor →
-    # 1×N device mesh via ``h2d_as_replicate_tensor_on_1x1_mesh``), so weights, inputs, masks and
-    # control tensors are replicated on every device. Every host readback inside ``tt/`` now
-    # goes through ``to_torch_replicated_first_shard`` (in ``tt/common.py``), which uses
-    # ``ConcatMeshToTensor(dim=0)`` + a leading slice to pull just one device's copy — without
-    # that wiring ``ttnn.to_torch`` would TT_FATAL on the multi-shard replicated tensor.
-    # All N devices run the same generate loop in lock-step; the demo's audio/text outputs are
-    # the device-0 result.
     from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import open_seamless_mesh_device
 
     device, mesh_shape = open_seamless_mesh_device(
@@ -417,8 +368,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
     tt_model = None
     try:
         tt_model = make_tt_model(device, model, cfg, t2u_cfg)
-        # Per-task throughput log — populated by ``_record_text_perf`` / ``_record_speech_perf``
-        # inside each task block, printed as a summary table at the end of the run.
         perf_log: list = []
 
         # =========================================================================
@@ -504,9 +453,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # Tasks 3–5 consume the saved T2ST WAV (same path as ``compare_speech_asr_hf_tt.py``).
-        # Reload from disk so the processor sees exactly what the printed path refers to, not a
-        # stale in-memory buffer from the TT vocoder readback.
         hindi_wav_chain = _load_mono_wav(T2ST_WAV)
         if MAX_CHAIN_AUDIO_SEC is not None:
             max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
@@ -526,15 +472,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             f"({hindi_wav_chain.size / sample_rate:.2f}s), mel_frames={mel_frames}"
         )
 
-        # Warm the speech-encoder JIT/disk cache for a given audio's mel-length bucket *before* its
-        # timed task. The encoder kernels are shape-specialized, so the first encode of a bucket
-        # otherwise pays a cold ~7-20 s recompile; after this the task rebuilds from the warm cache
-        # (~1-2 s). Called per speech task so each task is self-contained — run a single task in
-        # isolation and it warms its own bucket and reproduces the steady-state number; in this chained
-        # run ``prewarm_speech_encoder`` is idempotent so the shared bucket is warmed only once. The
-        # length is derived from the actual audio (not input-specific); only the live bucket is warmed
-        # (a larger neighbour bucket compiles an oversized program that clashes with the decode CB
-        # budget — see ``prewarm_speech_encoder``). The clear resets to a clean pre-task device state.
         def _warm_speech_enc(feats_torch: torch.Tensor) -> None:
             tt_model.prewarm_speech_encoder([int(feats_torch.shape[1])])
             tt_model.clear_runtime_program_cache()
@@ -610,8 +547,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
         # =========================================================================
-        # S2ST leaves speech-gen + decode-trace state that can skew the hin ASR decode if we
-        # reuse the eng-target trace from S2TT without a full reset (see compare_speech_asr_hf_tt.py).
         tt_model.release_generation_runtime()
         _warm_speech_enc(input_features)
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
@@ -646,7 +581,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
-        tt_asr_ids = _readback_first_shard(asr_out.sequences).long().reshape(-1).tolist()
+        tt_asr_ids = to_torch_replicated_first_shard(asr_out.sequences).long().reshape(-1).tolist()
         lcp = 0
         for a, b in zip(hf_asr_ids, tt_asr_ids):
             if a != b:
@@ -671,16 +606,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         print("  ok — all five tasks completed")
         print("=" * 78)
         print(f"  Audio outputs saved under: {OUTPUT_DIR}")
-        # Per-task throughput summary — wall-clock around ``tt_model.generate(...)`` only;
-        # input upload, output readback, tokenizer decode, and WAV write are excluded.
-        #
-        # Two metrics per task:
-        #   * Throughput  — tokens/s or samples/s (user-facing, but for tasks with EOS-dependent
-        #                  output length this can vary run-to-run as bf16 noise shifts where the
-        #                  decoder emits EOS — affects S2TT in particular).
-        #   * Per-work-unit latency — ms per token (text out) or μs per sample (speech out).
-        #                  Decouples the device cost from output-length variance; this is the
-        #                  more stable number for cross-run comparisons.
         if perf_log:
             print()
             print("-" * 78)
@@ -690,7 +615,6 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             for task_name, unit, value, count, elapsed_s in perf_log:
                 workload = f"{count} {'samples' if unit == 'samples/s' else 'tokens'}"
                 if unit == "samples/s":
-                    # μs/sample is more readable than ms/sample for 16 kHz audio.
                     per_unit = f"{(elapsed_s * 1e6 / count) if count else 0.0:.2f} μs/smp"
                 else:
                     per_unit = f"{(elapsed_s * 1e3 / count) if count else 0.0:.1f} ms/tok"
@@ -699,10 +623,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                     f"{value:>15.2f} {unit:<6} {workload:>20} {per_unit:>14}"
                 )
             print("-" * 78)
-            print(
-                "  Note: throughput depends on output length (variable for EOS-terminated tasks).\n"
-                "  For run-to-run comparison the per-unit latency column is more stable."
-            )
+            print("  Note: per-unit latency is more stable than throughput when output length varies.")
 
     finally:
         if tt_model is not None:
