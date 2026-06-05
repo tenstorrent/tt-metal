@@ -3,8 +3,6 @@
 
 """End-to-end Python correctness sweeps for ttnn.H2DStreamService."""
 
-import math
-
 import pytest
 import torch
 

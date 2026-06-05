@@ -125,7 +125,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     std::optional<DeviceAddr> preallocated_addr;
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
-    if (svc.claimed_cores(recv_device->id()).count(recv_core_.core_coord) > 0) {
+    if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         svc_config_l1_addr_ = svc.allocate_l1(recv_device, recv_core_.core_coord, config_buffer_size);
         preallocated_addr = svc_config_l1_addr_;
     }
@@ -143,7 +143,7 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
 
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
-    if (svc.claimed_cores(recv_device->id()).count(recv_core_.core_coord) > 0) {
+    if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
         const uint64_t alloc_size = fifo_size_ + pcie_alignment;
         DeviceAddr raw_addr = svc.allocate_l1(recv_device, recv_core_.core_coord, alloc_size);
         svc_data_l1_addr_ = raw_addr;

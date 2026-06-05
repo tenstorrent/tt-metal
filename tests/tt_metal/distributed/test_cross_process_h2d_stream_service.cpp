@@ -46,10 +46,10 @@ using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
 
-static int g_world_rank = -1;
-static int g_world_size = -1;
+int g_world_rank = -1;
+int g_world_size = -1;
 // Original 2-rank world, held for SetUp-time cross-rank coordination (mesh-shape broadcast).
-static std::shared_ptr<::tt::tt_metal::distributed::multihost::DistributedContext> g_cross_rank_world;
+std::shared_ptr<::tt::tt_metal::distributed::multihost::DistributedContext> g_cross_rank_world;
 
 // Deterministic per-iter source data; identical formula on both ranks so no
 // IPC is needed for seeds.

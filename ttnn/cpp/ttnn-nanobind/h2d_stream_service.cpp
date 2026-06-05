@@ -115,7 +115,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "forward_to_tensor",
-            [](tt::tt_metal::H2DStreamService& self, const tt::tt_metal::Tensor& host_tensor, nb::bytes metadata) {
+            [](tt::tt_metal::H2DStreamService& self, const tt::tt_metal::Tensor& host_tensor, const nb::bytes& metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
                 self.forward_to_tensor(host_tensor, meta_span);
@@ -141,7 +141,7 @@ void py_module_types(nb::module_& mod) {
             "forward_to_tensor_bytes",
             [](tt::tt_metal::H2DStreamService& self,
                const nb::ndarray<nb::c_contig, nb::device::cpu>& data,
-               nb::bytes metadata) {
+               const nb::bytes& metadata) {
                 auto bytes = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(data.data()), data.nbytes());
                 auto meta_span = ttsl::Span<const std::byte>(

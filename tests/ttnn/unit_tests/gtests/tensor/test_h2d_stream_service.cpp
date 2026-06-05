@@ -662,7 +662,7 @@ void ring_sdpa_reshuffle(
     ttsl::Span<std::byte> bytes, uint32_t c_start, uint32_t intra, uint32_t N_C, uint32_t W) {
     const size_t volume = N_C * W;
     TT_FATAL(bytes.size() == volume * sizeof(uint32_t), "reshuffle: size mismatch");
-    auto* in = reinterpret_cast<const uint32_t*>(bytes.data());
+    const auto* in = reinterpret_cast<const uint32_t*>(bytes.data());
     std::vector<uint32_t> out(volume);
 
     // Column c_start takes [0, W - intra) from the head and the trailing intra elements from the tail.
