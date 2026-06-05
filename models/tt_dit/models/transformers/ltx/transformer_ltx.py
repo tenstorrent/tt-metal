@@ -76,9 +76,7 @@ class LTXTransformerBlock(Module):
             fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
             audio_fsdp_mesh_axis = fsdp_mesh_axis
         else:
-            fsdp_mesh_axis = (
-                parallel_config.sequence_parallel.mesh_axis if (is_fsdp and not has_audio) else None
-            )
+            fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if (is_fsdp and not has_audio) else None
             audio_fsdp_mesh_axis = None
 
         self.norm1 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)

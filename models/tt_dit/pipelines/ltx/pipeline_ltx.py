@@ -735,7 +735,10 @@ class LTXPipeline:
         if os.environ.get("LTX_MEM_PROFILE", "0").lower() in ("1", "true", "yes"):
             try:
                 blk = self.transformer.transformer_blocks[0]
-                for name, p in (("ffn.ff1.weight", blk.ffn.ff1.weight), ("attn1.to_qkv.weight", blk.attn1.to_qkv.weight)):
+                for name, p in (
+                    ("ffn.ff1.weight", blk.ffn.ff1.weight),
+                    ("attn1.to_qkv.weight", blk.attn1.to_qkv.weight),
+                ):
                     shards = ttnn.get_device_tensors(p.data)
                     per_dev = tuple(shards[0].shape) if shards else None
                     logger.info(
