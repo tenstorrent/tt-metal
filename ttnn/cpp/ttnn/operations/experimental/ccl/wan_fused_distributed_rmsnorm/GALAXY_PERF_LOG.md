@@ -258,3 +258,45 @@ is read once/worker (face-row partial reads), deferred to overlap chunk-0 comput
 + fabric, and Idea I placed it before rope. Not a nail. Ranking unchanged:
 input #1 (-> Idea F), output-write #2 on no-rope/large (8-10%, best unaddressed
 lever), rope-read #2 on N18944-RoPE only (13%).
+
+## Barrier-read threshold sweep + heuristic (KEPT)
+
+Made the input read's push+barrier granularity a tunable `input_barrier_tiles`
+(CT arg; WAN_BARRIER_TILES env override) and swept {2,4,6,8,16,40} on all shapes.
+
+Sweep (fused µs/iter), RoPE | no-rope:
+
+| bar | N18944r | N9472r | N2368r | N18944 | N9472 | N2368 | L512 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2  | 739 | 432 | 216 | 613 | 354 | 144 | 66 |
+| 4  | 791 | 430 | 206 | 578 | 353 | 137 | 64 |
+| 8  | 845 | 442 | 204 | 570 | 350 | 136 | 64 |
+| 16 | 889 | 461 | 205 | 557 | 338 | 134 | 64 |
+| 40 (whole row) | 922 | 491 | 216 | 589 | 321 | 141 | 64 |
+
+Findings:
+1. **The reference DRAM-contention heuristic ((512/num_readers)*1152/tile_bytes,
+   ~4 for 64 readers) does NOT transfer.** The threshold here is dominated by
+   compute-overlap (how finely PRE is fed), not in-flight contention. The auto
+   heuristic REGRESSED no-rope N9472 321->352 (+10%): no-rope wants the whole
+   row in one push (no cos/sin to overlap; finer push is pure overhead).
+2. **RoPE wants finer push the deeper the worker** (more rows/worker = more
+   pipeline): N18944-RoPE (9.3 rows/wkr) opt=2, N9472-RoPE (4.6) opt=2-4,
+   N2368-RoPE (2 rows/wkr) opt=4-8 (2 regresses it).
+
+Heuristic kept (no-regression, net-positive):
+  - no-rope -> whole-row push (= num_tile_cols).
+  - RoPE -> rows_per_worker >= 4 ? 2 : block_size.
+
+Correctness PCC ~1.0. Perf (two runs, vs prior committed):
+
+| config | prev | heuristic | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 790 | 739.5 / 740.1 | **-6.4%** |
+| N9472 RoPE  | 430 | 432.1 / 431.6 | ~flat |
+| N2368 RoPE  | 206 | 205.7 / 205.7 | flat |
+| no-rope (all) | — | unchanged | 0 |
+
+N18944-RoPE -> 1.68x composite (was 1.57x). NOTE: tuned on Wormhole; Blackhole
+likely needs its own sweep (different DRAM BW / NoC), hence two heuristics.
+Sweep harness (WAN_BARRIER_TILES + input_barrier_tiles CT arg) retained.
