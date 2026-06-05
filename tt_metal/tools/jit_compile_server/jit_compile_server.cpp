@@ -322,7 +322,11 @@ void build_target(
         fs::path dst_path = out_dir + target.objs[i];
         if (compiled[i]) {
             fs::rename(src_path, dst_path);
-            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
+            // A preprocessed (.ii) input has no #includes, so -MMD yields an empty .d and no
+            // .dephash is written. Tolerate its absence: a missing dephash conservatively forces
+            // a recompile next time, which is correct (and the common fresh-cache farm case).
+            std::error_code dephash_ec;
+            fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"), dephash_ec);
         } else if (fs::exists(src_path)) {
             fs::remove(src_path);
         }
