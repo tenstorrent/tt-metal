@@ -1,0 +1,83 @@
+# Census — mcast + semaphore-handshake block call sites (`mcast_pipe`).
+# Durable, reusable manifest. Grouped by op-family. Tags: clean | refactor | defer | ref(prior-art) | oos(out-of-scope/CCL).
+# Format: <repo-relative path> — role: sender|receiver|hybrid | tag: <tag> | <note>
+# Recall converged: directory-swept; production code uses the OBJECT API (Noc::/Semaphore<>::),
+# pure-receiver halves are spelled with Semaphore<>::set/up/wait only (no mcast token) — caught by sweep.
+
+# ===== matmul =====
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp — role: sender | tag: clean | KNOWN INSTANCE; canonical P1
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp — role: receiver | tag: clean | P1 receiver; 3-state flag wait_min
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp — role: hybrid | tag: clean | KNOWN INSTANCE; P1
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp — role: receiver | tag: clean | P1 receiver
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp — role: hybrid | tag: refactor | P2 worker-type-dispatched (3 runtime core types)
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp — role: hybrid | tag: refactor | KNOWN INSTANCE; P3 ROTATING-ROLE; same-CB loopback; degenerate-unicast
+ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp — role: hybrid | tag: refactor | P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp — role: sender | tag: defer | P4 flag-only collective barrier, no data half
+ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp — role: n/a | tag: defer | P5 ring unicast, no multicast
+tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp — role: hybrid | tag: clean | didactic P1 (raw API)
+tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp — role: hybrid | tag: clean | didactic, 2 independent Pipes
+tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp — role: hybrid | tag: clean | didactic, 2 independent Pipes
+
+# ===== conv =====
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp — role: sender | tag: clean | weights sender (no barrier; VC-4 FIFO)
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp — role: receiver | tag: clean
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp — role: sender | tag: clean
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp — role: receiver | tag: clean
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp — role: hybrid | tag: refactor | INCLUDE_SRC loopback + barrier; mixed R→S counter / S→R flag
+ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp — role: hybrid | tag: refactor | all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE
+ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp — role: hybrid | tag: refactor | 3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope
+
+# ===== normalization =====
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp — role: sender | tag: clean | C1 pure-flag NO-pre-handshake fresh-slot
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp — role: receiver | tag: clean | C1
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect; raw-L1 src
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp — role: receiver | tag: clean | C2
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp — role: sender | tag: refactor | C2 flag-only; atomic-barrier
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp — role: receiver | tag: refactor | C2; atomic-barrier
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp — role: sender | tag: refactor | C2 multi-rect
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp — role: sender | tag: refactor | C2 multi-rect
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp — role: receiver | tag: refactor | C2
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp — role: receiver | tag: refactor | C2
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp — role: sender | tag: refactor | C3 TWO-PHASE flag→MONOTONE-counter streaming
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp — role: receiver | tag: refactor | C3
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp — role: sender | tag: refactor | C4 double-flag-per-exchange
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp — role: receiver | tag: refactor | C4
+
+# ===== transformer + sdpa =====
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp — role: both | tag: ref | ChainLink abstraction (existing two-sided helper); flush + linked=true companion
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp — role: hybrid | tag: refactor | open-coded chain-link, K+V
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp — role: hybrid | tag: refactor | open-coded chain-link + ring sync (ring part oos)
+ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp — role: both | tag: refactor | read_k vertical-column mcast; BARRIER + linked=false (inverse F1 of chain)
+ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp — role: sender | tag: oos | fabric cross-chip data; only degenerate sem-rect-mcast local
+
+# ===== data_movement + reduction =====
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/reader_final_topk.cpp — role: receiver | tag: clean | cleanest modern receiver
+ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp — role: sender | tag: refactor | unicast scatter + up(counter)
+ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp — role: hybrid | tag: refactor | richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast)
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp — role: sender | tag: refactor | legacy raw API; FLAG-ONLY
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp — role: receiver | tag: refactor | legacy
+ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp — role: sender | tag: refactor | confirmation inc
+ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp — role: sender | tag: refactor | single-shot go-flag mcast to 2-3 rects; legacy API
+ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp — role: sender | tag: refactor | RM twin of above
+
+# ===== ccl / deepseek / examples =====
+tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp — role: sender | tag: ref | didactic single-shot sender (raw API); cleanest reference
+models/demos/deepseek_v3_b1/unified_kernels/mcast.hpp — role: both | tag: ref | EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence
+models/demos/deepseek_v3_b1/unified_kernels/dataflow_utils.hpp — role: n/a | tag: ref | preprogram-state primitive layer
+models/demos/deepseek_v3_b1/unified_kernels/flash_mla.hpp — role: sender | tag: refactor | k-chunk data+flag, mixed counter/flag
+models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp — role: sender | tag: clean | preprogram-state mcast
+models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp — role: sender | tag: clean | flag-only loop barrier
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp — role: hybrid | tag: refactor | data + COUNTER inc_multicast + wait_min
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp — role: hybrid | tag: refactor | data + COUNTER inc_multicast
+ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp — role: sender | tag: refactor | one_packet mcast collector→7 cores
+ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp — role: sender | tag: clean | INCLUDE_SRC loopback + barrier
+ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp — role: sender | tag: refactor | INCLUDE_SRC loopback
+ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/worker_receiver.cpp — role: receiver | tag: clean | INCLUDE_SRC partner
+ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp — role: sender | tag: refactor | value-carrying flag (token counts in sem word)
+ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp — role: sender | tag: refactor | value-carrying flag
+ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp — role: sender | tag: refactor
+ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp — role: sender | tag: refactor
+ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp — role: sender | tag: refactor | flag-only sync
+ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp — role: sender | tag: refactor | flag-only sync
+ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp — role: sender | tag: refactor | flag-only
+ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp — role: sender | tag: refactor | INCLUDE_SRC loopback (intra-chip leg); fabric leg oos
