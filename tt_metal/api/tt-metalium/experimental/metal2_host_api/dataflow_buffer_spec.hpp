@@ -169,7 +169,7 @@ struct RemoteDataflowBufferSpec {
     // (These are TBD...)
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
-    // consumer node it feeds. 
+    // consumer node it feeds.
     // (What about multi-casting? TBD.)
     using ProducerNode = NodeCoord;
     using ConsumerNode = NodeCoord;
