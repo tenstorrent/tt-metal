@@ -16,19 +16,23 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       wheel-artifact-name:
         required: true
         type: string
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         default: false
         type: boolean
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         default: false
         type: boolean
       ref:
@@ -44,9 +48,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: [
-          {name: model},
-        ]
+        test-group: [{ name: model }]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     runs-on: >-
@@ -55,7 +57,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && inputs.harbor-prefix || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -89,9 +91,25 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          source tests/scripts/run_python_model_tests.sh
-          run_python_model_tests_${{ inputs.arch }}
-          run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash -c '
+              source tests/scripts/run_python_model_tests.sh
+              run_python_model_tests_${{ inputs.arch }}
+              run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
+            '
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-models-${{ inputs.arch }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |

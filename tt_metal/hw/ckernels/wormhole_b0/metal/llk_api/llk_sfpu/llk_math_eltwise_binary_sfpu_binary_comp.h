@@ -12,7 +12,7 @@ namespace ckernel {
 
 template <SfpuType OP, bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS>
 inline void llk_math_eltwise_binary_sfpu_rel_int_impl(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
@@ -35,7 +35,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_int_init() {
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
-inline void llk_math_eltwise_binary_sfpu_lt_int(uint i0, uint32_t i1, uint32_t o, int vm = (int)VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_lt_int(uint i0, uint32_t i1, uint32_t o, VectorMode vm = VectorMode::RC) {
     llk_math_eltwise_binary_sfpu_rel_int_impl<SfpuType::lt, APPROXIMATE, DATA_FORMAT, ITERATIONS>(i0, i1, o, vm);
 }
 
@@ -48,7 +48,7 @@ inline void llk_math_eltwise_binary_sfpu_gt_int_init() {
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
-inline void llk_math_eltwise_binary_sfpu_gt_int(uint i0, uint32_t i1, uint32_t o, int vm = (int)VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_gt_int(uint i0, uint32_t i1, uint32_t o, VectorMode vm = VectorMode::RC) {
     llk_math_eltwise_binary_sfpu_rel_int_impl<SfpuType::gt, APPROXIMATE, DATA_FORMAT, ITERATIONS>(i0, i1, o, vm);
 }
 
@@ -61,7 +61,7 @@ inline void llk_math_eltwise_binary_sfpu_le_int_init() {
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
-inline void llk_math_eltwise_binary_sfpu_le_int(uint i0, uint32_t i1, uint32_t o, int vm = (int)VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_le_int(uint i0, uint32_t i1, uint32_t o, VectorMode vm = VectorMode::RC) {
     llk_math_eltwise_binary_sfpu_rel_int_impl<SfpuType::le, APPROXIMATE, DATA_FORMAT, ITERATIONS>(i0, i1, o, vm);
 }
 
@@ -74,7 +74,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_int_init() {
 }
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8>
-inline void llk_math_eltwise_binary_sfpu_ge_int(uint i0, uint32_t i1, uint32_t o, int vm = (int)VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_ge_int(uint i0, uint32_t i1, uint32_t o, VectorMode vm = VectorMode::RC) {
     llk_math_eltwise_binary_sfpu_rel_int_impl<SfpuType::ge, APPROXIMATE, DATA_FORMAT, ITERATIONS>(i0, i1, o, vm);
 }
 
@@ -82,7 +82,7 @@ inline void llk_math_eltwise_binary_sfpu_eq_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_eq_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>,
         dst_index0,
@@ -95,7 +95,7 @@ inline void llk_math_eltwise_binary_sfpu_ne_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ne_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::ne>,
         dst_index0,
@@ -108,7 +108,7 @@ inline void llk_math_eltwise_binary_sfpu_lt_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lt_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::lt>,
         dst_index0,
@@ -121,7 +121,7 @@ inline void llk_math_eltwise_binary_sfpu_gt_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_gt_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::gt>,
         dst_index0,
@@ -134,7 +134,7 @@ inline void llk_math_eltwise_binary_sfpu_le_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_le_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::le>,
         dst_index0,
@@ -147,7 +147,7 @@ inline void llk_math_eltwise_binary_sfpu_ge_fp32_init() { llk_math_eltwise_binar
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_ge_fp32(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::ge>,
         dst_index0,

@@ -12,10 +12,37 @@
 
 namespace ttml::optimizers {
 
+namespace {
+
+/**
+ * Check if a parameter is sharded on any mesh axis.
+ */
+bool param_is_sharded(const autograd::Tensor& tensor) {
+    const auto& placements = tensor.get_value(autograd::PreferredPrecision::HALF).tensor_topology().placements();
+    for (const auto& p : placements) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(p)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
+            // FSDP and TP shards parameters along a mesh axis; the Newton-Schulz update in Muon
+            // is not elementwise, so running it against a local shard would produce a
+            // different result than running it against the full weight.
+            // TODO: implement proper FSDP and TP support for Muon
+            if (param_is_sharded(*tensor_ptr)) {
+                throw std::runtime_error(
+                    "MuonComposite: parameter '" + name +
+                    "' appears to be sharded on a mesh axis. Muon's Newton-Schulz update is "
+                    "not elementwise and cannot be applied to a shard independently. ");
+            }
             m_momentum_buffer.emplace(
                 name,
                 autograd::create_tensor(

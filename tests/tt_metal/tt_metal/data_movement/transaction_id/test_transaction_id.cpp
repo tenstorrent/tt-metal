@@ -186,6 +186,89 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
 
     return is_equal;
 }
+/// @brief Runs a 2-core read-only test: master_core reads num_trids*bytes_per_page bytes from
+/// sub0_core using the provided kernel, then verifies the data matches.
+/// The kernel receives compile_args = {l1_base_addr, num_trids, bytes_per_page, test_id, packed_sub0, 0}.
+bool run_dm_read(
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    const TransactionIdConfig& test_config,
+    const std::string& kernel_path) {
+    IDevice* device = mesh_device->impl().get_device(0);
+    Program program = CreateProgram();
+
+    const size_t total_bytes = test_config.num_of_trids * test_config.bytes_per_page;
+
+    L1AddressInfo master_l1_info =
+        unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
+    L1AddressInfo sub0_l1_info =
+        unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.sub0_core_coord);
+
+    if (master_l1_info.base_address != sub0_l1_info.base_address ||
+        master_l1_info.size != sub0_l1_info.size) {
+        log_error(LogTest, "Mismatch in L1 address or size between master and sub0 cores");
+        return false;
+    }
+    if (master_l1_info.size < total_bytes) {
+        log_error(LogTest, "Insufficient L1 size for the test configuration");
+        return false;
+    }
+
+    uint32_t l1_base_address = master_l1_info.base_address;
+    CoreCoord physical_sub0 = device->worker_core_from_logical_core(test_config.sub0_core_coord);
+    uint32_t packed_sub0 = (physical_sub0.x << 16) | (physical_sub0.y & 0xFFFF);
+
+    vector<uint32_t> compile_args = {
+        l1_base_address,
+        test_config.num_of_trids,
+        test_config.bytes_per_page,
+        test_config.test_id,
+        packed_sub0,
+        0};
+
+    CreateKernel(
+        program,
+        kernel_path,
+        test_config.master_core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = test_config.noc_id,
+            .compile_args = compile_args});
+
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    size_t element_size_bytes = sizeof(bfloat16);
+    uint32_t num_elements = total_bytes / element_size_bytes;
+
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
+
+    detail::WriteToDeviceL1(device, test_config.sub0_core_coord, l1_base_address, packed_input);
+    MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    auto mesh_workload = distributed::MeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    mesh_workload.add_program(target_devices, std::move(program));
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
+
+    vector<uint32_t> packed_output;
+    detail::ReadFromDeviceL1(device, test_config.master_core_coord, l1_base_address, total_bytes, packed_output);
+
+    bool is_equal = (packed_output == packed_input);
+    if (!is_equal) {
+        log_error(LogTest, "Equality Check failed");
+        log_info(LogTest, "Golden vector");
+        print_vector<uint32_t>(packed_input);
+        log_info(LogTest, "Output vector");
+        print_vector<uint32_t>(packed_output);
+    }
+    return is_equal;
+}
+
 }  // namespace unit_tests::dm::transaction_id
 
 /* ========== TEST CASES ========== */
@@ -427,6 +510,77 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOn
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementNocApiIsReadTridFlushed) {
+    uint32_t test_id = 620;
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
+
+    for (uint32_t num_trids : {1u, 4u, 8u, 15u}) {
+        if (num_trids * bytes_per_page > max_transmittable_bytes) {
+            continue;
+        }
+        unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+            .test_id = test_id,
+            .master_core_coord = master_core_coord,
+            .sub0_core_coord = sub0_core_coord,
+            .num_of_trids = num_trids,
+            .bytes_per_page = bytes_per_page,
+            .l1_data_format = DataFormat::Float16_b,
+        };
+
+        EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm_read(
+            mesh_device,
+            test_config,
+            "tests/tt_metal/tt_metal/data_movement/transaction_id/kernels/reader_nonblocking_poll_2_0.cpp"));
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementNocApiStatefulReadWithTrid) {
+    uint32_t test_id = 621;
+
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+
+    auto [min_bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Kernel uses max_page_size = NOC_MAX_BURST_SIZE (one-packet path only).
+    const uint32_t max_bytes_per_page =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
+
+    for (uint32_t bytes_per_page = min_bytes_per_page; bytes_per_page <= max_bytes_per_page;
+         bytes_per_page *= 2) {
+        for (uint32_t num_pages : {1u, 4u, 8u}) {
+            if (num_pages * bytes_per_page > max_transmittable_bytes) {
+                continue;
+            }
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
+                .test_id = test_id,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .num_of_trids = num_pages,  // reused as num_pages for the stateful kernel
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+            };
+
+            EXPECT_TRUE(unit_tests::dm::transaction_id::run_dm_read(
+                mesh_device,
+                test_config,
+                "tests/tt_metal/tt_metal/data_movement/transaction_id/kernels/reader_stateful_trid_2_0.cpp"));
         }
     }
 }

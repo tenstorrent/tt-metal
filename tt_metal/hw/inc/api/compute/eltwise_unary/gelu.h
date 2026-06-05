@@ -44,12 +44,12 @@ ALWI void gelu_tile_init_pack() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
+    MATH(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, VectorMode::RC));
 }
 
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_pack(uint32_t idst) {
-    PACK(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, (int)VectorMode::RC));
+    PACK(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, VectorMode::RC));
 }
 
 /**

@@ -11,11 +11,9 @@
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
-#define DPRINT_DISPATCH DPRINT
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_DISPATCH \
-    if (0)              \
-    DebugPrinter()
+#define DPRINT_DISPATCH(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -187,12 +185,22 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    DPRINT_DISPATCH << "Reader kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
-                    << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
 #ifdef IS_TILE_LAYOUT
-                    << " num_idle_cores=" << num_idle_cores
+    DPRINT_DISPATCH(
+        "Reader kernel: tokens=[{},{}] dispatch_core={}/{} num_idle_cores={}\n",
+        token_start_idx,
+        token_end_idx,
+        dispatch_core_idx,
+        num_dispatch_cores,
+        num_idle_cores);
+#else
+    DPRINT_DISPATCH(
+        "Reader kernel: tokens=[{},{}] dispatch_core={}/{}\n",
+        token_start_idx,
+        token_end_idx,
+        dispatch_core_idx,
+        num_dispatch_cores);
 #endif
-                    << ENDL();
 
     // Read offsets into local scratch
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
@@ -335,13 +343,13 @@ void kernel_main() {
             bool has_non_local = false;
 
             for (uint32_t t = 0; t < batch_count; t++) {
-                tt_l1_ptr int32_t* indices_t =
-                    reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+                tt_l1_ptr uint16_t* indices_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
                 tt_l1_ptr uint16_t* weights_t =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
                 for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    auto routed_expert = indices_t[k];
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    uint32_t routed_expert = (uint32_t)indices_t[k];
+                    if ((routed_expert & core_mask) != dispatch_core_idx) {
                         continue;
                     }
                     auto expert_chip_og = expert_dispatch_table[routed_expert];
@@ -385,14 +393,14 @@ void kernel_main() {
 
             // Only wait if the idle core will actually send data back.
             if (has_non_local) {
-                DPRINT_DISPATCH << "Waiting for idle core " << C << " batch " << B << ENDL();
+                DPRINT_DISPATCH("Waiting for idle core {} batch {}\n", C, B);
                 noc_semaphore_wait(data_ready_sem_ptr, 1);
                 noc_semaphore_set(data_ready_sem_ptr, 0);
-                DPRINT_DISPATCH << "Got batch " << B << " from idle core " << C << ENDL();
+                DPRINT_DISPATCH("Got batch {} from idle core {}\n", B, C);
             }
         } else {
             // ---- Self-batch: read tiles, untilize locally, no NOC transfer ----
-            DPRINT_DISPATCH << "Self-untilize batch " << B << ENDL();
+            DPRINT_DISPATCH("Self-untilize batch {}\n", B);
             uint32_t tile_base_page = B * tiles_per_row;
 
             // Signal compute to untilize (before streaming tiles so compute is ready)
@@ -424,7 +432,7 @@ void kernel_main() {
             // Wait for compute to finish (it writes untilized data into cb_untilize_id / c_18)
             cb_wait_front(cb_untilize_id, read_batch_size);
             noc_async_read_barrier();
-            DPRINT_DISPATCH << "Self-untilize batch " << B << " done" << ENDL();
+            DPRINT_DISPATCH("Self-untilize batch {} done\n", B);
         }
 #endif
 
@@ -439,13 +447,13 @@ void kernel_main() {
 #else
             uint32_t token_input_addr = input_base + t * aligned_input_page_size;
 #endif
-            tt_l1_ptr int32_t* indices =
-                reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+            tt_l1_ptr uint16_t* indices =
+                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
             tt_l1_ptr uint16_t* weights =
                 reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-                auto routed_expert = indices[k];
+                uint32_t routed_expert = (uint32_t)indices[k];
 
                 if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
                     continue;

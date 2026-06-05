@@ -377,3 +377,58 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
         )
 
     assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+
+
+def test_ternary_scalar_distinguishes_cache_entries(device):
+    """Regression guard for the ternary scalar static/dynamic contract.
+
+    addcmul(a, b, c, value) packs `value` (scalar_input_a) into the compute-kernel runtime args.
+    The scalar is intentionally EXCLUDED from to_hash()/compute_program_hash (so calls differing
+    only in the scalar cache-hit instead of recompiling) but must be re-applied to the cached
+    program on every dispatch via TernaryDeviceOperation::get_dynamic_runtime_args(). Pins both
+    halves of the contract:
+      * a different scalar must NOT grow the cache  -> guards against re-adding the scalar to the
+        hash (the recompile-per-scalar hack).
+      * a different scalar must change the output   -> guards against the frozen-runtime-arg bug,
+        where the cache hit reuses the first call's baked-in scalar (only correctly re-patched now
+        that the factory registers buffer bindings and declares the scalar dynamic).
+      * the same scalar must reproduce the output   -> guards against wrongly perturbing the scalar
+        on the fast path.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    shape = (256, 256)
+    torch.manual_seed(0)
+    a = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    b = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    c = ttnn.from_torch(
+        torch.rand(shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    out_v1 = ttnn.to_torch(ttnn.addcmul(a, b, c, value=2.0)).float().clone()
+    entries_after_first = device.num_program_cache_entries()
+    assert entries_after_first == 1, f"Expected 1 cache entry after first addcmul, got {entries_after_first}"
+
+    # Same scalar: must reuse the cached program AND reproduce the exact values.
+    out_v1_again = ttnn.to_torch(ttnn.addcmul(a, b, c, value=2.0)).float().clone()
+    assert device.num_program_cache_entries() == 1, "same scalar must reuse the cached program (no new cache entry)"
+    assert torch.equal(out_v1, out_v1_again), "same scalar must reproduce identical output"
+
+    # Different scalar: scalar is excluded from the hash, so it must STILL be a cache hit (no new
+    # entry) and yet produce different values (scalar re-patched on the cache hit).
+    out_v2 = ttnn.to_torch(ttnn.addcmul(a, b, c, value=7.0)).float().clone()
+    assert device.num_program_cache_entries() == 1, (
+        "a different scalar must NOT create a new cache entry -- the scalar is dynamic, not part of "
+        "the program hash. A new entry here means the scalar was (re-)added to compute_program_hash."
+    )
+    assert not torch.equal(out_v1, out_v2), (
+        "a different scalar must change the output (scalar re-patched on the fast path). Identical "
+        "output here means the cache hit reused the first call's frozen scalar runtime arg."
+    )
+
+    device.disable_and_clear_program_cache()

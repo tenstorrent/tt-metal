@@ -101,17 +101,17 @@ void assign_per_core_runtime_args(
     uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    bfloat16 bfloat_lr = bfloat16(lr);
     uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
 
-    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    bfloat16 bfloat_momentum = bfloat16(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0F - dampening);
+    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
     uint32_t packed_one_minus_dampening =
         pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
-    bfloat16 bfloat_wd = bfloat16::truncate(weight_decay);
+    bfloat16 bfloat_wd = bfloat16(weight_decay);
     uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
 
     const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));
@@ -418,17 +418,17 @@ void SGDProgramFactory::override_runtime_arguments(
                                                               ? compute_group_1_runtime_args
                                                               : GetRuntimeArgs(program, sgd_compute_kernel_group_2_id);
 
-    bfloat16 bfloat_lr = bfloat16::truncate(lr);
+    bfloat16 bfloat_lr = bfloat16(lr);
     uint32_t packed_lr = pack_two_bfloat16_into_uint32({bfloat_lr, bfloat_lr});
 
-    bfloat16 bfloat_momentum = bfloat16::truncate(momentum);
+    bfloat16 bfloat_momentum = bfloat16(momentum);
     uint32_t packed_momentum = pack_two_bfloat16_into_uint32({bfloat_momentum, bfloat_momentum});
 
-    bfloat16 bfloat_one_minus_dampening = bfloat16::truncate(1.0F - dampening);
+    bfloat16 bfloat_one_minus_dampening = bfloat16(1.0F - dampening);
     uint32_t packed_one_minus_dampening =
         pack_two_bfloat16_into_uint32({bfloat_one_minus_dampening, bfloat_one_minus_dampening});
 
-    bfloat16 bfloat_wd = bfloat16::truncate(weight_decay);
+    bfloat16 bfloat_wd = bfloat16(weight_decay);
     uint32_t packed_wd = pack_two_bfloat16_into_uint32({bfloat_wd, bfloat_wd});
 
     const bool use_weight_decay = !(bfloat_wd == bfloat16(0.0F));

@@ -1479,7 +1479,6 @@ class MLA1D(AbstractModule):
         # Paged Update Cache
 
         cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
-        ttnn.deallocate(tt_kvpe)
 
         # Q Rope + Nope
 

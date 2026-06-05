@@ -45,6 +45,26 @@ void kernel_main() {
 
     constexpr auto out_args = TensorAccessorArgs<28>();
 
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
+    // #44366: c_8 is the writer-only cur_pos CB after the split.
+    // Compute reads from c_15 (see sdpa_flash_decode.cpp), so the writer
+    // owns c_8 alone and can always pop it.
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_8;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
+    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
+    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
+    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
+    constexpr uint32_t cb_intermed_out =
+        tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
+    constexpr uint32_t cb_out = tt::CBIndex::c_20;
+
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
@@ -98,11 +118,11 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-            constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            cb_wait_front(cb_index_id, 1);
-            uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+            cb_wait_front(cb_cur_pos, 1);
+            uint32_t index_cb_ptr = get_read_ptr(cb_cur_pos);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
             cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
+            cb_pop_front(cb_cur_pos, 1);
         }
 
         if (cur_pos == UINT32_MAX) {
@@ -180,24 +200,6 @@ void kernel_main() {
         num_cores_to_wait = k_num_chunks - 1;
     }
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_20;
-    constexpr uint32_t cb_intermed_out =
-        tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
-    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
-    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
-    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
-
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
-    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
-    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
-
-    constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
-    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)

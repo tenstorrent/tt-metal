@@ -44,7 +44,7 @@ inline OutputCBs reduce_fct(
     uint32_t cb_l1_temp,
     uint32_t cb_l2_temp,
     uint32_t loop_size) {
-    constexpr int mode = VectorMode::R;
+    constexpr VectorMode mode = VectorMode::R;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
     // Wait for all inputs to be available
@@ -126,8 +126,6 @@ void kernel_main() {
 
     // for last round of device 1 add extra compute:
     // out = l / s
-    const bool use_half_tile = true;
-    constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     mm_init(cb_out_accumulate_im, cb_out_accumulate_im, cb_out_accumulate_im);

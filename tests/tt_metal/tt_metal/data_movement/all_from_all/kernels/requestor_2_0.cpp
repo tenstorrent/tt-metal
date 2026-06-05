@@ -40,7 +40,7 @@ void kernel_main() {
                 // Cycle through virtual channels 0 to (num_virtual_channels - 1)
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_read(
+                noc.async_read<NocOptions::CUSTOM_VC>(
                     unicast_endpoint,
                     unicast_endpoint,
                     bytes_per_transaction_per_subordinate,
@@ -52,7 +52,7 @@ void kernel_main() {
                     {
                         .addr = master_l1_local_address,
                     },
-                    current_virtual_channel);
+                    NocOptVals{.vc = current_virtual_channel});
             }
         }
         noc.async_read_barrier();

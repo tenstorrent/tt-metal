@@ -36,20 +36,20 @@ void kernel_main() {
         const uint32_t page_id = chunk_offset + tile_id;
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_write<Noc::TxnIdMode::ENABLED>(
+            noc.async_write<NocOptions::TXN_ID>(
                 dfb, tensor_accessor, {}, {.page_id = page_id});
 #endif
         } else {
-            DPRINT << "consumer wait page id: " << page_id << ENDL();
+            DPRINT("consumer wait page id: {}\n", page_id);
             dfb.wait_front(1);
             noc.async_write(dfb, tensor_accessor, entry_size, {}, {.page_id = page_id});
             noc.async_write_barrier();
             dfb.pop_front(1);
         }
     }
-    DPRINT << "consumer before finish" << ENDL();
+    DPRINT("consumer before finish\n");
     dfb.finish();
-    DPRINT << "at end of kernel_main b4 write barrier" << ENDL();
+    DPRINT("consumer after finish before write barrier\n");
     dfb.write_barrier(noc);
-    DPRINT << "finished write barrier" << ENDL();
+    DPRINT("finished write barrier\n");
 }

@@ -33,8 +33,8 @@ namespace ckernel {
 
 template <DstSync DST_SYNC, bool DST_ACCUM, typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _sfpu_check_and_call_(
-    Callable&& sfpu_func, std::uint32_t dst_index, [[maybe_unused]] int vector_mode, Args&&... args) {
-    LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
+    Callable&& sfpu_func, std::uint32_t dst_index, [[maybe_unused]] VectorMode vector_mode, Args&&... args) {
+    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     _llk_math_eltwise_unary_sfpu_params_(std::forward<Callable>(sfpu_func), dst_index, std::forward<Args>(args)...);
 }
 
@@ -90,14 +90,14 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
 // Same as SFPU_CALL but vector_mode is given as a `VectorMode` enumerator name
-// (RC, C, RC_custom, ...). The `(int)VectorMode::MODE` cast is generated.
+// (RC, C, RC_custom, ...).
 //   SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
 //                  calculate_erfc,   (8),     RC,        idst);
 //   SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
 //                  calculate_cumsum, (false), RC_custom, dst, first);
 #define SFPU_CALL_MODE(DST_SYNC, DST_ACCUM, FN, TEMPLATES, MODE, DST_IDX, ...) \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC, DST_ACCUM>(                     \
-        ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, (int)::ckernel::VectorMode::MODE, ##__VA_ARGS__)
+        ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, ::ckernel::VectorMode::MODE, ##__VA_ARGS__)
 
 // Non-templated functor in `ckernel::sfpu`, runtime vector_mode expression.
 //   SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE,
@@ -184,8 +184,8 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
 #define SFPU_TWO_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0, PARAM1) \
     SFPU_INIT_CB_ARGS(OP, INIT_CB, (APPROXIMATE), PARAM0, PARAM1)
 
-#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, SCALE, CLAMP_NEGATIVE) \
-    SFPU_INIT_CB(OP, INIT_CB, (APPROX, SCALE, CLAMP_NEGATIVE))
+#define SFPU_TEMPLATE_INIT_KERNEL(OP, INIT_CB, APPROX, SCALE, CLAMP_NEGATIVE, DST_ACCUM_MODE) \
+    SFPU_INIT_CB(OP, INIT_CB, (APPROX, SCALE, CLAMP_NEGATIVE, DST_ACCUM_MODE))
 
 // ----- compare-with-zero aliases --------------------------------------------
 
@@ -314,7 +314,7 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
     static_assert(DATA_FORMAT == DataFormat::Int32, "Unsupported data format. Supported: Int32"); \
     constexpr InstrModLoadStore _INSTRUCTION_MODE = InstrModLoadStore::INT32;                     \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                              \
-        ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>, DST_IDX, (int)VectorMode::MODE, PARAM0)
+        ckernel::sfpu::FN<APPROXIMATE, _INSTRUCTION_MODE, EXTRA_PARAM>, DST_IDX, VectorMode::MODE, PARAM0)
 
 #define SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN(FN, APPROXIMATE, DATA_FORMAT, ITERATIONS, DST_IDX, MODE) \
     static_assert(                                                                                        \
@@ -328,4 +328,4 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
         : (DATA_FORMAT == DataFormat::Int32) ? InstrModLoadStore::INT32                                   \
                                              : InstrModLoadStore::DEFAULT;                                \
     ::ckernel::_sfpu_check_and_call_<DST_SYNC_MODE, DST_ACCUM_MODE>(                                      \
-        ckernel::sfpu::FN<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>, DST_IDX, (int)VectorMode::MODE)
+        ckernel::sfpu::FN<APPROXIMATE, INSTRUCTION_MODE, ITERATIONS>, DST_IDX, VectorMode::MODE)

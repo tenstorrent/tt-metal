@@ -15,8 +15,21 @@ namespace tt::tt_metal {
 
 class Buffer;
 class IDevice;
+// Impl-only DRISC L1 arena types; held by GlobalCircularBuffer as a private
+// shared_ptr so the GCB doesn't have to include the impl arena header.
+class DriscL1Allocation;
 
 namespace experimental {
+
+// Forward declarations for the experimental DRAM-sender extension defined in
+// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
+// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
+// callers continue to see the original public interface unchanged.
+class GlobalCircularBuffer;
+enum class SenderCoreType : uint8_t;
+namespace global_circular_buffer_dram_sender {
+struct GlobalCircularBufferDramSenderInternals;
+}  // namespace global_circular_buffer_dram_sender
 
 class GlobalCircularBuffer {
 public:
@@ -53,6 +66,17 @@ public:
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
 
+    // Tag for the private experimental DRAM-sender constructor; only the experimental
+    // factory (a friend) can name this type. Takes MeshDevice because the DRAM-sender
+    // path relies on the per-mesh DriscL1Arena for pages_sent placement.
+    struct DramSenderTag {};
+    GlobalCircularBuffer(
+        distributed::MeshDevice* mesh_device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+        uint32_t size,
+        BufferType buffer_type,
+        DramSenderTag);
+
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     distributed::AnyBuffer cb_buffer_;
@@ -63,6 +87,20 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     uint32_t size_ = 0;
+    // Private experimental DRAM-sender metadata. `sender_core_type_value_` is stored as
+    // uint8_t (0=Worker, 1=Dram) so the SenderCoreType enum stays in the experimental
+    // header. Accessed only through the friend struct in
+    // tt-metalium/experimental/global_circular_buffer.hpp.
+    uint8_t sender_core_type_value_ = 0;
+    DeviceAddr pages_sent_drisc_l1_base_ = 0;
+    DeviceAddr pages_sent_worker_l1_base_ = 0;
+    std::vector<std::vector<CoreCoord>> receiver_coords_per_sender_;
+    // RAII handle for the DRAM-sender's pages_sent allocation in the per-mesh DriscL1Arena.
+    // Held via shared_ptr so copies of the GCB share the same backing range; released
+    // when the last GCB copy goes out of scope. Empty for worker-sender GCBs.
+    std::shared_ptr<::tt::tt_metal::DriscL1Allocation> drisc_pages_sent_alloc_;
+
+    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
 
 /**

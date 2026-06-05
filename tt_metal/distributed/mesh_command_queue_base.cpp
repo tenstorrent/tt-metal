@@ -324,7 +324,8 @@ void MeshCommandQueueBase::enqueue_write_with_core_filter(
 void MeshCommandQueueBase::enqueue_read_shards_nolock(
     const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
-    bool blocking) {
+    bool blocking,
+    std::vector<MemoryPin> memory_pins) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
@@ -342,7 +343,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
                 num_txns_per_device);
         }
     }
-    this->submit_memcpy_request(num_txns_per_device, blocking);
+    this->submit_memcpy_request(num_txns_per_device, blocking, std::move(memory_pins));
 
     if (!blocking && has_pinned_memory) {
         auto event = this->enqueue_record_event_to_host_nolock();
@@ -372,6 +373,11 @@ void MeshCommandQueueBase::enqueue_read(
     bool blocking) {
     auto lock = lock_api_function_();
     std::vector<distributed::ShardDataTransfer> shard_data_transfers;
+    // For non-blocking reads, capture a MemoryPin for each shard so the host
+    // buffer stays alive until the async reader thread finishes the memcpy
+    // (fixes use-after-free, issue #43638). For blocking reads finish_nolock()
+    // ensures the copy is complete before we return, so no pin is needed.
+    std::vector<MemoryPin> memory_pins;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {
             continue;
@@ -379,6 +385,9 @@ void MeshCommandQueueBase::enqueue_read(
 
         auto buf = host_buffer.get_shard(coord);
         if (buf.has_value()) {
+            if (!blocking) {
+                memory_pins.push_back(buf->pin());
+            }
             auto xfer = distributed::ShardDataTransfer{coord}
                             .host_data(buf->view_bytes().data())
                             .region(BufferRegion(0, buf->view_bytes().size()));
@@ -387,7 +396,7 @@ void MeshCommandQueueBase::enqueue_read(
         }
     }
 
-    this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking);
+    this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking, std::move(memory_pins));
 }
 
 void MeshCommandQueue::enqueue_write_shards(

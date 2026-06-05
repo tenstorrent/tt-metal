@@ -112,7 +112,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # For Bfp4_b, _bfp4_block_aware_compare inside passed_test tilizes its
+    # For Bfp4_b, _bfp_block_aware_compare inside passed_test tilizes its
     # inputs to align BFP blocks, but our golden/result are already tilized.
     # Compare directly on the tilized data using the block-aware ULP comparator
     # without the extra tilize step.
@@ -308,7 +308,7 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
     last_g_addr = (
         stim.buf_res_addr + (tile_count + guard_tiles - 1) * stim.buf_res_tile_size
     )
-    core_loc = "0,0"  # already "x,y" string
+    core_loc = TestConfig.TENSIX_LOCATION
     raw = read_from_device(core_loc, last_g_addr, num_bytes=10)
     marker = struct.unpack_from("<H", raw, 0)[0]
     assert (

@@ -36,20 +36,20 @@ void kernel_main() {
             dst_addr = l1_addr;
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
-                    noc.async_read<Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
+                    noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
                         dram_bank,
                         unicast_endpoint,
                         page_size_bytes,
                         {.bank_id = bank_id, .addr = src_addr + i * page_size_bytes},
                         {.addr = dst_addr},
-                        curr_trid);
+                        NocOptVals{.trid = curr_trid});
                     dst_addr += page_size_bytes;
                 }
                 curr_trid = (curr_trid % (num_of_trids - 1)) + 1;  // keep trid between 1 and num_of_trids-1
             }
         }
         for (uint32_t t = 1; t < num_of_trids; t++) {
-            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(t);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = t});
         }
     }
 }

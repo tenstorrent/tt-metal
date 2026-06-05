@@ -40,7 +40,10 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) = 0;
+    virtual void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) = 0;
     // Must be called with lock_api_function_() held.
     virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual MeshEvent enqueue_record_event_to_host_nolock(
@@ -59,7 +62,8 @@ private:
     void enqueue_read_shards_nolock(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        bool blocking);
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {});
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
         MeshBuffer& mesh_buffer,

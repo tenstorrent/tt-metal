@@ -7,6 +7,7 @@
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -14,18 +15,17 @@
 
 namespace ttnn::prim {
 
-MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
+using namespace tt::tt_metal;
+
+ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
     using namespace tt::constants;
-    using namespace tt::tt_metal;
     const Tensor& input = tensor_args.input_tensor;
     Tensor& output = tensor_return_value;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto shard_spec = input.shard_spec().value();
     const auto shard_shape = shard_spec.shape;
     const auto shard_grid = shard_spec.grid;
@@ -42,88 +42,77 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
     const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
 
-    CircularBufferConfig src_cb_sharded_config =
-        CircularBufferConfig(total_size_bytes, {{src_cb_sharded, cb_data_format}})
-            .set_page_size(src_cb_sharded, page_size_bytes);
-    src_cb_sharded_config.set_globally_allocated_address(*input.buffer());
-    const CBHandle src_sharded_cb = tt::tt_metal::CreateCircularBuffer(program, shard_grid, src_cb_sharded_config);
-
-    CircularBufferConfig dst_cb_sharded_config =
-        CircularBufferConfig(total_size_bytes, {{dst_cb_sharded, cb_data_format}})
-            .set_page_size(dst_cb_sharded, page_size_bytes);
-    dst_cb_sharded_config.set_globally_allocated_address(*output.buffer());
-    const CBHandle dst_sharded_cb = tt::tt_metal::CreateCircularBuffer(program, shard_grid, dst_cb_sharded_config);
-
-    const uint32_t input_buffer_address = input.buffer()->address();
-    const uint32_t output_buffer_address = output.buffer()->address();
-
-    const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
-    TT_FATAL(
-        input.buffer()->alignment() == output.buffer()->alignment(),
-        "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        input.buffer()->alignment(),
-        output.buffer()->alignment());
-    TT_FATAL(
-        move_chunk_size_bytes % input.buffer()->alignment() == 0,
-        "Expected chunk size bytes to move to be {} byte aligned.",
-        input.buffer()->alignment());
-    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
-    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
-
-    std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
-    KernelHandle kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp",
-        shard_grid,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args});
-
-    const std::array runtime_args = {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes};
-    tt::tt_metal::SetRuntimeArgs(program, kernel_id, shard_grid, runtime_args);
-
-    return {
-        std::move(program),
-        MoveShardedProgramFactory::shared_variables_t{
-            .kernel_id = kernel_id,
-            .src_sharded_cb = src_sharded_cb,
-            .dst_sharded_cb = dst_sharded_cb,
-            .total_size_bytes = total_size_bytes,
-            .cores = corerange_to_cores(shard_grid, std::nullopt, true)}};
-}
-
-void MoveShardedProgramFactory::override_runtime_arguments(
-    MoveShardedProgramFactory::cached_program_t& cached_program,
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    Program& program = cached_program.program;
-    const Tensor& input = tensor_args.input_tensor;
-    Tensor& output = tensor_return_value;
-
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.src_sharded_cb, *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.dst_sharded_cb, *dst_buffer);
-
     const uint32_t input_buffer_address = src_buffer->address();
     const uint32_t output_buffer_address = dst_buffer->address();
+
     const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
-    const uint32_t num_chunks = cached_program.shared_variables.total_size_bytes / move_chunk_size_bytes;
-    const uint32_t remainder_chunk_size_bytes =
-        cached_program.shared_variables.total_size_bytes % move_chunk_size_bytes;
+    TT_FATAL(
+        src_buffer->alignment() == dst_buffer->alignment(),
+        "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
+        src_buffer->alignment(),
+        dst_buffer->alignment());
+    TT_FATAL(
+        move_chunk_size_bytes % src_buffer->alignment() == 0,
+        "Expected chunk size bytes to move to be {} byte aligned.",
+        src_buffer->alignment());
+    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
+    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
-    std::vector<uint32_t> new_runtime_args = {
-        cached_program.shared_variables.total_size_bytes,
-        num_chunks,
-        move_chunk_size_bytes,
-        remainder_chunk_size_bytes};
+    ProgramDescriptor desc;
 
-    for (const auto& core : cached_program.shared_variables.cores) {
-        SetRuntimeArgs(program, cached_program.shared_variables.kernel_id, core, new_runtime_args);
+    // Sharded src CB: dynamic globally-allocated; framework rebinds on cache hit.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = total_size_bytes,
+        .core_ranges = shard_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src_cb_sharded),
+            .data_format = cb_data_format,
+            .page_size = page_size_bytes,
+        }}},
+        .buffer = src_buffer,
+    });
+
+    // Sharded dst CB: dynamic globally-allocated; framework rebinds on cache hit.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = total_size_bytes,
+        .core_ranges = shard_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(dst_cb_sharded),
+            .data_format = cb_data_format,
+            .page_size = page_size_bytes,
+        }}},
+        .buffer = dst_buffer,
+    });
+
+    std::vector<uint32_t> reader_compile_time_args = {src_cb_sharded, dst_cb_sharded};
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/reader_unary_local_l1_copy_backwards.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = shard_grid;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+
+    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
+    // therefore must be recomputed every call.  We deliberately emit them as plain
+    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
+    // empty and the slow cache-hit path runs create_descriptor() again — which
+    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
+    // from the freshly-allocated buffer addresses.  CB addresses are still patched
+    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
+    const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
+    for (const auto& core : cores) {
+        reader_desc.emplace_runtime_args(
+            core, {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes});
     }
+
+    desc.kernels.push_back(std::move(reader_desc));
+
+    return desc;
 }
 
 }  // namespace ttnn::prim

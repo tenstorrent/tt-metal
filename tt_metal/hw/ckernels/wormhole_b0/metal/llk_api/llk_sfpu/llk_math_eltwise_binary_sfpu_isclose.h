@@ -22,7 +22,7 @@ inline void llk_math_eltwise_binary_sfpu_isclose(
     uint32_t odst,
     uint32_t rtol_bits,
     uint32_t atol_bits,
-    int vector_mode = (int)VectorMode::RC) {
+    VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_sfpu_isclose<APPROXIMATE, ITERATIONS, EQUAL_NAN>,
         dst_index0,

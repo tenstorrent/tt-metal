@@ -113,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_sfpu_start_(0);
     ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
-    ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
+    ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
 
     ckernel::sfpu::_reduce_max_col_subblock_4x2_epilogue_();
 

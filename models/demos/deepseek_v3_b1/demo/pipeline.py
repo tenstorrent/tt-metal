@@ -218,6 +218,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    enable_sram_bspm: bool = False,
 ) -> PipelineConfiguration:
     """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
@@ -269,6 +270,7 @@ def create_single_pod_spec_decode_pipeline_configuration(
             num_slots=num_slots,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
@@ -349,6 +351,7 @@ def create_sp4_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    enable_sram_bspm: bool = False,
 ) -> PipelineConfiguration:
     """64-stage super-pod: Embed -> Dense(0,1,2) -> Decoder(3..60) -> LMHead -> Token fwd.
 
@@ -400,6 +403,7 @@ def create_sp4_pipeline_configuration(
             num_slots=num_slots,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
@@ -434,6 +438,7 @@ def create_pipeline_configuration_from_num_procs(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    enable_sram_bspm: bool = False,
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
@@ -442,6 +447,7 @@ def create_pipeline_configuration_from_num_procs(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             enable_mtp=enable_mtp,
+            enable_sram_bspm=enable_sram_bspm,
         )
     if num_procs == 16:
         if enable_speculative_decode:
@@ -455,6 +461,7 @@ def create_pipeline_configuration_from_num_procs(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
+            enable_sram_bspm=enable_sram_bspm,
         )
     if num_procs == 64:
         return create_sp4_pipeline_configuration(
@@ -466,6 +473,7 @@ def create_pipeline_configuration_from_num_procs(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
+            enable_sram_bspm=enable_sram_bspm,
         )
     raise ValueError(f"Unsupported num_procs: {num_procs}")
 

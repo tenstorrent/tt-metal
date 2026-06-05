@@ -118,6 +118,14 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     log_debug(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
     log_debug(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
 
+    // Optional tensor buffers passed as Buffer* so the framework patches their
+    // addresses on cache hits (BufferBinding). Plain uint32_t goes stale when
+    // the allocator moves the buffer on a subsequent dispatch (cf. #44565).
+    Buffer* const weight_buffer = has_weight ? weight_tensor.value().buffer() : nullptr;
+    Buffer* const transformation_mat_buffer = fuse_rope ? transformation_mat.value().buffer() : nullptr;
+    Buffer* const rope_cos_buffer = fuse_rope ? rope_cos.value().buffer() : nullptr;
+    Buffer* const rope_sin_buffer = fuse_rope ? rope_sin.value().buffer() : nullptr;
+
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     //////////////////////////////////////////////////////////////////////////
@@ -288,26 +296,16 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_core, num_tile_rows);
         const uint32_t num_tile_rows_to_process = tile_row_end - tile_row_start;
 
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(input_tensor.buffer());
-        reader_args.push_back(stats_tensor.buffer());
-        if (has_weight) {
-            reader_args.push_back(weight_tensor.value().buffer());
-        } else {
-            reader_args.push_back(0u);
-        }
-        if (fuse_rope) {
-            reader_args.push_back(transformation_mat.value().buffer());
-            reader_args.push_back(rope_cos.value().buffer());
-            reader_args.push_back(rope_sin.value().buffer());
-        } else {
-            reader_args.push_back(0u);
-            reader_args.push_back(0u);
-            reader_args.push_back(0u);
-        }
-        reader_args.push_back(tile_row_start);
-        reader_args.push_back(tile_row_end);
-        reader_kernel_desc.emplace_runtime_args(core, reader_args);
+        reader_kernel_desc.emplace_runtime_args(
+            core,
+            {input_tensor.buffer(),
+             stats_tensor.buffer(),
+             weight_buffer,
+             transformation_mat_buffer,
+             rope_cos_buffer,
+             rope_sin_buffer,
+             tile_row_start,
+             tile_row_end});
 
         compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_to_process});
 
