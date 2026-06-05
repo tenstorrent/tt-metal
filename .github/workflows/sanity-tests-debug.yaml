@@ -73,6 +73,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -91,6 +92,7 @@ jobs:
     if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

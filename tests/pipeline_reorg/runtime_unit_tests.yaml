@@ -202,9 +202,9 @@
     wh_n300_civ2:
       timeout: 20
     bh_p150b_civ2:
-      timeout: 20
+      timeout: 15
     bh_p100a_civ2_viommu:
-      timeout: 20
+      timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -311,7 +311,7 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
   skus:
     bh_quietbox:
-      timeout: 10
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -366,5 +366,20 @@
   skus:
     wh_galaxy:
       timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# Service Core Manager Tests (BH only, SD + FD)
+- name: service_core_manager
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreSdFixture.*'
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreFdFixture.*'
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+    bh_p100a_civ2_viommu:
+      timeout: 5
+    bh_quietbox:
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

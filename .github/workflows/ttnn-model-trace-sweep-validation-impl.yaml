@@ -402,7 +402,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.compute-sweep-matrix.outputs.matrix).include }}
     container:
-      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
