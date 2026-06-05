@@ -316,14 +316,7 @@ def main() -> None:
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
     # ---- Single English prompt drives the entire demo chain ----
-    src_text = """Maya lived in a small coastal town where every morning began with the sound of fishing boats leaving the harbor. She worked at her grandfather’s old bookstore, a narrow shop filled with dusty shelves, handwritten notes, and the smell of paper that had aged for decades. Most customers came looking for schoolbooks or travel guides, but Maya loved recommending forgotten stories hidden in the back corners of the store.
-
-One rainy evening, while organizing a stack of returned books, she discovered a small blue journal tucked between two novels. The cover had no title, only a silver compass symbol that shimmered faintly under the light. Curious, she opened it and found detailed sketches of places around the town along with cryptic messages about a hidden lighthouse path that only appeared during storms.
-
-At first, Maya thought someone was playing a prank. But the next night, as heavy clouds gathered over the sea, she noticed something unusual from the bookstore window. A narrow trail of lantern lights stretched along the cliffs where no road existed before. Holding the journal tightly, she followed the glowing path through the rain until she reached an abandoned lighthouse overlooking the crashing waves.
-
-Inside the lighthouse, she found old maps, letters, and photographs belonging to sailors who had once protected ships during dangerous storms. Among the papers was a letter written by her grandfather many years earlier. He explained that the journal was meant for the next person curious enough to search for the truth hidden in ordinary places. Maya smiled as thunder echoed outside. For the first time, she realized the bookstore had never only been about selling books. It had always been about discovering stories waiting quietly for someone brave enough to follow them.
-"""
+    src_text = """Hello, my dog is cute"""
     src_lang = "eng"
     tgt_translate = "hin"  # task 1, 2: translate eng → hin
     tgt_back_text = "eng"  # task 3: speech in hin → text in eng (back-translation)
@@ -507,6 +500,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             max_new_tokens=gen_common["max_new_tokens"],
         )
         print(f"  Output text ({tgt_back_text}): {_decode(tokenizer, s2tt_out.sequences)}")
+        ttnn.deallocate(s2tt_out.sequences)
 
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
