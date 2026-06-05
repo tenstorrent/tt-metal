@@ -51,7 +51,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            107_554_551,
+            61_188_063,
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe",
             1,
