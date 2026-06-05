@@ -39,7 +39,7 @@ inline void _llk_pack_rows_configure_addrmod_()
  *
  * The MOP uses a single outer loop with num_rows inner iterations:
  * - Each inner iteration packs one row (16 datums) using ADDR_MOD_0 (Y += 1)
- * - The last outer loop iteration uses ADDR_MOD_1 with Last=1 to reset Y to 0 after num_rows rows
+ * - The last inner loop iteration uses ADDR_MOD_1 (whose y_src.clr resets Y to 0) after num_rows rows
  *
  * @param num_rows: Number of rows to pack from the destination register.
  */
@@ -128,7 +128,7 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
 }
 
 /**
- * @brief Restore packer addrmods and counters to a safe default state.
+ * @brief Restore the packer X counter to its default full-face value.
  *
  * Resets the packer X counter to its default full-face value, undoing @ref _llk_pack_rows_init_.
  *

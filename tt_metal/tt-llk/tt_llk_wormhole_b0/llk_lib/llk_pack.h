@@ -420,8 +420,8 @@ inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
 /**
  * @brief Pack one tile from the destination register to an L1 address.
  *
- * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
- * the Z counters afterward.
+ * Selects the source dest tile, programs the L1 destination address, and runs the packer MOP.
+ * Untilize mode emits a closing PACR, and the multi-tile path runs the multi-tile pack sequence.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
