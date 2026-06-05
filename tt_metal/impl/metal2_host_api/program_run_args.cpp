@@ -131,7 +131,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Validate kernel runtime parameters
     for (const auto& kernel_params : params.kernel_run_args) {
         const auto& kernel_name = kernel_params.kernel;
-        kernels_with_params.insert(kernel_name);
+        // kernel_run_args is a Group (no structural key), so uniqueness must be validated here.
+        auto [it, inserted] = kernels_with_params.insert(kernel_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate kernel '{}' in ProgramRunArgs.kernel_run_args. Each kernel must appear exactly once.",
+            kernel_name);
 
         // Check that the kernel exists
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
@@ -194,7 +199,13 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
-            nodes_with_named_params.insert(node);
+            // runtime_arg_values is a Group (no structural key), so per-node uniqueness is validated here.
+            auto [it_node, inserted_node] = nodes_with_named_params.insert(node);
+            TT_FATAL(
+                inserted_node,
+                "Duplicate node_coord {} in runtime_arg_values for kernel '{}'.",
+                node.str(),
+                kernel_name);
             TT_FATAL(
                 kernel_nodes.contains(node),
                 "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
@@ -279,8 +290,15 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     }
 
     // Validate DFB runtime parameters
+    std::unordered_set<DFBSpecName> dfbs_with_params;
     for (const auto& dfb_params : params.dfb_run_overrides) {
         const auto& dfb_spec_name = dfb_params.dfb;
+        // dfb_run_overrides is a Group (no structural key), so uniqueness must be validated here.
+        auto [it, inserted] = dfbs_with_params.insert(dfb_spec_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate DFB '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
+            dfb_spec_name);
         TT_FATAL(
             !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
             "DFB size overrides are not yet implemented for DFB '{}'.",
