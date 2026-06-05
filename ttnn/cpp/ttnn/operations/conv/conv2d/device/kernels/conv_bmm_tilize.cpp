@@ -349,16 +349,34 @@ void kernel_main() {
     //     SubblockMajor). With pin off the helper owns matmul_partials_cb reserve/push, so the pin-era manual
     //     partials-pointer management below is skipped on this path.
     //   • the untilize phase reads the row-major interm via the plain `untilize` helper (the row strip is
-    //     already contiguous tile-row order), NOT reblock_and_untilize (which is SubblockMajor-only).
+    //     already contiguous tile-row order), NOT reblock_and_untilize (which is SubblockMajor-only). EXCEPTION:
+    //     when fuse_bias=true, see the TileRowMajor+bias deadlock note below.
     // helper_sbm / main stay SubblockMajor (define absent → tile_pack_row_major=false). conv_bench forces
     // packer_l1_acc OFF in every mode, so the row-major l1_acc spill / CB-format pitfalls never arise here.
+    //
+    // TileRowMajor + fuse_bias deadlock: when tile_pack_row_major=true and fuse_bias=true, the matmul helper
+    // packs the last K-block in TileRowMajor order into matmul_partials_cb (row_group_tiles =
+    // out_subblock_h * per_core_N tiles per push). The bias add then simultaneously calls
+    // wait_front(row_group_tiles) AND reserve_back(row_group_tiles) on the SAME matmul_partials_cb. When
+    // per_core_M == out_subblock_h (one M-subblock per block), row_group_tiles == CB_capacity, making the
+    // reserve_back block forever (the pop hasn't happened yet) → deadlock on all cores (TRISC2=K stuck).
+    //
+    // Fix: when tile_pack_row_major && fuse_bias, use SubblockMajor for the matmul's last K-block AND the
+    // bias_add. The matmul emits per-subblock (4 tiles) into matmul_partials_cb, the bias add consumes and
+    // re-emits in the same CB at 4-tile granularity (4 << 28 → no deadlock), and the subsequent untilize
+    // uses reblock_and_untilize to correctly convert SubblockMajor tiles to row-major bytes. This leaves
+    // the tile_pack_row_major && !fuse_bias path (plain untilize) unchanged and correct.
 #ifdef CONV_TILE_PACK_ROW_MAJOR
     constexpr bool tile_pack_row_major = true;
 #else
     constexpr bool tile_pack_row_major = false;
 #endif
-    constexpr auto conv_output_layout = tile_pack_row_major ? compute_kernel_lib::OutputCBLayout::TileRowMajor
-                                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
+    // For the fuse_bias path with TileRowMajor, use SubblockMajor to avoid the CB self-deadlock described
+    // above. For the non-bias path (plain untilize), TileRowMajor is safe and preferred (row strip already
+    // contiguous → no reblock gather needed). SubblockMajor is always correct for helper_sbm / main.
+    constexpr auto conv_output_layout = (tile_pack_row_major && !fuse_bias)
+                                            ? compute_kernel_lib::OutputCBLayout::TileRowMajor
+                                            : compute_kernel_lib::OutputCBLayout::SubblockMajor;
     constexpr bool pin_partials = !tile_pack_row_major;
 
     constexpr uint32_t out_block_w = in1_block_w;
@@ -619,9 +637,22 @@ void kernel_main() {
                 }
                 if constexpr (packer_untilize && !tile_pack_row_major) {
                     // Narrow SubblockMajor output (helper_sbm / main): gather subblock-major matmul output
-                    // into row-major and untilize via pack_untilize_dest. reblock_and_untilize is
-                    // SubblockMajor-only (its layout template static_asserts), so helper_trm (TileRowMajor)
-                    // falls through to the plain `untilize` below — its row strip is already contiguous.
+                    // into row-major and untilize via pack_untilize_dest.
+                    compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        cb_matmul_partials,
+                        cb_out);
+                } else if constexpr (tile_pack_row_major && fuse_bias) {
+                    // helper_trm + fuse_bias: the TileRowMajor+bias deadlock fix switches conv_output_layout
+                    // to SubblockMajor (see note above), so the bias add left SubblockMajor data in
+                    // matmul_partials_cb. Use reblock_and_untilize — the same helper_sbm/main path —
+                    // to correctly reorder SubblockMajor tiles into row-major bytes. The packer_untilize
+                    // gate (weight_block_w_ntiles <= 8) is not needed here: pack_untilize_dest is called
+                    // with block_ct_dim=out_subblock_w (≤ DST limit), not with the full out_block_w, so
+                    // wide per_core_N configs (e.g. 14) are handled correctly.
                     compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
                         in0_num_subblocks,
                         in1_num_subblocks,
@@ -630,11 +661,13 @@ void kernel_main() {
                         cb_matmul_partials,
                         cb_out);
                 } else {
-                    // Wide output, OR helper_trm (any width): plain untilize — for TileRowMajor the interm
-                    // row strip is already contiguous tile-row order, so no reblock gather is needed.
+                    // Wide output (packer_untilize=false, !tile_pack_row_major): plain untilize for
+                    // SubblockMajor data from helper_sbm/main. Also the tile_pack_row_major && !fuse_bias
+                    // path: TileRowMajor interm is already contiguous tile-row order, so no reblock gather
+                    // is needed — plain untilize reads the row strip sequentially and converts to row-major.
                     // srcA reconfig to matmul_partials is handled externally here because untilize is
                     // invoked with NoReconfigure (the pack format came from the packer_l1_acc reconfig
-                    // above). The reblock branch self-reconfigs via reblock_and_untilize_init.
+                    // above or is already set by bias_add for the fuse_bias path that reaches here).
                     if constexpr (!fuse_bias) {
                         reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                     }
