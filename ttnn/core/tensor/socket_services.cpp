@@ -32,9 +32,6 @@
 #include "tt_metal/distributed/h2d_stream_service_descriptor.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/shm_resource_tracker.hpp"
-#include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/llrt/llrt.hpp"
-#include "tt_metal/llrt/hal/generated/dev_msgs.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -57,6 +54,7 @@ Tensor make_zero_host_tensor(const TensorSpec& spec) {
         case DataType::BFLOAT8_B:
         case DataType::UINT32:
             return Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
+        case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
@@ -97,6 +95,7 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
                 ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(raw), bytes.size() / sizeof(uint32_t)),
                 shape,
                 MemoryPin{});
+        case DataType::FP8_E4M3: TT_THROW("H2DStreamService: FP8_E4M3 is not supported");
         case DataType::INVALID: TT_THROW("H2DStreamService: invalid global_spec data type");
     }
     TT_THROW("Unreachable");
@@ -265,7 +264,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     per_shard_spec_ = device_tensor_.tensor_spec();
 
     // Each device may resolve a different free service core; record it per coord.
-    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager();
     const auto& coords = topology.mesh_coords();
     for (const auto& coord : coords) {
         auto* d = mesh_device_->get_device(coord);
@@ -479,13 +478,11 @@ H2DStreamService::~H2DStreamService() {
 
         // Wait for each kernel to actually return (RUN_MSG_DONE), not just for
         // dispatch to drain, or a later instance finds the service core occupied.
-        auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+        auto& svc = tt::tt_metal::internal::service_core_manager();
         if (mesh_device_) {
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
-                const auto physical_core = d->virtual_core_from_logical_core(core, CoreType::WORKER);
-                std::unordered_set<CoreCoord> not_done_cores{physical_core};
-                tt::llrt::internal_::wait_until_cores_done(d->id(), dev_msgs::RUN_MSG_GO, not_done_cores);
+                svc.wait_done(d, core);
             }
         }
 

@@ -20,6 +20,8 @@
 #include <tt-metalium/device.hpp>
 
 #include <llrt/hal.hpp>
+#include "llrt/llrt.hpp"
+#include "llrt/hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_metal::internal {
 
@@ -235,5 +237,13 @@ size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) cons
 
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
+
+void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const {
+    const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+    std::unordered_set<CoreCoord> not_done{physical_core};
+    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
+}
+
+ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
 
 }  // namespace tt::tt_metal::internal
