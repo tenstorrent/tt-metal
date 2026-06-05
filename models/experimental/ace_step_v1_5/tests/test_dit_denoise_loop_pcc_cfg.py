@@ -122,7 +122,7 @@ def test_dit_denoise_loop_pcc_cfg_apg_vs_torch(frames: int, label: str):
     from models.experimental.ace_step_v1_5.ttnn_impl.e2e_model_tt import run_ttnn_denoise_loop
     from models.experimental.ace_step_v1_5.ttnn_impl.full_pipeline import AceStepV15TTNNPipeline
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_configure_dit_long_clip_quality
-    from models.experimental.ace_step_v1_5.tt_device import (
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
         ace_step_dit_pipe_batch_size,
         ace_step_needs_split_device,
         close_ace_step_device,

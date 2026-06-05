@@ -32,7 +32,7 @@ def test_condition_encoder_forward_payload_pcc_vs_hf(device, duration_sec: float
         pytest.skip("ACE-Step v1.5 checkpoints not found; set ACE_STEP_CHECKPOINT_DIR.")
 
     import ttnn
-    from models.experimental.ace_step_v1_5.official_lm_preprocess import (
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
         handler_prepare_condition_payload,
         handler_prepare_condition_tensors,
     )
