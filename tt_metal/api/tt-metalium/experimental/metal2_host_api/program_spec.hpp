@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -59,7 +60,7 @@ struct WorkUnitSpec {
     std::string name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
-    std::vector<KernelSpecName> kernels;
+    Group<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
     Nodes target_nodes;
@@ -75,20 +76,20 @@ struct ProgramSpec {
     std::string name;
 
     // Kernels, DFBs (local + remote), and semaphores that make up the Program
-    std::vector<KernelSpec> kernels;
-    std::vector<DataflowBufferSpec> dataflow_buffers;
-    std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
-    std::vector<SemaphoreSpec> semaphores;
+    Group<KernelSpec> kernels;
+    Group<DataflowBufferSpec> dataflow_buffers;
+    Group<RemoteDataflowBufferSpec> remote_dataflow_buffers;
+    Group<SemaphoreSpec> semaphores;
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on
     // (The actual MeshTensors are supplied via ProgramRunArgs.)
-    std::vector<TensorParameter> tensor_parameters;
+    Group<TensorParameter> tensor_parameters;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
-    std::vector<WorkUnitSpec> work_units;
+    Group<WorkUnitSpec> work_units;
 };
 
 }  // namespace tt::tt_metal::experimental

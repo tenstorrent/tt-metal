@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
@@ -46,36 +47,42 @@ struct ProgramRunArgs {
     // Kernel runtime arguments
     ////////////////////////////////////////////////////////////////////////
     struct KernelRunArgs {
-        // Runtime argument values: maps each node to its named-RTA values (a name -> value table).
-        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be set,
-        // for every node the kernel runs on.
+        KernelSpecName kernel;
+
+        // Per-node runtime argument values: 
+        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
+        // set, for every node the kernel runs on.
         // Missing arguments or superfluous arguments will trigger validation errors.
         //
-        // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
-        // a common runtime argument would provide better dispatch efficiency.
-        using NamedRuntimeArgs = Table<std::string, uint32_t>;
-        Table<NodeCoord, NamedRuntimeArgs> runtime_arg_values;
+        // NOTE: If a kernel runtime argument always has the same value for all nodes,
+        // passing a common runtime argument would provide better dispatch efficiency.
+        using RuntimeArgValues = Table<std::string, uint32_t>;
+        struct NodeRuntimeArgs {
+            NodeCoord node;
+            RuntimeArgValues args;
+        };
+        Group<NodeRuntimeArgs> runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
         // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
-        NamedRuntimeArgs common_runtime_arg_values;
+        RuntimeArgValues common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
         // positional vararg values.
         AdvancedKernelRunArgs advanced_options;
     };
-    // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec, keyed by kernel name.
-    Table<KernelSpecName, KernelRunArgs> kernel_run_args;
+    // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
+    Group<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
-    struct TensorArgument {
-        // The actual MeshTensor argument
-        // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
-        std::reference_wrapper<const MeshTensor> tensor;
-    };
+
+    // The actual MeshTensor argument
+    // (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
+    using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
+
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
     Table<TensorParamName, TensorArgument> tensor_args;
@@ -84,6 +91,8 @@ struct ProgramRunArgs {
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunOverrides {
+        DFBSpecName dfb;
+
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
         // If unset, the ProgramSpec value is used.
@@ -94,8 +103,13 @@ struct ProgramRunArgs {
         // the corresponding tensor_arg.
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
-    Table<DFBSpecName, DFBRunOverrides> dfb_run_overrides;
+    Group<DFBRunOverrides> dfb_run_overrides;
 };
+
+// Convenience aliases
+using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
+using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
+
 
 //------------------------------------------------
 // ProgramRunArgsView (for advanced users)
@@ -117,6 +131,8 @@ struct ProgramRunArgs {
 //
 struct ProgramRunArgsView {
     struct KernelRunArgsView {
+        KernelSpecName kernel;
+
         // Direct views into per-node vararg runtime args
         Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
 
@@ -127,9 +143,11 @@ struct ProgramRunArgsView {
     //       Would eliminate the lookup indirection.
     //       ...But would mess up all the implicit RTAs....
     //       Look into this when implementing.
-    Table<KernelSpecName, KernelRunArgsView> kernel_run_args;
+    Group<KernelRunArgsView> kernel_run_args;
 
     struct DFBRunOverridesView {
+        DFBSpecName dfb;
+
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
         // (This is seldom used in practice)
@@ -139,7 +157,7 @@ struct ProgramRunArgsView {
         // Note: borrowed-memory DFBs update their backing L1 SRAM address from
         // the corresponding tensor_arg.
     };
-    Table<DFBSpecName, DFBRunOverridesView> dfb_run_overrides;
+    Group<DFBRunOverridesView> dfb_run_overrides;
 };
 
 // TODO: Consider a const version of the view object, for debug/test use?

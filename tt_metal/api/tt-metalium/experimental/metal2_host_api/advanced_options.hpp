@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt_stl/strong_type.hpp>
 
@@ -142,7 +143,7 @@ struct DFBAdvancedOptions {
     //   - Aliased DFBs must have the same total size (num_entries * entry_size).
     //   - All members must target the same node set
     //     (derived from their bound kernels' WorkUnitSpecs).
-    std::vector<DFBSpecName> alias_with;
+    Group<DFBSpecName> alias_with;
 };
 
 struct AdvancedKernelRunArgs {
