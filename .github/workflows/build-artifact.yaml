@@ -409,9 +409,12 @@ jobs:
 
     steps:
       - name: Configure Garage S3 ccache
-        # Silently skip when secrets are absent (e.g. old forks) — build continues without remote cache
-        if: ${{ secrets.GARAGE_S3_ACCESS_KEY != '' }}
         run: |
+          # Silently skip when secrets are absent (forks without access) — build continues without remote cache
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ]; then
+            echo "GARAGE_S3_ACCESS_KEY not set — skipping remote ccache"
+            exit 0
+          fi
           {
             echo "CCACHE_REMOTE_STORAGE=s3://ccache|endpoint-url=http://garage.garage.svc.cluster.local:3900|aws-access-key-id=${{ secrets.GARAGE_S3_ACCESS_KEY }}|aws-secret-access-key=${{ secrets.GARAGE_S3_SECRET_KEY }}|aws-default-region=us-east-1"
             echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
