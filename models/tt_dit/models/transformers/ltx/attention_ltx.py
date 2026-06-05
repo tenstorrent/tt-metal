@@ -440,7 +440,11 @@ class LTXAttention(Module):
             # STG perturbation: skip Q/K attention, use V passthrough.
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
-            if sp_factor > 1 and attn_mask is None:
+            # Ring-joint SDPA is the memory-efficient SP path, but its fused CCL+attention
+            # program overflows Wormhole's (smaller) Tensix kernel-config buffer. On WH we
+            # fall through to the gather + local-SDPA branch below: numerically identical
+            # exact attention, trading the ring for an all-gather of K/V. BH keeps ring-joint.
+            if sp_factor > 1 and attn_mask is None and is_blackhole():
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,

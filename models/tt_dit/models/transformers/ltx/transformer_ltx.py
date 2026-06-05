@@ -69,8 +69,17 @@ class LTXTransformerBlock(Module):
             "apply_gated_attention": apply_gated_attention,
         }
 
-        # Video-only uses fsdp_mesh_axis for FFN; AV does not.
-        fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if (is_fsdp and not has_audio) else None
+        # FSDP shards FFN weights across the SP axis (gathered per-layer at compute time).
+        # WH-only: shard video+audio FFNs in AV mode for 1080p DRAM headroom.
+        # BH: unchanged — video-only FSDP when is_fsdp and no audio (pre-existing behavior).
+        if ttnn.device.is_wormhole_b0(mesh_device):
+            fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+            audio_fsdp_mesh_axis = fsdp_mesh_axis
+        else:
+            fsdp_mesh_axis = (
+                parallel_config.sequence_parallel.mesh_axis if (is_fsdp and not has_audio) else None
+            )
+            audio_fsdp_mesh_axis = None
 
         self.norm1 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
         self.attn1 = LTXAttention(dim=video_dim, num_heads=video_num_heads, is_self=True, **attn_kwargs)
@@ -131,6 +140,7 @@ class LTXTransformerBlock(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                fsdp_mesh_axis=audio_fsdp_mesh_axis,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
