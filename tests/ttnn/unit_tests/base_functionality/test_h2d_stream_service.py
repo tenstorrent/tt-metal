@@ -8,11 +8,19 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import skip_for_slow_dispatch
+from conftest import is_6u
+from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
 
-# H2DStreamService claims FD dispatch-column service cores, so every test here requires
-# fast dispatch; skip the whole module when running in slow-dispatch mode.
-pytestmark = skip_for_slow_dispatch()
+# H2DStreamService claims FD dispatch-column service cores, which are only supported on
+# Blackhole or UBB Galaxy clusters and require fast dispatch. Skip the whole module on any
+# other configuration so unsupported runners skip cleanly instead of hitting the claim TT_FATAL.
+pytestmark = [
+    skip_for_slow_dispatch(),
+    pytest.mark.skipif(
+        not (is_blackhole() or is_6u()),
+        reason="H2DStreamService service cores require Blackhole or UBB Galaxy",
+    ),
+]
 
 
 # int32 source viewed as UINT32; compared as int64 (lossless for 0..INT32_MAX).
