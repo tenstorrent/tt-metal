@@ -88,14 +88,16 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                 output tensor (UINT32/UINT16 tile formats are unavailable). On Wormhole and Blackhole,
                 both UINT32 and INT32 are supported.
 
-            If no :attr:`output_tensor` is provided, the return tensor will be as follows:
+            If no :attr:`output_tensor` is provided, the return tensor will be as follows.
+            The default dtype is architecture-dependent: UINT32 on Wormhole/Blackhole, and INT32 on
+            Quasar (which does not support UINT32 tile formats).
 
             .. list-table:: output_tensor (default)
                 :header-rows: 1
 
                 * - dtype
                   - layout
-                * - UINT32
+                * - UINT32 (Wormhole/Blackhole), INT32 (Quasar)
                   - ROW_MAJOR
 
             If :attr:`output_tensor` is provided, the supported data types and layout are:
