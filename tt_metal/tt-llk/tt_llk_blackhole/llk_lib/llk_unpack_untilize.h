@@ -63,14 +63,14 @@ inline void _llk_unpack_untilize_mop_config_()
 /**
  * @brief Initialize the unpacker for an untilize operation.
  *
- * Disables face transpose, saves the unpacker stride/tile-dim config for later restore, programs
+ * Disables face transpose, saves the unpacker stride/tile-dim config into scratch GPRs, programs
  * the 1x16-row stride and tile dimensions for untilize, loads the tile size and clears the tile
  * offset GPR, then programs the untilize MOP.
  *
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @param tile_size: Size of one tile, stored to the tile-size GPR for per-tile offset stepping.
  * @param face_r_dim: Rows per face.
- * @post Call @ref _llk_unpack_untilize_uninit_ to restore the saved unpacker config.
+ * @post Call @ref _llk_unpack_untilize_uninit_ to restore the default unpacker config.
  * @ref _llk_unpack_untilize_pass_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D) is the matching init on the math thread.
  */

@@ -124,7 +124,7 @@ inline void reduce_row_perform_transpose()
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
  * @tparam clear_mode: Source-clear mode applied after pooling (p_setrwc::CLR_* value).
- * @tparam index: Pool index argument passed to the instruction.
+ * @tparam index: Destination-register offset (the GMPOOL/GAPOOL dst field) the pooled result is written to.
  */
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()

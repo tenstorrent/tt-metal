@@ -321,7 +321,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 /**
  * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
  *
- * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT or the datum is UInt8/UInt16; B2D uses
+ * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT (except UInt16, which stays on MOVA2D) or the datum is UInt8; B2D uses
  * MOVB2D (or ELWADD for non-UInt16 column broadcast) with loop counts derived from the broadcast type.
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>

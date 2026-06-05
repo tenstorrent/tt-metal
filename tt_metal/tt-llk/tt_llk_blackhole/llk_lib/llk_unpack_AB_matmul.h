@@ -21,9 +21,10 @@ using namespace ckernel::unpacker;
 /**
  * @brief Program the unpacker MOP/replay buffer for a matmul operand unpack.
  *
- * Builds a replay buffer that unpacks the reused operand and advances its L1 base address by a
- * tile each step. The reused operand (SrcB for inA, SrcA for inB) is chosen by comparing ct_dim
- * and rt_dim; the unused address bump is suppressed under kernel broadcast.
+ * Builds a replay buffer that unpacks the streamed (non-reused) operand and advances its L1 base
+ * address by one tile each step. Which operand is reused versus streamed is chosen by comparing
+ * ct_dim and rt_dim (reuse_a = ct_dim >= rt_dim); operand A maps to SrcB and operand B to SrcA.
+ * The address bump is suppressed under kernel broadcast.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -298,7 +299,7 @@ inline void _llk_unpack_AB_matmul_uninit_(const std::uint32_t unpA_face_r_dim, c
  * @brief Unpack the operand tiles for a matmul (A x B) into SrcA and SrcB.
  *
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
- * broadcast wraparound and kt_dim striding), and unpacks operand B to SrcB / operand A to SrcA
+ * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
  * for each step while synchronizing through the unpack semaphore and config-context switching.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
