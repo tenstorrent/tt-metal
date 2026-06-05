@@ -60,6 +60,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-goal-gate", action="store_true")
     parser.add_argument(
+        "--start-index",
+        type=int,
+        default=1,
+        help="Stage number to use for the first prompt file, useful when continuing from a later stage.",
+    )
+    parser.add_argument(
         "--same-thread",
         action="store_true",
         help=(
@@ -69,7 +75,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dry-run", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.start_index < 1:
+        raise SystemExit("--start-index must be >= 1")
+    return args
 
 
 def timestamp() -> str:
@@ -274,7 +283,7 @@ def main() -> int:
     )
 
     session_id: str | None = None
-    for index, prompt_path in enumerate(args.prompt_files, start=1):
+    for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
         prompt = load_prompt(prompt_path, replacements)
         expected_terms = goal_match_terms(prompt)
         name = stage_name(index, prompt_path)
