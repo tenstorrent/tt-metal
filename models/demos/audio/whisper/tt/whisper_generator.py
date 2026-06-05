@@ -635,6 +635,22 @@ class WhisperGenerator:
         self._pending_token_host = None
         return sampled.reshape(-1).long()
 
+    def _stream_incremental_text(self, cache, token_id):
+        """Windowed incremental detokenization for streaming intermediate yields.
+
+        Whisper's byte-level BPE splits a multi-byte UTF-8 character (e.g. a kanji) across
+        tokens, so decoding a single token in isolation yields partial bytes that surface as
+        U+FFFD. Instead, hold unresolved trailing tokens in ``cache`` (mutated in place) and
+        emit text only once the decoded bytes form complete characters. Returns the newly
+        completed incremental text ("" while a multi-byte character is still incomplete).
+        """
+        cache.append(int(token_id))
+        text = self.processor.batch_decode([cache], skip_special_tokens=True)[0]
+        if text.endswith("�"):
+            return ""  # incomplete multi-byte tail — keep the tokens and wait for the next one
+        cache.clear()  # all bytes form complete characters — flush
+        return text
+
     def generate(
         self,
         current_batch,
@@ -985,6 +1001,9 @@ class WhisperGenerator:
         # multi-byte UTF-8 characters (e.g. CJK) split across BPE tokens are reassembled correctly.
         collect_output_ids = not return_timestamps_for_prefix
         output_ids = []
+        # Per-batch token buffers for windowed incremental detokenization of streaming
+        # intermediate yields (see _stream_incremental_text). Unused in non-streaming mode.
+        stream_token_cache = [[] for _ in range(unpadded_batch_size)]
         total_decode_time = 0
         prompt_is_done = [False for _ in range(unpadded_batch_size)]
         log_probs = []  # Track log probabilities
@@ -1061,9 +1080,10 @@ class WhisperGenerator:
                     prompt_is_done[user_id] = True
 
             if streaming:
-                ttnn_transcription = self.processor.batch_decode(
-                    first_transcription_token.unsqueeze(dim=1), skip_special_tokens=True
-                )
+                ttnn_transcription = [
+                    self._stream_incremental_text(stream_token_cache[b], first_transcription_token[b])
+                    for b in range(unpadded_batch_size)
+                ]
                 current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
@@ -1314,7 +1334,10 @@ class WhisperGenerator:
             # Streaming mode decodes per-token to yield incremental results; non-streaming
             # skips this entirely and decodes the full collected ID sequence once at the end.
             if i >= transcription_start_pos and streaming:
-                ttnn_transcription = self.processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
+                ttnn_transcription = [
+                    self._stream_incremental_text(stream_token_cache[b], next_tokens[b])
+                    for b in range(unpadded_batch_size)
+                ]
 
                 # Calculate current average log probability for each batch item
                 if log_probs:
