@@ -113,7 +113,10 @@ inline std::string_view get_core_type_name(CoreType ct) {
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint64_t hw_fault_info = 0) {
+    dev_msgs::debug_assert_type_t type,
+    uint16_t line_num = 0,
+    uint64_t hw_fault_info = 0,
+    uint32_t faulting_instr_l1 = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
             return fmt::format(
@@ -139,12 +142,16 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
-            if ((hw_fault_info & 0xffffffff) <= 7) {
+            // DM faults carry the cause (DmErrors, 0-7) in line_num and pack the full 32-bit PC and
+            // faulting addr/instr into hw_fault_info; TRISC faults (cause > 7) keep their own encoding.
+            if (line_num <= 7) {
                 return fmt::format(
-                    "hardware fault occurred at PC 0x{:x}. Cause: {}, faulting address or instruction: 0x{:08x}",
-                    line_num,
-                    enchantum::to_string(static_cast<DmErrors>(hw_fault_info & 0xffffffff)),
-                    (hw_fault_info >> 32) & 0xffffffff);
+                    "hardware fault occurred at PC 0x{:08x}. Cause: {}, faulting address or instruction: 0x{:08x}, "
+                    "L1 word at PC (uncached): 0x{:08x}",
+                    (hw_fault_info >> 32) & 0xffffffff,
+                    enchantum::to_string(static_cast<DmErrors>(line_num)),
+                    hw_fault_info & 0xffffffff,
+                    faulting_instr_l1);
             } else {
                 return fmt::format(
                     "hardware fault occurred with cause: {}, additional code: 0x{:08x}, faulting address or "

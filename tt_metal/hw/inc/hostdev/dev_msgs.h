@@ -262,6 +262,7 @@ struct debug_assert_msg_t {
     volatile uint8_t which;
     volatile uint32_t claim;
     volatile uint64_t hw_fault_info;
+    volatile uint32_t faulting_instr_l1;  // Quasar HW fault: 32-bit word at the faulting PC, read via uncached L1 alias
 };
 
 enum debug_assert_type_t {

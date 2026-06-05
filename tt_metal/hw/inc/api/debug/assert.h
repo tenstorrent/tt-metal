@@ -42,8 +42,22 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
             asm volatile("csrr %0, mepc" : "=r"(mepc));
             asm volatile("csrr %0, mcause" : "=r"(mcause));
             asm volatile("csrr %0, mtval" : "=r"(mtval));
-            v->line_num = mepc;  // mepc is the instruction address that caused the fault
-            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
+            // line_num (16-bit) can't hold the full 32-bit PC, so carry mepc and mtval (both 32-bit)
+            // in hw_fault_info and stash the small DM cause (DmErrors, 0-7) in line_num. The host keys
+            // its DM-vs-TRISC fault decode on line_num <= 7 (see get_debug_assert_message).
+            v->line_num = mcause & 0xffff;                           // DM fault cause / DM-vs-TRISC discriminator
+            v->hw_fault_info = (mepc << 32) | (mtval & 0xffffffff);  // PC (high 32) | faulting addr/instr (low 32)
+#if defined(ARCH_QUASAR)
+            // Cross-check the CSR mtval against what is actually stored in L1 at the faulting PC, read
+            // through the uncached alias (bypasses I$/D$/L2). If mtval read back 0 but this holds a
+            // real instruction, the fault was a stale/zero instruction fetch, not genuinely zeroed
+            // memory. Bounded to the L1 window so a wild PC can't trigger a nested fault here.
+            uint32_t fault_pc = static_cast<uint32_t>(mepc);
+            v->faulting_instr_l1 = (fault_pc < MEM_L1_SIZE)
+                                       ? *reinterpret_cast<volatile uint32_t tt_l1_ptr*>(
+                                             static_cast<uintptr_t>(fault_pc) + MEM_L1_UNCACHED_BASE)
+                                       : 0u;
+#endif
 #elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_TRISC)
             uint32_t error_code =
                 RISC_PIC_BRISC_EX_REG_BASE(internal_::get_trisc_id())[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
