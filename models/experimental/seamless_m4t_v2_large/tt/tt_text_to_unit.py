@@ -43,6 +43,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     TILE,
     to_torch_replicated_first_shard,
     t2u_tuned_matmul,
+    t2u_tuned_sdpa_batched,
     width_sharded_to_l1_interleaved,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
@@ -53,6 +54,13 @@ _T2U_LINEAR_CHUNK_ROWS = 16 * TILE
 _T2U_LINEAR_IN0_BLOCK_W = 8
 _T2U_LONG_SDPA_TP_THRESHOLD = 128
 _T2U_SDPA_Q_CHUNK_ROWS = 512
+_T2U_SDPA_Q_CHUNK_ROWS_LONG = 1024
+
+
+def _t2u_sdpa_q_chunk_rows(seq: int) -> int:
+    """Fewer SDPA chunks on decoder long-seq (``seq > 4096``) without changing encoder tuning."""
+    return _T2U_SDPA_Q_CHUNK_ROWS_LONG if seq > 4096 else _T2U_SDPA_Q_CHUNK_ROWS
+
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
@@ -130,6 +138,86 @@ def _t2u_sdpa_program_config(
     return out
 
 
+def _t2u_tuned_sdpa_matmul(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    m: int,
+    k: int,
+    n: int,
+    mc: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+) -> Optional[ttnn.Tensor]:
+    """Per-head tuned 2D SDPA matmul for ``[B,H,M,K] @ [B,H,K,N]`` (batched 4D breaks block-shard)."""
+    device = a.device()
+    tuned = t2u_tuned_matmul(device, m, k, n)
+    if tuned is None:
+        return None
+    program_config, in0_mem, out_mem = tuned
+    in0_is_bs = in0_mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    out_is_bs = out_mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    batch = int(a.shape[0])
+    nh = int(a.shape[1])
+    heads: list[ttnn.Tensor] = []
+    for h in range(nh):
+        a_h = ttnn.slice(a, [0, h, 0, 0], [batch, h + 1, m, k], [1, 1, 1, 1], memory_config=mc)
+        b_h = ttnn.slice(b, [0, h, 0, 0], [batch, h + 1, k, n], [1, 1, 1, 1], memory_config=mc)
+        a_h = ttnn.reshape(a_h, (1, 1, m, k))
+        b_h = ttnn.reshape(b_h, (1, 1, k, n))
+        if in0_is_bs:
+            a_h = ttnn.to_memory_config(a_h, in0_mem)
+        out_h = ttnn.matmul(
+            a_h,
+            b_h,
+            program_config=program_config,
+            memory_config=out_mem,
+            compute_kernel_config=compute_kernel_config,
+        )
+        ttnn.deallocate(a_h)
+        ttnn.deallocate(b_h)
+        if out_is_bs:
+            out_h = ttnn.sharded_to_interleaved(out_h, mc, output_dtype=ttnn.bfloat16)
+        elif (
+            out_mem.buffer_type != ttnn.BufferType.DRAM or out_mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+        ):
+            out_h = ttnn.to_memory_config(out_h, mc)
+        out_h = ttnn.reshape(out_h, (batch, 1, m, n))
+        heads.append(out_h)
+    if len(heads) == 1:
+        return heads[0]
+    out = ttnn.concat(heads, dim=1, memory_config=mc)
+    for h in heads:
+        ttnn.deallocate(h)
+    return out
+
+
+def _t2u_tuned_sdpa_batched_matmul(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    m: int,
+    k: int,
+    n: int,
+    mc: ttnn.MemoryConfig,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+) -> Optional[ttnn.Tensor]:
+    """Native 4D batched SDPA matmul via 1D fuse_batch (decoder long-seq; no per-head overhead)."""
+    tuned = t2u_tuned_sdpa_batched(a.device(), m, k, n)
+    if tuned is None:
+        return None
+    program_config, _, out_mem = tuned
+    out = ttnn.matmul(
+        a,
+        b,
+        program_config=program_config,
+        memory_config=out_mem,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if out_mem.buffer_type != mc.buffer_type or out_mem.memory_layout != mc.memory_layout:
+        out = ttnn.to_memory_config(out, mc)
+    return out
+
+
 def _t2u_dram_matmul_attention(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -151,11 +239,40 @@ def _t2u_dram_matmul_attention(
     out_chunks: list[ttnn.Tensor] = []
     for start in range(0, seq, q_chunk):
         end = min(start + q_chunk, seq)
+        chunk_rows = end - start
         q_c = ttnn.slice(q, [0, 0, start, 0], [batch, nh, end, hd], [1, 1, 1, 1], memory_config=mc)
-        scores = ttnn.matmul(q_c, k_t, memory_config=mc, compute_kernel_config=compute_kernel_config)
-        ttnn.deallocate(q_c)
         if scale != 1.0:
-            scores = ttnn.multiply(scores, scale, memory_config=mc)
+            q_c = ttnn.multiply(q_c, scale, memory_config=mc)
+        use_per_head = chunk_rows == q_chunk and t2u_tuned_matmul(q.device(), chunk_rows, hd, seq) is not None
+        use_batched = (
+            chunk_rows == q_chunk
+            and not use_per_head
+            and t2u_tuned_sdpa_batched(q.device(), chunk_rows, hd, seq) is not None
+        )
+        scores = None
+        if use_per_head:
+            scores = _t2u_tuned_sdpa_matmul(
+                q_c,
+                k_t,
+                m=q_chunk,
+                k=hd,
+                n=seq,
+                mc=mc,
+                compute_kernel_config=compute_kernel_config,
+            )
+        elif use_batched:
+            scores = _t2u_tuned_sdpa_batched_matmul(
+                q_c,
+                k_t,
+                m=chunk_rows,
+                k=hd,
+                n=seq,
+                mc=mc,
+                compute_kernel_config=compute_kernel_config,
+            )
+        if scores is None:
+            scores = ttnn.matmul(q_c, k_t, memory_config=mc, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(q_c)
         if attn_mask is not None:
             # A full-range slice (single chunk, i.e. q_chunk >= seq) returns a view aliasing
             # ``attn_mask`` rather than a copy; deallocating it would free the shared mask and
@@ -170,7 +287,35 @@ def _t2u_dram_matmul_attention(
                 ttnn.deallocate(mask_c)
         probs = ttnn.softmax(scores, dim=-1, numeric_stable=True, memory_config=mc)
         ttnn.deallocate(scores)
-        out_c = ttnn.matmul(probs, v, memory_config=mc, compute_kernel_config=compute_kernel_config)
+        use_per_head_av = chunk_rows == q_chunk and t2u_tuned_matmul(probs.device(), chunk_rows, seq, hd) is not None
+        use_batched_av = (
+            chunk_rows == q_chunk
+            and not use_per_head_av
+            and t2u_tuned_sdpa_batched(probs.device(), chunk_rows, seq, hd) is not None
+        )
+        out_c = None
+        if use_per_head_av:
+            out_c = _t2u_tuned_sdpa_matmul(
+                probs,
+                v,
+                m=q_chunk,
+                k=seq,
+                n=hd,
+                mc=mc,
+                compute_kernel_config=compute_kernel_config,
+            )
+        elif use_batched_av:
+            out_c = _t2u_tuned_sdpa_batched_matmul(
+                probs,
+                v,
+                m=chunk_rows,
+                k=seq,
+                n=hd,
+                mc=mc,
+                compute_kernel_config=compute_kernel_config,
+            )
+        if out_c is None:
+            out_c = ttnn.matmul(probs, v, memory_config=mc, compute_kernel_config=compute_kernel_config)
         ttnn.deallocate(probs)
         out_chunks.append(out_c)
     ttnn.deallocate(q)
@@ -207,6 +352,7 @@ def _t2u_scaled_dot_product_attention(
             seq=seq,
             scale=scale,
             compute_kernel_config=attn_matmul_compute_cfg,
+            q_chunk=_t2u_sdpa_q_chunk_rows(seq),
         )
 
     attn_mc = ttnn.DRAM_MEMORY_CONFIG if seq > TILE else ttnn.L1_MEMORY_CONFIG
