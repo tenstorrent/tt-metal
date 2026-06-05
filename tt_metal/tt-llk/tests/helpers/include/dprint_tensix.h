@@ -96,7 +96,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
             case static_cast<uint32_t>(DataFormat::Int8):
             case static_cast<uint32_t>(DataFormat::UInt8):
             {
-                uint32_t rd[4]         = {0};
+                uint32_t rd[4];
                 volatile uint8_t* addr = reinterpret_cast<volatile uint8_t*>(0xFFBD8000);
                 for (int i = 0; i < 16; ++i)
                 {

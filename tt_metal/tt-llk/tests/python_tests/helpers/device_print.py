@@ -573,18 +573,14 @@ def _bfp_pair_decode(data: bytes, n: int, mantissa_bits: int) -> list[float]:
     return out
 
 
-def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
-    """Decode the (len << 16) | type word that prefixes a dp_typed_array_t."""
-    word = struct.unpack_from("<I", args_blob, offset)[0]
-    return word >> 16, word & 0xFFFF
-
-
 def _render_typed_array(args_blob: bytes, offset: int, dest_make_float: bool) -> str:
     """Render a dp_typed_array_t record (a DEST register dump) as one row of
     colored cells. DEST float byte order is arch-dependent, see _decode_typed_array.
 
     Cell formatting follows helpers.utils.format_tile_row."""
-    length, fmt_code = _typed_array_header(args_blob, offset)
+    # (len << 16) | type header word prefixes a dp_typed_array_t.
+    header = struct.unpack_from("<I", args_blob, offset)[0]
+    length, fmt_code = header >> 16, header & 0xFFFF
     elt_bytes = _TA_ELT_BYTES.get(fmt_code)
     if elt_bytes is None:
         return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
@@ -663,10 +659,6 @@ def _render_tile_slice(args_blob: bytes, offset: int) -> str:
     body = format_tile_row(values, TILE_BG_RESULT) + "\n"
     body += f"<TileSlice truncated (max is {data_count}, try bumping the tile slice template param)>"
     return body + trailer
-
-
-def _strip_stall(wpos: int) -> int:
-    return wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG
 
 
 class DevicePrintParser:
@@ -782,7 +774,7 @@ class DevicePrintParser:
 
         for _ in range(self._MAX_STALL_RESETS_PER_POLL):
             stall = bool(wpos & DEVICE_PRINT_WRITE_STALL_FLAG)
-            wpos = _strip_stall(wpos)
+            wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG
 
             if rpos > wpos:
                 # Kernel wrapped wpos back to 0; drain the tail then fall through to head.
