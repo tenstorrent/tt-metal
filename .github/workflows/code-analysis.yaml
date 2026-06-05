@@ -97,7 +97,7 @@ jobs:
         run: git config --global --add safe.directory ${{ github.workspace }}
 
       - id: find-changes
-        uses: ./.github/actions/find-changed-files
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
 
       - id: compute-outputs
         shell: bash
