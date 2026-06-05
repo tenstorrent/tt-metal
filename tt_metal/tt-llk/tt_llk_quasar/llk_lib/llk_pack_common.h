@@ -274,7 +274,7 @@ inline void _llk_packer_wait_for_math_done_()
 }
 
 /**
- * @brief Signals (increments) the MATH_PACK semaphore to release the math thread to write again.
+ * @brief Signals the MATH_PACK semaphore (decrements it via SEMGET) to release the math thread to write again.
  *
  * @tparam WaitRes: p_stall resource mask to stall on before signalling; default p_stall::NOTHING issues no stall.
  */
