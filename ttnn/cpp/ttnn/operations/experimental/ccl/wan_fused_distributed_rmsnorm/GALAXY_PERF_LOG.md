@@ -408,3 +408,59 @@ Findings:
 5. N2368 is compute(POST)+drain bound with balanced TRISC/BRISC lanes, not
    fabric/setup bound. The composite's edge at that size is its lighter per-row
    POST + separate tuned AG, not MUX setup cost.
+
+---
+
+## Compute-vs-I/O decomposition via two complementary ablations
+
+Added two diagnostic ablations to isolate the critical path (program_factory
+`ablation_defines()`, `WAN_ABLATION` env):
+
+- **WAN_ABLATION=7 (`WAN_ABL_SKIP_COMPUTE`)** — compute kernel runs the exact
+  external CB handshake (input / stats_local / stats_gathered / output / rope
+  cos+sin) but issues **zero LLKs** (no math, reduce, tile_regs, pack, reconfig,
+  init). A gated passthrough branch at the chunk-loop head; valid for the common
+  AG path (whole-row norm, packed AG, non-streaming, is_tp_1==0 = galaxy bench).
+  Gives the **I/O floor**: reader DRAM reads + writer fabric-AG + drain + output
+  write + CB sync, with no compute.
+- **WAN_ABLATION=8 (pure compute)** — sets all six read/write skips
+  (INPUT/WEIGHT/ROPE read, OUTPUT write, FABRIC, GATHER_SCATTER). Every CB
+  reserve/push/wait/pop lives *outside* the per-skip `#ifndef` guards, so CBs
+  still flow (garbage data) and **compute runs full-speed LLKs** with all
+  DRAM/fabric stubbed. Gives **pure compute time**.
+
+Both passed with no deadlock, confirming the CB accounting in the passthrough
+and the guard placement. Profiler off, WAN_GALAXY_LINKS=4, traced wall (us/iter):
+
+| shape | RoPE | full | pure compute (A8) | I/O floor (A7) | bound by | overlap gap |
+|---|:--:|---:|---:|---:|:--:|---:|
+| N18944 | Y | 738.5 | 580.2 | 597.3 | balanced | 141 |
+| N9472  | Y | 431.1 | 334.2 | 332.5 | balanced | 97 |
+| N2368  | Y | 205.7 | 181.8 | 116.4 | **compute** | 24 |
+| N18944 | N | 589.3 | 280.5 | 532.4 | **I/O** | 57 |
+| N9472  | N | 320.6 | 176.6 | 303.5 | **I/O** | 17 |
+| N2368  | N | 140.5 | 99.9  | 111.2 | balanced | 29 |
+| L512   | N | 64.2  | 53.9  | 52.3  | balanced | 10 |
+
+overlap gap = full - max(compute, I/O) = time lost to imperfect compute<->I/O
+overlap (serialization). The wall = max(compute, I/O) + overlap gap.
+
+Findings:
+1. **No-RoPE big shapes are pure I/O-bound.** Compute (280 / 177) is ~half the
+   I/O floor (532 / 304) and fully hideable. No compute headroom; DRAM/fabric
+   sets the wall. Already 1.76x / 1.62x.
+2. **N2368-RoPE is genuinely compute-bound.** Pure compute alone (181.8) is
+   within 24us of the full 205.7 wall; its I/O floor is only 116. Compute does
+   not fit behind the small I/O window. This is *the* reason it sits at 0.96x.
+3. **RoPE ~doubles compute.** Pure-compute RoPE vs no-RoPE: N18944 580 vs 280
+   (+300), N9472 334 vs 177 (+157), N2368 182 vs 100 (+82). trans-mat matmul +
+   .cos + .sin + add per row. On big shapes it still (mostly) tucks under the
+   I/O floor; on N2368 it blows past it.
+4. **RoPE big shapes are balanced with overlap headroom.** N18944-RoPE compute
+   580 ~= I/O 597 yet wall is 738 -> 141us lost to serialization; N9472-RoPE
+   loses 97. Perfect overlap would approach ~597 / ~334 (~19% / ~23% faster).
+
+Two distinct optimization targets:
+- **N2368-RoPE** -> cut RoPE compute (binding constraint, 182 of 206us).
+- **N18944 / N9472-RoPE** -> tighten compute<->I/O overlap (97-141us exposed
+  serialization despite balanced costs).
