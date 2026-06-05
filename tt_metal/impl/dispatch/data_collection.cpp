@@ -48,8 +48,9 @@ void RecordProgramRun(uint64_t program_id) {
     tt::tt_metal::MetalContext::instance().data_collector()->RecordProgramRun(program_id);
 }
 
-void RecordKernelSourceMap(ProgramImpl& program) {
-    tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelSourceMap(program);
+void RecordKernelSourceMap([[maybe_unused]] ProgramImpl& program) {
+    return;
+    // tt::tt_metal::MetalContext::instance().data_collector()->RecordKernelSourceMap(program);
 }
 
 std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) {

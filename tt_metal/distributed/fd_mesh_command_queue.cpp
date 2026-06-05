@@ -265,7 +265,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
-    ZoneScopedN("EnqueueProgram");
+    // ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
@@ -410,10 +410,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.
-        if (!tt::tt_metal::getDeviceProfilerState()) {
-            std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
-            TracyMessage(msg.c_str(), msg.size());
-        }
+        // if (!tt::tt_metal::getDeviceProfilerState()) {
+        //     std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
+        //     TracyMessage(msg.c_str(), msg.size());
+        // }
     }
     // Send go signals to devices not running a program to ensure consistent global state
     this->write_go_signal_to_unused_sub_grids(
@@ -553,12 +553,12 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScopedN("FDMeshCommandQueue::finish");
+    // ZoneScopedN("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
 
     {
-        ZoneScopedN("RealtimeProfilerSyncCheck");
+        // ZoneScopedN("RealtimeProfilerSyncCheck");
         mesh_device_->impl().trigger_realtime_profiler_sync_check();
     }
 

@@ -1223,42 +1223,52 @@ def sample_greedy(
     except Exception as e:
         raise ValueError(f"Failed to encode prompt '{prompt}': {e}")
 
-    # Initialize running context with prompt
-    # For simplicity, we'll use the prompt tokens and pad/truncate to sequence_length
-    # If prompt is shorter than sequence_length, pad with the first token (usually space/newline)
-    running = list(prompt_ids[:sequence_length])
-    if len(running) < sequence_length:
-        # Pad with the first token in vocabulary (usually a common character like space)
-        # Get the first token ID from the tokenizer's vocabulary
-        if tokenizer.stoi:
-            # Get the token ID for space character, or first token if space not found
-            space_token_id = tokenizer.stoi.get(" ", None)
-            if space_token_id is None:
-                space_token_id = list(tokenizer.stoi.values())[0]
-            padding = [space_token_id] * (sequence_length - len(running))
-        else:
-            # Fallback: use 0 if tokenizer has no vocabulary
-            padding = [0] * (sequence_length - len(running))
-        running = padding + running
+    # Build the running context. Prepend BOS when the tokenizer defines one
+    # (the packed-data preprocessing injects BOS at each document start, so the
+    # model expects generation to begin with it). Char-level tokenizers have no
+    # bos_id, so this is a no-op for them.
+    bos_id = getattr(tokenizer, "bos_id", None)
+    eos_id = getattr(tokenizer, "eos_id", None)
+    # Right-pad filler token. CRITICAL: the model is fed a fixed-width window,
+    # but we RIGHT-pad (real tokens left-aligned, filler after them) instead of
+    # left-padding. Under causal masking a position can only attend to earlier
+    # positions, so right-side filler is numerically inert at the last real
+    # position. The previous implementation LEFT-padded with
+    # ``list(stoi.values())[0]`` — for the Llama/BPE tokenizer that resolves to
+    # byte-token ``<0xD0>`` (the Cyrillic UTF-8 lead byte), so the model was
+    # primed with ~2000 junk bytes and produced byte/Cyrillic garbage. Reading
+    # logits at the last real position with right-padding eliminates that.
+    pad_id = eos_id if eos_id is not None else 0
+    running = list(prompt_ids)
+    if bos_id is not None:
+        running = [bos_id] + running
+    if not running:
+        running = [pad_id]
 
     generated_tokens = []
 
     print(f"\nGenerating text from prompt: '{prompt}'")
     print("=" * 70)
 
-    # Create initial input tensor on device once, then update in-place
-    # This avoids CPU->Device transfer every iteration
-    inp_list = running[-sequence_length:]
-    input_ttnn = ttnn.from_buffer(
-        buffer=inp_list,
-        shape=[1, 1, 1, sequence_length],
-        dtype=ttnn.uint32,
-        device=device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    def _build_input(real_tokens):
+        """Right-pad the real context to the fixed window; return (tensor, real_len)."""
+        real = list(real_tokens[-sequence_length:])
+        real_len = len(real)
+        ctx = real + [pad_id] * (sequence_length - real_len)
+        t = ttnn.from_buffer(
+            buffer=ctx,
+            shape=[1, 1, 1, sequence_length],
+            dtype=ttnn.uint32,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        return t, real_len
 
     for step in range(max_new_tokens):
-        # Wrap current input tensor for model (no data transfer)
+        # Rebuild the input each step: real tokens left-aligned, right-padded to
+        # the fixed window. real_len marks the last real position whose logits
+        # predict the next token.
+        input_ttnn, real_len = _build_input(running)
         input_tensor = ttml.autograd.Tensor(input_ttnn, False)
 
         # Forward pass with causal mask
@@ -1267,54 +1277,40 @@ def sample_greedy(
 
         logits = model(input_tensor, mask_for_model)
 
-        # Get logits for last position using ttml/ttnn operations
+        # Get logits for the last REAL position (right padding is causally inert).
         # Model returns shape [B, 1, seq_len, vocab_size] or [B, 1, 1, seq_len, vocab_size]
         logits_shape = logits.shape()
+        last_pos = real_len - 1
 
-        # Extract last position logits using ttnn operations (no autograd needed for inference)
-        # Handle different possible shapes
+        # Slice exactly the last real position -> [B, 1, 1, vocab_size]
         if len(logits_shape) == 5:
-            # [B, 1, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, 1, vocab_size]
-            seq_len = logits_shape[3]
-            last_pos = seq_len - 1
             sliced_tensor = ttnn.slice(
                 logits.get_value(),
                 [0, 0, 0, last_pos, 0],
-                [
-                    logits_shape[0],
-                    logits_shape[1],
-                    logits_shape[2],
-                    seq_len,
-                    logits_shape[4],
-                ],
+                [logits_shape[0], logits_shape[1], logits_shape[2], last_pos + 1, logits_shape[4]],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
             reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[4]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         elif len(logits_shape) == 4:
-            # [B, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, vocab_size]
-            seq_len = logits_shape[2]
-            last_pos = seq_len - 1
             sliced_tensor = ttnn.slice(
                 logits.get_value(),
                 [0, 0, last_pos, 0],
-                [logits_shape[0], logits_shape[1], seq_len, logits_shape[3]],
+                [logits_shape[0], logits_shape[1], last_pos + 1, logits_shape[3]],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
             reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[3]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         else:
-            # Fallback: use reshape and take last element
-            # This case should be rare
+            # Fallback: flatten to [positions, vocab] and take the last real row.
             reshaped = ttnn.reshape(logits.get_value(), [-1, logits_shape[-1]])
             reshaped_shape = reshaped.shape
-            if reshaped_shape[0] > 1:
-                sliced_tensor = ttnn.slice(
-                    reshaped,
-                    [reshaped_shape[0] - 1, 0],
-                    [reshaped_shape[0], reshaped_shape[1]],
-                )
-                reshaped = ttnn.reshape(sliced_tensor, [1, 1, 1, reshaped_shape[1]])
+            sliced_tensor = ttnn.slice(
+                reshaped,
+                [last_pos, 0],
+                [last_pos + 1, reshaped_shape[1]],
+            )
+            reshaped = ttnn.reshape(sliced_tensor, [1, 1, 1, reshaped_shape[1]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
 
         # Get vocabulary size (model may have rounded up, but tokenizer has actual size)
@@ -1387,35 +1383,16 @@ def sample_greedy(
             # Clamp to valid vocabulary
             next_id = min(next_id, vocab_size - 1)
 
-        # Append to running context (for final decode)
+        # Append to running context; next step rebuilds the input from it.
         running.append(next_id)
         generated_tokens.append(next_id)
 
-        # Update input tensor on device: shift left and append new token
-        # Roll tensor left by 1 position: [t0, t1, t2, ...] -> [t1, t2, ..., t0]
-        # Then overwrite last position with new token
-        # This keeps everything on device, avoiding CPU->Device transfer
-
-        # Shift left: slice [1:] and concat with placeholder, then overwrite last
-        # More efficient: use ttnn.roll if available, otherwise slice and concat
-        shifted = ttnn.slice(input_ttnn, [0, 0, 0, 1], [1, 1, 1, sequence_length])
-        # Create single-element tensor with new token
-        new_token_tensor = ttnn.from_buffer(
-            buffer=[next_id],
-            shape=[1, 1, 1, 1],
-            dtype=ttnn.uint32,
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        # Concatenate: shifted [1:seq_len-1] + new_token -> full sequence
-        input_ttnn = ttnn.concat([shifted, new_token_tensor], dim=3)
-
-        # Cleanup intermediate tensors
-        ttnn.deallocate(shifted)
-        ttnn.deallocate(new_token_tensor)
-
         # Reset graph for next iteration
         ttml.autograd.AutoContext.get_instance().reset_graph()
+
+        # Stop early on EOS (clean end of a document) when the tokenizer has one.
+        if eos_id is not None and next_id == eos_id:
+            break
 
         # Print progress every 50 tokens
         if (step + 1) % 50 == 0:
@@ -2094,6 +2071,20 @@ def main():
     # the mesh is opened with anonymous axis names and all DDP code paths
     # collapse to single-device behavior.
     device_config = DeviceConfig(yaml_config)
+    # Generation (--prompt) is a single batch-1 stream and relies on scalar
+    # extraction (sampled_tensor.item()), which cannot read from a tensor
+    # replicated across a multi-device mesh ("Can't get a single buffer from
+    # host storage distributed over mesh shape ..."). DDP/TP also buy nothing
+    # for single-stream decoding, so force a single device for inference even
+    # if the supplied --config enables parallelism (e.g. the training YAML's
+    # device_config: mesh_shape=[32,1], enable_ddp=true).
+    if args.prompt and (device_config.enable_ddp or device_config.enable_tp or device_config.total_devices() > 1):
+        print(
+            f"Inference mode: overriding device_config "
+            f"(mesh_shape={device_config.mesh_shape}, enable_ddp={device_config.enable_ddp}, "
+            f"enable_tp={device_config.enable_tp}) with a single device (mesh_shape=[1, 1])."
+        )
+        device_config = DeviceConfig({})
     if device_config.enable_tp and args.model_save_path:
         # Pickle checkpoint format can't round-trip TP-sharded parameters
         # (mirrors train_nanogpt.py:1378-1384 / main.cpp:447-451).
