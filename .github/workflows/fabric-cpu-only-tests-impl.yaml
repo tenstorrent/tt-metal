@@ -28,12 +28,12 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # Shard A (~8 min): unit + phys-grouping + t3k
-          - name: "unit-phys-t3k"
-            groups: "unit phys-grouping t3k"
-          # Shard B (~7 min): control-plane + wh-galaxy + bh-galaxy
-          - name: "ctrl-wh-bh"
-            groups: "control-plane wh-galaxy bh-galaxy"
+          # Shard A (~6m07s): unit + phys-grouping + t3k + wh-galaxy
+          - name: "unit-phys-t3k-wh"
+            groups: "unit phys-grouping t3k wh-galaxy"
+          # Shard B (~6m27s): control-plane + bh-galaxy
+          - name: "ctrl-bh"
+            groups: "control-plane bh-galaxy"
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
