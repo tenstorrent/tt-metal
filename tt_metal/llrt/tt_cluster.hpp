@@ -92,6 +92,9 @@ public:
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
+    // WH B0 unconditionally, BH with ETH FW >= 1.9.0.
+    bool supports_ethernet_link_retraining() const;
+
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);
 
@@ -230,6 +233,10 @@ public:
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
+        // Simulation/mock/emule chips do not have host NUMA affinity; UMD throws if queried.
+        if (this->target_type_ != tt::TargetDevice::Silicon) {
+            return 0;
+        }
         uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
         return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
@@ -360,6 +367,9 @@ public:
     bool is_mock_or_emulated() const {
         return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
     }
+
+    void register_sim_fabric_endpoint_direction(
+        ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
 
     bool is_base_routing_fw_enabled() const;
 
