@@ -148,7 +148,6 @@ class GemmaMultimodalGenerator(Generator):
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
-                non_greedy_decoding_on_device=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape

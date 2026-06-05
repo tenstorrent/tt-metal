@@ -997,6 +997,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         user_slots: list[int] | None = None,
         skip_precompile: bool = False,
     ) -> ttnn.Tensor:
+        assert getattr(self, "sampling_generator", None) is not None, (
+            "_sample_tokens_device called before the sampling generator was created "
+            "(it is initialized lazily on the first sampling request); on-device sampling is unavailable."
+        )
         sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
         sampling_logits = logits
         if logits.shape[2] != sampling_batch_size:

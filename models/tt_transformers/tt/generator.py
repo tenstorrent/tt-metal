@@ -561,7 +561,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
-                non_greedy_decoding_on_device=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -1542,7 +1541,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # preserve device-produced tokens.
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
-                device_page_table = self.trace_inputs_decode[sampling_on_device][i][DECODE_PAGE_TABLE_INPUT_IDX]
+                device_page_table = self.trace_inputs_decode[on_device_sampling][i][DECODE_PAGE_TABLE_INPUT_IDX]
                 if host_page_table is not None:
                     ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 

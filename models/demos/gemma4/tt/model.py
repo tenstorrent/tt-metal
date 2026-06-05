@@ -1121,7 +1121,11 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if on_device_logits and self.sampling is not None:
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "decode forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
+            )
             batch_dim = logits.shape[2]
             if batch_dim < 32:
                 logits = ttnn.pad(logits, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)

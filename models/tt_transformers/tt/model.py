@@ -808,6 +808,10 @@ class Transformer(LightweightModule):
         )
 
         if on_device_logits:
+            assert self.sampling is not None, (
+                "ttnn_decode_forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
+            )
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return tt_logits
 

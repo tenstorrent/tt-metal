@@ -254,7 +254,6 @@ class Generator(WarmupForwardMixin):
                 if not sampling_parameters_sweeped:
                     sampling_params_list = self._create_sampling_params(
                         can_sample_on_device=on_device_sampling_enabled,
-                        non_greedy_decoding_on_device=on_device_sampling_enabled,
                         batch_size=batch,
                     )
                 else:
@@ -1179,8 +1178,8 @@ class Generator(WarmupForwardMixin):
             )
 
         if read_from_device:
-            # IMPORTANT: If split sampling is enabled, `tt_log_probs` is produced by the sampling
-            # module (potentially via its own trace). We must pass it through to the readback path;
+            # IMPORTANT: When on-device sampling ran, `tt_log_probs` is produced by the sampling
+            # module (via its own trace). We must pass it through to the readback path;
             # otherwise `process_output_decode()` will return log_probs=None and host code will fill
             # log_probs with torch.ones(), masking the real values.
             tt_out_for_read = (tt_tok, tt_log_probs) if tt_log_probs is not None else tt_tok
