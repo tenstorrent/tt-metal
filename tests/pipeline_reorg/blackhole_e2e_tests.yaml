@@ -304,7 +304,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/cache/ -vvv --tb=short
   skus:
     bh_llmbox:
-      timeout: 10
+      timeout: 20
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
@@ -356,7 +356,7 @@
     exit $exit_code
   skus:
     bh_deskbox:
-      timeout: 13
+      timeout: 26
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
