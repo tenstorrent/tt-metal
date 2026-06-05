@@ -21,10 +21,10 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Atten
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model as DSv3RefModel
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE as DSv3RefMoE
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Model as KimiRefModel
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 
 
 class TestVariant:
@@ -87,7 +87,7 @@ DSV3 = TestVariant(
     moe_pcc_threshold=0.985,
 )
 
-KIMI = TestVariant(
+KIMI_V2_6 = TestVariant(
     name="kimi_k2_6",
     env_var="KIMI_K2_6_HF_MODEL",
     hf_repo_id="moonshotai/Kimi-K2.6",
@@ -105,4 +105,4 @@ KIMI = TestVariant(
     moe_pcc_threshold=0.987,
 )
 
-TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI]}
+TEST_VARIANTS = {v.name: v for v in [DSV3, KIMI_V2_6]}
