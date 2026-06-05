@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef ARCH_QUASAR
-#include "api/debug/assert.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
@@ -152,13 +152,19 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
  */
 // clang-format on
 ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
-#ifndef ARCH_QUASAR
     uint32_t address = 0;
 
     UNPACK({
         uint32_t operand_id = get_operand_id(cb_id);
+#ifdef ARCH_QUASAR
+        LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+        uint32_t base_address =
+            local_dfb.tc_slots[local_dfb.tc_idx].base_addr + local_dfb.tc_slots[local_dfb.tc_idx].rd_offset;
+        uint32_t offset_address = static_cast<uint32_t>(local_dfb.entry_size) * tile_index;
+#else
         uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
         uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+#endif
         address = (base_address + offset_address) << 4;  // Convert to byte address
 
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
@@ -169,10 +175,6 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
     PACK(address = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return address;
-#else
-    ASSERT(false && "get_tile_address is not implemented for ARCH_QUASAR");
-    return 0;
-#endif
 }
 
 // clang-format off
@@ -190,13 +192,19 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
  */
 // clang-format on
 ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t element_offset) {
-#ifndef ARCH_QUASAR
     uint32_t value = 0;
 
     UNPACK({
         uint32_t operand_id = get_operand_id(cb_id);
+#ifdef ARCH_QUASAR
+        LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+        uint32_t base_address =
+            local_dfb.tc_slots[local_dfb.tc_idx].base_addr + local_dfb.tc_slots[local_dfb.tc_idx].rd_offset;
+        uint32_t offset_address = static_cast<uint32_t>(local_dfb.entry_size) * tile_index;
+#else
         uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
         uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
+#endif
         uint32_t byte_address = (base_address + offset_address) << 4;  // Convert to byte address
 
         value = reinterpret_cast<volatile uint32_t*>(byte_address)[element_offset];
@@ -209,10 +217,6 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
     PACK(value = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
 
     return value;
-#else
-    ASSERT(false && "read_tile_value is not implemented for ARCH_QUASAR");
-    return 0;
-#endif
 }
 
 }  // namespace ckernel
