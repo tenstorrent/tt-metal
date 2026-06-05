@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.transformer.flash_multi_latent_attention_decode &mdash; TT-NN&amp;trade;  documentation</title>
+  <title>ttnn.transformer.ring_mla &mdash; TT-NN&amp;trade;  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.flash_multi_latent_attention_decode.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.ring_mla.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -24,8 +24,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.transformer.joint_scaled_dot_product_attention" href="ttnn.transformer.joint_scaled_dot_product_attention.html" />
-    <link rel="prev" title="ttnn.transformer.flash_mla_prefill" href="ttnn.transformer.flash_mla_prefill.html" /> 
+    <link rel="next" title="ttnn.transformer.scaled_dot_product_attention" href="ttnn.transformer.scaled_dot_product_attention.html" />
+    <link rel="prev" title="ttnn.transformer.ring_joint_scaled_dot_product_attention" href="ttnn.transformer.ring_joint_scaled_dot_product_attention.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -81,13 +81,13 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.chunked_scaled_dot_product_attention.html">ttnn.transformer.chunked_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_mla_prefill.html">ttnn.transformer.flash_mla_prefill</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_multi_latent_attention_decode.html">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.joint_scaled_dot_product_attention.html">ttnn.transformer.joint_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_flash_multi_latent_attention_decode.html">ttnn.transformer.paged_flash_multi_latent_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_scaled_dot_product_attention_decode.html">ttnn.transformer.paged_scaled_dot_product_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_distributed_scaled_dot_product_attention.html">ttnn.transformer.ring_distributed_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_joint_scaled_dot_product_attention.html">ttnn.transformer.ring_joint_scaled_dot_product_attention</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.ring_mla</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
@@ -139,9 +139,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.transformer.flash_multi_latent_attention_decode</li>
+      <li class="breadcrumb-item active">ttnn.transformer.ring_mla</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.transformer.flash_multi_latent_attention_decode.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.transformer.ring_mla.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -149,51 +149,60 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-transformer-flash-multi-latent-attention-decode">
-<h1>ttnn.transformer.flash_multi_latent_attention_decode<a class="headerlink" href="#ttnn-transformer-flash-multi-latent-attention-decode" title="Permalink to this heading"></a>
+  <section id="ttnn-transformer-ring-mla">
+<h1>ttnn.transformer.ring_mla<a class="headerlink" href="#ttnn-transformer-ring-mla" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.transformer.flash_multi_latent_attention_decode">
-<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">flash_multi_latent_attention_decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_q:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_k:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_v:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_causal:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">attn_mask:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cur_pos:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cur_pos_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config:</span> <span class="pre">SDPAProgramConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sliding_window_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">share_cache:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.transformer.flash_multi_latent_attention_decode" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.transformer.ring_mla">
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">ring_mla</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_kv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">persistent_output_buffer_kv</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">head_dim_v</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logical_n</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SDPAProgramConfig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">multi_device_global_semaphore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.GlobalSemaphore</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mesh_device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.ccl.Topology</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tt.tt_metal.SubDeviceId</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ccl_core_grid_offset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreCoord</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_column_major_ccl</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_balanced</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_cache_batch_idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_actual_isl</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.transformer.ring_mla" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>A version of scaled dot product attention specifically for decode.
-The implementation is Flash-Decode and it currently only supports MQA on decoding single token.</p>
-<p>Accepts a <cite>SDPAMultiCoreProgramConfig</cite> which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over <cite>b</cite> and K/V/Mask’s <cite>s</cite> dimension.</p>
+<p>Causal Ring MLA attention over a single KV tensor.</p>
+<p>K and V are represented by one tensor. QK uses the full KV head dimension and
+QKT@V uses the first head_dim_v columns as V. The V dimension must be smaller
+than K and tile aligned. The KV tensor must have one shared KV head.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>) – the input tensor [1 x b x nh x dh]</p></li>
-<li><p><strong>input_tensor_k</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
-<li><p><strong>input_tensor_v</strong> (<em>ttnn.Tensor</em>) – the input tensor [b x nkv x   s x dh]</p></li>
+<li><p><strong>input_tensor_q</strong> (<em>ttnn.Tensor</em>) – Queries [b x nqh x N/num_devices x dh].</p></li>
+<li><p><strong>input_tensor_kv</strong> (<em>ttnn.Tensor</em>) – Shared KV tensor [b x nkv x N/num_devices x dh].</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>is_causal</strong> (<em>bool</em>) – whether the attention is is_causal. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>attn_mask</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the input tensor [b x 1 x s x s]. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos</strong> (<em>List</em><em> of </em><em>int</em><em>, </em><em>optional</em>) – list of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>cur_pos_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – [b] tensor of integers of length b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>SDPAProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sliding_window_size</strong> (<em>int</em><em>, </em><em>optional</em>) – The size of sliding window for sliding window attention. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>share_cache</strong> (<em>bool</em><em>, </em><em>optional</em>) – KV cache sharing across batch for decode. <cite>True</cite> enables, <cite>False</cite> disables. Defaults to <cite>None</cite> (distinct program-cache key from explicit <cite>False</cite>).</p></li>
+<li><p><strong>persistent_output_buffer_kv</strong> (<em>ttnn.Tensor</em>) – Persistent buffer for gathered KV tensor.</p></li>
+<li><p><strong>head_dim_v</strong> (<em>int</em>) – Tile-aligned V hidden dimension, read from KV’s prefix.</p></li>
+<li><p><strong>logical_n</strong> (<em>int</em>) – Logical global sequence length before sharding.</p></li>
+<li><p><strong>program_config</strong> (<em>ttnn.SDPAProgramConfig</em>) – Program configuration for the operation.</p></li>
+<li><p><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>) – Scale factor for QK^T. Defaults to None.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Defaults to None.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – Dimension for ring all-gather.</p></li>
+<li><p><strong>multi_device_global_semaphore</strong> (<em>List</em><em>[</em><em>ttnn.GlobalSemaphore</em><em>]</em>) – Global semaphores for CCL synchronization.</p></li>
+<li><p><strong>num_links</strong> (<em>int</em>) – Number of CCL links.</p></li>
+<li><p><strong>cluster_axis</strong> (<em>int</em>) – Mesh axis for all-gather.</p></li>
+<li><p><strong>mesh_device</strong> (<em>ttnn.MeshDevice</em>) – Multi-device mesh.</p></li>
+<li><p><strong>topology</strong> (<em>ttnn.ccl.Topology</em>) – Communication topology.</p></li>
+<li><p><strong>subdevice_id</strong> (<em>Optional</em><em>[</em><em>tt.tt_metal.SubDeviceId</em><em>]</em>) – Sub-device identifier. Defaults to None.</p></li>
+<li><p><strong>ccl_core_grid_offset</strong> (<em>ttnn.CoreCoord</em>) – Core grid offset for CCL workers.</p></li>
+<li><p><strong>use_column_major_ccl</strong> (<em>bool</em>) – If true, allocate CCL workers column-major. Defaults to False.</p></li>
+<li><p><strong>is_balanced</strong> (<em>bool</em>) – Whether to use balanced causal work distribution. Defaults to False.</p></li>
+<li><p><strong>kv_cache_batch_idx</strong> (<em>int</em><em>, </em><em>optional</em>) – Selects one batch slot from an indexed K/V cache. Defaults to None.</p></li>
+<li><p><strong>kv_actual_isl</strong> (<em>int</em><em>, </em><em>optional</em>) – Prior valid global KV length before this fixed-size chunk.
+When passed, enables KV-pad-aware rotation and derives current valid tokens as
+logical_n - kv_actual_isl.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor [1 x b x pnh x dh].</p>
+<p><em>(ttnn.Tensor, ttnn.Tensor)</em> –   - Attention output [b x nqh x N/num_devices x head_dim_v].
+- Streaming statistics scratch [b x nqh x 2*N/num_devices x 1].</p>
 </dd>
 </dl>
-<p>“Accepts a <cite>SDPAMultiCoreProgramConfig</cite> which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over <cite>b</cite> and K/V/Mask’s <cite>s</cite> dimension.”
-“If a position is given as (-1), compute for the corresponding index in the batch is skipped.”</p>
 </dd>
 </dl>
 
@@ -204,8 +213,8 @@ The implementation is Flash-Decode and it currently only supports MQA on decodin
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.transformer.flash_mla_prefill.html" class="btn btn-neutral float-left" title="ttnn.transformer.flash_mla_prefill" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.transformer.joint_scaled_dot_product_attention.html" class="btn btn-neutral float-right" title="ttnn.transformer.joint_scaled_dot_product_attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.transformer.ring_joint_scaled_dot_product_attention.html" class="btn btn-neutral float-left" title="ttnn.transformer.ring_joint_scaled_dot_product_attention" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.transformer.scaled_dot_product_attention.html" class="btn btn-neutral float-right" title="ttnn.transformer.scaled_dot_product_attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -434,6 +434,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.paged_scaled_dot_product_attention_decode.html">ttnn.transformer.paged_scaled_dot_product_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.ring_distributed_scaled_dot_product_attention.html">ttnn.transformer.ring_distributed_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.ring_joint_scaled_dot_product_attention.html">ttnn.transformer.ring_joint_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
@@ -2124,18 +2125,22 @@
 <td><p>RingJointAttention operation supports both:</p></td>
 </tr>
 <tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.transformer.ring_mla.html#ttnn.transformer.ring_mla" title="ttnn.transformer.ring_mla"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.ring_mla</span></code></a></p></td>
+<td><p>Causal Ring MLA attention over a single KV tensor.</p></td>
+</tr>
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention.html#ttnn.transformer.scaled_dot_product_attention" title="ttnn.transformer.scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Causal scaled dot product attention.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.scaled_dot_product_attention_decode.html#ttnn.transformer.scaled_dot_product_attention_decode" title="ttnn.transformer.scaled_dot_product_attention_decode"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.scaled_dot_product_attention_decode</span></code></a></p></td>
 <td><p>A version of scaled dot product attention specifically for decode.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.transformer.split_query_key_value_and_split_heads.html#ttnn.transformer.split_query_key_value_and_split_heads" title="ttnn.transformer.split_query_key_value_and_split_heads"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.split_query_key_value_and_split_heads</span></code></a></p></td>
 <td><p>Splits <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">hidden_size]</span></code> into 3 tensors (Query, Key, Value) of shape <code class="docutils literal notranslate"><span class="pre">[batch_size,</span> <span class="pre">sequence_size,</span> <span class="pre">hidden_size]</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.transformer.windowed_scaled_dot_product_attention.html#ttnn.transformer.windowed_scaled_dot_product_attention" title="ttnn.transformer.windowed_scaled_dot_product_attention"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.transformer.windowed_scaled_dot_product_attention</span></code></a></p></td>
 <td><p>Windowed scaled dot product attention.</p></td>
 </tr>
