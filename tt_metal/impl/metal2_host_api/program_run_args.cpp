@@ -57,7 +57,7 @@ void ValidateTensorArgs(
         tensor_parameters_with_params.insert(param_name.get());
         const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(param_name.get());
         TT_FATAL(expected_spec != nullptr, "TensorArgument references unknown TensorParameter '{}'.", param_name);
-        const TensorSpec& runtime_spec = tensor_arg.tensor.get().tensor_spec();
+        const TensorSpec& runtime_spec = mesh_tensor_of(tensor_arg).tensor_spec();
         const bool dyn_shape = program_impl.get_tensor_parameter_dynamic_tensor_shape(param_name.get());
         const bool padded_only = program_impl.get_tensor_parameter_match_padded_shape_only(param_name.get());
         if (dyn_shape) {
@@ -374,7 +374,7 @@ void AttachBorrowedDFBBuffers(
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
     for (const auto& [param_name, tensor_arg] : tensor_args) {
-        tensor_by_param.emplace(param_name.get(), &tensor_arg.tensor.get());
+        tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
     }
 
     for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
@@ -444,7 +444,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(params.tensor_args.size());
     for (const auto& [param_name, tensor_arg] : params.tensor_args) {
-        tensor_by_param.emplace(param_name.get(), &tensor_arg.tensor.get());
+        tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
     }
 
     // Process kernel runtime arguments.
@@ -597,7 +597,7 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
     for (const auto& [param_name, tensor_arg] : tensor_args) {
-        tensor_by_param.emplace(param_name.get(), &tensor_arg.tensor.get());
+        tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
     }
 
     // For every kernel with tensor bindings, patch the binding slots in its CRTA buffer in

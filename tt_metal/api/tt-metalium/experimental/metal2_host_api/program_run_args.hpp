@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
@@ -49,7 +50,7 @@ struct ProgramRunArgs {
     struct KernelRunArgs {
         KernelSpecName kernel;
 
-        // Per-node runtime argument values: 
+        // Per-node runtime argument values:
         // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
         // set, for every node the kernel runs on.
         // Missing arguments or superfluous arguments will trigger validation errors.
@@ -109,7 +110,13 @@ struct ProgramRunArgs {
 // Convenience aliases
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
+using TensorArgument = ProgramRunArgs::TensorArgument;
 
+// Resolve a TensorArgument to its MeshTensor. (One alternative today; switch to
+// std::visit once MeshTensorView is added as a second variant alternative.)
+inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {
+    return std::get<std::reference_wrapper<const MeshTensor>>(arg).get();
+}
 
 //------------------------------------------------
 // ProgramRunArgsView (for advanced users)

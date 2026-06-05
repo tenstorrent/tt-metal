@@ -641,7 +641,7 @@ public:
             bindings.reserve(factory_tensor_args.size());
             // The name is the Table key; the TensorArgument value carries only the tensor ref.
             for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
-                const auto* target = &tensor_arg.tensor.get();
+                const auto* target = &tt::tt_metal::experimental::mesh_tensor_of(tensor_arg);
                 auto it = std::find_if(io_mesh_tensors.begin(), io_mesh_tensors.end(), [target](const auto& wrapped) {
                     return &wrapped.get() == target;
                 });
@@ -707,7 +707,7 @@ public:
                 tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
                     fresh_tensor_args.emplace(
-                        b.tensor_parameter_name, TensorArgument{.tensor = io_mesh_tensors[b.io_tensor_idx]});
+                        b.tensor_parameter_name, TensorArgument{io_mesh_tensors[b.io_tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
