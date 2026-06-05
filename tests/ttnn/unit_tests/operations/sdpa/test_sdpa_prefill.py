@@ -696,7 +696,10 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
 @pytest.mark.parametrize("k_chunk_size", [256], ids=["k256"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, sliding_window",
-    ([1, 8, 1, 2048, 128, 128],),
+    (
+        [1, 8, 1, 2048, 128, 128],
+        [1, 8, 1, 8192, 128, 512],
+    ),
 )
 def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, sliding_window):
     """Test sliding window attention functionality in SDPA prefill."""
@@ -708,6 +711,35 @@ def test_sdpa_sliding_window(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_ch
     rmse_threshold = 0.01
     run_test_sdpa_sliding_window(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, rmse_threshold=rmse_threshold
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b], ids=["bfp8"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, q_chunk_size, k_chunk_size, sliding_window, is_causal",
+    (
+        [1, 8, 1, 2048, 128, 256, 256, 130, True],
+        [1, 8, 1, 1024, 128, 256, 256, 130, False],
+    ),
+)
+def test_sdpa_sliding_window_streaming_parity(
+    device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, sliding_window, is_causal, dtype
+):
+    """Covers streaming sliding-window cases that previously fell back to legacy compute."""
+    rmse_threshold = 0.01
+    run_test_sdpa_sliding_window(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        sliding_window,
+        is_causal=is_causal,
+        rmse_threshold=rmse_threshold,
     )
 
 
