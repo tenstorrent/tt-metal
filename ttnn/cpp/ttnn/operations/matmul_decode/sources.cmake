@@ -5,6 +5,7 @@ set(TTNN_OP_MATMUL_DECODE_SRCS
     matmul_decode.cpp
     device/matmul_decode_device_operation.cpp
     device/full_width_sharded_program_factory.cpp
+    device/partial_width_sharded_program_factory.cpp
     device/multi_core_program_factory.cpp
 )
 

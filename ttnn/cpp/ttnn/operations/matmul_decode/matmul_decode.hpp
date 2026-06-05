@@ -18,6 +18,9 @@ namespace ttnn {
 // device operation (operation_attributes_t / tensor_args_t / program factories) when a
 // custom decode-optimized implementation is required.
 Tensor matmul_decode(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const DataType> dtype = std::nullopt);
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool partial_width_sharded = false,
+    std::optional<const DataType> dtype = std::nullopt);
 
 }  // namespace ttnn
