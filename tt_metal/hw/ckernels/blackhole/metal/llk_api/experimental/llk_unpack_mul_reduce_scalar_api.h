@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_mul_reduce_scalar.h"
 
 /*************************************************************************

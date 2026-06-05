@@ -78,7 +78,7 @@ jobs:
       bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
       bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -188,7 +188,7 @@ jobs:
             techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Download artifacts from metal
         id: download-artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -285,14 +285,15 @@ jobs:
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
       - name: Run image
-        timeout-minutes: 65
+        timeout-minutes: 75
         env:
-          HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
-          TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+          HF_HOME: /mnt/MLPerf/huggingface
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/huggingface/tt_cache/meta-llama--Llama-3.1-8B-Instruct
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
-            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
-            -e HF_MODEL -e TT_CACHE_PATH \
+            --device /dev/tenstorrent -v $HF_HOME:$HF_HOME:ro \
+            -e HF_HOME -e HF_MODEL -e TT_CACHE_PATH -e HF_HUB_OFFLINE=1 \
             ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
@@ -323,18 +324,19 @@ jobs:
         timeout-minutes: 30
         env:
           # For different environments, BH VLAN vs. cloud
-          HF_MODEL: >-
+          HF_HOME: >-
             ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
             && '/localdev/blackhole_demos/huggingface_data'
-            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+            || '/mnt/MLPerf/huggingface' }}
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: >-
             ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
-            && '/localdev/blackhole_demos/huggingface_data'
-            || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+            && '/localdev/blackhole_demos/huggingface_data/tt_cache'
+            || '/mnt/MLPerf/huggingface/tt_cache' }}/meta-llama--Llama-3.1-8B-Instruct
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
-            --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
-            -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
+            --device /dev/tenstorrent -v $HF_HOME:$HF_HOME:ro \
+            -e HF_HOME -e HF_MODEL -e TT_CACHE_PATH -e HF_HUB_OFFLINE=1 ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -427,7 +429,7 @@ jobs:
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Calculate images to publish
         id: calculate-images
         shell: bash
@@ -592,7 +594,7 @@ jobs:
         image-config: ${{ fromJSON(needs.calculate-to-publish.outputs.images-to-push) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}

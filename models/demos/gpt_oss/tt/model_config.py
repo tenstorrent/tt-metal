@@ -74,7 +74,10 @@ class ModelArgs:
         self.model_path = dir
         self.weights_path = dir
 
-        logger.info(f"Using GPT-OSS model from: {self.model_path}")
+        logger.info(
+            f"Using GPT-OSS model from: {self.model_path}"
+            f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
+        )
 
         if self.dummy_weights:
             # Skip loading HF config for testing - use default values

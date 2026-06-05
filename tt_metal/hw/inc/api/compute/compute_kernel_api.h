@@ -24,18 +24,17 @@
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
 #include "llk_math_unary_sfpu_api.h"
+#include "llk_math_binary_sfpu_api.h"
 #ifndef ARCH_QUASAR
 #include "llk_math_binary_api.h"
-#include "llk_math_binary_sfpu_api.h"
 #include "llk_math_reduce_api.h"
 #endif
-#define MATH(x) x
+#define MATH(...) __VA_ARGS__
 #else
-#define MATH(x)
+#define MATH(...)
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_api.h"
 #include "llk_io_pack.h"
 #ifndef ARCH_QUASAR
 #include "llk_math_eltwise_unary_sfpu_silu.h"
@@ -43,9 +42,9 @@
 #include "llk_math_eltwise_unary_sfpu_sigmoid.h"
 #include "llk_math_eltwise_unary_sfpu_activations.h"
 #endif
-#define PACK(x) x
+#define PACK(...) __VA_ARGS__
 #else
-#define PACK(x)
+#define PACK(...)
 #endif
 
 #ifdef TRISC_UNPACK
@@ -59,9 +58,9 @@
 #include "llk_unpack_untilize_api.h"
 #endif
 #include "llk_io_unpack.h"
-#define UNPACK(x) x
+#define UNPACK(...) __VA_ARGS__
 #else
-#define UNPACK(x)
+#define UNPACK(...)
 #endif
 
 namespace ckernel {
@@ -89,7 +88,7 @@ ALWI void sigmoid_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
+template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
@@ -120,7 +119,7 @@ ALWI void sigmoid_tile_init_pack() {
     PACK((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
 }
 
-template <int vec_mode = VectorMode::RC, bool fast_and_approx = false>
+template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile_pack(uint32_t idst) {
     PACK((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
 }
@@ -694,7 +693,7 @@ ALWI void max_reduce_with_indices_init() {
  * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
  */
 // clang-format on
-template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim=ReduceDim::REDUCE_COL>
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||

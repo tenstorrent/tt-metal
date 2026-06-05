@@ -350,15 +350,6 @@ roughly the order I'd tackle them:
   forward, and then immediately all-gather and reshard on the backward, which is quite foolish since
   we could just keep weights from the second forward AG.
 
-- [ ] **Add tests.** No FSDP-specific unit tests yet. At minimum:
-    - shard ↔ unshard round-trip for a single linear (verify
-      gathered-after-shard ≡ original full tensor, bit-exact on bf16).
-    - 1-step loss equivalence with DDP at FSDP=1 (degenerate case
-      should be bit-identical).
-    - 1-step loss closeness with DDP at FSDP > 1 with SGD (loose
-      tolerance — exact equality isn't expected because of CCL
-      reduction-order rounding).
-
 - [ ] **Add prefetching / CCL-compute overlap.** The hook architecture is
   designed for this — each FSDPState already knows its neighbors via
   the natural module ordering. The plan is:

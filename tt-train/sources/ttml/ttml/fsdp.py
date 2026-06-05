@@ -52,7 +52,6 @@ import ttml
 from ttml.modules import AbstractModuleBase
 from ttml.modules.parameter import Parameter, TensorMetadata, replace_lazy_mapper
 
-
 # ---------------------------------------------------------------------------
 # Utility functions
 # ---------------------------------------------------------------------------
@@ -308,11 +307,11 @@ def _pick_shard_dim_from_shape(
     already_sharded: set,
     axis_index: int,
 ) -> Optional[int]:
-    """Shape-only ``_auto_shard_dim`` core, shared by eager and lazy paths.
+    """Shape-only ``_auto_shard_dim_for_param`` core, shared by eager and lazy paths.
 
-    Same precedence rule as :func:`_auto_shard_dim`: prefer ``rank-2`` (the
-    first matmul weight dim on TTML's ``[1,1,O,I]`` convention), fall back to
-    ``rank-1`` if ``rank-2`` is already sharded by another mesh axis (e.g. TP)
+    Same precedence rule as :func:`_auto_shard_dim_for_param`: prefer ``rank-2``
+    (the first matmul weight dim on TTML's ``[1,1,O,I]`` convention), fall back
+    to ``rank-1`` if ``rank-2`` is already sharded by another mesh axis (e.g. TP)
     or has size 1.
     """
     rank = len(shape)
@@ -739,9 +738,16 @@ def fully_shard(
         if shard_dim == "auto":
             chosen = _auto_shard_dim_for_param(parameter, axis_index)
         else:
+            rank = len(shape)
             chosen = int(shard_dim)
             if chosen < 0:
-                chosen = len(shape) + chosen
+                chosen = rank + chosen
+            if not 0 <= chosen < rank:
+                raise RuntimeError(
+                    f"Invalid shard_dim {shard_dim!r} for parameter {rel_name!r} "
+                    f"(rank {rank}): normalized dim {chosen} is out of range "
+                    f"[0, {rank})."
+                )
 
         if chosen is None:
             warnings.warn(
@@ -820,11 +826,7 @@ def is_fsdp_managed(param_tensor: Any) -> bool:
     """Return True if ``param_tensor`` was sharded by an ``fully_shard`` call."""
     if getattr(param_tensor, "_fsdp_managed", False):
         return True
-    # Fallback: inspect placements (may be stale after CCL ops; use only as hint).
-    placements = _get_placements(param_tensor)
-    if placements is None:
-        return False
-    return any(_is_shard(p) for p in placements)
+    return False
 
 
 def fsdp_axis_of(param_tensor: Any) -> Optional[int]:

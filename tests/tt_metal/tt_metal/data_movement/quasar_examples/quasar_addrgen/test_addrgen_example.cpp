@@ -8,7 +8,7 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,22 +24,48 @@ bool should_skip_test() {
     return std::getenv("TT_METAL_SIMULATOR") == nullptr;
 }
 
+// All four addrgen kernels declare the same three named CTAs. The interleaved kernel
+// only consumes `num_of_addresses`; the two stride-enable bindings are dead in that path.
 bool run_addrgen_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
     uint32_t src_stride_en,
     uint32_t dst_stride_en,
     uint32_t num_of_addresses) {
-    constexpr CoreCoord core = {0, 0};
+    constexpr const char* DM_KERNEL = "addrgen";
+    const experimental::NodeCoord node{0, 0};
 
-    Program program = CreateProgram();
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = kernel_path,
+        .num_threads = 1,
+        .compile_time_args =
+            {{"src_stride_en", src_stride_en},
+             {"dst_stride_en", dst_stride_en},
+             {"num_of_addresses", num_of_addresses}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+    };
 
-    experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        core,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {src_stride_en, dst_stride_en, num_of_addresses}});
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "addrgen",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {{
+        .kernel_spec_name = DM_KERNEL,
+    }};
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

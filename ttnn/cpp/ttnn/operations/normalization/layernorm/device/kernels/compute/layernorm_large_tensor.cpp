@@ -145,9 +145,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_in, cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif
@@ -290,9 +291,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif

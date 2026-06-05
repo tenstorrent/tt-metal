@@ -91,7 +91,7 @@ inline void _move_to_next_subblock_4x2_()
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
 inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_height /*, const uint32_t block_width*/)
 {
-    static_assert(reduce_dim == REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX, "Only MAX pool type is currently supported");
     static_assert(format == DataFormat::Float16_b, "SFPU reduce max col only supports Float16_b format");
 

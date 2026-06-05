@@ -93,14 +93,20 @@ void MuonComposite::step() {
 
 serialization::StateDict MuonComposite::get_state_dict() const {
     serialization::StateDict dict;
-    dict["momentum_buffer"] = m_momentum_buffer;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
+    dict["momentum"] = m_config.momentum;
+    dict["ns_steps"] = m_config.ns_steps;
+    dict["momentum_buffer"] = m_momentum_buffer;
     return dict;
 }
 
 void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
-    m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
+    m_config.momentum = serialization::get_value_type<float>(dict, "momentum");
+    m_config.ns_steps = serialization::get_value_type<int>(dict, "ns_steps");
+    m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
 }
 
 size_t MuonComposite::get_steps() const {

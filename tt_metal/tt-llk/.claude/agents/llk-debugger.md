@@ -60,9 +60,7 @@ Determine the target architecture from (in priority order):
 
 ### Step 1: Classify the Error
 
-Read the error output or log file:
-- Compile errors: `$LOG_DIR/compile.log`
-- Runtime errors: `$LOG_DIR/run.log`
+Read the error output from the failing `run_test.sh` invocation (stdout/stderr is streamed to the terminal by default). If the caller passed `--log-dir DIR`, the same output is also appended to `<DIR>/compile.log` (compile phase) and `<DIR>/run.log` (run phase), but log files are not created by default.
 
 ### Step 2: Check common-errors.md
 

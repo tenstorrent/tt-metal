@@ -318,7 +318,7 @@ def test_ttnn_dispatch_combine(
         mesh_mapper=mesh_mapper_dispatch_inputs,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint16,
     )
 
     # Initialize TTNN dispatch module
@@ -457,7 +457,7 @@ def test_ttnn_dispatch_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        init_zeros=True,
+        init_zeros=False,
     )
 
     tt_dispatched_buffer = ttnn.to_layout(tt_dispatched_buffer, layout=dispatched_buffer_layout)
@@ -672,7 +672,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
         mesh_mapper=mesh_mapper_dispatch_inputs,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint16,
     )
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
@@ -727,7 +727,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        init_zeros=True,
+        init_zeros=False,
     )
     logger.info(f"[overflow test / {overflow_mode}] Running combine...")
     tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts, tt_expert_region_offsets)

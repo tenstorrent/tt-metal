@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
@@ -144,7 +144,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = sfpi::float_to_fp16b(y, sfpi::RoundMode::NearestEven);
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
     }
 
     return y;
