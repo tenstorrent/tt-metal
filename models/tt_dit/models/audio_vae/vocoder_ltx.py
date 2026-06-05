@@ -4,12 +4,10 @@
 
 """LTX-2 audio vocoder (Stage B): BigVGAN-v2 with AMP1 blocks.
 
-fp32 mandatory throughout: bf16 accumulation degrades spectral metrics 40-90%
-through the 108-conv chain, so every Conv1d/Snake/anti-alias filter runs at
-``dtype=ttnn.float32`` (HiFi4 + ``fp32_dest_acc_en`` + ``packer_l1_acc``).
-
-Vocoder works on ``(B, C, T)`` torch tensors, converted to ``(B, T, C)``
-ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
+fp32 mandatory: bf16 accumulation degrades spectral metrics through the 108-conv
+chain, so every Conv1d/Snake/anti-alias filter runs at ``dtype=ttnn.float32`` (HiFi4
++ ``fp32_dest_acc_en`` + ``packer_l1_acc``). Works on ``(B, C, T)`` torch, converted
+to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 """
 
 from __future__ import annotations

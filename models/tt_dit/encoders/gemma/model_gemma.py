@@ -2,16 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-TTNN Gemma-3 text encoder for LTX-2.
+"""TTNN Gemma-3 text encoder for LTX-2.
 
-Forward-only encoder (no KV cache, no autoregressive generation).
-Runs all tokens through the decoder layers and returns hidden states.
-Follows the T5Encoder pattern from tt_dit/encoders/t5/model_t5.py.
-
-Architecture: Gemma-3 12B text model
-- 48 layers, dim=3840, 16 Q heads, 8 KV heads (GQA), head_dim=256
-- SiLU-gated MLP, RMSNorm, RoPE (theta=1e6)
+Forward-only (no KV cache): runs all tokens through the decoder stack and returns
+the hidden states. Follows the T5Encoder pattern in tt_dit/encoders/t5/model_t5.py.
 """
 
 from __future__ import annotations

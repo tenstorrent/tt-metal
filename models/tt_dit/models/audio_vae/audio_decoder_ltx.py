@@ -4,9 +4,9 @@
 
 """LTX-2 audio mel-VAE decoder (Stage A).
 
-Conv2dViaConv3d operates on ``(B, H, W, C)`` (mel_bins is W); the torch
-reference uses BCHW, so we convert at the device boundary and back on exit.
-All convs are causal on the height (time) axis. Single-chip module.
+Conv2dViaConv3d operates on ``(B, H, W, C)`` (mel_bins is W); the torch reference
+is BCHW, so inputs convert at the device boundary and back on exit. All convs are
+causal on the height (time) axis. Single-chip.
 """
 
 from __future__ import annotations

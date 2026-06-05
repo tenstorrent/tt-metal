@@ -2,13 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX-2 Embeddings Connector — transformer blocks + final norm that refine the per-modality
-features from GemmaFeatureExtractor into the dims the DiT cross-attention consumes.
-
-The aggregate_embed projection lives in GemmaFeatureExtractor (the reference
-FeatureExtractorV2 boundary); this module is the stack of ConnectorBlocks (8 each at 4096
-video / 2048 audio).
+"""LTX-2 embeddings connector: transformer blocks + final norm that refine the
+per-modality GemmaFeatureExtractor features into the dims the DiT cross-attention
+consumes.
 
 Reference: ltx_core.text_encoders.gemma.embeddings_connector
 """

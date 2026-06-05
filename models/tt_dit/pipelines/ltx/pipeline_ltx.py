@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-LTX-2 audio-video generation pipeline for tt_dit.
-
-Implements the text-to-AV inference pipeline:
-1. Text encoding (on-device Gemma-3 + embeddings connectors)
-2. Sigma schedule computation (LTX-2 shift schedule)
-3. Joint audio-video denoising loop (Euler steps + multi-modal guidance)
-4. On-device VAE video decode + audio decode (mel-VAE + vocoder)
+"""LTX-2 audio-video generation pipeline for tt_dit: on-device Gemma text encoding,
+LTX-2 sigma schedule, joint AV denoise (Euler + multi-modal guidance), and on-device
+VAE video + audio decode.
 
 Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 """
@@ -223,25 +218,18 @@ class LTXPipeline:
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
-        # When True, the denoise loop captures the DiT forward as a ttnn trace on the
-        # first step and replays it thereafter (collapses per-op dispatch overhead).
+        # Capture the DiT forward as a ttnn trace on the first step, replay after.
         self._traced = traced
-        # One Tracer per fixed shape (e.g. "s1"/"s2"); kept resident across generate()
-        # calls and freed by release_traces().
+        # One Tracer per fixed shape ("s1"/"s2"); resident across generate(), freed by release_traces().
         self._tracers: dict[str, Tracer] = {}
-        # Per-trace device constants (rope/masks/cross-PE), pre-allocated before any capture
-        # and held for the session. A ttnn trace bakes absolute tensor addresses into its
-        # command stream; every held input must keep a fixed address below the traces'
-        # activation region, so these are allocated up front and never rebuilt.
+        # Per-trace device constants (rope/masks/cross-PE). A ttnn trace bakes absolute tensor
+        # addresses, so every held input is allocated up front and never rebuilt.
         self._trace_consts: dict[str, tuple] = {}
-        # Per-trace SP-sharded latent buffers + padding masks, also pre-allocated and held.
-        # The latent stays on device for the whole traced loop (on-device Euler), so nothing
-        # is freed/reallocated per step onto a trace buffer.
+        # Per-trace SP-sharded latent buffers + padding masks, held for the traced loop's
+        # on-device Euler (nothing freed/reallocated per step).
         self._trace_latents: dict[str, tuple] = {}
-        # One prompt buffer shared by all stages (the text embedding is identical). Built on
-        # the first traced step, not pre-allocated: a pre-allocated low-address prompt buffer
-        # overlaps a video activation; building it after the constants places it clear of
-        # every stage's activations.
+        # Shared prompt buffer, built on the first traced step rather than pre-allocated:
+        # a low-address pre-alloc would overlap a video activation.
         self._trace_prompt: dict[str, tuple] = {}
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
@@ -1069,10 +1057,9 @@ class LTXPipeline:
         """Compute temporal-only cross positional embeddings for A↔V cross-attention.
 
         Reference: ``MultiModalTransformerArgsPreprocessor.prepare`` builds ``cross_pe`` from
-        ``modality.positions[:, 0:1, :]`` (temporal slice only) at ``dim=audio_cross_attention_dim``
-        with ``max_pos=[cross_pe_max_pos]``. Both video and audio share this scheme so that audio
-        token at time t and video tokens at time t share the same rotary phase — this is what
-        ties footstep onsets, lip movement, and other AV alignment cues.
+        the temporal slice ``modality.positions[:, 0:1, :]`` at ``dim=audio_cross_attention_dim``
+        with ``max_pos=[cross_pe_max_pos]``. Video and audio share the scheme so a video token
+        and an audio token at the same time get the same rotary phase (AV temporal sync).
 
         Returns 8 device tensors used by inner_step:
             (v_q_cos, v_q_sin)         — video Q in A→V cross-attn (SP×TP sharded).
@@ -1328,10 +1315,9 @@ class LTXPipeline:
 
         v_cos, v_sin = self._prepare_rope(latent_frames, latent_h, latent_w)
         a_cos, a_sin = self._prepare_audio_rope(audio_N, audio_N_real)
-        # Cross-modal positional embeddings for A↔V cross-attention. Without these, audio queries
-        # attend to video keys with a uniform (no-RoPE) phase — destroying temporal sync. Reference
-        # MultiModalTransformerArgsPreprocessor builds these from the temporal-only column at
-        # dim=audio_cross_attention_dim with max_pos=[cross_pe_max_pos]. See test_av_model_pcc_vs_reference.
+        # Cross-modal positional embeddings for A↔V cross-attention: without them audio queries
+        # attend to video keys with uniform phase, destroying temporal sync. Reference:
+        # MultiModalTransformerArgsPreprocessor (temporal-only column, dim=audio_cross_attention_dim).
         (
             v_xpe_cos,
             v_xpe_sin,

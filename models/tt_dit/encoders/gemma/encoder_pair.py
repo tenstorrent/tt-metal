@@ -2,22 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-On-device Gemma-3 text encoder for LTX-2, following the tt_dit encoder_pair
-convention (cf. ``encoders/t5/encoder_pair.py``): the pair owns module
-construction, weight loading through the shared cache, and encoding.
-
-Unlike T5 (encoder only), the LTX text-conditioning the DiT consumes is the
-*connector* output, so this pair owns the full device assembly — the Gemma
-encoder, the FeatureExtractorV2 (per-token RMS + dual aggregate_embed), and the
-video/audio EmbeddingsConnectors. All four route through ``cache.load_model``.
-
-Under ``dynamic_load`` the encoder modules are coresident-excluded with the DiT
-and VAE (they can't all fit on BH-LB L1), so a DiT load evicts the encoder and
-vice-versa. The pipeline registers the peer modules once via
-``register_coresident_peers`` and reloads via ``ensure_loaded`` after each
-evicting DiT load.
-"""
+"""On-device Gemma-3 text encoder + embeddings connectors for LTX-2, following the
+tt_dit encoder_pair convention (cf. ``encoders/t5/encoder_pair.py``)."""
 
 from __future__ import annotations
 

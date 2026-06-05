@@ -406,10 +406,8 @@ _BLOCKINGS = {
     (4, 32, 384, 384, (3, 3, 3), 6, 22, 5): (128, 64, 3, 16, 2),  # res_s3
     (4, 32, 384, 32, (3, 3, 3), 6, 22, 5): (96, 32, 1, 16, 2),  # conv_out_enc
     # ===================================================================
-    # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4)
-    # 1080p production target: 1088x1920, 145 frames. Per-device (T, H, W).
-    # Swept blockings; regenerate via
-    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_1080p`.
+    # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1080p.
+    # Regenerate via bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_1080p
     # ===================================================================
     (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us
     (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us
@@ -421,20 +419,15 @@ _BLOCKINGS = {
     (2, 4, 256, 512, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_chg — 48772us
     (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (64, 128, 6, 4, 8),  # ltx_s4_res — 22798us
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
-    # LTX-2.3 spatial latent upsampler (x2), production shape on 2x4 BH-LB:
-    # stage-1 (17,30) → padded (18,32) → per-device (9,8); post-D2S (18,16). T_pad=21.
-    # VAE-style (128,64,...) overflows L1 at this tile; (64,32,...) fits.
-    (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv (C_in=128 ok)
+    # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
+    (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
     (2, 4, 1024, 1024, (3, 3, 3), 21, 9, 8): (64, 32, 1, 2, 2),  # pre-upsample res
     (2, 4, 1024, 4096, (1, 3, 3), 19, 9, 8): (64, 32, 1, 2, 2),  # ups (kT=1)
     (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
     (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
     # ===================================================================
-    # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8)
-    # 1080p production target: 1088x1920, 145 frames. Per-device (T, H, W) =
-    # 2x4 geometry re-sharded with per-stage ceil-pad (only s0 padded: 34x60 -> 9x8).
-    # Trace-timed HiFi2 sweep on 1x1; regenerate via
-    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h4w8_1080p`.
+    # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
+    # Regenerate via bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h4w8_1080p
     # ===================================================================
     (4, 8, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_res — 1974us
@@ -447,31 +440,12 @@ _BLOCKINGS = {
     (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
-    # Input latent (17,30) -> per-device pre = ceil(17/4)xceil(30/8) = 5x4; post-D2S 10x8.
-    # Tiny stages swept ungated (h*w==32 unsatisfiable at 5x4); regenerate via
-    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_ups_h4w8_1080p`.
+    # Regenerate via bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_ups_h4w8_1080p
     (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
     (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
-    # ===================================================================
-    # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4)
-    # 2K production target: 1088x2048. Per-device (T, H, W) from
-    # `bruteforce_conv3d_sweep.py::test_bruteforce_sweep_ltx_h2w4_2k`.
-    # NOTE: the two upsample-projection layers (512->4096 ltx_s1_up and
-    # 1024->4096 ltx_s0_up) are absent: at 2K they do not fit on a 2x4 (8-chip)
-    # mesh, so the sweep could not stage them. They fall back to
-    # _DEFAULT_BLOCKINGS pending a 4x8 (Galaxy) re-sweep.
-    # ===================================================================
-    (2, 4, 128, 1024, (3, 3, 3), 21, 19, 18): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 1.5 ms
-    (2, 4, 1024, 1024, (3, 3, 3), 21, 19, 18): (128, 64, 5, 2, 16),  # ltx_s0_res — 14.6 ms
-    (2, 4, 512, 512, (3, 3, 3), 39, 36, 34): (64, 256, 1, 2, 16),  # ltx_s1_res — 23.4 ms
-    (2, 4, 512, 512, (3, 3, 3), 75, 70, 66): (64, 256, 1, 4, 8),  # ltx_s2_res — 187.6 ms
-    (2, 4, 256, 256, (3, 3, 3), 147, 70, 66): (64, 256, 1, 4, 8),  # ltx_s3_res — 88.9 ms
-    (2, 4, 256, 512, (3, 3, 3), 147, 70, 66): (64, 256, 1, 4, 8),  # ltx_s3_chg — 179.9 ms
-    (2, 4, 128, 128, (3, 3, 3), 147, 138, 130): (64, 128, 5, 2, 16),  # ltx_s4_res — 90.2 ms
-    (2, 4, 128, 48, (3, 3, 3), 147, 138, 130): (128, 64, 7, 2, 16),  # ltx_s4_out — 48.0 ms
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -488,42 +462,26 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
-    # LTX Video VAE fallback blockings (conservative, no mesh-specific sweep yet)
-    (128, 1024, (3, 3, 3)): (128, 32, 1, 2, 2),
-    (128, 512, (3, 3, 3)): (128, 32, 1, 2, 2),
-    (256, 256, (3, 3, 3)): (256, 32, 1, 4, 4),
-    (256, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),
-    (512, 512, (3, 3, 3)): (256, 32, 1, 2, 2),
-    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),
-    (1024, 2048, (3, 3, 3)): (256, 32, 1, 1, 1),
-    (64, 64, (3, 3, 3)): (64, 32, 1, 8, 8),
-    (64, 48, (3, 3, 3)): (64, 32, 1, 8, 8),
-    # LTX-2.3 22B VAE decoder — DepthToSpaceUpsample convs
-    (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),
-    (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),
-    (512, 2048, (3, 3, 3)): (256, 32, 1, 2, 2),
-    (512, 1024, (3, 3, 3)): (256, 32, 1, 2, 2),
-    (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),
-    (128, 128, (3, 3, 3)): (128, 32, 1, 8, 8),
-    (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),
-    # LTX-2 latent upsampler — t-kernel-1 and 1024→128 convs (4×8 hits L1 OOM with hardcoded Cin=full)
-    (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),
-    (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),
+    # LTX-2.3 22B VAE decoder + latent upsampler conservative fallbacks. These
+    # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
+    # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
+    # full-Cin default OOMs at these widths).
+    (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
+    (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
+    (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
+    (128, 128, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_res
+    (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
+    (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
+    (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
 }
 
 
-# fp32 conv3d has 2× the L1 footprint of bf16, so the bf16 tables above don't
-# transfer — fp32 keeps its own channel-keyed table. Populated by the LTX audio
-# vocoder sweep on BH-LB 1×8 mesh (8-way T-sharded per-chip shapes).
-# Keyed by (in_channels, out_channels, kernel_size_3tuple).
-# See wiki/CONV3D_BLOCKING_SWEEP_RUNBOOK.md for the sweep methodology.
+# fp32 conv3d has 2× the L1 footprint of bf16, so it keeps its own channel-keyed
+# table, swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB (safe when the
+# audio chain runs co-resident with pipeline allocations).
+# Key:   (in_channels, out_channels, kernel_size_3tuple)
+# Value: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1)
 _FP32_BLOCKINGS: dict = {
-    # Swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB so blockings are
-    # safe when the audio chain runs co-resident with pipeline allocations.
-    # estimate_l1_bytes was corrected to scale tile sizes by dtype_bytes (fp32=4).
-    # Keys: (in_channels, out_channels, kernel_size_3tuple).
-    # Values: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1).
-    #
     # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
     (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
     (768, 768, (11, 1, 1)): (256, 32, 2, 1, 1),  # stage 0 AMP k11

@@ -32,7 +32,7 @@ tt_dit/
 │   └── LTX2.md          # LTX-2.3 model documentation
 ├── encoders/            # Text encoder implementations
 │   ├── clip/           # CLIP encoder
-│   ├── gemma/          # Gemma encoder (LTX-2)
+│   ├── gemma/          # Gemma encoder
 │   └── t5/             # T5 encoder
 ├── parallel/            # Parallelization utilities
 │   ├── config.py        # Parallel configuration
