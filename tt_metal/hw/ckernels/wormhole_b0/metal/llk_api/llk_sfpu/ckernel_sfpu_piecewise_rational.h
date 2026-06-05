@@ -88,9 +88,8 @@ inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_
 #else
     constexpr float EXPAND_C = 0.6931471805599453f;  // ln(2)
 #endif
-    v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
-    v_endif;
-    return sfpi::int32_to_float(e_int, sfpi::RoundMode::NearestEven) * EXPAND_C + poly_result;
+    auto e_smag = sfpi::convert<sfpi::vSMag>(e_int);
+    return sfpi::convert<sfpi::vFloat>(e_smag, sfpi::RoundMode::NearestEven) * EXPAND_C + poly_result;
 }
 #endif
 

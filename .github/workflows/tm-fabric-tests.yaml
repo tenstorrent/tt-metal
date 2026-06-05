@@ -3,6 +3,11 @@ name: "(TM-Fabric) Fabric Tests"
 on:
   workflow_dispatch:
     inputs:
+      run-fabric-cpu-only-unit-tests:
+        description: "Run fabric CPU-only unit tests (no hardware needed)"
+        required: false
+        default: false
+        type: boolean
       run-wh-n300-fabric-tests:
         description: "Run Wormhole N300 fabric tests"
         required: false
@@ -126,6 +131,7 @@ jobs:
 
           # For workflow_dispatch, use inputs; for workflow_call/push, default to all true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            run_cpu_only="${{ inputs.run-fabric-cpu-only-unit-tests }}"
             run_wh_n300="${{ inputs.run-wh-n300-fabric-tests }}"
             run_wh_t3k="${{ inputs.run-wh-t3k-fabric-tests }}"
             run_wh_6u="${{ inputs.run-wh-6u-fabric-tests }}"
@@ -137,6 +143,7 @@ jobs:
             bh_quietbox_2="${{ inputs.bh-runner-quietbox-2 }}"
           else
             # Default to true for workflow_call and push events
+            run_cpu_only="true"
             run_wh_n300="true"
             run_wh_t3k="true"
             run_wh_6u="true"
@@ -148,38 +155,41 @@ jobs:
             bh_quietbox_2="true"
           fi
 
+          if [[ "$run_cpu_only" == "true" ]]; then
+            matrix_items+=('{"test-type":"fabric-cpu-only-unit-tests","run-fabric-cpu-only-unit-tests":true,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+          fi
+
           if [[ "$run_wh_n300" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-n300-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":true,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_wh_t3k" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-t3k-fabric-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":true,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-t3k-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":true,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_wh_6u" == "true" ]]; then
-            matrix_items+=('{"test-type":"wh-6u-fabric-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":true,"run-bh-multi-card-unit-tests":false}')
+            matrix_items+=('{"test-type":"wh-6u-fabric-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":true,"run-bh-multi-card-unit-tests":false}')
           fi
 
           if [[ "$run_bh" == "true" ]]; then
             # Add blackhole test configurations for each selected runner
             if [[ "$bh_llmbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":true,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":true,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_deskbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":true,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":true,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_loudbox" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":true,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":true,"bh-runner-p300":false,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_p300" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":true,"bh-runner-quietbox-2":false}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":true,"bh-runner-quietbox-2":false}')
             fi
             if [[ "$bh_quietbox_2" == "true" ]]; then
-              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":true}')
+              matrix_items+=('{"test-type":"bh-multi-card-unit-tests","run-fabric-cpu-only-unit-tests":false,"run-wh-n300-fabric-tests":false,"run-wh-t3k-fabric-tests":false,"run-wh-6u-fabric-tests":false,"run-bh-multi-card-unit-tests":true,"bh-runner-llmbox":false,"bh-runner-deskbox":false,"bh-runner-loudbox":false,"bh-runner-p300":false,"bh-runner-quietbox-2":true}')
             fi
           fi
 
-          # If no items selected, fail with an explicit error
           if [ ${#matrix_items[@]} -eq 0 ]; then
             echo "ERROR: No test configurations selected. Please select at least one test to run."
             exit 1
@@ -209,6 +219,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-fabric-cpu-only-unit-tests: ${{ matrix.test-config.run-fabric-cpu-only-unit-tests || false }}
       run-wh-n300-fabric-tests: ${{ matrix.test-config.run-wh-n300-fabric-tests }}
       run-wh-t3k-fabric-tests: ${{ matrix.test-config.run-wh-t3k-fabric-tests }}
       run-wh-6u-fabric-tests: ${{ matrix.test-config.run-wh-6u-fabric-tests }}

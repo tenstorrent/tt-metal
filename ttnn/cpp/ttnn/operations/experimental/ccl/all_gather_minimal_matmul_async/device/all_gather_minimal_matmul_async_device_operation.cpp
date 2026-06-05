@@ -208,9 +208,20 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
 
         const uint32_t K_tiles_per_device = a_padded[-1] / TILE_WIDTH;
+        // Ring topology uses a bidirectional half-block scheme that requires K_block_size to
+        // evenly divide K_tiles_per_device (no tail-block support). Linear topology uses a
+        // unidirectional full-block scheme that supports a tail block of K_tiles_per_device %
+        // K_block_size tiles (zero-padded in L1 to keep the K_block_size row stride).
+        if (attributes.topology != ttnn::ccl::Topology::Linear) {
+            TT_FATAL(
+                K_tiles_per_device % cfg.K_block_size == 0,
+                "K_block_size ({}) must evenly divide the number of K tiles per device ({}) for Ring topology",
+                cfg.K_block_size,
+                K_tiles_per_device);
+        }
         TT_FATAL(
-            K_tiles_per_device % cfg.K_block_size == 0,
-            "K_block_size ({}) must evenly divide the number of K tiles per device ({})",
+            cfg.K_block_size <= K_tiles_per_device,
+            "K_block_size ({}) must be <= K tiles per device ({})",
             cfg.K_block_size,
             K_tiles_per_device);
         TT_FATAL(cfg.subblock_h > 0 && cfg.subblock_w > 0, "Subblock sizes must be > 0");
