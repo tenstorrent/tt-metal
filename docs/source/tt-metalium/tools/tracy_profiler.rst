@@ -46,7 +46,7 @@ When the server starts, the **console logs** print the suggested **HTTP URL** (o
 
 By default the HTTP server listens on **8080**. To use a different HTTP port, pass ``--web-app-port <port>``.
 
-In addition to the HTTP port, a **WebSocket** is used for live refresh on port *P*+1 (one above the chosen HTTP port *P*).
+In addition to the HTTP port, a **WebSocket** is used for live refresh on port *P*\ +1 (one above the chosen HTTP port *P*).
 
 Remote host (SSH)
 ~~~~~~~~~~~~~~~~~
@@ -65,7 +65,7 @@ Add matching ``LocalForward`` lines to your ``~/.ssh/config`` (or pass equivalen
         LocalForward 8080 127.0.0.1:8080
         LocalForward 8081 127.0.0.1:8081
 
-Connect with ``ssh my-tt-metal-host``, then open ``http://127.0.0.1:8080/`` in a local browser. If you change the HTTP port with ``--web-app-port``, forward that port and **P**+1 the same way.
+Connect with ``ssh my-tt-metal-host``, then open ``http://127.0.0.1:8080/`` in a local browser. If you change the HTTP port with ``--web-app-port``, forward that port and **P**\ +1 the same way.
 
 Installing for Mac users
 ~~~~~~~~~~~~~~~~~~~~~~~~
