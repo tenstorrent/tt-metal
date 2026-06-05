@@ -5,9 +5,14 @@ from typing import Any, Dict
 import os
 
 
-def _tensor_to_ttnn(tensor: torch.Tensor, device) -> ttnn.Tensor:
-    """Convert a torch tensor to a ttnn tensor on the given device."""
-    return ttnn.from_torch(tensor, device=device)
+def _tensor_to_ttnn(tensor: torch.Tensor, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
+    """Convert a torch tensor to a ttnn tensor on the given device with specified layout."""
+    if layout == ttnn.TILE_LAYOUT:
+        # Check if dimensions are compatible with tiling (multiples of 32)
+        if tensor.shape[-1] % 32 != 0 or tensor.shape[-2] % 32 != 0:
+            layout = ttnn.ROW_MAJOR_LAYOUT
+    
+    return ttnn.from_torch(tensor, device=device, layout=layout)
 
 
 def _make_obj(**kwargs) -> object:

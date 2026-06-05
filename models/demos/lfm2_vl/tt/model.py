@@ -180,10 +180,21 @@ class TtLfm2ConvBlock:
         projected = ttnn.linear(x, self.parameters.input_projection.weight)
         B, C, x_proj = ttnn.split(projected, self.config["hidden_size"], dim=-1)
         x_gated = ttnn.mul(B, x_proj)
-        x_conv_in = ttnn.permute(x_gated, (0, 2, 1))
-        x_conv = ttnn.conv1d(x_conv_in, self.parameters.conv.weight, groups=self.config["hidden_size"])
+
+        # conv1d usually requires ROW_MAJOR layout
+        x_gated_rm = ttnn.to_layout(x_gated, ttnn.ROW_MAJOR_LAYOUT)
+        x_conv_in = ttnn.permute(x_gated_rm, (0, 2, 1))
+
+        x_conv = ttnn.conv1d(
+            x_conv_in,
+            self.parameters.conv.weight,
+            groups=self.config["hidden_size"]
+        )
+
         x_conv = ttnn.permute(x_conv, (0, 2, 1))
-        x_gated_2 = ttnn.mul(C, x_conv)
+        x_conv_tiled = ttnn.to_layout(x_conv, ttnn.TILE_LAYOUT)
+
+        x_gated_2 = ttnn.mul(C, x_conv_tiled)
         return ttnn.linear(x_gated_2, self.parameters.output_projection.weight)
 
 
@@ -395,20 +406,20 @@ class TtLfm2VlModel:
         use_cache=False,
     ):
         batch_size = input_ids.shape[0]
-        
+
         # === Vision path ===
         img_embs = self.vision_encoder(pixel_values)
         img_tokens = self.projector(img_embs)
-        
+
         # === Text embedding ===
         text_tokens = ttnn.embedding(input_ids, self.parameters.embed_tokens.weight)
-        
+
         # === Token interleaving ===
         # Replace placeholder token IDs with projected vision features
         IMAGE_TOKEN_ID = 32000
         input_ids_cpu = ttnn.to_torch(input_ids).to(torch.int32)
-        
-        mask = (input_ids_cpu == IMAGE_TOKEN_ID)
+
+        mask = input_ids_cpu == IMAGE_TOKEN_ID
         if mask.any():
             text_tokens_cpu = ttnn.to_torch(text_tokens)
             img_tokens_cpu = ttnn.to_torch(img_tokens)
@@ -421,9 +432,11 @@ class TtLfm2VlModel:
                 layout=ttnn.TILE_LAYOUT,
             )
         else:
+            # Ensure text_tokens is tilized before concat or entering layers
+            text_tokens = ttnn.to_layout(text_tokens, ttnn.TILE_LAYOUT)
             # Fallback: prefix concatenation
             x = ttnn.concat([img_tokens, text_tokens], dim=1)
-        
+
         # === Hybrid backbone ===
         present_kv = [] if use_cache else None
         
