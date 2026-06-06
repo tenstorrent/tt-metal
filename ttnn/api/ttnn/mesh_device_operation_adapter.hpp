@@ -37,6 +37,9 @@ namespace ttnn::device_operation {
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
+template <typename T>
+using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
+
 // Extracts every Tensor reachable from an aggregate `T` and pushes its buffer()
 // onto `out`.  Generated per-T at compile time so the compiler emits a
 // straight-line walk of T's tensor fields with no runtime reflection visit,
@@ -560,77 +563,121 @@ public:
     // -----------------------------------------------------------------------
     // ProgramSpecMeshWorkloadFactoryAdapter
     //
-    // Adapts a ProgramSpecFactoryConcept factory (Metal 2.0, single-program /
-    // SPMD) for mesh dispatch. The op author writes ONLY create_program_artifacts,
-    // returning a single ProgramArtifacts (one ProgramSpec + ProgramRunArgs).
-    // The adapter stamps a Program from that spec onto each mesh coordinate
-    // range covered by the workload.
+    // Adapts a ProgramSpecFactoryConcept factory that exposes
+    // create_program_artifacts (Metal 2.0, single-program / SPMD) for mesh
+    // dispatch.  The op author writes ONLY create_program_artifacts, returning a
+    // single ProgramArtifacts (one ProgramSpec + ProgramRunArgs).  The adapter
+    // stamps a Program from that spec onto each mesh coordinate range covered by
+    // the workload.
     //
-    // On cache miss: The adapter calls create_program_artifacts, builds one Program
-    // per coordinate range (via experimental::MakeProgramFromSpec), applies
-    // the initial ProgramRunArgs (via experimental::SetProgramRunArgs), then
-    // resolves each TensorArgument against the io_tensors enumerated from
-    // tensor_args / tensor_return_value (pointer-identity match within the call).
+    // The adapter supports TWO cache-hit paths, selected by a type-level marker
+    // on the factory (`using fast_cache_hit_path = std::true_type;` opts into
+    // Option 1).  See the doc block on `HasFastCacheHitPathOptIn` in
+    // operation_concepts.hpp for the design rationale.
     //
-    // On cache hit: the adapter enumerates fresh io_tensors, mutates the
-    // cached TensorArgument storage in place using the stored index bindings, and
-    // applies the new MeshTensors to the existing (cached) Program
-    // (via experimental::UpdateTensorArgs).
+    // -------------------------------------------------------
+    // Option 2 — default, safe by construction
+    // -------------------------------------------------------
+    // On cache miss:
+    //   1. create_program_artifacts is called.
+    //   2. One Program per coordinate range is built via MakeProgramFromSpec.
+    //   3. The initial ProgramRunArgs is applied via SetProgramRunArgs.
     //
-    // Requirements:
-    //  1. Every TensorArgument returned by the factory must reference a
-    //     MeshTensor reachable from tensor_args or tensor_return_value.
-    //  2. The returned ProgramRunArgs must not contain any DFB size overrides.
-    //     This is a TTNN-side restriction specific to the basic
-    //     ProgramSpecFactoryConcept, not a Metal 2.0 restriction.
+    // On cache hit:
+    //   1. create_program_artifacts is called AGAIN.
+    //   2. The full ProgramRunArgs is re-applied via SetProgramRunArgs to every
+    //      cached Program.
     //
-    // Runtime arguments — important constraint:
-    // Runtime arguments are supported. They are the standard mechanism for
-    // per-node distribution: the same compiled kernel binary running on N
-    // nodes receives different per-node argument values (slice indices, work
-    // offsets, per-node tensor addresses, etc.). RTA values are set ONCE at
-    // cache-miss time by experimental::SetProgramRunArgs and persist through
-    // every subsequent cache hit (UpdateTensorArgs only refreshes tensor args;
-    // all other ProgramRunArgs are stateful and retained — see the comment on
-    // experimental::UpdateTensorArgs).
+    // The fast path is "wide-and-flat": full Metalium ProgramRunArgs (RTAs,
+    // CRTAs, DFB size overrides, tensor args) are re-applied each dispatch and
+    // therefore can vary freely between dispatches sharing a cache entry.
+    // Greater per-dispatch host overhead (the factory runs each call), in
+    // exchange for guaranteed correctness — no fast-path-specific code in the
+    // factory.
     //
-    // The factory must therefore ensure RTA values are deterministic from
-    // cache-miss-time inputs (operation_attributes, tensor_args, mesh
-    // coordinates). Encoding anything that varies BETWEEN dispatches sharing
-    // a cache entry (e.g., raw tensor addresses, dispatch counters) would
-    // silently produce stale values on cache hits — the bug class the
-    // immutable/mutable contract is built around. For per-dispatch mutable
-    // non-tensor state, use the (future) more general factory concept (see
-    // Unhandled use cases below).
+    // -------------------------------------------------------
+    // Option 1 — opt-in fast path
+    // -------------------------------------------------------
+    // On cache miss:
+    //   1. create_program_artifacts is called.
+    //   2. One Program per coordinate range is built via MakeProgramFromSpec.
+    //   3. The initial ProgramRunArgs is applied via SetProgramRunArgs.
+    //   4. Each TensorArgument is resolved against the io_tensors enumerated
+    //      from tensor_args / tensor_return_value (pointer-identity match
+    //      within the call) and recorded as an index, stored per range.
     //
-    // Unhandled use cases:
-    //  - Ops that need op-owned resources (single-program or multi-program)
-    //    should use the (future) MeshWorkloadSpecFactoryConcept analog of
-    //    WorkloadDescriptorConcept, not this concept.
-    //  - Ops that need fast-path patching of non-tensor mutable arguments
-    //    (RTA values that vary per dispatch, DFB sizes that vary per dispatch)
-    //    should use the (future) create_program_spec / create_program_run_args
-    //    mechanism.
-    //  - Ops that need different per-device Programs should use the (future)
-    //    MeshWorkloadSpecFactoryConcept.
+    // On cache hit:
+    //   1. Fresh io_tensors are enumerated; for each cached Program, the stored
+    //      index bindings rebuild a TensorArgument vector against the fresh
+    //      tensors and apply it via UpdateTensorArgs.  The factory is NOT
+    //      called.
+    //
+    // The fast path is "narrow-but-cheap": only the tensor portion of the
+    // ProgramRunArgs is refreshed.  All other RunArgs (RTAs, CRTAs, DFB sizes)
+    // are set ONCE at cache-miss time and persist across hits.  The factory
+    // must therefore ensure those values are deterministic from cache-miss-time
+    // inputs — anything varying BETWEEN dispatches sharing a cache entry would
+    // silently produce stale values on hits (the bug class the immutable/
+    // mutable contract is built around).
+    //
+    // Option 1 requirements (in addition to the shared requirement below):
+    //   - The returned ProgramRunArgs must not contain any DFB size overrides
+    //     (UpdateTensorArgs does not touch DFB sizes; a stale override would
+    //     persist).  This is a TTNN-side restriction, not a Metal 2.0
+    //     restriction.
+    //
+    // -------------------------------------------------------
+    // Shared requirement (both options)
+    // -------------------------------------------------------
+    // Every TensorArgument returned by the factory must reference a MeshTensor
+    // reachable from tensor_args or tensor_return_value.  Op-owned MeshTensors
+    // do not work on either path: they are local to create_program_artifacts
+    // and are destroyed at return, leaving the cached Program (Option 1) or the
+    // SetProgramRunArgs copy (Option 2) holding addresses freed before the
+    // asynchronous device dispatch completes.  Ops that need op-owned mesh
+    // resources should use create_workload_artifacts (WorkloadArtifactConcept)
+    // instead, which keeps those resources alive for the cached workload's
+    // lifetime.
+    //
+    // -------------------------------------------------------
+    // Runtime arguments
+    // -------------------------------------------------------
+    // Runtime arguments are supported on both options.  They are the standard
+    // mechanism for per-node distribution: the same compiled kernel binary
+    // running on N nodes receives different per-node argument values (slice
+    // indices, work offsets, per-node tensor addresses, etc.).  See the
+    // per-option description above for what varies / persists between
+    // dispatches.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
+        requires requires { &ProgramSpecFactory::create_program_artifacts; }
     struct ProgramSpecMeshWorkloadFactoryAdapter {
+        // Option 1 (opt-in via the `fast_cache_hit_path` type marker) restores the
+        // narrow-but-cheap UpdateTensorArgs fast path; the default is Option 2's
+        // safe-by-construction full re-apply.
+        static constexpr bool fast_cache_hit_path = HasFastCacheHitPathOptIn<ProgramSpecFactory>;
+
         using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
-        // Stored across cache entries: for each TensorArgument in a program's
-        // ProgramRunArgs, which io_tensor (by index into the deterministic
-        // reflection-driven enumeration) it was bound to. Pointer identity is
-        // only valid within a single call; the index is stable across calls.
+        // Stored across cache entries on the Option 1 path: for each
+        // TensorArgument in a program's ProgramRunArgs, which io_tensor (by
+        // index into the deterministic reflection-driven enumeration) it was
+        // bound to.  Pointer identity is only valid within a single call; the
+        // index is stable across calls.  Empty on Option 2 (the factory is
+        // re-run on every cache hit, so no cross-dispatch state is needed).
         struct ResolvedTensorBinding {
             TensorParameterName tensor_parameter_name;
             std::size_t io_tensor_idx;
         };
 
-        struct shared_variables_t {
+        struct fast_path_shared_variables_t {
             std::vector<ResolvedTensorBinding> bindings;
         };
+        struct safe_path_shared_variables_t {};
+
+        using shared_variables_t =
+            std::conditional_t<fast_cache_hit_path, fast_path_shared_variables_t, safe_path_shared_variables_t>;
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
         // Walk tensor_args and tensor_return_value via reflection, collecting
@@ -649,26 +696,29 @@ public:
             return result;
         }
 
-        // Disallow DFB size overrides for the basic ProgramSpecFactoryConcept.
+        // Disallow DFB size overrides on the Option 1 path.
         // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
         //
         // ProgramRunArgs::dfb_run_overrides resize a DFB at dispatch time
-        // (entry_size / num_entries). This concept's cache-hit path runs only
+        // (entry_size / num_entries). The Option 1 cache-hit path runs only
         // UpdateTensorArgs, which doesn't touch DFB sizes — so any override
         // set at cache-miss persists, but the factory can't update it between
         // dispatches that share a cache entry. Unlike RTAs, DFB sizes have no
         // per-node-distribution use case (a DFB is per-spec, not per-node), so
-        // there is no legitimate reason to use dfb_run_overrides on this
-        // concept: factories should set DFB sizes directly in the ProgramSpec
-        // (attr-derived sizes are naturally specialised via the cache key).
+        // there is no legitimate reason to use dfb_run_overrides on the fast
+        // path: factories should set DFB sizes directly in the ProgramSpec
+        // (attr-derived sizes are naturally specialised via the cache key), or
+        // switch to Option 2 (the default), whose SetProgramRunArgs cache-hit
+        // path applies DFB size overrides correctly.
         static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
             TT_FATAL(
                 run_args.dfb_run_overrides.empty(),
                 "ProgramRunArgs returned by create_program_artifacts contains DFB size "
-                "overrides. TTNN ProgramSpecFactoryConcept restricts factories using the "
-                "basic create_program_artifacts to tensor-only per-dispatch mutation. "
-                "Either use fixed DFB sizes, or upgrade to the version of the factory "
-                "concept that supports full generality of fast-path ProgramRunArgs.");
+                "overrides. The Option 1 fast cache-hit path of ProgramSpecFactoryConcept "
+                "(opted into via `using fast_cache_hit_path = std::true_type;`) restricts "
+                "factories to tensor-only per-dispatch mutation. Either use fixed DFB "
+                "sizes, or drop the `fast_cache_hit_path` opt-in to use the default "
+                "Option 2 path (full ProgramRunArgs re-apply on cache hit).");
         }
 
         // Match each TensorArgument's MeshTensor reference back to its index in the
@@ -724,21 +774,39 @@ public:
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
             // The factory produces a single ProgramArtifacts; the adapter stamps it
-            // across all coordinate ranges. Bindings derive from the (single) set of
-            // factory tensor_args and are identical for every stamped program; copy
-            // per range into the cached shared state.
+            // across all coordinate ranges.
             auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-            assert_no_dfb_size_overrides(artifacts.run_params);
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
-            auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-            for (const auto& range : tensor_coords.ranges()) {
-                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-                shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
-                mesh_workload.add_program(range, std::move(program));
+
+            if constexpr (fast_cache_hit_path) {
+                // Option 1: validate fast-path-specific constraints and resolve bindings
+                // once; copy the (identical) bindings into each per-range shared state so
+                // they're available on cache hits for UpdateTensorArgs.
+                assert_no_dfb_size_overrides(artifacts.run_params);
+                auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+                auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+                for (const auto& range : tensor_coords.ranges()) {
+                    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+                    shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
+                    mesh_workload.add_program(range, std::move(program));
+                }
+            } else {
+                // Option 2: validate the io-tensor reachability invariant (op-owned
+                // MeshTensors would die at factory return and leave the SetProgramRunArgs
+                // copy holding freed device addresses), but discard the resulting
+                // bindings — the factory is re-run on every cache hit, so no
+                // cross-dispatch state needs to persist.
+                auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+                (void)resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+                for (const auto& range : tensor_coords.ranges()) {
+                    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+                    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+                    shared_variables.emplace(range, shared_variables_t{});
+                    mesh_workload.add_program(range, std::move(program));
+                }
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
@@ -750,17 +818,235 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
+            [[maybe_unused]] const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            if constexpr (fast_cache_hit_path) {
+                // Option 1: rebuild TensorArguments from cached bindings against fresh
+                // io_tensors and refresh only the tensor portion of the ProgramRunArgs.
+                // RTAs, CRTAs, and DFB sizes set at cache-miss persist across hits.
+                auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                    std::vector<TensorArgument> fresh_tensor_args;
+                    fresh_tensor_args.reserve(sv.bindings.size());
+                    for (const auto& b : sv.bindings) {
+                        fresh_tensor_args.push_back(TensorArgument{
+                            .tensor_parameter_name = b.tensor_parameter_name,
+                            .tensor = io_mesh_tensors[b.io_tensor_idx]});
+                    }
+                    tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
+                }
+            } else {
+                // Option 2: re-run the factory and re-apply the full ProgramRunArgs to
+                // every cached Program. Safe by construction — every field (RTAs,
+                // CRTAs, DFB sizes, tensor args) is freshly built from the new inputs,
+                // so nothing can carry stale state across dispatches.
+                auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+                auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+                (void)resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+                    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+                }
+            }
+        }
+    };
+
+    // -----------------------------------------------------------------------
+    // WorkloadArtifactMeshWorkloadAdapter
+    //
+    // Adapts a ProgramSpecFactoryConcept factory that exposes
+    // create_workload_artifacts for mesh dispatch.  The op author returns a
+    // MeshWorkloadArtifacts in one call: workload-scoped resources
+    // (GlobalSemaphores, op-owned MeshTensors) and a sequence of per-coord
+    // ProgramArtifacts (each a ProgramSpec + ProgramRunArgs) covering the
+    // workload.  The adapter builds one Program per per-coord entry and
+    // assembles the MeshWorkload.
+    //
+    // Metal 2.0 analog of DescriptorMeshWorkloadAdapter contract (2): the
+    // declarative single-call shape, with MeshTensors instead of WorkloadBuffer.
+    //
+    // On cache miss:
+    //   1. create_workload_artifacts is called.
+    //   2. The factory's workload-scoped resources are MOVED into shared_variables
+    //      and held there for the cached workload's lifetime — MeshTensors are
+    //      move-only and own their device allocations, GlobalSemaphores keep
+    //      their on-device allocation valid.
+    //   3. For each per-coord ProgramArtifacts, a Program is built via
+    //      MakeProgramFromSpec and the initial ProgramRunArgs is applied via
+    //      SetProgramRunArgs.  TensorArguments are resolved to indices into a
+    //      combined enumeration of {io tensors, workload-owned mesh_tensors};
+    //      the bindings are stored per range.
+    //
+    // On cache hit:
+    //   - Fresh io tensors are enumerated and combined with the cached
+    //     workload-owned mesh_tensors (which are stable across hits).  For
+    //     each cached Program, the stored index bindings rebuild a
+    //     TensorArgument vector and apply it via UpdateTensorArgs.  The
+    //     factory is NOT called.
+    //
+    // Why no Option-2-style cache-hit factory re-run:
+    // Re-running create_workload_artifacts on every hit would allocate fresh
+    // GlobalSemaphores and MeshTensors; the cached Programs already hold
+    // device addresses from the cache-miss allocations.  The new resources
+    // would be immediately destroyed at function return, freeing addresses
+    // the cached Programs still reference.
+    //
+    // Requirements:
+    //  - Every TensorArgument in any per-coord ProgramRunArgs must reference
+    //    a MeshTensor reachable from tensor_args, tensor_return_value, or the
+    //    workload's mesh_tensors.
+    //  - DFB size overrides are forbidden (same UpdateTensorArgs cache-hit
+    //    constraint as Option 1 of the create_program_artifacts adapter).
+    // -----------------------------------------------------------------------
+    template <ProgramSpecFactoryConcept ProgramSpecFactory>
+        requires WorkloadArtifactConcept<ProgramSpecFactory>
+    struct WorkloadArtifactMeshWorkloadAdapter {
+        using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
+        using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
+
+        // Signature-mismatch guard: a factory with a `create_workload_artifacts`
+        // member whose signature/return type doesn't match would otherwise
+        // produce deep template errors at the first call site.  Surface the
+        // problem clearly at concept-check time.
+        static constexpr bool has_create_workload_artifacts = requires(
+            const operation_attributes_t& a,
+            const tensor_args_t& t,
+            tensor_return_value_t& r,
+            const ttnn::MeshCoordinateRangeSet& tc) {
+            { ProgramSpecFactory::create_workload_artifacts(a, t, r, tc) } -> std::same_as<MeshWorkloadArtifacts>;
+        };
+        static_assert(
+            has_create_workload_artifacts,
+            "Factory has create_workload_artifacts but its signature/return type doesn't match. "
+            "Expected: static MeshWorkloadArtifacts create_workload_artifacts("
+            "const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&, "
+            "const ttnn::MeshCoordinateRangeSet&)");
+
+        // For each TensorArgument in a per-coord ProgramRunArgs, the index
+        // into the combined {io tensors, workload mesh_tensors} enumeration.
+        struct ResolvedTensorBinding {
+            TensorParameterName tensor_parameter_name;
+            std::size_t tensor_idx;
+        };
+
+        struct shared_variables_t {
+            // Workload-scoped resources, kept alive for the cached workload's
+            // lifetime.  MeshTensor is move-only and owns its device
+            // allocation, so we MOVE it in once and reference it by index from
+            // here on out.  GlobalSemaphore is copyable but we treat it the
+            // same way for symmetry.
+            std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
+            std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
+            // Per-program tensor-arg bindings, keyed by program coordinate
+            // range.  Stored as a map so cache-hit lookup is O(1) per range.
+            std::unordered_map<ttnn::MeshCoordinateRange, std::vector<ResolvedTensorBinding>> bindings_per_range;
+        };
+        using cached_mesh_workload_t = CachedMeshWorkload<shared_variables_t>;
+
+        // Walk io tensors then workload mesh_tensors.  Order matters: bindings
+        // are recorded against this exact ordering on cache miss and must
+        // match on cache hit.
+        static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_all_mesh_tensors(
+            const tensor_args_t& tensor_args,
+            const tensor_return_value_t& tensor_return_value,
+            const std::vector<tt::tt_metal::MeshTensor>& workload_mesh_tensors) {
+            std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
+            const auto visit = [&result](const tt::tt_metal::Tensor& t) {
+                result.push_back(std::cref(t.mesh_tensor()));
+            };
+            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_args);
+            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_return_value);
+            for (const auto& wmt : workload_mesh_tensors) {
+                result.push_back(std::cref(wmt));
+            }
+            return result;
+        }
+
+        static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+            TT_FATAL(
+                run_args.dfb_run_overrides.empty(),
+                "ProgramRunArgs returned by create_workload_artifacts contains DFB size overrides. "
+                "The WorkloadArtifactConcept cache-hit path runs only UpdateTensorArgs, which does "
+                "not touch DFB sizes; set DFB sizes directly in the ProgramSpec instead.");
+        }
+
+        static std::vector<ResolvedTensorBinding> resolve_bindings(
+            const std::vector<TensorArgument>& factory_tensor_args,
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
+            std::vector<ResolvedTensorBinding> bindings;
+            bindings.reserve(factory_tensor_args.size());
+            for (const auto& tensor_arg : factory_tensor_args) {
+                const auto* target = &tensor_arg.tensor.get();
+                auto it = std::find_if(mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& wrapped) {
+                    return &wrapped.get() == target;
+                });
+                TT_FATAL(
+                    it != mesh_tensors.end(),
+                    "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args, "
+                    "tensor_return_value, or the workload-owned mesh_tensors returned by "
+                    "create_workload_artifacts.",
+                    tensor_arg.tensor_parameter_name);
+                bindings.push_back(
+                    {tensor_arg.tensor_parameter_name,
+                     static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
+            }
+            return bindings;
+        }
+
+        static auto create_mesh_workload(
+            const operation_attributes_t& attrs,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            TT_FATAL(
+                first_tensor.has_value(),
+                "WorkloadArtifact factory adapter requires at least one Tensor in tensor_args to source the "
+                "MeshDevice");
+            auto* mesh_device = first_tensor.value().device();
+            TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
+
+            auto artifacts =
+                ProgramSpecFactory::create_workload_artifacts(attrs, tensor_args, tensor_return_value, tensor_coords);
+
+            // Move resources into shared_variables FIRST, then collect references off the
+            // post-move storage; otherwise the references would dangle when the local
+            // `artifacts.mesh_tensors` is moved later.
+            shared_variables_t shared_variables{
+                .semaphores = std::move(artifacts.semaphores),
+                .mesh_tensors = std::move(artifacts.mesh_tensors),
+                .bindings_per_range = {}};
+
+            const auto mesh_tensor_refs =
+                collect_all_mesh_tensors(tensor_args, tensor_return_value, shared_variables.mesh_tensors);
+
+            tt::tt_metal::distributed::MeshWorkload mesh_workload;
+            for (auto& precursor : artifacts.program_precursors) {
+                assert_no_dfb_size_overrides(precursor.artifacts.run_params);
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, precursor.artifacts.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, precursor.artifacts.run_params);
+                auto bindings = resolve_bindings(precursor.artifacts.run_params.tensor_args, mesh_tensor_refs);
+                shared_variables.bindings_per_range.emplace(precursor.range, std::move(bindings));
+                mesh_workload.add_program(precursor.range, std::move(program));
+            }
+            return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+        }
+
+        static void apply_descriptor(
+            cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& /*attrs*/,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            auto& sv = cached_workload.shared_variables;
+            const auto mesh_tensor_refs = collect_all_mesh_tensors(tensor_args, tensor_return_value, sv.mesh_tensors);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                const auto& bindings = sv.bindings_per_range.at(coordinate_range);
                 std::vector<TensorArgument> fresh_tensor_args;
-                fresh_tensor_args.reserve(sv.bindings.size());
-                for (const auto& b : sv.bindings) {
+                fresh_tensor_args.reserve(bindings.size());
+                for (const auto& b : bindings) {
                     fresh_tensor_args.push_back(TensorArgument{
-                        .tensor_parameter_name = b.tensor_parameter_name, .tensor = io_mesh_tensors[b.io_tensor_idx]});
+                        .tensor_parameter_name = b.tensor_parameter_name, .tensor = mesh_tensor_refs[b.tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
