@@ -192,15 +192,27 @@ def _bh_tp4_vision_mlp_pc(
 ):
     """Optimal 2D-mcast program config for BH TP4 vision MLP.
 
-    Improvements over the generic ``_vision_matmul_program_config``:
-    1. Finds the largest ``effective_grid_y`` ≤ ``grid_y`` that divides
-       ``m_tiles`` so that BH devices with non-8 row counts still get an
-       explicit (max-core) config instead of falling back to auto-config.
-    2. Uses ``cb_budget = L1_PER_CORE - l1_resident_bytes_per_core`` for the
-       CB-size gate, allowing larger ``out_block_h`` when activations are in L1
-       (the existing DRAM-mode 1024 KB cap is too conservative in that case).
-       Larger ``out_block_h`` → fewer outer-M iterations → fewer weight DRAM
-       re-reads, which dominates runtime on these weight-bandwidth-bound shapes.
+    Probes both transpose_mcast orientations and picks the best (ob_h, DST
+    area, total cores) triple.  On BH P150x the grid is (grid_x=11, grid_y=10).
+
+    With transpose_mcast=False (M→rows, N→cols):
+      best divisor of 352 ≤ 10 = 8 → per_core_m=44, partial_sums≥352KB
+      gate/up: 11×8=88 cores (per_core_n=3),  down: 10×8=80 cores (per_core_n=5)
+
+    With transpose_mcast=True (M→cols, N→rows):
+      352 = 32×11, so eff_gx=11 → per_core_m=32, partial_sums reduced
+      gate/up: 11×9=99 cores (+12%),  down: 11×10=110 cores (+37%)
+      ob_h larger → fewer outer-M iterations → better DRAM BW
+
+    Fixed CB costs (allocated once per kernel, independent of ob_h):
+      • in1 double-buffered (bf8b weight):   2 × in0_block_w × per_N × 1088
+      • partial-sums (bf16 packer acc):      per_M × per_N × 2048  ← dominant
+        (Omitting this caused the L1 clash at per_M=44/per_N=4.)
+
+    Variable CB costs (scale with ob_h):
+      • in0 double-buffered (bf16 act):      2 × ob_h × in0_block_w × 2048
+      • interm (bf16, packer_l1_acc):        ob_h × per_N × 2048
+      • out (conservatively bf16):           ob_h × per_N × 2048
     """
     grid = device.compute_with_storage_grid_size()
     grid_x, grid_y = int(grid.x), int(grid.y)
@@ -213,76 +225,90 @@ def _bh_tp4_vision_mlp_pc(
     k_tiles = k_dim // tile
     n_tiles = n_dim // tile
 
-    # Largest effective_grid_y ≤ grid_y that divides m_tiles (max-core fit).
-    eff_gy = grid_y
-    while eff_gy > 1 and m_tiles % eff_gy != 0:
-        eff_gy -= 1
-
-    per_core_m = m_tiles // eff_gy
-    per_core_n = (n_tiles + grid_x - 1) // grid_x  # ceil-div; 2D mcast pads trailing
-
-    if per_core_n > 24 or per_core_m > 64:
-        return None
-
     in0_block_w = _largest_divisor_le(k_tiles, 8)
+    cb_budget_bytes = max(256 * 1024, _L1_PER_CORE_BYTES - l1_resident_bytes_per_core)
 
-    # CB budget for the matmul kernel, reduced by the L1 already occupied by
-    # resident activation tensors (the in0 tensor that is already in L1, and
-    # the output tensor being written into L1 during this op).
-    cb_budget_kb = max(256, (_L1_PER_CORE_BYTES - l1_resident_bytes_per_core) // 1024)
+    best_pc = None
+    # Score: (-outer_m_iters, dst_area, total_cores) — higher is better.
+    # outer_m_iters = per_core_m // ob_h: fewer DRAM weight re-reads wins.
+    # When tied, prefer full DST utilisation (dst_area=8) then more cores.
+    best_score = (-(2**31), -1, -1)
 
-    # Enumerate all divisors of per_core_m (largest first) to find the
-    # out_block_h that maximises DST area then minimises outer-M iterations.
-    divisors = sorted([h for h in range(1, per_core_m + 1) if per_core_m % h == 0], reverse=True)
+    for transpose_mcast in (True, False):
+        # transpose_mcast=True:  M→grid_x (cols), N→grid_y (rows)
+        # transpose_mcast=False: M→grid_y (rows), N→grid_x (cols)
+        m_grid_max = grid_x if transpose_mcast else grid_y
+        n_grid_max = grid_y if transpose_mcast else grid_x
 
-    best_area = 0
-    best_ob_h = 1
-    best_sh = 1
-    best_sw = 1
+        # Largest divisor of m_tiles that fits in the M-axis grid dimension.
+        eff_mg = m_grid_max
+        while eff_mg > 1 and m_tiles % eff_mg != 0:
+            eff_mg -= 1
 
-    for ob_h in divisors:
-        # BF16 in0 CB: ob_h * in0_block_w tiles × 2 KB each.
-        # BF8  interm CB: ob_h * per_core_n tiles × 1 KB each (×2 for out+interm).
-        approx_interm_kb = (ob_h * per_core_n * 2048) // 1024
-        approx_in0_kb = (ob_h * in0_block_w * 2 * 2048) // 1024
-        if approx_interm_kb + approx_in0_kb > cb_budget_kb:
+        per_core_m = m_tiles // eff_mg
+        per_core_n = (n_tiles + n_grid_max - 1) // n_grid_max
+        actual_ng = (n_tiles + per_core_n - 1) // per_core_n  # N-axis cores actually used
+
+        if per_core_n > 24 or per_core_m > 64:
             continue
 
-        cand_area = 0
-        cand_h = cand_w = 1
-        dst = 8  # tiles in DST register file (LoFi, fp32_dest_acc_en=False)
-        for h in range(min(ob_h, dst), 0, -1):
-            if ob_h % h != 0:
+        in1_fixed = 2 * in0_block_w * per_core_n * 1088
+        partial_fixed = per_core_m * per_core_n * 2048
+        fixed_cb_bytes = in1_fixed + partial_fixed
+
+        if fixed_cb_bytes >= cb_budget_bytes:
+            continue
+
+        remaining_bytes = cb_budget_bytes - fixed_cb_bytes
+        divisors = sorted([h for h in range(1, per_core_m + 1) if per_core_m % h == 0], reverse=True)
+
+        for ob_h in divisors:
+            in0_bytes = 2 * ob_h * in0_block_w * 2048
+            interm_bytes = ob_h * per_core_n * 2048
+            out_bytes = ob_h * per_core_n * 2048
+            if in0_bytes + interm_bytes + out_bytes > remaining_bytes:
                 continue
-            for w in range(min(per_core_n, dst // h), 0, -1):
-                if per_core_n % w != 0:
+
+            cand_area = 0
+            cand_h = cand_w = 1
+            dst = 8  # tiles in DST register file (LoFi, fp32_dest_acc_en=False)
+            for h in range(min(ob_h, dst), 0, -1):
+                if ob_h % h != 0:
                     continue
-                if h * w > cand_area:
-                    cand_area = h * w
-                    cand_h = h
-                    cand_w = w
-                break  # inner loop: take first (largest) w
+                for w in range(min(per_core_n, dst // h), 0, -1):
+                    if per_core_n % w != 0:
+                        continue
+                    if h * w > cand_area:
+                        cand_area = h * w
+                        cand_h = h
+                        cand_w = w
+                    break
 
-        # Prefer max DST area; break ties by max ob_h (fewest outer-M iters).
-        if cand_area > best_area or (cand_area == best_area and ob_h > best_ob_h):
-            best_area = cand_area
-            best_ob_h = ob_h
-            best_sh = cand_h
-            best_sw = cand_w
+            outer_m_iters = per_core_m // ob_h
+            total_cores = eff_mg * actual_ng
+            score = (-outer_m_iters, cand_area, total_cores)
 
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(grid_x, eff_gy),
-        in0_block_w=in0_block_w,
-        out_subblock_h=best_sh,
-        out_subblock_w=best_sw,
-        out_block_h=best_ob_h,
-        out_block_w=per_core_n,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=False,
-    )
+            if score > best_score:
+                best_score = score
+                # Grid coords are always (x=cols, y=rows).
+                gx = eff_mg if transpose_mcast else actual_ng
+                gy = actual_ng if transpose_mcast else eff_mg
+                best_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(gx, gy),
+                    in0_block_w=in0_block_w,
+                    out_subblock_h=cand_h,
+                    out_subblock_w=cand_w,
+                    out_block_h=ob_h,
+                    out_block_w=per_core_n,
+                    per_core_M=per_core_m,
+                    per_core_N=per_core_n,
+                    transpose_mcast=transpose_mcast,
+                    fused_activation=None,
+                    fuse_batch=False,
+                )
+            break  # best ob_h found for this orientation
+
+    return best_pc
 
 
 # ---------------------------------------------------------------------------
@@ -554,9 +580,10 @@ def test_vision_mlp_tp4_n_k_shard_blackhole(bh_tp4_mesh_device):
 
     def _log_pc(label, pc):
         if pc is not None:
+            tm = "T" if pc.transpose_mcast else "F"
             logger.info(
                 f"  {label}: grid={pc.compute_with_storage_grid_size} "
-                f"per_core_M={pc.per_core_M} per_core_N={pc.per_core_N} "
+                f"tm={tm} per_core_M={pc.per_core_M} per_core_N={pc.per_core_N} "
                 f"in0_block_w={pc.in0_block_w} out_block_h={pc.out_block_h} "
                 f"sub=({pc.out_subblock_h},{pc.out_subblock_w}) "
                 f"dst_area={pc.out_subblock_h * pc.out_subblock_w}"
