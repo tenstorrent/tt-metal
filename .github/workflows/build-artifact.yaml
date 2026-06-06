@@ -396,6 +396,9 @@ jobs:
         # Log ccache operations to a file so remote storage errors are visible in CI.
         # Errors (storage helper failures, Redis timeouts) would otherwise be silent.
         CCACHE_LOGFILE: /tmp/ccache.log
+        # Strip the working directory prefix from hashed paths so cache entries
+        # are reusable across machines even if the checkout path differs.
+        CCACHE_BASEDIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
