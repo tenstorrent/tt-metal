@@ -203,33 +203,64 @@ Task order:
 
 ## Performance (Blackhole BH QB, 2CQ + decode trace)
 
-End-to-end `generate()` timings measured by running [`demo/demo.py`](demo/demo.py) on a four-chip Blackhole QB host, using the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Inputs are **replicated** on all four devices (batch-1, TP=4), not data-parallel batched. Reported numbers exclude host pre/post-processing (token decode, WAV I/O). Each task opens its own mesh device with warmup before the timed iteration.
+Phase-separated timings from [`demo/demo.py`](demo/demo.py) with ``generate(return_timings=True)`` on a four-chip Blackhole QB host (`MeshShape(1, 4)`, batch-1 replicated TP=4). Uses the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Host pre/post-processing (token decode, WAV I/O) is excluded. Each task opens its own mesh device with warmup before the timed iteration.
 
-**Per-unit latency** (`ms/tok`, `μs/sample`) is more stable than throughput when output length varies run-to-run.
+Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
+
+| Metric | Meaning |
+|--------|---------|
+| **TTFT** | Time from `generate()` start to first **new** decoder token (includes encoder + decoder prefill + first decode step) |
+| **Encoder** | Speech or text encoder only |
+| **Prefill** | Text-decoder KV prefill on the seed sequence (`[decoder_start, lang]`) |
+| **decode t/s/u** | `1000 / steady_ms_per_tok` — steady text-decoder step rate (**decode steps 2+**, excludes first-step trace/compile outlier) |
+| **E2E** | Full synced `generate()` wall time (includes T2U + vocoder on T2ST/S2ST) |
+| **RTF** | Real-time factor on speech tasks: `e2e_s / audio_duration_s` (`<1` = faster than real time) |
+
+**Compare decode t/s/u across tasks** — unlike legacy E2E `tokens/s`, it is not penalized by long input encoders (S2TT/ASR) or variable output length.
+
+Measured on **2026-06-06** via [`demo/demo.py`](demo/demo.py) (`return_timings=True`, warm JIT except where noted):
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
-| Task | Runtime | Throughput | Workload | Per-unit |
-|------|--------:|-----------:|----------|----------|
-| T2TT | 669.5 ms | 95.59 tokens/s | 64 tokens | 10.5 ms/tok |
-| T2ST | 4106.7 ms | 56492.72 samples/s | 232000 samples | 17.70 μs/smp |
-| S2TT | 1201.9 ms | 21.63 tokens/s | 26 tokens | 46.2 ms/tok |
-| S2ST | 4042.2 ms | 36336.83 samples/s | 146880 samples | 27.52 μs/smp |
-| ASR | 1495.0 ms | 19.40 tokens/s | 29 tokens | 51.6 ms/tok |
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 131.5 ms | 26.0 ms | 51.3 ms | 115.9 | 8.6 | 687.8 ms | 64 tok |
+| T2ST | 196.0 ms | 39.5 ms | 69.7 ms | 111.2 | 9.0 | 4089.0 ms | 232000 smp (RTF **0.28×**) |
+| S2TT | 910.1 ms | 724.2 ms | 101.0 ms | 87.8 | 11.4 | 1200.0 ms | 26 tok (479 mel) |
+| S2ST | 1047.1 ms | 853.9 ms | 104.7 ms | 80.7 | 12.4 | 25064 ms* | 146880 smp (RTF 2.73×*) |
+| ASR | 1134.3 ms | 893.9 ms | 73.5 ms | 77.4 | 12.9 | 1504.2 ms | 29 tok (479 mel) |
 
-Task notes:
-- **T2TT** — text encoder + traced text-decoder loop.
-- **T2ST** — text path + T2U + vocoder; vocoder dominates wall-clock but yields high samples/s.
-- **S2TT / ASR** — speech encoder prefill + text decoder; dominated by encoder prefill amortized over short outputs on the ~9.6 s preamble clip (~479 mel frames).
-- **S2ST** — speech encoder + decoder + T2U + vocoder.
+\* **S2ST E2E outlier (this run):** first speech-synthesis task in a fresh process paid ~22.5 s vocoder JIT; decode t/s/u and ms/tok above are still representative. A warm rerun on the same host gave **E2E ~4.0 s** and **RTF ~0.28×** (comparable to T2ST).
 
-**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task, so the first speech-synthesis task in a run may still pay one-time compile cost if the disk cache is cold; the table above reflects a warm JIT cache.
+Speech-synthesis detail (T2ST, warm):
 
-### Reproducing
+| Phase | Time |
+|-------|-----:|
+| T2U | 1708.9 ms |
+| Vocoder | 1302.7 ms |
+
+Reproduce:
 
 ```bash
 python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
+
+Task notes:
+- **T2TT** — text encoder + traced text-decoder loop.
+- **T2ST** — text path + T2U + vocoder; vocoder dominates E2E; use **RTF** for speech QoS.
+- **S2TT / ASR** — speech encoder dominates TTFT; **decode t/s/u** isolates the text-decoder steady rate.
+- **S2ST** — speech encoder + decoder + T2U + vocoder.
+
+**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task; the first speech-synthesis task may pay one-time compile if the disk cache is cold.
+
+### Device kernel perf (Tracy, eager, no trace)
+
+```bash
+pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device_perf.py \
+    -v -m models_device_performance_bare_metal
+```
+
+The outer driver spawns eager forwards in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy and reports **both** Tracy per-device kernel floors and the same TT-aligned wall metrics (via JSON side-channel).
 
 ---
 
@@ -262,7 +293,7 @@ pytest models/experimental/seamless_m4t_v2_large/tests/perf/test_seamless_device
     -v -m models_device_performance_bare_metal
 ```
 
-The outer driver spawns eager forward-only inner tests in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy (`use_decode_trace=False`, `use_2cq=False`) and reports per-device kernel throughput.
+The outer driver spawns eager forward-only inner tests in [`tests/perf/test_device_perf_forwards.py`](tests/perf/test_device_perf_forwards.py) under Tracy (`use_decode_trace=False`, `use_2cq=False`). It reports Tracy per-device kernel floors plus TT-aligned wall metrics from ``return_timings=True`` (see **Performance** above).
 
 ---
 

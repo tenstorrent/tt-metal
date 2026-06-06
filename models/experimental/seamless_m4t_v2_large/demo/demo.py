@@ -60,6 +60,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     to_torch_replicated_first_shard,
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
+    SeamlessGenerateTimings,
     TTSeamlessM4Tv2GenerationOutput,
     TTSeamlessM4Tv2GreedySearchOutput,
     TTSeamlessM4Tv2Model,
@@ -242,7 +243,7 @@ def ensure_demo_audio(
     return dest
 
 
-_TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq"})
+_TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq", "return_timings"})
 
 
 def _hf_gen_kwargs(gen_common: dict) -> dict:
@@ -313,51 +314,54 @@ def _warmup_and_time(
     return out, min(times) if times else 0.0
 
 
-def _text_tokens_generated(sequences_tt: ttnn.Tensor, *, seed_len: int = 2) -> int:
-    """Number of new tokens emitted by the decoder, excluding the 2-token seed
-    ``[decoder_start, lang]`` that ``generate`` always prepends."""
-    return max(0, _tt_row_length(sequences_tt) - seed_len)
-
-
-def _samples_generated(lengths_tt: ttnn.Tensor) -> int:
-    """Valid audio-sample count from the TT vocoder ``waveform_lengths`` tensor."""
-    return int(to_torch_replicated_first_shard(lengths_tt).long().reshape(-1)[0].item())
-
-
-def _record_text_perf(
-    perf: list,
-    task: str,
-    sequences_tt: ttnn.Tensor,
-    elapsed_s: float,
-    *,
-    eos_token_id: int,
-    max_new_tokens: int,
-) -> None:
-    n_tokens = _text_tokens_generated(sequences_tt)
-    tps = n_tokens / elapsed_s if elapsed_s > 0 else 0.0
-    perf.append((task, "tokens/s", tps, n_tokens, elapsed_s))
-    ids = to_torch_replicated_first_shard(sequences_tt).long().reshape(-1).tolist()
-    last_id = int(ids[-1]) if ids else -1
-    if last_id == int(eos_token_id):
-        stop = f"EOS (id {eos_token_id})"
-    elif n_tokens >= max_new_tokens:
-        stop = f"max_new_tokens={max_new_tokens}"
-    else:
-        stop = "ended"
+def _record_tt_perf(perf_tt: list, task: str, timings: SeamlessGenerateTimings) -> None:
+    """Record TT-catalog-style phase metrics from ``generate(return_timings=True)``."""
+    perf_tt.append((task, timings))
+    steady = timings.steady_decode_ms_per_tok
+    decode_tps = timings.decode_tok_s_u
     print(
-        f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {tps:.2f} tokens/s "
-        f"({n_tokens} new tokens, budget {max_new_tokens}, stopped at {stop})"
+        f"  {task} TT metrics: TTFT {timings.ttft_ms:.1f} ms, "
+        f"encoder {timings.encoder_ms:.1f} ms, prefill {timings.prefill_ms:.1f} ms, "
+        f"decode {decode_tps:.2f} t/s/u ({steady:.1f} ms/tok steady), "
+        f"e2e {timings.e2e_ms:.1f} ms ({timings.output_tokens} out tokens)"
     )
+    if timings.t2u_ms > 0 or timings.vocoder_ms > 0:
+        rtf_str = f", RTF {timings.rtf:.2f}x" if timings.output_samples > 0 else ""
+        print(
+            f"  {task} speech synth: T2U {timings.t2u_ms:.1f} ms, "
+            f"vocoder {timings.vocoder_ms:.1f} ms, "
+            f"TTFT audio {timings.ttft_audio_ms:.1f} ms{rtf_str}"
+        )
+    if timings.input_is_speech and timings.mel_frames > 0:
+        print(f"  {task} input: {timings.mel_frames} mel frames")
 
 
-def _record_speech_perf(perf: list, task: str, lengths_tt: ttnn.Tensor, elapsed_s: float) -> None:
-    n_samples = _samples_generated(lengths_tt)
-    sps = n_samples / elapsed_s if elapsed_s > 0 else 0.0
-    perf.append((task, "samples/s", sps, n_samples, elapsed_s))
-    us_per = (elapsed_s * 1e6 / n_samples) if n_samples else 0.0
+def _print_tt_perf_summary(perf_tt: list) -> None:
+    if not perf_tt:
+        return
+    print()
+    print("-" * 78)
+    print("  TT-aligned runtime summary (phase-separated; decode t/s/u = 1000 / steady ms/tok)")
+    print("-" * 78)
+    hdr = f"  {'Task':<6} {'TTFT':>8} {'Enc':>8} {'Pref':>8} " f"{'Dec t/s/u':>10} {'ms/tok':>8} {'E2E':>9} {'Out':>8}"
+    print(hdr)
+    for task_name, timings in perf_tt:
+        out = f"{timings.output_tokens}tok"
+        if timings.output_samples > 0:
+            out = f"{timings.output_samples}smp"
+        print(
+            f"  {task_name:<6} {timings.ttft_ms:>7.1f}ms {timings.encoder_ms:>7.1f}ms "
+            f"{timings.prefill_ms:>7.1f}ms {timings.decode_tok_s_u:>10.2f} "
+            f"{timings.steady_decode_ms_per_tok:>7.1f}ms {timings.e2e_ms:>8.1f}ms {out:>8}"
+        )
+        if timings.output_samples > 0:
+            print(
+                f"         T2U {timings.t2u_ms:.0f} ms  vocoder {timings.vocoder_ms:.0f} ms  " f"RTF {timings.rtf:.2f}x"
+            )
+    print("-" * 78)
     print(
-        f"  {task} runtime: {elapsed_s * 1000:.1f} ms  →  {sps:.2f} samples/s "
-        f"({n_samples} audio samples, {us_per:.2f} μs/sample)"
+        "  decode t/s/u = 1000 / steady ms/tok (text-decoder steps 2+). "
+        "TTFT includes encoder + prefill + first token. E2E includes T2U/vocoder on speech tasks."
     )
 
 
@@ -468,6 +472,7 @@ def main() -> None:
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
         use_2cq=use_2cq,
+        return_timings=True,
     )
 
     try:
@@ -489,7 +494,7 @@ def main() -> None:
         f"decode=trace+2CQ+ttnn_argmax"
     )
 
-    perf_log: list = []
+    perf_tt_log: list = []
     session_kw = dict(
         hf_model=hf_model,
         cfg=cfg,
@@ -525,7 +530,7 @@ def main() -> None:
     with _isolated_task_session(**session_kw) as (device, tt_model):
         ids_tt = torch_ids_to_ttnn(device, input_ids)
         attn_tt = torch_ids_to_ttnn(device, input_text_attn)
-        t2tt_out, t2tt_elapsed = _warmup_and_time(
+        t2tt_out, _ = _warmup_and_time(
             device,
             lambda: tt_model.generate(
                 input_ids=ids_tt,
@@ -538,14 +543,8 @@ def main() -> None:
         )
         if not isinstance(t2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"T2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(t2tt_out)}")
-        _record_text_perf(
-            perf_log,
-            "T2TT",
-            t2tt_out.sequences,
-            t2tt_elapsed,
-            eos_token_id=gen_common["eos_token_id"],
-            max_new_tokens=gen_common["max_new_tokens"],
-        )
+        if t2tt_out.timings is not None:
+            _record_tt_perf(perf_tt_log, "T2TT", t2tt_out.timings)
         t2tt_text = _decode(tokenizer, t2tt_out.sequences)
         ttnn.deallocate(t2tt_out.sequences)
     print(f"  Output text ({tgt_translate}): {t2tt_text}")
@@ -558,7 +557,7 @@ def main() -> None:
     with _isolated_task_session(**session_kw) as (device, tt_model):
         ids_tt = torch_ids_to_ttnn(device, input_ids)
         attn_tt = torch_ids_to_ttnn(device, input_text_attn)
-        t2st_out, t2st_elapsed = _warmup_and_time(
+        t2st_out, _ = _warmup_and_time(
             device,
             lambda: tt_model.generate(
                 input_ids=ids_tt,
@@ -574,7 +573,8 @@ def main() -> None:
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
-        _record_speech_perf(perf_log, "T2ST", t2st_out.waveform_lengths, t2st_elapsed)
+        if t2st_out.timings is not None:
+            _record_tt_perf(perf_tt_log, "T2ST", t2st_out.timings)
         t2st_text = _decode(tokenizer, t2st_out.sequences)
         hindi_wav_np = _waveform_to_mono_fp32(t2st_out.waveform, t2st_out.waveform_lengths)
         t2u_pad = int(t2u_cfg.pad_token_id)
@@ -599,7 +599,7 @@ def main() -> None:
         _prewarm_speech_encoder(tt_model, mel_frames)
         feats_tt = torch_feats_to_ttnn(device, input_features)
         attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
-        s2tt_out, s2tt_elapsed = _warmup_and_time(
+        s2tt_out, _ = _warmup_and_time(
             device,
             lambda: tt_model.generate(
                 input_features=feats_tt,
@@ -613,14 +613,8 @@ def main() -> None:
         )
         if not isinstance(s2tt_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(s2tt_out)}")
-        _record_text_perf(
-            perf_log,
-            "S2TT",
-            s2tt_out.sequences,
-            s2tt_elapsed,
-            eos_token_id=gen_common["eos_token_id"],
-            max_new_tokens=gen_common["max_new_tokens"],
-        )
+        if s2tt_out.timings is not None:
+            _record_tt_perf(perf_tt_log, "S2TT", s2tt_out.timings)
         s2tt_text = _decode(tokenizer, s2tt_out.sequences)
         ttnn.deallocate(s2tt_out.sequences)
     print(f"  Output text ({tgt_s2tt}): {s2tt_text}")
@@ -634,7 +628,7 @@ def main() -> None:
         _prewarm_speech_encoder(tt_model, mel_frames)
         feats_tt = torch_feats_to_ttnn(device, input_features)
         attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
-        s2st_out, s2st_elapsed = _warmup_and_time(
+        s2st_out, _ = _warmup_and_time(
             device,
             lambda: tt_model.generate(
                 input_features=feats_tt,
@@ -650,7 +644,8 @@ def main() -> None:
         )
         if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")
-        _record_speech_perf(perf_log, "S2ST", s2st_out.waveform_lengths, s2st_elapsed)
+        if s2st_out.timings is not None:
+            _record_tt_perf(perf_tt_log, "S2ST", s2st_out.timings)
         s2st_text = _decode(tokenizer, s2st_out.sequences)
         spanish_wav_np = _waveform_to_mono_fp32(s2st_out.waveform, s2st_out.waveform_lengths)
         s2st_n_samples = spanish_wav_np.size
@@ -685,7 +680,7 @@ def main() -> None:
         _prewarm_speech_encoder(tt_model, mel_frames)
         feats_tt = torch_feats_to_ttnn(device, input_features)
         attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
-        asr_out, asr_elapsed = _warmup_and_time(
+        asr_out, _ = _warmup_and_time(
             device,
             lambda: tt_model.generate(
                 input_features=feats_tt,
@@ -706,14 +701,8 @@ def main() -> None:
                 break
             lcp += 1
         print(f"  HF/TT token prefix match: {lcp} (seed + {max(0, lcp - 2)} content tokens)")
-        _record_text_perf(
-            perf_log,
-            "ASR",
-            asr_out.sequences,
-            asr_elapsed,
-            eos_token_id=gen_common["eos_token_id"],
-            max_new_tokens=gen_common["max_new_tokens"],
-        )
+        if asr_out.timings is not None:
+            _record_tt_perf(perf_tt_log, "ASR", asr_out.timings)
         asr_text = _decode(tokenizer, asr_out.sequences)
         ttnn.deallocate(asr_out.sequences)
     print(f"  TT output ({tgt_asr}): {asr_text}")
@@ -723,24 +712,7 @@ def main() -> None:
     print("  ok — all five tasks completed")
     print("=" * 78)
     print(f"  Audio outputs saved under: {OUTPUT_DIR}")
-    if perf_log:
-        print()
-        print("-" * 78)
-        print("  TT model runtime summary (excludes pre/post-processing; per-task device)")
-        print("-" * 78)
-        print(f"  {'Task':<6} {'Runtime':>11} {'Throughput':>22} {'Workload':>20} {'Per-unit':>14}")
-        for task_name, unit, value, count, elapsed_s in perf_log:
-            workload = f"{count} {'samples' if unit == 'samples/s' else 'tokens'}"
-            if unit == "samples/s":
-                per_unit = f"{(elapsed_s * 1e6 / count) if count else 0.0:.2f} μs/smp"
-            else:
-                per_unit = f"{(elapsed_s * 1e3 / count) if count else 0.0:.1f} ms/tok"
-            print(
-                f"  {task_name:<6} {elapsed_s * 1000:>9.1f} ms  "
-                f"{value:>15.2f} {unit:<6} {workload:>20} {per_unit:>14}"
-            )
-        print("-" * 78)
-        print("  Note: per-unit latency is more stable than throughput when output length varies.")
+    _print_tt_perf_summary(perf_tt_log)
 
 
 if __name__ == "__main__":
