@@ -19,18 +19,18 @@ namespace tt::tt_metal {
 
 namespace {
 
-static constexpr CoreCoord WORKER_CORE = {0, 0};
-static constexpr uint32_t RESULT_L1_ADDR = 1000 * 1024;
+constexpr CoreCoord WORKER_CORE = {0, 0};
+constexpr uint32_t RESULT_L1_ADDR = 1000 * 1024;
 
 using DataT = std::uint32_t;
-static constexpr auto DATA_FORMAT = DataFormat::UInt32;
+constexpr auto DATA_FORMAT = DataFormat::UInt32;
 
-static constexpr DataT VAL0 = 0xA5A5A5A5u;
-static constexpr DataT VAL1 = 0x11111111u;
-static constexpr DataT VAL2 = 0x22222222u;
-static constexpr DataT VAL3 = 0x33333333u;
+constexpr DataT VAL0 = 0xA5A5A5A5u;
+constexpr DataT VAL1 = 0x11111111u;
+constexpr DataT VAL2 = 0x22222222u;
+constexpr DataT VAL3 = 0x33333333u;
 // {read tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0]}
-static const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL2, VAL3, VAL2};
+const std::vector<DataT> EXPECTED_RESULT = {VAL0, VAL1, VAL2, VAL3, VAL2};
 
 }  // namespace
 
