@@ -12,6 +12,7 @@ Run:
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.5-27B-FP8 \
     pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_model_tp_contract.py
 """
+import math
 import os
 
 import pytest
@@ -131,3 +132,53 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
     logger.info(f"long-prompt (T={T}) chunk-outer prefill logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"long-prompt chunk-outer prefill PCC below 0.99: {pcc}"
     logger.info("PASSED: TP chunk-outer eager prefill matches bespoke single-pass (B=1, >2048)")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    indirect=True,
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("T", [4096, 4352], ids=["exact_2chunks", "2chunks_plus_tail"])
+def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
+    """TP long-prompt (>2048) prefill via the CAPTURED chunk-outer trace — the path vLLM serves
+    at long ISL (and the fix for the eager path's >7872-token crash). Replays the per-chunk trace
+    for each full 2048 chunk, carrying GDN recurrent/conv + paged-KV state in place, then the
+    masked tail. Must match the bespoke single-pass prefill_tp. T=4096 (= 2*2048, no tail) hits the
+    exact-multiple branch (_masked_bucket_logits_tp on the last chunk's hidden); T=4352 (= 2*2048 +
+    256) exercises the multi-chunk replay + masked tail.
+
+    The oracle prefill_tp runs BEFORE any trace is parked (it compiles per-length, so it must not
+    run with the trace captured); the traced replay + masked buckets are all pre-warmed by
+    capture_prefill_trace_chunked, so they never compile at request time."""
+    nd = mesh_device.get_num_devices()
+    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
+    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
+    args = model.args
+    vocab = args.vocab_size
+    torch.manual_seed(0)
+    prompt = torch.randint(0, vocab, (T,)).tolist()
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+    # bespoke oracle: single-pass prefill over the whole sequence (no trace parked yet).
+    model.reset_tp()
+    ref = model.prefill_tp(torch.tensor([prompt], dtype=torch.long), valid_len=T).reshape(-1).float()
+
+    # contract path: capture the chunk-outer trace (TP fork), then replay it per full chunk + tail.
+    block_size = 64
+    num_blocks = math.ceil(((T // block_size) + 8) / 32) * 32  # 32-aligned for the flexible SDPA
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+    model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
+    assert model._chunked_trace_id is not None, "TP chunk-outer trace was not captured"
+
+    c_dev = model.prefill_traced_chunked(torch.tensor([prompt], dtype=torch.long), page_table, actual_len=T)
+    c_logits = ttnn.to_torch(c_dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
+
+    _, pcc = comp_pcc(ref.reshape(-1), c_logits.reshape(-1), 0.99)
+    logger.info(f"traced chunk-outer prefill (T={T}) logits PCC = {pcc}")
+    assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
+    logger.info(f"PASSED: TP traced chunk-outer prefill matches bespoke single-pass (B=1, T={T})")

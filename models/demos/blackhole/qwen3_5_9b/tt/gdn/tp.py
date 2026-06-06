@@ -14,7 +14,7 @@ Sharding mirrors models/demos/qwen35_27b. GDN output uses the *gated* RMSNorm
 """
 import torch
 from tt.ttnn_delta_rule_ops import recurrent_gated_delta_rule_decode_ttnn
-from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
+from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter, create_chunk_masks_seq
 from tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
 import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
@@ -128,6 +128,12 @@ class TPGatedDeltaNet:
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
+        # Pre-build the chunk-prefill masks ONCE (replicated across the mesh) so the seq kernel
+        # reads them from cache instead of rebuilding eye/triu/tril via from_torch on every call.
+        # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
+        # trace; pre-allocating here (outside any trace) makes the GDN prefill trace-safe. Mirrors
+        # the single-device gdn/weights.py create_chunk_masks_seq usage.
+        self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         self.conv_states = None
         self.rec_state = None
         # When True, decode/prefill update rec_state IN PLACE (ttnn.copy into the fixed
@@ -208,7 +214,13 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,T,dim]
         T = x.shape[1]
-        vlen = valid_len or T
+        # Pass the RAW valid_len (may be None) to the conv-FIR / seq kernels below — NOT a
+        # `valid_len or T` coercion. A full chunk (valid_len is None) must take the kernels'
+        # valid_len-None path (a static last-(K-1) slice for the conv state), which is trace-safe;
+        # the valid_len-set path builds a one-hot via ttnn.from_torch (a host write) that TT_FATALs
+        # ("Writes are not supported during trace capture") inside the captured chunk-outer trace.
+        # Masked buckets still pass a real valid_len (< T) so their exact masking is unchanged, and
+        # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
 
         # Cross-chunk carry (chunk-outer prefill): when _stable_state, the recurrent + conv
         # state continue from the persistent buffers (zeroed at sequence start by
@@ -240,7 +252,7 @@ class TPGatedDeltaNet:
             conv_state=self.conv_carry if carry else None,
             weight_taps=tw["conv_taps"],
             bias_dev=None,
-            valid_len=vlen,
+            valid_len=valid_len,
         )
         ttnn.deallocate(qkv)
 
@@ -268,7 +280,8 @@ class TPGatedDeltaNet:
             scale=self.scale,
             initial_state=self.rec_state if carry else None,
             device=self.mesh,
-            valid_len=vlen,
+            cached_masks=self.chunk_seq_masks,
+            valid_len=valid_len,
         )
         B, D = 1, self.qkv_dim_tp
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
