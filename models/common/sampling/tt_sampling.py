@@ -542,6 +542,15 @@ class TTSampling(LightweightModule):
             user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self.sub_core_grids,
         )
+        import os as _os
+
+        if _os.environ.get("QWEN36_RS_DBG", "0") == "1":
+            print(
+                f"[SAMP2_DBG] values.shape={list(topk_values_gathered_bf16_interleaved.shape)} "
+                f"indices.shape={list(topk_global_indices_interleaved_untilised.shape)} "
+                f"k.shape={list(self.k_tensor.shape)} max_batch_size={self.max_batch_size}",
+                flush=True,
+            )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,

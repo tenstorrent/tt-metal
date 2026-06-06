@@ -825,9 +825,16 @@ class TtQwen36ModelArgs(TtModelArgs):
         # Per-col padded vocab: pad to multiple of LM_HEAD_RING_SIZE * tile.
         per_col_vocab = self.padded_vocab_size // self.cluster_shape[1]  # 62208
         RING_TILE_ALIGN = LM_HEAD_RING_SIZE * self.tile_size  # 24->768, 72->2304
-        per_col_vocab_padded = (
-            (per_col_vocab + RING_TILE_ALIGN - 1) // RING_TILE_ALIGN
-        ) * RING_TILE_ALIGN  # 62208 (clean for 24 & 72: 1944 = 24*81 = 72*27 tiles)
+        # per_col_vocab_padded must be tile-aligned BOTH for the RING_SIZE matmul shard
+        # (per_col/RING_SIZE % tile == 0 -> %RING_TILE_ALIGN) AND for the 32-core decode
+        # RESHARD (LM_HEAD_OUT_RING_RESHARD_MEMCFG: per_col/32 % tile == 0 -> %(32*tile)).
+        # Padding only to RING_TILE_ALIGN left per_col/32 = 1944 (not %32) -> the decode
+        # lm_head reshard hit tensor_layout.cpp:112 (physical_shard not tile-aligned). Pad
+        # to the LCM of both so every derived shard is tile-aligned (62208 -> 64512:
+        # 64512/24=2688, 64512/32=2016, both %32).
+        _reshard_tile_align = 32 * self.tile_size  # 1024 (32 reshard cores * tile)
+        _vocab_align = (RING_TILE_ALIGN * _reshard_tile_align) // math.gcd(RING_TILE_ALIGN, _reshard_tile_align)
+        per_col_vocab_padded = ((per_col_vocab + _vocab_align - 1) // _vocab_align) * _vocab_align
         self.lm_head_shape = (self.dim_per_tp, per_col_vocab_padded)  # (1280, 62208)
 
         # Input/output ring shards live on LM_HEAD_RING_SIZE cores carved from

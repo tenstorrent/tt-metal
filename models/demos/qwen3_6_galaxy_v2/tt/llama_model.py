@@ -496,9 +496,7 @@ class TtTransformer(LightweightModule):
                 # column 0 ONLY, leaving columns 1-3 empty -> decode (replicated) reads
                 # those empty columns -> garbage past the first (pre-cache) token.
                 assert batch_size == 1, "qwen3.6 server prefill is batch-1 (single user)"
-                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(
-                    page_table, pad_value=inactive_fill_value
-                )
+                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(page_table, pad_value=inactive_fill_value)
                 qwen36_replicate_pt = True
             elif batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
@@ -995,6 +993,25 @@ class TtTransformer(LightweightModule):
         assert chunk_start_idx is not None and hasattr(
             chunk_start_idx, "shape"
         ), "prefill requires chunk_start_idx as device tensor"
+        # Long-context prefill (QWEN36_PREFILL_CHUNK): the DeltaNet/GDN forward_prefill materializes a
+        # full-sequence activation that OOMs DRAM at >=256k (2GB). Route to prefill_chunked — the SAME
+        # GDN-sequence-chunking path the inline demo uses for long context (full-attn stays single-pass
+        # via chunked SDPA). It returns the full post-layer hidden, identical to forward(mode="prefill"),
+        # so the caller's norm + lm_head (process_output_prefill) is unchanged. (llama70b's generator
+        # has no GDN, so it never needed this — its long-context handling is chunked SDPA + prefix
+        # caching, both already in the model.) No prefix-caching with chunked GDN (demo path only).
+        _pf_chunk = os.environ.get("QWEN36_PREFILL_CHUNK")
+        if getattr(self, "is_qwen36", False) and _pf_chunk and start_pos in (0, None):
+            return self.prefill_chunked(
+                x,
+                rot_mats,
+                gdn_chunk_size=int(_pf_chunk),
+                user_id=user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                chunk_start_idx_tensor=chunk_start_idx,
+                batch_size=batch_size,
+            )
         tt_logits = self.forward(
             x,
             current_pos=None,
@@ -1066,10 +1083,11 @@ class TtTransformer(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
             )
-            if os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1" or os.environ.get("QWEN36_DECODE_32ROW", "0") == "1":
-                x_embd = ttnn.reshape(
-                    x_emb_flat, ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]])
-                )
+            if (
+                os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1"
+                or os.environ.get("QWEN36_DECODE_32ROW", "0") == "1"
+            ):
+                x_embd = ttnn.reshape(x_emb_flat, ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]]))
             else:
                 x_emb_3d = ttnn.slice(
                     x_emb_flat, [0, 0, 0], [1, 1, x_emb_flat.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1078,6 +1096,8 @@ class TtTransformer(LightweightModule):
                 x_embd = ttnn.unsqueeze_to_4D(x_emb_3d)
         else:
             x_embd = self.embd(x)
+        if os.environ.get("QWEN36_RS_DBG", "0") == "1":
+            print(f"[ROWDBG] x.shape={list(x.shape)} x_embd.shape={list(x_embd.shape)}", flush=True)
         tt_logits = self.forward(
             x_embd,
             current_pos,
@@ -1086,11 +1106,20 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        if os.environ.get("QWEN36_RS_DBG", "0") == "1":
+            _tl = tt_logits[0] if isinstance(tt_logits, (list, tuple)) else tt_logits
+            print(f"[ROWDBG] tt_logits.shape={list(_tl.shape)}", flush=True)
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
         if return_logits:
+            # The persistent SAMPLING all-gather buffer is bf16; the decode lm_head may emit
+            # bf8 logits (QWEN36_ATTN_OUT_BF8) -> all_gather_async asserts output.dtype==input.dtype.
+            # Typecast the logits to bf16 to match the buffer for the return_logits (host-sampling) path.
+            _samp_in = tt_logits[0]
+            if _samp_in.dtype != ttnn.bfloat16:
+                _samp_in = ttnn.typecast(_samp_in, dtype=ttnn.bfloat16)
             tt_logits = self.tt_ccl.line_all_gather(
-                tt_logits[0],
+                _samp_in,
                 dim=3,
                 num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
                 cluster_axis=0,
@@ -1117,6 +1146,11 @@ class TtTransformer(LightweightModule):
         if capture_sampling_trace:
             return tt_logits
 
+        if os.environ.get("QWEN36_RS_DBG", "0") == "1":
+            print(
+                f"[LOGITS_DBG] tt_logits[0].shape={list(tt_logits[0].shape)} x.shape={list(x.shape)}",
+                flush=True,
+            )
         tt_toks, tt_log_probs = self.sampling.sample(
             tt_logits[0],
             tt_out_tok=x,
@@ -1219,6 +1253,9 @@ class TtTransformer(LightweightModule):
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
+            if os.environ.get("QWEN36_RS_DBG", "0") == "1" and mode == "decode":
+                _is_gdn_dbg = getattr(layer, "is_linear_attention_layer", False)
+                print(f"[LAYER_DBG] decode layer {i} ({'gdn' if _is_gdn_dbg else 'full'}) start", flush=True)
             x, h = layer(
                 x,
                 h,
@@ -1251,6 +1288,24 @@ class TtTransformer(LightweightModule):
                     f"absmean={_td.abs().mean():.4f} max={_td.abs().max():.4f} per_user_maxdiff={_udiff:.4f} "
                     f"row0[:6]={[round(v,3) for v in _r0.tolist()]}"
                 )
+            # DECODE-CCL DRIFT PROBE (QWEN36_DDUMP_TAG=<tag>): on the FIRST decode forward, save
+            # every layer's output hidden (all devices gathered) to /tmp/qwen36_ddump_<tag>.pt.
+            # Run once with decode-CCL (switch_mode) and once with prefill-CCL
+            # (QWEN36_SKIP_SWITCH_DECODE=1) under IDENTICAL inputs (QWEN36_GEN_FORCE_FIRST_TOK), then
+            # compare per-layer PCC offline — the first layer whose PCC drops is the broken decode-CCL op.
+            if os.environ.get("QWEN36_DDUMP_TAG") and mode == "decode" and not getattr(self, "_ddump_done", False):
+                if not hasattr(self, "_ddump"):
+                    self._ddump = {}
+                self._ddump[i] = ttnn.to_torch(
+                    x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                ).float()
+        if os.environ.get("QWEN36_DDUMP_TAG") and mode == "decode" and not getattr(self, "_ddump_done", False):
+            import torch as _torch
+
+            _tag = os.environ["QWEN36_DDUMP_TAG"]
+            _torch.save(getattr(self, "_ddump", {}), f"/tmp/qwen36_ddump_{_tag}.pt")
+            self._ddump_done = True
+            print(f"[DDUMP] saved {len(getattr(self, '_ddump', {}))} layers -> /tmp/qwen36_ddump_{_tag}.pt", flush=True)
         # ttnn.deallocate(h)
         if mode == "decode" and not is_qwen36_decode:
             if self.args.use_prefetcher:
@@ -1260,6 +1315,10 @@ class TtTransformer(LightweightModule):
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
             )
+        # NOTE: qwen3.6 decode lm_head reduces via reduce_scatter+all_gather (olmo3-style, see
+        # lm_head.py), NOT line_all_reduce(lm_head=True), so the large L1 tt_lm_head_buffer_l1
+        # is intentionally NOT built here — it would waste ~274KB/core and its static CB clashed
+        # on core (0,0) at qwen3.6's 4x-larger vocab.
 
         if mode == "prefill":
             return x
@@ -1324,6 +1383,30 @@ class TtTransformer(LightweightModule):
                         f"absmean={_xpre.abs().mean():.4f} max={_xpre.abs().max():.4f} "
                         f"nan={bool(_xpre.isnan().any())} row0[:12]={[round(v,3) for v in _r0.tolist()]}"
                     )
+                # FIX (decode-tail row-0 corruption): for batch-1 the 31 tile-padding rows have
+                # DIVERGED from the real user (row 0) through the backbone (per-row maxdiff grows to
+                # ~5). The decode-mode tail processes all 32 rows together (rms_allgather requires
+                # logical 32 rows; the ring lm_head reshards across rows), and the diverged padding
+                # rows corrupt the row-0 logits (0.05 PCC vs the proven row-0-slice prefill tail).
+                # Re-broadcast row 0 to all 32 rows so the decode tail runs as a degenerate batch-32
+                # of IDENTICAL users -> row 0 (the answer) is preserved. batch>1 = real distinct
+                # users, left untouched. NOTE: NOT needed once the decode lm_head uses minimal_matmul
+                # (QWEN36_LM_HEAD_PLAIN_DECODE) — the row-0 corruption was the ring lm_head, not row
+                # contamination — so default OFF (avoids a per-step DRAM round-trip). Opt in to A/B.
+                if batch_size == 1 and os.environ.get("QWEN36_DECODE_TAIL_BCAST", "0") == "1":
+                    _mc = x.memory_config()
+                    _xd = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                    _xb, _, _xr, _xh = list(_xd.shape)
+                    if _xr > 1:
+                        _x0 = ttnn.slice(_xd, [0, 0, 0, 0], [_xb, 1, 1, _xh], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                        ttnn.deallocate(_xd)
+                        _xb2 = ttnn.repeat(_x0, ttnn.Shape([1, 1, _xr, 1]))
+                        ttnn.deallocate(_x0)
+                        x = ttnn.to_memory_config(_xb2, _mc)
+                        ttnn.deallocate(_xb2)
+                    else:
+                        x = ttnn.to_memory_config(_xd, _mc)
+                        ttnn.deallocate(_xd)
                 x, _ = self.norm(x, res=None, mode="decode")
                 if os.environ.get("QWEN36_DUMP_HIDDEN", "0") == "1":
                     _xpost = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
@@ -1332,11 +1415,30 @@ class TtTransformer(LightweightModule):
                         f"absmean={_xpost.abs().mean():.4f} max={_xpost.abs().max():.4f} "
                         f"nan={bool(_xpost.isnan().any())}"
                     )
+                if os.environ.get("QWEN36_DDUMP_TAG") and not getattr(self, "_ddump_done2", False):
+                    import torch as _t2
+
+                    _tag2 = os.environ["QWEN36_DDUMP_TAG"]
+                    _t2.save(
+                        ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float(),
+                        f"/tmp/qwen36_ddump_{_tag2}_postnorm.pt",
+                    )
                 lm_head_output = self.lm_head(
                     x,
                     self.prefetcher_setup.worker_sub_device_id if self.prefetcher_setup is not None else None,
                     mode="decode",
                 )
+                if os.environ.get("QWEN36_DDUMP_TAG") and not getattr(self, "_ddump_done2", False):
+                    import torch as _t3
+
+                    _tag3 = os.environ["QWEN36_DDUMP_TAG"]
+                    _lm = lm_head_output[0] if isinstance(lm_head_output, (list, tuple)) else lm_head_output
+                    _t3.save(
+                        ttnn.to_torch(_lm, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float(),
+                        f"/tmp/qwen36_ddump_{_tag3}_lmhead.pt",
+                    )
+                    self._ddump_done2 = True
+                    print(f"[DDUMP2] saved postnorm+lmhead for tag {_tag3}", flush=True)
                 return lm_head_output
             # The decoder loop exit is col-sharded [B, 1, T=1, H/4] (same
             # contract as prefill). Run the final norm + lm_head via the

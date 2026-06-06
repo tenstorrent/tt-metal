@@ -2,9 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from collections import defaultdict
 from dataclasses import fields, replace
-import os
 from typing import List
 
 import torch
@@ -1078,7 +1078,14 @@ class Generator(WarmupForwardMixin):
             )  # Make sure we reference a fresh page table, in case it has changed
 
         if self.model.is_decode_setup is False:
-            self.model.switch_mode("decode")
+            # Exp 3 (qwen3.6 4k+ decode bisection): the proven-coherent inline demo runs decode
+            # on PREFILL-CCL (it never calls switch_mode). QWEN36_SKIP_SWITCH_DECODE=1 makes the
+            # generator path do the same — mark decode setup done WITHOUT swapping the tt_ccl
+            # instance — so we can A/B decode-CCL vs prefill-CCL as the 4k+ garbage culprit.
+            if os.environ.get("QWEN36_SKIP_SWITCH_DECODE", "0") == "1":
+                self.model.is_decode_setup = True
+            else:
+                self.model.switch_mode("decode")
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
 
         kv_cache = kv_cache[0]
@@ -1209,6 +1216,17 @@ class Generator(WarmupForwardMixin):
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
 
+        # qwen3.6: reset the CCL gather/reduce-scatter/barrier indices to 0 right BEFORE capture so
+        # the trace bakes a deterministic, baseline set of persistent buffers + semaphores. The
+        # coherent inline demo (text_demo_qwen36) does exactly this before begin_trace_capture; the
+        # compile run above otherwise leaves the indices at a per-step offset, and the decode-CCL
+        # traced path drifts to garbage (eager decode-CCL is semi-coherent) — a trace/semaphore reuse
+        # symptom. Reset here to match the coherent demo's capture state.
+        if getattr(self.model, "is_qwen36", False):
+            _ccl = getattr(self.model, "tt_ccl", None)
+            if _ccl is not None and hasattr(_ccl, "reset_gather_and_buffer_idx"):
+                _ccl.reset_gather_and_buffer_idx()
+
         # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         tt_out_tok = self.model.ttnn_decode_forward(
@@ -1297,7 +1315,7 @@ class Generator(WarmupForwardMixin):
             except Exception as _e:
                 print(f"[TRACE_DBG] PRE dump failed: {_e}", flush=True)
 
-        if getattr(self.model, "is_qwen36", False):
+        if getattr(self.model, "is_qwen36", False) and page_table is None:
             # qwen3.6-specific (the llama70b base has no host-written decode mask —
             # its causal mask is in-kernel from current_pos). qwen3.6's V2-9 decode
             # SDPA reads a per-step host-written mask buffer; the captured forward
@@ -1305,6 +1323,13 @@ class Generator(WarmupForwardMixin):
             # so prime the per-layer decode-mask buffers for THIS step's position
             # BEFORE the trace replay. Mirrors the demo's per-step
             # refresh_decode_per_step_buffers call before execute_trace.
+            #
+            # PERF: only the NON-PAGED decode SDPA consumes the explicit mask. The
+            # paged path (page_table is not None — the Generator / server contract)
+            # uses paged_scaled_dot_product_attention_decode with cur_pos_tensor +
+            # page_table and NO attn_mask, so these per-step host writes (one
+            # copy_host_to_device_tensor per full-attn layer) are pure overhead that
+            # serialized the decode loop (host-bound ~5.6 tok/s). Skip them when paged.
             self.model.refresh_decode_per_step_buffers(current_pos)
 
         trace_tok_rm = self._decode_forward_trace_text(

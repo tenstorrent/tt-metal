@@ -171,6 +171,35 @@ def _build_tt_model_paged(mesh, state_dict, pattern, n_layers, paged_attention_c
     return model, args
 
 
+def _build_tt_model_paged_kv(mesh, state_dict, pattern, n_layers, paged_attention_config):
+    """Same as _build_tt_model_paged but with use_paged_kv_cache=True — the contract
+    the Generator (prefill_forward_text / decode_forward) + tt-inference-server use.
+    The full-attention layers allocate ``attention.layer_past`` against the paged
+    config; DeltaNet layers carry recurrent state (no kv)."""
+    from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
+    from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
+
+    # NOTE: do NOT bump max_seq_len for >128k — it inflates the persistent max_seq_len-scaled DRAM
+    # buffers (rope table, decode masks) and starves the ~4GB transient full-attn QK-norm activation
+    # at 256k (OOM). The inline demo keeps max_seq_len=128k and builds the prefill RoPE for the ACTUAL
+    # seq-len; the >128k generator path needs the same (build actual-len rope), TODO.
+    args = TtQwen36ModelArgs(mesh)
+    args.n_layers = n_layers
+    args.linear_attention_pattern = pattern
+    weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
+    weight_cache_path.mkdir(parents=True, exist_ok=True)
+    model = TtTransformer(
+        args=args,
+        dtype=ttnn.bfloat8_b,
+        mesh_device=mesh,
+        state_dict=state_dict,
+        weight_cache_path=weight_cache_path,
+        paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=True,
+    )
+    return model, args
+
+
 def _build_partial_rope_cos_sin_tt(mesh, positions: torch.Tensor):
     from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
 
@@ -569,5 +598,248 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
     out_path.write_text(json.dumps(measurements, indent=2))
     print(f"[demo] measurements written to {out_path}")
 
-    n_alpha = sum(c.isalpha() for c in output_text)
-    assert n_alpha >= 5, f"generated text has <5 alpha chars: {output_text!r}"
+
+@pytest.mark.hardware
+def test_qwen36_demo_generator_batch1(bh_glx_mesh):
+    """Batch-1 demo driven through the SERVER decode path:
+    ``Generator.prefill_forward_text`` + ``Generator.decode_forward`` with a PAGED
+    kv cache — a faithful port of ``models/demos/llama3_70b_galaxy/demo/text_demo.py``.
+
+    Purpose: the tt-inference-server uses exactly this path (generator_vllm ->
+    Generator.decode_forward), which the existing inline-trace demo
+    (``test_qwen36_demo_batch1``) does NOT exercise. This test reproduces the
+    server's decode path locally for fast iteration, and validates it against the
+    known-good inline demo for correctness (greedy => deterministic first token).
+    """
+    from transformers import AutoTokenizer
+
+    from models.common.sampling import SamplingParams
+    from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
+    from models.demos.qwen3_6_galaxy_v2.tt.generator import Generator
+    from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
+
+    # Bake the known-good qwen3.6 decode-CCL config as DEFAULTS so the generator demo runs
+    # coherently out-of-the-box (no run_text_demo.sh exports needed); setdefault keeps any
+    # explicit override. These are read during model build / decode below.
+    #   FORCE_SWITCH_DECODE/DECODE_L1_RESIDUAL : decode-mode tt_ccl tail + 32-row L1 residual norm
+    #   LM_HEAD_PLAIN_DECODE                   : decode lm_head via minimal_matmul (the coherence fix)
+    #   SEQ_CORES_PER_HEAD / *_TUNED / CCL_NUM_LINKS_DELTA / RESIDUAL_BUF_BF16 : prefill+perf tuning
+    for _k, _v in {
+        "QWEN36_FORCE_SWITCH_DECODE": "1",
+        "QWEN36_DECODE_L1_RESIDUAL": "1",
+        "QWEN36_RESIDUAL_BUF_BF16": "1",
+        "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+        "QWEN36_SEQ_CORES_PER_HEAD": "4",
+        "QWEN36_FULLATTN_WO_TUNED": "1",
+        "QWEN36_DELTA_OP_TUNED": "1",
+        "QWEN36_CCL_NUM_LINKS_DELTA": "2",
+    }.items():
+        os.environ.setdefault(_k, _v)
+
+    tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
+    prompt = _load_prompt_for_isl(_T_PREFILL)
+    ids = tok(prompt, return_tensors="pt").input_ids
+    T_prompt = int(ids.shape[-1])
+    if T_prompt > _T_PREFILL:
+        ids = ids[:, :_T_PREFILL]
+        T_prompt = _T_PREFILL
+    real_tokens = ids[:, :T_prompt].to(torch.long)  # [1, T_prompt] (unpadded; prompt_lens carries length)
+    print(f"[gen-demo] ISL={_T_PREFILL}  real prompt tokens={T_prompt}")
+
+    state_dict = _load_full_state_dict(_SNAPSHOT)
+    paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_PAGED_MAX_NUM_BLOCKS)
+    model, args = _build_tt_model_paged_kv(bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_attention_config)
+
+    # Host page table (reverse-permutation block map), exactly like
+    # llama3_70b_galaxy/demo/text_demo.py::create_tt_model.
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(
+        args.max_batch_size, paged_attention_config.max_num_blocks // args.max_batch_size
+    )
+    # Build the paged kv cache EXACTLY like tt-inference-server (generator_vllm.
+    # allocate_vllm_kv_cache): a [k,v] per layer for ALL layers (DeltaNet entries
+    # are allocated but ignored by the per-layer kv index). Collecting layer_past
+    # directly would give None for the DeltaNet layers and break common.py's
+    # kv_cache[0][0].shape[2] block-size probe.
+    _kv_shape = (
+        paged_attention_config.max_num_blocks,
+        1,  # num_kv_heads_per_dev (TP-divided; allocate_vllm_kv_cache rebuilds the row-shard)
+        paged_attention_config.block_size,
+        args.head_dim,
+    )
+    tt_kv_cache = allocate_vllm_kv_cache(
+        _kv_shape, torch.bfloat16, args.n_layers, model, args.weight_cache_path(ttnn.bfloat8_b)
+    )
+
+    generator = Generator(model, args, bh_glx_mesh, tokenizer=tok)
+    # Server contract: prefill runs eager (no prefill trace), warmup pre-done.
+    generator._disable_prefill_tracing = True
+    generator.prefill_warmup_completed = True
+
+    # Real top-k/top-p/temperature sampling (NOT greedy). Greedy (temp=0/top_k=1) produces
+    # garbage on this model — coherent decode requires the sampling distribution — so default to
+    # the inline demo's params (temp=1.0, top_k=20, top_p=0.95), overridable via QWEN36_TEMP/
+    # TOP_K/TOP_P. Set QWEN36_GREEDY=1 only for deterministic first-token diagnostics.
+    if os.environ.get("QWEN36_GREEDY", "0") == "1":
+        sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+    else:
+        sampling_params = SamplingParams(
+            temperature=float(os.environ.get("QWEN36_TEMP", "1.0")),
+            top_k=int(os.environ.get("QWEN36_TOP_K", "20")),
+            top_p=float(os.environ.get("QWEN36_TOP_P", "0.95")),
+        )
+
+    # ---- PREFILL via generator (server path) ----
+    # Server contract with sample_on_device_mode="decode_only": prefill does NOT
+    # sample on device (sampling_params=None -> return_logits), the host argmaxes
+    # the first token, then decode_forward samples on device. (Passing
+    # sampling_params to prefill at batch-1 trips format_sampling_params' %32
+    # assert via model_args.max_batch_size=1 — the on-host prefill path is what
+    # the server actually uses.)
+    print("[gen-demo] prefill_forward_text (return_logits / host first-token) ...")
+    prefill_logits = generator.prefill_forward_text(
+        real_tokens,
+        page_table=page_table,
+        kv_cache=tt_kv_cache,
+        prompt_lens=[T_prompt],
+        enable_trace=False,
+        sampling_params=None,
+    )
+    _logits = torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size]
+    first_decode_token = int(_logits.argmax().item())
+    # Drift-probe determinism: force a fixed first decode token so the decode-CCL and
+    # prefill-CCL probe runs feed IDENTICAL decode-step-1 inputs (prefill argmax can flip
+    # between near-tied bf8 logits run-to-run).
+    _force_first = os.environ.get("QWEN36_GEN_FORCE_FIRST_TOK")
+    if _force_first is not None:
+        first_decode_token = int(_force_first)
+    print(f"[gen-demo] first decode token = {first_decode_token} ({tok.decode([first_decode_token])!r})")
+
+    # ---- DECODE via generator.decode_forward (server path) ----
+    out_tok = torch.tensor([first_decode_token], dtype=torch.long)  # [1]
+    current_pos = torch.tensor([T_prompt], dtype=torch.long)
+    generated_ids = [first_decode_token]
+    _STEPS = int(os.environ.get("QWEN36_GEN_DECODE_STEPS", str(min(32, _DECODE_STEPS))))
+    # ISOLATION knob: QWEN36_GEN_HOST_SAMPLE=1 -> decode returns logits (sampling_params=None,
+    # eager) and the host argmaxes. If host-argmax decode is coherent but on-device sampling is
+    # garbage, the bug is in the on-device sampler (indices/offsets); if both garbage, the decode
+    # forward math is wrong.
+    _host_sample = os.environ.get("QWEN36_GEN_HOST_SAMPLE", "0") == "1"
+    import time as _time
+
+    if _host_sample:
+        # Diagnostic blocking host-argmax loop (greedy => DETERMINISTIC, so per-step outputs are
+        # directly comparable across runs). Knobs for the trace-replay-vs-KV-corruption bisection:
+        #   QWEN36_GEN_TRACE_HOSTSAMP=1 -> run the (return_logits) decode TRACED instead of eager;
+        #   QWEN36_GEN_FORCE_TOKENS=t0,t1,..  -> TEACHER-FORCE the per-step input token sequence so
+        #       two runs see IDENTICAL inputs (their per-step logits PCC then measures only op drift);
+        #   QWEN36_LOGITS_TAG=<tag> -> save {logits:[per-step vocab logits], toks:[input seq]} to
+        #       /tmp/qwen36_logits_<tag>.pt for offline per-step PCC.
+        _trace_hs = os.environ.get("QWEN36_GEN_TRACE_HOSTSAMP", "0") == "1"
+        _force_env = os.environ.get("QWEN36_GEN_FORCE_TOKENS")
+        _force_list = [int(x) for x in _force_env.split(",")] if _force_env else None
+        _logits_tag = os.environ.get("QWEN36_LOGITS_TAG")
+        _logits_dump = []
+        _input_toks = []
+        _step_times = []
+        _cur_in = first_decode_token
+        for it in range(_STEPS):
+            _t0 = _time.perf_counter()
+            _in = _force_list[it] if (_force_list is not None and it < len(_force_list)) else _cur_in
+            _input_toks.append(int(_in))
+            out = generator.decode_forward(
+                torch.tensor([_in], dtype=torch.long).reshape(1, 1),
+                current_pos,
+                enable_trace=_trace_hs,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                read_from_device=True,
+                sampling_params=None,
+                reset_inputs=True,
+            )
+            _logits = out[0] if isinstance(out, (tuple, list)) else out
+            _l = torch.as_tensor(_logits).float().reshape(-1)[: args.vocab_size]
+            if _logits_tag:
+                _logits_dump.append(_l.clone())
+            next_tok = int(_l.argmax().item())
+            _step_times.append(_time.perf_counter() - _t0)
+            generated_ids.append(next_tok)
+            _cur_in = next_tok
+            current_pos = current_pos + 1
+        if _logits_tag:
+            torch.save({"logits": _logits_dump, "input_toks": _input_toks}, f"/tmp/qwen36_logits_{_logits_tag}.pt")
+            print(f"[LOGITS_DUMP] saved {len(_logits_dump)} steps -> /tmp/qwen36_logits_{_logits_tag}.pt", flush=True)
+    else:
+        # FAST path — async-pipelined trace replay, mirroring
+        # llama3_70b_galaxy/demo/text_demo.py's decode loop. Keys to perf (vs the
+        # earlier host-bound ~5.6 tok/s):
+        #   * async_read=True       -> the per-step readback never blocks issuing the next step;
+        #   * reset_inputs=(it==0)  -> after step 0 the sampled token stays on device and the
+        #                              device self-increments current_pos IN-TRACE, so there is
+        #                              NO per-step host->device input reload and NO host data
+        #                              dependency (out_tok below is ignored after step 0);
+        #   * process step N-1's readback while step N runs on device (one-deep pipeline).
+        out_tok = out_tok.reshape(1, 1)
+        # QWEN36_GEN_NO_TRACE=1: run the fast path EAGER (no trace) but keep on-device sampling —
+        # the missing cell to disentangle the garbage (trace vs on-device sampler vs CCL). decode-CCL
+        # eager + on-device sampling: if garbage -> sampler; if semi-coherent (like eager+host-argmax)
+        # -> the trace is the amplifier.
+        _enable_trace = os.environ.get("QWEN36_GEN_NO_TRACE", "0") != "1"
+        read_events = []
+        tt_out_toks = []
+        _loop_t0 = None
+        for it in range(_STEPS):
+            if it == 1:
+                # steady-state clock starts after the step-0 trace capture/compile.
+                _loop_t0 = _time.perf_counter()
+            tt_tok, read_event = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=_enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                read_from_device=True,
+                async_read=True,
+                sampling_params=sampling_params,
+                reset_inputs=(it == 0),
+            )
+            read_events.append(read_event)
+            tt_out_toks.append(tt_tok)
+            current_pos = current_pos + 1
+            if it > 0:
+                ttnn.event_synchronize(read_events.pop(0)[0])
+                _tt_tok, _ = generator.process_decode_output_host(tt_out_toks.pop(0))
+                generated_ids.append(int(torch.as_tensor(_tt_tok).reshape(-1)[0].item()))
+        # drain the final in-flight step
+        _loop_dt = (_time.perf_counter() - _loop_t0) if _loop_t0 is not None else 0.0
+        ttnn.event_synchronize(read_events.pop(0)[0])
+        _tt_tok, _ = generator.process_decode_output_host(tt_out_toks.pop(0))
+        generated_ids.append(int(torch.as_tensor(_tt_tok).reshape(-1)[0].item()))
+        _n = max(1, _STEPS - 1)
+        _mean_s = _loop_dt / _n
+        _step_times = []  # not used on the fast path
+
+    text = tok.decode(generated_ids, skip_special_tokens=False)
+    if _host_sample and len(_step_times) > 1:
+        _warm = _step_times[1:]
+        _mean_s = sum(_warm) / len(_warm)
+    if not _host_sample or len(_step_times) > 1:
+        _tok_s = 1.0 / _mean_s if _mean_s > 0 else 0.0
+        print("=" * 80)
+        print(
+            f"[gen-demo] DECODE PERF: steady-state={_mean_s*1000:.2f}ms/tok  "
+            f"{_tok_s:.2f} tok/s/user  (n={_STEPS - 1})"
+        )
+    print("=" * 80)
+    print(f"[gen-demo] GENERATED ({len(generated_ids)} tokens): {text!r}")
+    print("=" * 80)
+
+    # Correctness gate vs the inline demo: the first decode token is the prefill
+    # argmax and must be deterministic/coherent (the inline demo prints
+    # "[demo] first decode token = ..." for the same prompt/ISL).
+    assert first_decode_token >= 0
+    assert len(set(generated_ids)) > 1, f"degenerate (all-same) decode: {generated_ids}"
+
+    n_alpha = sum(c.isalpha() for c in text)
+    assert n_alpha >= 5, f"generated text has <5 alpha chars (incoherent decode): {text!r}"

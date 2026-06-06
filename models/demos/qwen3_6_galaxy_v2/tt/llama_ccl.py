@@ -305,9 +305,19 @@ class TT_CCL:
         )
         persistent_buffers["LAYERNORM"] = tt_buffer
 
+        # Sampling values / indices.
+        # TTSampling forces its batch to max(32, round_up_32(max_batch_size)) (tt_sampling.py),
+        # and its device-offsets / k / p / temp tensors are that many rows. The decode topk
+        # gather writes into these persistent buffers, so their row count MUST match — else the
+        # gather collapses to max_batch_size rows (e.g. 1 at batch-1) while the offsets add
+        # broadcasts indices back to 32, giving values=[1,1,1,256] vs indices=[1,1,32,256] and
+        # ttnn.sampling's "values and indices must have the same shape" assert. The decode
+        # logits are already 32-tile-padded ([1,1,32,V]), so 32 rows is the correct gather width.
+        _samp_rows = max(32, ((self.max_batch_size + 31) // 32) * 32)
+
         # Sampling values
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
+            torch.zeros((1, 1, _samp_rows, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             # dtype=ttnn.bfloat8_b,  # TODO: use bfp8_b when issue #23644 is fixed
@@ -319,7 +329,7 @@ class TT_CCL:
 
         # Sampling indices
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, self.max_batch_size, self.max_top_k * self.cluster_shape[0])),
+            torch.zeros((1, 1, _samp_rows, self.max_top_k * self.cluster_shape[0])),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.uint16,
@@ -327,17 +337,22 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, 32, 128 * 1024)),
+        # Decode return_logits / host-sampling all-gather output buffer (full gathered vocab).
+        # qwen3.6: width = padded_vocab 248832 (= per-col 31104 * 8 rows) and dtype bf16 to match
+        # the decode lm_head logits (typecast to bf16 in llama_model.py before this gather) — the
+        # llama-sized bf8/131072 buffer both under-sized AND dtype-mismatched qwen3.6 and crashed
+        # the decode return_logits path (all_gather_async output.dtype==input assert).
+        if self.is_qwen36:
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((1, 1, 32, 248832)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            if not self.is_qwen
-            else ttnn.from_torch(
+        elif self.is_qwen:
+            tt_buffer = ttnn.from_torch(
                 torch.zeros((1, 1, 32, 155648)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
@@ -345,7 +360,15 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        )
+        else:
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((1, 1, 32, 128 * 1024)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         persistent_buffers["SAMPLING"] = tt_buffer
 
         # LogProbs
@@ -562,6 +585,17 @@ class TT_CCL:
 
         _BUILD_AXES = os.environ.get("QWEN36_RESIDUAL_BUF_AXES", "0,1").split(",")
         _BUILD_AXES = tuple(int(a) for a in _BUILD_AXES if a.strip())
+        # The all_reduce_async persistent output buffer MUST match the dtype the
+        # DeltaNet / full-attention decode out-proj feeds it: both produce bf16 by
+        # default and bf8 only under QWEN36_ATTN_OUT_BF8 (see _dn_out_dtype in
+        # qwen36_delta_attention.py and _attn_out_dtype in llama_attention.py).
+        # Hardcoding bf8 here while the producer is bf16 made all_reduce_async size
+        # its CB for bf16 (65536 B) against a bf8-sized L1 bank (34816 B) ->
+        # "Cannot set circular buffer size" crash on the FIRST GDN layer of the
+        # decode-CCL (switch_mode) path at ISL-4096. The inline demo never hit this
+        # because prefill-CCL routes line_all_reduce through reduce_scatter+all_gather,
+        # not the persistent-buffer all_reduce_async.
+        _resid_buf_dtype = ttnn.bfloat8_b if os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
         for cluster_axis in _BUILD_AXES:
             ring_size = cluster_shape[cluster_axis]
             buf_per_core_w = per_core_w * ring_size
@@ -574,7 +608,7 @@ class TT_CCL:
                 torch.zeros((*cluster_shape, M, buf_per_core_w * num_cores_buf)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
+                dtype=_resid_buf_dtype,
                 memory_config=buf_mem_cfg,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
@@ -905,11 +939,19 @@ class TT_CCL:
         # has 128"). Keep the seqlen=32 entry strictly the fixed-length set.
         ag_persistent_buffers_32: dict = {}
         for key, shape in buffers_fixed_length.items():
+            # qwen3.6: the SAMPLING all-gather output feeds host-argmax (prefill
+            # return_logits) / on-device sampling (decode). The prefill lm_head
+            # (lm_head.py) and the decode return_logits gather (llama_model.py ~1092)
+            # now emit/typecast logits to bf16 to preserve precision, so this
+            # persistent output buffer MUST be bf16 too — else all_gather_async
+            # asserts output_tensor.dtype()==input.dtype (bf8 here crashed the
+            # generator prefill return_logits path at ISL-4096). LM_HEAD stays bf8.
+            _fixed_dtype = ttnn.bfloat16 if (self.is_qwen36 and key == "SAMPLING") else ttnn.bfloat8_b
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
+                dtype=_fixed_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_32"),
@@ -934,6 +976,84 @@ class TT_CCL:
         use_qwen36_residual_buffer=False,
     ):
         if self.mode == "decode":
+            # BISECTION gate (QWEN36_DECODE_RESIDUAL_RSAG=1): route the decode-only SHARDED
+            # residual all_reduce_async (DeltaNet/full-attn out-proj, use_qwen36_residual_buffer)
+            # through the SAME reduce_scatter+all_gather path the COHERENT prefill-CCL uses, to
+            # test whether the sharded all_reduce_async is the decode-CCL drift source. The
+            # residual input/output are L1-width-sharded, so round-trip via DRAM for the
+            # DRAM-capable RS+AG and restore the requested sharded memory_config on exit.
+            _resid_rsag = (
+                self.is_qwen36
+                and use_qwen36_residual_buffer
+                and not lm_head
+                and os.environ.get("QWEN36_DECODE_RESIDUAL_RSAG", "0") == "1"
+            )
+            if _resid_rsag:
+                _in_dram = (
+                    ttnn.to_memory_config(input_tensor_mesh, ttnn.DRAM_MEMORY_CONFIG)
+                    if input_tensor_mesh.memory_config().shard_spec is not None
+                    else input_tensor_mesh
+                )
+                rs = self.line_reduce_scatter(
+                    _in_dram,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    math_op=ttnn.ReduceType.Sum,
+                    buffer_key=buffer_key,
+                    batch_size=batch_size,
+                )
+                if _in_dram is not input_tensor_mesh:
+                    ttnn.deallocate(_in_dram)
+                ag = self.line_all_gather(
+                    rs,
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    buffer_key=buffer_key if buffer_key is not None else "RESID_AR",
+                )
+                ttnn.deallocate(rs)
+                out = ttnn.to_memory_config(ag, memory_config)
+                ttnn.deallocate(ag)
+                return out
+            if (
+                self.is_qwen36
+                and not lm_head
+                and not use_qwen36_residual_buffer
+                and input_tensor_mesh.memory_config().shard_spec is None
+            ):
+                # qwen3.6 DRAM decode reduces (e.g. _mlp_decode_qwen36 w2/FF2) feed an
+                # INTERLEAVED input. The persistent-buffer all_reduce_async path expects
+                # L1-width-sharded I/O (and a dtype-matched persistent buffer), so an
+                # interleaved input crashes (CB clash / bad optional access). Decompose
+                # into reduce_scatter + all_gather (both DRAM-capable) — identical to what
+                # the prefill-CCL path does for the same reduce, so the math matches the
+                # proven inline demo. Sharded inputs keep the fast all_reduce_async below.
+                rs = self.line_reduce_scatter(
+                    input_tensor_mesh,
+                    memory_config,
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    math_op=ttnn.ReduceType.Sum,
+                    buffer_key=buffer_key,
+                    batch_size=batch_size,
+                )
+                out = self.line_all_gather(
+                    rs,
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    num_links=num_links,
+                    memory_config=memory_config,
+                    # decode line_all_gather asserts a non-None buffer_key; it only uses it
+                    # for an all_gather_buffers .get() (a miss => fresh output buffer), so
+                    # any non-None key is safe. Use the caller's key when present.
+                    buffer_key=buffer_key if buffer_key is not None else "INTERLEAVED_AR",
+                )
+                ttnn.deallocate(rs)
+                return out
             if lm_head:
                 persistent_buffer = self.tt_lm_head_buffer_l1
             elif use_qwen36_residual_buffer:
@@ -1234,6 +1354,29 @@ class TT_CCL:
             ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
             self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
 
+        elif input_tensor_mesh.memory_config().shard_spec is None:
+            # qwen3.6 DRAM decode MLP (_mlp_decode_qwen36) feeds an INTERLEAVED (DRAM)
+            # input here. The sharded-only ``llama_reduce_scatter`` below dereferences
+            # the input's shard_spec -> `bad optional access` on interleaved input.
+            # Route interleaved input through the generic DRAM-capable
+            # ``ttnn.reduce_scatter`` (olmo-style), mirroring the prefill branch above;
+            # sharded inputs still take the fast llama_reduce_scatter path.
+            B = input_tensor_mesh.shape[1]
+            input_reshaped = ttnn.reshape(
+                input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+            )
+            seqlen = input_reshaped.shape[-2]
+            ttnn_tensor_out = ttnn.reduce_scatter(
+                input_reshaped,
+                dim,
+                cluster_axis=cluster_axis,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Linear,
+                num_links=num_links,
+                subdevice_id=self.worker_sub_device_id,
+            )
+            ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+            self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         else:
             persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
                 self.reduce_scatter_buffer_idx[cluster_axis]
@@ -1356,8 +1499,13 @@ class TT_CCL:
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
-            assert buffer_key is not None, "buffer_key is None"
-            persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
+            # qwen3.6 DRAM decode (e.g. _mlp_decode_qwen36's step-4 ff gather, and the
+            # interleaved all_reduce decomposition above) issues all-gathers with no
+            # persistent buffer — valid in prefill, which simply allocates a fresh
+            # output. Tolerate buffer_key=None here too (None -> fresh output via the
+            # barrier-semaphore path below) instead of asserting. llama70b decode
+            # callers always pass a key, so their behaviour is unchanged.
+            persistent_buffer = self.all_gather_buffers.get(buffer_key, None) if buffer_key is not None else None
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         barrier_semaphore = None
         if persistent_buffer is None:

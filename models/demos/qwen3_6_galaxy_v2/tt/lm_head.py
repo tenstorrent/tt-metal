@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import torch
 
@@ -150,19 +151,46 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         outputs = []
         num_links = self.args.model_config["GALAXY_NUM_LINKS"]
+        # On the all-bf8 low-L1 decode path (QWEN36_ATTN_OUT_BF8=1), emit bf8 logits so the
+        # decode lm_head all-reduce reduction CB (sized from this input dtype) matches the bf8
+        # tt_lm_head_buffer bank (else CB=516096 bf16 > 274176 bf8 bank). bf16 otherwise.
+        _lmhead_dtype = ttnn.bfloat8_b if os.environ.get("QWEN36_ATTN_OUT_BF8", "0") == "1" else ttnn.bfloat16
+        # QWEN36_LM_HEAD_PLAIN_DECODE (default ON for qwen3.6): the decode-mode RING lm_head matmul
+        # (LM_HEAD_TG_RING_PROGCFG + 32-row ring reshards) produces garbage row-0 logits on the
+        # batch-1 decode tail (0.05 PCC vs the proven prefill lm_head, while the backbone row-0 hidden
+        # is 0.99). The ring path was never validated end-to-end (the coherent inline demo uses the
+        # PREFILL lm_head). Route decode through the SAME minimal_matmul the prefill lm_head uses
+        # (identical weights output_weights_decode==output_weights_prefill), then reduce via the
+        # decode RS+AG below. Previously this flag was referenced NOWHERE (a no-op).
+        _plain_decode = (
+            getattr(self.args, "is_qwen36", False)
+            and os.environ.get("QWEN36_LM_HEAD_PLAIN_DECODE", "1") == "1"
+            and isinstance(self.prefill_pc, ttnn.MinimalMatmulConfig)
+        )
         if mode == "decode":
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
-                x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
-                output = ttnn.linear(
-                    x,
-                    weight,
-                    compute_kernel_config=self.compute_kernel_config,
-                    program_config=pc,
-                    memory_config=self.output_memory_config,
-                    dtype=ttnn.bfloat8_b,
-                    sub_device_id=worker_sub_device_id,
-                )
-                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+                if _plain_decode:
+                    _xin = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                    output = ttnn.experimental.minimal_matmul(
+                        input_tensor=_xin,
+                        weight_tensor=weight,
+                        config=self.prefill_pc,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(_xin)
+                else:
+                    x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+                    output = ttnn.linear(
+                        x,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        program_config=pc,
+                        memory_config=self.output_memory_config,
+                        dtype=_lmhead_dtype,  # bf8 on the all-bf8 path to match the bf8 all-reduce buffer
+                        sub_device_id=worker_sub_device_id,
+                    )
+                    output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
 
                 outputs.append(output)
         else:
@@ -187,20 +215,61 @@ class LMHead(LightweightModule):
                         compute_kernel_config=self.compute_kernel_config,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         program_config=self.prefill_pc,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=ttnn.bfloat16,  # bf16 logits — match the bf16 SAMPLING buffer (minimal_matmul branch already bf16)
                     )
                 x.deallocate(True)
                 outputs.append(output)
 
         outputs_reduced = []
+        _is_qwen36 = getattr(self.args, "is_qwen36", False)
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=num_links,
-                memory_config=output.memory_config(),
-                lm_head=True,
-                buffer_key="LM_HEAD",
-            )  # self.output_memory_config
-            outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            if _is_qwen36 and mode == "decode":
+                # qwen3.6 decode lm_head reduce — match olmo3 (no-prefetcher port): decompose
+                # the col-axis all-reduce into reduce_scatter + all_gather over DRAM. This is
+                # still DECODE-mode CCL (separate from prefill), but uses NO persistent L1
+                # all-reduce buffer, so it avoids the core-(0,0) static-CB clash that the
+                # tt_lm_head_buffer_l1 path hits at qwen3.6's 4x-larger vocab (64512).
+                # olmo3 feeds a DRAM (interleaved) lm_head output to its reduce_scatter; qwen3.6's
+                # output is L1-sharded (the RESHARD), so move it to DRAM first — that routes
+                # line_reduce_scatter to the generic ttnn.reduce_scatter (DRAM-capable) instead of
+                # the sharded-only llama_reduce_scatter.
+                # If output is already DRAM-interleaved (the minimal_matmul / plain-decode path) use
+                # it directly — to_memory_config returns a new wrapper over the SAME buffer, so
+                # deallocating `output` would free the reduce_scatter's input (use-after-free, the
+                # earlier "Buffer is not allocated" crash). output_dram is freed after the RS below.
+                _mc = output.memory_config()
+                if _mc.buffer_type == ttnn.BufferType.DRAM and _mc.shard_spec is None:
+                    output_dram = output
+                else:
+                    output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(output)
+                rs_output = self.tt_ccl.line_reduce_scatter(
+                    output_dram,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
+                )
+                ttnn.deallocate(output_dram)
+                ag_output = self.tt_ccl.line_all_gather(
+                    rs_output,
+                    dim=3,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(rs_output)
+                outputs_reduced.append(ag_output)
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )  # self.output_memory_config
+                outputs_reduced.append(
+                    ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                )
         return outputs_reduced
