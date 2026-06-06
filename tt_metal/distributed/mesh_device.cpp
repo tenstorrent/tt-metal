@@ -61,6 +61,7 @@
 #include "context/metal_context.hpp"
 #include <experimental/context/metal_env.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "mesh_device_view_impl.hpp"
@@ -138,6 +139,26 @@ decltype(auto) validate_and_get_reference_value(
         }
     }
     return reference_value;
+}
+
+ChipId get_reference_physical_device_id(const MeshDeviceView& view, ContextId context_id) {
+    auto devices = view.get_devices();
+    if (!devices.empty()) {
+        return devices.front()->id();
+    }
+
+    auto fabric_node_ids = view.get_fabric_node_ids();
+    TT_FATAL(
+        !fabric_node_ids.empty(), "MeshDeviceView must have at least one fabric node ID to query device properties");
+    return tt_metal::MetalContext::instance(context_id)
+        .get_control_plane()
+        .get_physical_chip_id_from_fabric_node_id(fabric_node_ids.front());
+}
+
+const metal_SocDescriptor& get_reference_soc_desc(const MeshDeviceView& view, ContextId context_id) {
+    return tt_metal::MetalContext::instance(context_id)
+        .get_cluster()
+        .get_soc_desc(get_reference_physical_device_id(view, context_id));
 }
 
 // Returns offset of the mesh device view in the system mesh.
@@ -250,11 +271,17 @@ bool MeshDeviceImpl::is_remote_only() const {
 }
 
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).worker_l1_size;
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
 }
 
 uint32_t MeshDeviceImpl::dram_size_per_channel() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).dram_view_size;
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
 }
@@ -783,6 +810,13 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
+    if (view_->get_devices().empty()) {
+        auto& metal_context = tt_metal::MetalContext::instance(context_id_);
+        auto& env_impl = MetalEnvAccessor(metal_context.get_env()).impl();
+        const auto& dispatch_core_config = metal_context.get_dispatch_core_manager().get_dispatch_core_config();
+        return tt::get_compute_grid_size(
+            env_impl, get_reference_physical_device_id(*view_, context_id_), this->num_hw_cqs(), dispatch_core_config);
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
 }
@@ -986,7 +1020,7 @@ const MeshDeviceView& MeshDeviceImpl::get_view() const {
 
 int MeshDeviceImpl::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
-ChipId MeshDeviceImpl::build_id() const { return reference_device()->id(); }
+ChipId MeshDeviceImpl::build_id() const { return get_reference_physical_device_id(*view_, context_id_); }
 
 bool MeshDeviceImpl::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
@@ -1063,16 +1097,25 @@ void MeshDeviceImpl::clear_loaded_sub_device_manager() {
 }
 
 CoreCoord MeshDeviceImpl::dram_grid_size() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).get_dram_grid_size();
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
 }
 
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDeviceImpl::grid_size() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).grid_size;
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->grid_size(); });
 }
 CoreCoord MeshDeviceImpl::logical_grid_size() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).get_grid_size(CoreType::TENSIX);
+    }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
 }
@@ -1163,9 +1206,21 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 }
 
 // Bank and memory management methods
-int MeshDeviceImpl::num_dram_channels() const { return reference_device()->num_dram_channels(); }
+int MeshDeviceImpl::num_dram_channels() const {
+    if (view_->get_devices().empty()) {
+        return get_reference_soc_desc(*view_, context_id_).get_num_dram_views();
+    }
+    return reference_device()->num_dram_channels();
+}
 
-int MeshDeviceImpl::get_clock_rate_mhz() const { return reference_device()->get_clock_rate_mhz(); }
+int MeshDeviceImpl::get_clock_rate_mhz() const {
+    if (view_->get_devices().empty()) {
+        return tt_metal::MetalContext::instance(context_id_)
+            .get_cluster()
+            .get_device_aiclk(get_reference_physical_device_id(*view_, context_id_));
+    }
+    return reference_device()->get_clock_rate_mhz();
+}
 
 CoreCoord MeshDeviceImpl::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(this->get_devices(), [dram_channel](const auto* device) {
