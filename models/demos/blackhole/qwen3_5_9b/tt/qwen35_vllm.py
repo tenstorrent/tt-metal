@@ -140,23 +140,13 @@ class Qwen35ForCausalLM(Generator):
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
-        if self.model[0].num_devices > 1:
-            # TP (Milestone A): warm the bounded masked-bucket prefill program set so every
-            # bucket compiles HERE, before the decode trace is parked. After this a real
-            # request (<=2048 tokens) replays an already-compiled bucket and never compiles
-            # at request time — the fix that lets the decode trace coexist with eager prefill.
-            # No chunk-outer prefill trace yet (that is >2048-token support, Milestone B).
-            # Fire on the traced phase only (matching the single-device guard contract).
-            if not enable_trace or getattr(self, "already_warmed_up_prefill", False):
-                return
-            self.already_warmed_up_prefill = True
-            if kv_cache:
-                num_blocks = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
-            else:
-                num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
-            page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-            self.model[0].warmup_prefill_masked_buckets(page_table)
-            return
+        # Single-device AND TP share this path: capture_prefill_trace_chunked dispatches to its
+        # TP fork (_capture_prefill_trace_chunked_tp) when num_devices>1. The capture compiles the
+        # per-chunk programs AND warms the bounded masked-bucket program set (short prompts + the
+        # long-prompt tail) before the decode trace is parked, so a real request only ever replays
+        # already-compiled programs — the compile-clobbers-trace fix — and long prompts replay the
+        # chunk-outer trace (bounded host dispatch, the 128K path) instead of the eager fallback.
+        #
         # The plugin's warmup_model() is two-phase: it calls this first with
         # enable_trace=False (compile), then resets ``already_warmed_up_prefill``
         # and calls again with enable_trace=True (capture). Only the traced phase
