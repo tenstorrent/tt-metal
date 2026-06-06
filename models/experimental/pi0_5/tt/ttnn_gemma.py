@@ -1149,12 +1149,25 @@ class GemmaMLPTTNN:
                     fp32_dest_acc_en=False,
                     packer_l1_acc=True,
                 )
+                # PI0_VLM_MINIMAL_CFG="M,K,N,sh,sw" overrides block/subblock sizes
+                # for the gate/up minimal_matmul. Default (8,8,8,4,2) matches the
+                # Llama prefill ≤4096 config. Try (8,8,8,1,8) for the playbook 05
+                # §5 wide-N subblock orientation.
+                _cfg_env = _os_mlp.environ.get("PI0_VLM_MINIMAL_CFG", "").strip()
+                _bs = [8, 8, 8, 4, 2]
+                if _cfg_env:
+                    try:
+                        _parts = [int(x) for x in _cfg_env.split(",")]
+                        if len(_parts) == 5 and all(p > 0 for p in _parts):
+                            _bs = _parts
+                    except ValueError:
+                        pass
                 minimal_cfg = ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
-                    K_block_size=8,
-                    N_block_size=8,
-                    subblock_h=4,
-                    subblock_w=2,
+                    M_block_size=_bs[0],
+                    K_block_size=_bs[1],
+                    N_block_size=_bs[2],
+                    subblock_h=_bs[3],
+                    subblock_w=_bs[4],
                     compute_with_storage_grid_size=ttnn.CoreCoord(self._pcfg_grid[0], self._pcfg_grid[1]),
                 )
                 gate_activated = ttnn.experimental.minimal_matmul(
