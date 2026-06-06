@@ -88,8 +88,8 @@ def _vocoder_conv1d_prep_length(timeline_length: int, *, in_channels: int, paddi
 _VOCODER_CONV1D_BUCKET_STEP = int(os.environ.get("SEAMLESS_VOCODER_CONV1D_BUCKET", "256"))
 
 
-def _vocoder_conv1d_bucket(length: int) -> int:
-    """Tile-aligned bucket for a short (<= ``_HIFIGAN_MAX_CONV1D_TLEN``) conv1d timeline.
+def _vocoder_timeline_bucket(length: int) -> int:
+    """Tile-aligned bucket for any vocoder conv1d timeline (short or chunked).
 
     ``SEAMLESS_VOCODER_CONV1D_BUCKET<=1`` disables bucketing (exact length) for A/B."""
     L = int(length)
@@ -97,7 +97,43 @@ def _vocoder_conv1d_bucket(length: int) -> int:
     if L <= 0 or raw <= 1:
         return L
     step = max(32, raw)
-    return min(((L + step - 1) // step) * step, _HIFIGAN_MAX_CONV1D_TLEN)
+    return ((L + step - 1) // step) * step
+
+
+def _vocoder_conv1d_bucket(length: int) -> int:
+    """Tile-aligned bucket capped at ``_HIFIGAN_MAX_CONV1D_TLEN`` (single-shot path in ``_conv1d_run``)."""
+    return min(_vocoder_timeline_bucket(length), _HIFIGAN_MAX_CONV1D_TLEN)
+
+
+def _slice_nlc_time(
+    x: ttnn.Tensor,
+    *,
+    batch: int,
+    start: int,
+    end: int,
+    channels: int,
+) -> ttnn.Tensor:
+    """Slice ``[B, start:end, C]`` (or mesh ``[B, 1, S, C]``); block-sharded inputs are interleaved first."""
+    if ttnn.is_sharded(x):
+        x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+    rank = len(x.shape)
+    if rank == 4 and int(x.shape[1]) == 1:
+        return ttnn.slice(
+            x,
+            [0, 0, int(start), 0],
+            [batch, 1, int(end), int(channels)],
+            (1, 1, 1, 1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    if rank == 3:
+        return ttnn.slice(
+            x,
+            [0, int(start), 0],
+            [batch, int(end), int(channels)],
+            (1, 1, 1),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    raise RuntimeError(f"cannot slice NLC tensor with shape {tuple(x.shape)}")
 
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
@@ -701,12 +737,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         keep_sharded_output: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation."""
-        # Length-bucketing (fixes the ~5x speech-output repeated-run slowdown): the nondeterministic
-        # decode/T2U output makes this conv's timeline vary run-to-run, so each distinct length cold-
-        # compiles + preps (~15s) and bloats the program cache. Pad the (row-major, single-shot, stride-1)
-        # timeline up to a fixed bucket so few stable shapes compile once and reuse; slice the output
-        # prefix. PCC-safe: zero right-pad + symmetric ("same") conv padding leaves the valid prefix
-        # bit-identical (the trailing window already saw zeros), and stride 1 keeps out_len == in + const.
+        # Short single-shot length-bucketing (``<= _HIFIGAN_MAX_CONV1D_TLEN``): pad timeline to a fixed
+        # bucket so few stable shapes compile once. Long/chunked timelines are bucketed in ``_conv1d``
+        # (with sharded-aware trim via ``_slice_nlc_time``) before the chunk loop.
         bucket_pad = 0
         if (
             not timeline_chunked
@@ -777,9 +810,66 @@ class TTSeamlessM4Tv2CodeHifiGan:
         out = ttnn.reshape(out, (batch, out_len, out_channels))
         if bucket_pad:
             keep = out_len - bucket_pad  # stride-1 conv: out_len tracks input_length 1:1
-            out = ttnn.slice(out, [0, 0, 0], [batch, keep, out_channels], [1, 1, 1])
+            out = _slice_nlc_time(out, batch=batch, start=0, end=keep, channels=out_channels)
             out_len = keep
         return out, out_len
+
+    def _conv1d_apply_timeline_bucket(
+        self,
+        x_in: ttnn.Tensor,
+        *,
+        x_nlc: ttnn.Tensor,
+        rm_buf: Optional[ttnn.Tensor],
+        batch: int,
+        seq: int,
+        in_channels: int,
+        accept_sharded_input: bool,
+    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor], int, int]:
+        """Right-pad a stride-1 timeline to a stable bucket; returns (x_in, rm_buf, seq, real_seq)."""
+        real_seq = int(seq)
+        if _VOCODER_CONV1D_BUCKET_STEP <= 1:
+            return x_in, rm_buf, real_seq, real_seq
+        bucket = _vocoder_timeline_bucket(real_seq)
+        if bucket <= real_seq:
+            return x_in, rm_buf, real_seq, real_seq
+        if accept_sharded_input and ttnn.is_sharded(x_in):
+            x_in = ttnn.sharded_to_interleaved(x_in, ttnn.DRAM_MEMORY_CONFIG)
+        elif x_in.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            if rm_buf is not None:
+                ttnn.deallocate(rm_buf)
+            rm_buf = ttnn.to_layout(x_in, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_in = rm_buf
+        x_padded, created = self._pad_nlc_time(
+            x_in,
+            batch=batch,
+            tlen=real_seq,
+            channels=in_channels,
+            pad_to=bucket,
+        )
+        if created:
+            if rm_buf is x_in:
+                ttnn.deallocate(rm_buf)
+                rm_buf = None
+            elif x_in is not x_nlc:
+                ttnn.deallocate(x_in)
+            rm_buf = x_padded
+            x_in = rm_buf
+        return x_in, rm_buf, bucket, real_seq
+
+    def _conv1d_trim_timeline(
+        self,
+        out: ttnn.Tensor,
+        out_len: int,
+        *,
+        real_seq: int,
+        batch: int,
+        out_channels: int,
+    ) -> Tuple[ttnn.Tensor, int]:
+        """Drop bucket-padded tail rows; stride-1 conv keeps ``out_len == input_length``."""
+        if int(out_len) <= int(real_seq):
+            return out, int(out_len)
+        out = _slice_nlc_time(out, batch=batch, start=0, end=int(real_seq), channels=out_channels)
+        return out, int(real_seq)
 
     def _conv1d(
         self,
@@ -813,11 +903,23 @@ class TTSeamlessM4Tv2CodeHifiGan:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
 
+        real_seq = seq
+        if int(stride) == 1:
+            x_in, rm_buf, seq, real_seq = self._conv1d_apply_timeline_bucket(
+                x_in,
+                x_nlc=x_nlc,
+                rm_buf=rm_buf,
+                batch=batch,
+                seq=seq,
+                in_channels=in_channels,
+                accept_sharded_input=accept_sharded_input,
+            )
+
         timeline_chunked = seq > _HIFIGAN_MAX_CONV1D_TLEN
 
         # Below this length one conv1d fits BH l1_small (double-buffer off). Only chunk above it.
         if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
-            return self._conv1d_run(
+            out, out_len = self._conv1d_run(
                 x_in,
                 weight=weight,
                 bias=bias,
@@ -837,13 +939,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 row_major_output=row_major_output,
                 keep_sharded_output=keep_sharded_output,
             )
+            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
         halo = int(padding)
         interior = _vocoder_conv1d_chunk_interior(in_channels)
         fixed_in = interior + 2 * halo
         if seq <= fixed_in:
-            return self._conv1d_run(
+            out, out_len = self._conv1d_run(
                 x_in,
                 weight=weight,
                 bias=bias,
@@ -863,6 +966,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 row_major_output=False,
                 keep_sharded_output=keep_sharded_output,
             )
+            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
         num_chunks = (seq + interior - 1) // interior
         # Multi-chunk stitch concat requires interleaved RM chunk tensors.
@@ -936,11 +1040,13 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(x_in)
 
         if len(chunks) == 1:
-            return chunks[0], seq
-        out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for c in chunks:
-            ttnn.deallocate(c)
-        return out, seq
+            out, out_len = chunks[0], seq
+        else:
+            out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for c in chunks:
+                ttnn.deallocate(c)
+            out_len = seq
+        return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
     def _pad_nlc_time(
         self,
@@ -1056,6 +1162,21 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
 
+        real_len = int(input_length)
+        work_len = _vocoder_timeline_bucket(real_len)
+        x_work = x_nlc
+        padded_in = False
+        if work_len > real_len:
+            x_work, padded_in = self._pad_nlc_time(
+                x_nlc,
+                batch=batch,
+                tlen=real_len,
+                channels=in_channels,
+                pad_to=work_len,
+            )
+            input_length = work_len
+        real_out_h = _host_transpose_conv_out_length(real_len, k, s, p)
+
         # HEIGHT per DRAM slice when slice count and K are within caps; else auto layout.
         sliced = int(input_length) > 64
         num_slices = _vocoder_dram_slice_count(input_length) if sliced else 0
@@ -1066,8 +1187,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             shard_layout=_resolve_conv_shard_layout(prefer, in_channels=in_channels, kernel_size=k),
         )
         if sliced:
-            return self._conv_transpose1d_nlc_dram_sliced(
-                x_nlc,
+            out_nlc, out_h = self._conv_transpose1d_nlc_dram_sliced(
+                x_work,
                 layer=layer,
                 batch=batch,
                 input_length=input_length,
@@ -1075,8 +1196,13 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 out_channels=out_channels,
                 conv_config=conv_config,
             )
+            if padded_in and x_work is not x_nlc:
+                ttnn.deallocate(x_work)
+            if out_h > real_out_h:
+                out_nlc = _slice_nlc_time(out_nlc, batch=batch, start=0, end=real_out_h, channels=out_channels)
+            return out_nlc, real_out_h
 
-        x_nhwc = ttnn.reshape(x_nlc, (batch, input_length, 1, in_channels))
+        x_nhwc = ttnn.reshape(x_work, (batch, input_length, 1, in_channels))
         out_4d, out_hw = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
             weight_tensor=weight,
@@ -1099,12 +1225,16 @@ class TTSeamlessM4Tv2CodeHifiGan:
             return_weights_and_bias=False,
             dtype=ttnn.bfloat16,
         )
+        if padded_in and x_work is not x_nlc:
+            ttnn.deallocate(x_work)
         out_h, out_w = int(out_hw[0]), int(out_hw[1])
         assert out_w == 1
         out_nlc = ttnn.reshape(out_4d, (batch, out_h, out_channels))
         if ttnn.is_sharded(out_nlc):
             out_nlc = ttnn.sharded_to_interleaved(out_nlc, ttnn.DRAM_MEMORY_CONFIG)
-        return out_nlc, out_h
+        if out_h > real_out_h:
+            out_nlc = _slice_nlc_time(out_nlc, batch=batch, start=0, end=real_out_h, channels=out_channels)
+        return out_nlc, real_out_h
 
     def _dur_predictor_dev(self, x_nlc: ttnn.Tensor, *, batch: int, seq: int, dp: Any) -> ttnn.Tensor:
         """Returns log-duration prediction as a device tensor of shape ``[B, T_units]`` (bf16)."""
