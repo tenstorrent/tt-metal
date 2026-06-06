@@ -84,12 +84,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
         {"test_id", (uint32_t)test_config.test_id}};
 
     SemaphoreSpec sender_sem{
-        .unique_id = "sender_sem",
+        .unique_id = SemaphoreSpecName{"sender_sem"},
         .target_nodes = test_config.master_core_coord,
     };
 
     KernelSpec sender_spec{
-        .unique_id = "sender",
+        .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/loopback/kernels/sender_2_0.cpp",
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
@@ -124,7 +124,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     sender_run_params.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {

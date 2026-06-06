@@ -120,15 +120,15 @@ bool run_noc_api_latency_test(
 
     switch (test_config.kernel_type) {
         case KernelType::MULTICAST_WRITE:
-            named_compile_args.push_back({"dest_coords_end", packed_dest_core_end_coordinates});
-            named_compile_args.push_back({"loopback", test_config.loopback});
-            named_compile_args.push_back({"num_cores", sub_logical_core_set.num_cores()});
+            named_compile_args.emplace("dest_coords_end", packed_dest_core_end_coordinates);
+            named_compile_args.emplace("loopback", (uint32_t)test_config.loopback);
+            named_compile_args.emplace("num_cores", (uint32_t)sub_logical_core_set.num_cores());
             break;
         case KernelType::UNICAST_WRITE:
         case KernelType::UNICAST_READ:
         case KernelType::STATEFUL_WRITE:
         case KernelType::STATEFUL_READ:
-            named_compile_args.push_back({"dest_coords_end", packed_dest_core_end_coordinates});
+            named_compile_args.emplace("dest_coords_end", packed_dest_core_end_coordinates);
             break;
         default: break;
     }
@@ -136,7 +136,7 @@ bool run_noc_api_latency_test(
     ProgramSpec spec{
         .name = "noc_api_latency_test",
         .kernels = {KernelSpec{
-            .unique_id = "noc_kernel",
+            .unique_id = KernelSpecName{"noc_kernel"},
             .source = kernel_path,
             .num_threads = 1,
             .compile_time_args = named_compile_args,
@@ -148,7 +148,7 @@ bool run_noc_api_latency_test(
                     .gen2_config = DataMovementHardwareConfig::Gen2Config{}}}},
         .work_units = {WorkUnitSpec{
             .name = "noc_work_unit",
-            .kernels = {"noc_kernel"},
+            .kernels = {KernelSpecName{"noc_kernel"}},
             .target_nodes = NodeCoord{
                 static_cast<uint32_t>(test_config.source_core_coord.x),
                 static_cast<uint32_t>(test_config.source_core_coord.y)}}}};

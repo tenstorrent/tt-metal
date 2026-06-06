@@ -72,7 +72,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     using namespace tt::tt_metal::experimental;
 
     SemaphoreSpec rw_sync_sem{
-        .unique_id = "dram_unary_rw_sync",
+        .unique_id = SemaphoreSpecName{"dram_unary_rw_sync"},
         .target_nodes = core_range_set,
     };
 
@@ -93,7 +93,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     };
 
     KernelSpec reader_spec{
-        .unique_id = "reader",
+        .unique_id = KernelSpecName{"reader"},
         .source = reader_kernel_path,
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
@@ -115,7 +115,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     };
 
     KernelSpec writer_spec{
-        .unique_id = "writer",
+        .unique_id = KernelSpecName{"writer"},
         .source = writer_kernel_path,
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
@@ -150,7 +150,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs reader_run{.kernel_spec_name = reader_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs reader_run{.kernel = reader_spec.unique_id};
     reader_run.runtime_arg_values.push_back(
         {.node = test_config.core_coord,
          .args = {
@@ -158,7 +158,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
              {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
     run_params.kernel_run_args.push_back(reader_run);
 
-    ProgramRunArgs::KernelRunArgs writer_run{.kernel_spec_name = writer_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs writer_run{.kernel = writer_spec.unique_id};
     writer_run.runtime_arg_values.push_back(
         {.node = test_config.core_coord,
          .args = {

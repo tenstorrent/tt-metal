@@ -131,7 +131,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
     const uint32_t num_coord_varargs = (uint32_t)(num_subordinates * 2);
 
     KernelSpec sender_spec{
-        .unique_id = "sender",
+        .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/all_to_all/kernels/sender_2_0.cpp",
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -161,14 +161,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const AllToA
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
         sender_run_params.runtime_arg_values.push_back(
             {.node = mst_logical_core,
              .args = {
                  {"num_of_transactions", (uint32_t)test_config.num_of_transactions_per_master},
                  {"bytes_per_transaction", (uint32_t)bytes_per_transaction}}});
-        sender_run_params.advanced_options.runtime_varargs.push_back({mst_logical_core, sub_worker_coordinates});
+        sender_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
     }
     run_params.kernel_run_args.push_back(sender_run_params);
     SetProgramRunArgs(program, run_params);
