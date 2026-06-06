@@ -48,12 +48,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tensor_shape.face_r_dim,
         tensor_shape.face_r_dim,
         tensor_shape.total_num_faces(),
-        tensor_shape.total_num_faces(),
-        params.TILE_SIZE_UNPACK_A,
-        params.TILE_SIZE_UNPACK_B);
+        tensor_shape.total_num_faces());
 
     // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
-    // bits programmed here are overwritten by configure_unpack_AB().
+    // bits programmed here are overwritten by _llk_unpack_hw_configure_().
     _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
 
     _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);

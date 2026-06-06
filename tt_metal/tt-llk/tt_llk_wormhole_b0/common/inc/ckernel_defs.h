@@ -222,6 +222,41 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
     };
 }
 
+// Returns the per-tile L1 footprint in bytes for `datum_count` datums of `format`.
+// Layered on top of SCALE_DATUM_SIZE, with two BFP-specific corrections:
+//   * Bfp4/Bfp4_b pack 2 mantissa datums per byte, so the mantissa payload is half
+//     of what SCALE_DATUM_SIZE (which is byte-per-datum for sub-byte formats) returns;
+//     Bfp2/Bfp2_b pack 4 datums per byte, so the payload is a quarter.
+//   * All BFP* formats also store one shared exponent byte per 16 datums (one
+//     exp byte per face row) alongside the mantissas.
+// This matches what the host writes into the CB's fifo_page_size, and is what the
+// matching pack-side helper (_llk_pack_output_size_bytes_) computes.
+constexpr static std::uint32_t TILE_SIZE_BYTES(std::uint32_t format, std::uint32_t datum_count)
+{
+    std::uint32_t tile_size_bytes = SCALE_DATUM_SIZE(format, datum_count);
+
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
+            tile_size_bytes /= 2;
+            break;
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
+            tile_size_bytes /= 4;
+            break;
+        default:
+            break;
+    }
+
+    if (IS_BFP_FORMAT(format))
+    {
+        tile_size_bytes += datum_count / 16;
+    }
+
+    return tile_size_bytes;
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 

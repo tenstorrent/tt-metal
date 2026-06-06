@@ -60,29 +60,14 @@ static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_
 
 inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_format, const std::uint32_t datum_count)
 {
-    std::uint32_t packed_tile_size_bytes = SCALE_DATUM_SIZE(pack_dst_format, datum_count);
-
-    // SCALE_DATUM_SIZE keeps one-byte-per-datum compatibility for the sub-byte
-    // BFP payload formats. Pack address programming needs the real packed L1
-    // footprint instead: Bfp4 payload is 2 datums/byte, Bfp2 is 4 datums/byte,
-    // and all BFP formats also store one exponent byte per 16 datums
-    // alongside the mantissas.
-    if (pack_dst_format == to_underlying(DataFormat::Bfp4) || pack_dst_format == to_underlying(DataFormat::Bfp4_b))
-    {
-        packed_tile_size_bytes /= 2;
-    }
-    else if (pack_dst_format == to_underlying(DataFormat::Bfp2) || pack_dst_format == to_underlying(DataFormat::Bfp2_b))
-    {
-        packed_tile_size_bytes /= 4;
-    }
-
-    if (IS_BFP_FORMAT(pack_dst_format))
-    {
-        packed_tile_size_bytes += datum_count / 16;
-    }
-
-    return packed_tile_size_bytes;
+    // The "packed L1 footprint of `datum_count` datums of `pack_dst_format`"
+    // is exactly what TILE_SIZE_BYTES computes: SCALE_DATUM_SIZE adjusted for
+    // BFP4/BFP2 sub-byte mantissa packing plus the per-face exponent bytes
+    // that all BFP* formats add. The unpack side derives TILE_SIZE_A/B from
+    // the same helper, keeping pack and unpack in agreement (#34495).
+    return TILE_SIZE_BYTES(pack_dst_format, datum_count);
 }
+
 inline std::uint32_t _llk_pack_output_addr_offset_words_(
     const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {

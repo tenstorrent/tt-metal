@@ -32,10 +32,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_dst,
         params.in1_tile_r_dim < FACE_R_DIM ? params.in1_tile_r_dim : FACE_R_DIM,
         params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
-        params.num_faces_B, // in1
-        params.num_faces_A, // in0
-        params.TILE_SIZE_UNPACK_B,
-        params.TILE_SIZE_UNPACK_A);
+        params.num_faces_B,  // in1
+        params.num_faces_A); // in0
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
     _llk_unpack_AB_matmul_init_<>(
         params.UNPACK_TRANSPOSE_FACES,
