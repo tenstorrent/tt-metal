@@ -183,7 +183,7 @@ export SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large
 python models/experimental/seamless_m4t_v2_large/demo/demo.py
 ```
 
-The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device and runs warmup `generate()` calls (two warmups for speech paths) before printing outputs.
+The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device. Speech paths (T2ST, S2ST) run **two untimed warmups**, a vocoder conv prewarm from cached shapes, then **two timed** `generate()` calls (phase timings taken from the faster timed iter). Text paths use one warmup and one timed iter.
 
 **Text input (tasks 1–2):** a long English paragraph hardcoded in [`demo/demo.py`](demo/demo.py) — a Joyce-style passage (`src_lang=eng`):
 
@@ -249,7 +249,7 @@ Task notes:
 - **S2TT / ASR** — speech encoder dominates TTFT; **decode t/s/u** isolates the text-decoder steady rate.
 - **S2ST** — speech encoder + decoder + T2U + vocoder.
 
-**Cold start:** the first **S2ST** (and sometimes **T2ST**) call in a fresh process can be much slower (~20 s) while vocoder/T2U kernels JIT-compile. The demo opens a fresh device per task; the first speech-synthesis task may pay one-time compile if the disk cache is cold.
+**Cold start:** the first timed speech-synthesis call in a **brand-new process** with a cold on-disk JIT cache can still pay a one-time vocoder compile outlier (~15–20 s). Subsequent timed iters in the same session and later demo invocations (warm disk cache) report steady vocoder times (~1.1–1.6 s on BH QB). Speech warmups + vocoder prewarm keep the **reported** timed iter near steady state.
 
 ### Device kernel perf (Tracy, eager, no trace)
 
@@ -284,6 +284,20 @@ pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_code_hifigan.py 
 
 All PCC tests pass at `PCC_THRESHOLD = 0.99` ([`tests/pcc/test_seamless_m4t_v2_model.py`](tests/pcc/test_seamless_m4t_v2_model.py)).
 
+### Repeatability check (optional)
+
+Same-process stability on the demo text input (T2TT + T2ST ×3):
+
+```bash
+python models/experimental/seamless_m4t_v2_large/scripts/check_determinism.py
+```
+
+Full regression bundle (PCC + demo ×4 + determinism):
+
+```bash
+models/experimental/seamless_m4t_v2_large/scripts/multi_run_report.sh
+```
+
 ### Device-level performance (kernel-only)
 
 ```bash
@@ -309,7 +323,9 @@ models/experimental/seamless_m4t_v2_large/
 │   ├── torch_text_to_unit.py
 │   └── torch_code_hifigan.py
 ├── scripts/
-│   └── download_weights.py              # HF snapshot downloader + CLI
+│   ├── download_weights.py              # HF snapshot downloader + CLI
+│   ├── check_determinism.py             # Same-process T2TT/T2ST repeatability check
+│   └── multi_run_report.sh              # PCC + demo ×N + determinism runner
 ├── tests/
 │   ├── pcc/                             # PCC ≥ 0.99 per-module and per-task
 │   │   ├── test_seamless_m4t_v2_model.py
@@ -393,24 +409,30 @@ The TT model runs encoders, decoder, T2U, and vocoder on device, but **`TTSeamle
 
 SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or* audio) the model loses coherence — it drops content, repeats phrases, and emits EOS early — and on speech it may *translate* rather than transcribe. **This is the Hugging Face model's behavior, not a TTNN bug**: the bf16 reference degenerates the same way on the same input. The demo uses a long English paragraph for T2TT/T2ST to stress the text path; speech-input tasks use the shorter ~9.6 s preamble clip. Accuracy on long inputs should be judged by **TT-vs-HF faithfulness** (chrF / CER versus the bf16 reference on the same input), not by absolute correctness. Production pipelines typically segment long audio/text into utterance-sized chunks.
 
-### Greedy decode is not bit-reproducible run-to-run
+### Cross-run stability and TT-vs-HF parity
 
-The TT `generate()` output **varies run-to-run even on a byte-identical input** on `MeshShape(1, 4)`. Tiny per-step floating-point differences in multi-device (TP) compute can flip the greedy `argmax` at near-tie decode steps and the T2U duration-predictor `round()`. Consequences:
+On **`MeshShape(1, 4)`** with the default demo settings (greedy decode, trace + 2CQ, `repetition_penalty=1.0`), **identical inputs produce stable TT outputs across repeated runs** for the demo text and preamble speech inputs (verified with [`scripts/check_determinism.py`](scripts/check_determinism.py) and multi-run demo logs).
 
-- S2TT / ASR **text content and length** can vary between runs; T2ST / S2ST **audio sample counts** vary with T2U duration rounding.
+A prior regression that caused **S2TT (and other speech-path tasks) to emit repetitive token loops** was traced to using `ttnn.all_reduce` for decoder / speech / T2U TP reductions. That path is **fixed**: gather+sum is restored for those modules; `ttnn.all_reduce` is kept only on the text encoder. Do not blanket-switch all TP reductions to `all_reduce` without validating the speech-encoder L1 path and residual adds.
 
-The right correctness metric is the **TT-vs-HF faithfulness gate** (chrF / CER), not exact reproducibility.
+TT outputs are **not required to be bit-identical to Hugging Face** on every task (integrated PCC uses chrF / CER / plausible-voiced gates, not exact token or sample match). Residual gaps include:
 
-### Speech-output throughput degrades on repeated runs (vocoder)
+- **T2ST / S2ST waveform length** can differ from HF by a modest sample count while still passing PCC voicing checks.
+- **Strict bit-reproducibility** (every greedy step identical run-to-run under all TP tie cases) is not yet guaranteed — see **To Do**.
 
-T2ST and S2ST can be much slower on **second and subsequent** `generate()` calls within a single process when the vocoder sees a **new `ttnn.conv1d` shape** each time (~15 s cold compile). The demo mitigates this by opening a fresh device per task with warmup iterations and a warm on-disk kernel cache; the **first** speech-synthesis task in a cold process may still be an outlier. Partially mitigated by length-bucketing short vocoder convs (`SEAMLESS_VOCODER_CONV1D_BUCKET`, default 256, in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py)). Chunked upsampled convs still vary and need sharded-aware bucketing.
+Phrase **repetition on very long inputs** (text or audio) is expected **HF model behavior** on utterance-scale inputs, not a TT-only bug — see **Utterance-level model** above.
+
+### Vocoder throughput (mitigated)
+
+Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/upsampled paths via `_vocoder_timeline_bucket` / `_slice_nlc_time` in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py); override with `SEAMLESS_VOCODER_CONV1D_BUCKET`). Speech `generate()` **preserves vocoder prep/program cache** across decode/T2U program evictions (`_clear_decode_and_t2u_programs(preserve_vocoder=True)`). Together with demo warmups this removes the prior ~8–25 s vocoder recompile on every in-process speech iter; see **Performance → Cold start** for the remaining one-time JIT outlier on a cold process.
 
 ---
 
 ## To Do
 
-- **Full vocoder length-bucketing.** Extend short-conv bucketing to chunked (>4096, upsampled) convs to remove repeated-run slowdown on speech output. Blocked on a sharded-aware `ttnn.slice` for block-sharded resblock outputs.
-- **Deterministic decode.** Investigate deterministic multi-device reductions (TTNN / CCL) so greedy `generate()` is bit-reproducible run-to-run.
+- **Bit-exact deterministic decode.** Optional hardening: deterministic multi-device reductions (TTNN / CCL) on decoder / speech / T2U without breaking the speech-encoder L1 path — cross-run stability on demo inputs is already restored with gather+sum.
+- **End-to-end validation beyond 512 encoder frames.** Text-decoder cross-attention prefill PCC is validated only up to **512** subsampled encoder frames on BH 1×4; longer sources need L1 work or a new prefill strategy before `generate()` is certified at 4096-token scale.
+- **T2ST / S2ST waveform length vs HF.** Investigate remaining sample-count gap versus the bf16 reference while keeping plausible-voiced PCC gates.
 - **Utterance segmentation in demo.** Optional VAD / sentence splitting for long-form inputs so chained tasks stay in the target language.
 
 ---
