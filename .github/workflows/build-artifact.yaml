@@ -432,13 +432,14 @@ jobs:
           REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
           REDIS_HOST="${{ vars.REDIS_HOST }}"
           REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
+          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
+          # including when that value is false.  Omit the property entirely unless we
+          # actually want read-only mode; ccache's default when absent is writable.
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
