@@ -5,6 +5,7 @@
 """Linear layer implementations for TTNN."""
 
 import math
+import os
 
 from torch import nn
 import torch
@@ -19,7 +20,27 @@ from models.experimental.tt_symbiote.core.module import (
 from models.experimental.tt_symbiote.core.run_config import trace_disabled, trace_enabled
 
 
+# Hybrid parallelism: force "the rest of the model" (text decoder, lm_head,
+# non-attention vision) to run replicated / TP-degree-1 on a multi-device mesh,
+# while a specific module (e.g. the vision attention) shards itself directly.
+# When set, every linear that routes through ``_tp_mesh_mapper`` /
+# ``_tp_requires_ccl`` / ``_tp_num_shards`` behaves as if the mesh were a single
+# rank: weights are replicated, no CCL, TP degree 1 -- i.e. the validated
+# single-device path, just physically replicated across the mesh. Modules that
+# want to shard regardless (vision attention) must NOT use these helpers; they
+# build their own mappers from the physical mesh shape.
+_REST_REPLICATE = os.environ.get("DOTS_OCR_REST_TP1", "0") == "1"
+
+
+def set_rest_replicate(enabled: bool) -> None:
+    """Toggle forced-replicate mode for decoder/lm_head/non-attention linears."""
+    global _REST_REPLICATE
+    _REST_REPLICATE = bool(enabled)
+
+
 def _tp_mesh_mapper(device, dim):
+    if _REST_REPLICATE:
+        return ttnn.ReplicateTensorToMesh(device)
     if (
         hasattr(device, "get_num_devices")
         and device.get_num_devices() > 1
@@ -31,7 +52,22 @@ def _tp_mesh_mapper(device, dim):
 
 
 def _tp_requires_ccl(device):
+    if _REST_REPLICATE:
+        return False
     return not (hasattr(device, "shape") and list(device.shape)[-1] == 1)
+
+
+def _tp_num_shards(device) -> int:
+    """TP degree (N-shard count) for the column/row-sharded linears.
+
+    Returns 1 in forced-replicate mode so ``n_per_device`` computations match
+    the replicated (full-width) weight instead of slicing it ``mesh[-1]`` ways.
+    """
+    if _REST_REPLICATE:
+        return 1
+    if hasattr(device, "shape") and list(device.shape):
+        return int(list(device.shape)[-1])
+    return 1
 
 
 def _ccl_num_links(device) -> int:
@@ -1121,33 +1157,50 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
 
     def move_weights_to_device_impl(self):
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # The DRAM-width-sharded weight/bias layout is only consumed by the
+        # _decode_o_proj_dram_sharded_program_config kernel, which runs only on
+        # the single-device (non-CCL) fast path (see ``forward``: that program
+        # config is gated on ``not _tp_requires_ccl``). On a TP/CCL mesh the
+        # matmul instead uses a 1D-mcast program config that requires a
+        # DRAM_INTERLEAVED operand B -- handing it a width-sharded weight trips
+        # "Only L1 buffers can have an associated circular buffer". So store the
+        # weight/bias DRAM_INTERLEAVED whenever CCL is active.
+        needs_ccl = _tp_requires_ccl(self.device)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
-            mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
-            num_tp = int(mesh_shape[-1]) if mesh_shape else 1
+            num_tp = _tp_num_shards(self.device)
             weight_n_per_device = math.ceil(int(weight.shape[-1]) / num_tp)
+            weight_mem = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if needs_ccl
+                else _dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device)
+            )
             self.tt_weight = ttnn.as_tensor(
                 weight,
                 device=self.device,
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device),
+                memory_config=weight_mem,
             )
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         if isinstance(self.tt_bias_host, torch.Tensor):
             bias = self.tt_bias_host.reshape((1, -1))
-            mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
-            num_tp = int(mesh_shape[-1]) if mesh_shape else 1
+            num_tp = _tp_num_shards(self.device)
             bias_n_per_device = math.ceil(int(bias.shape[-1]) / num_tp)
+            bias_mem = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if needs_ccl
+                else _dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device)
+            )
             self.tt_bias = ttnn.as_tensor(
                 bias,
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device),
+                memory_config=bias_mem,
             )
         else:
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
@@ -1432,7 +1485,7 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
         # garbage token from the local 1/8 slice. That was the corruption
         # observed previously when this class was wired in.
         mesh_shape = list(device.shape) if hasattr(device, "shape") else [1, 1]
-        num_tp = int(mesh_shape[-1]) if mesh_shape else 1
+        num_tp = _tp_num_shards(device)
         self._num_tp = num_tp
 
         # Alignment constraints for the DRAM-sharded matmul kernel:

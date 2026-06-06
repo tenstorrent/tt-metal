@@ -332,6 +332,7 @@ class DeviceArch(Enum):
     N300 = "n300"
     T3K = "t3k_wh"
     TG = "gx_wh"
+    P100 = "p100"
     P150 = "p150"
     P300 = "p300"
     P150x4 = "p150x4"
@@ -344,6 +345,7 @@ MeshShapeToDeviceArch = {
     "N300": DeviceArch.N300,
     "T3K": DeviceArch.T3K,
     "TG": DeviceArch.TG,
+    "P100": DeviceArch.P100,
     "P150": DeviceArch.P150,
     "P300": DeviceArch.P300,
     "P150x4": DeviceArch.P150x4,
@@ -358,6 +360,7 @@ SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS = (
     DeviceArch.N300,
     DeviceArch.T3K,
     DeviceArch.TG,
+    DeviceArch.P100,
     DeviceArch.P150,
     DeviceArch.P300,
     DeviceArch.P150x4,
