@@ -170,7 +170,7 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
-RUN apt update && apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-20-dev \
@@ -187,7 +187,7 @@ RUN apt update && apt install -y --no-install-recommends \
     uuid-runtime \
     wget \
     zstd \
-    && apt clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
 # CI Test image
@@ -252,15 +252,15 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
     if [ "$UBUNTU_VERSION" != "24.04" ]; then \
         cp -a /gdb-staging/* /usr/local/; \
     else \
-        apt update && apt install -y --no-install-recommends gdb && \
-        apt clean && rm -rf /var/lib/apt/lists/*; \
+        apt-get update && apt-get install -y --no-install-recommends gdb && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi
 
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
 # switching to libgl1
-RUN apt update && apt install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     acl \
     emacs \
     gh \
@@ -271,14 +271,13 @@ RUN apt update && apt install -y --no-install-recommends \
     vim \
     libgl1 \
     ipmitool \
-    && apt clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 
 # Configure SSH for MPI multihost jobs readiness
 # To be safe, keep this **after** the apt install to avoid openssh-server mangling configs
 RUN adduser --uid 1001 --shell /bin/bash --disabled-password --gecos "" user && \
     usermod -aG sudo user && \
-    usermod -p 'NP' user && \
     echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
     mkdir -p /run/sshd && \
     echo "StrictModes no" >> /etc/ssh/sshd_config

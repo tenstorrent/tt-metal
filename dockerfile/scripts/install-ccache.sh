@@ -31,7 +31,7 @@ fi
 # Extract to temp dir and run upstream install.sh
 # install.sh uses patch-binary.py (requires python3) to bake the correct
 # libexecdir and sysconfdir paths into the binary at install time.
-# We pass the final on-disk paths (/usr/local/libexec, /usr/local/etc) so
+# We pass the final on-disk paths (/usr/local/libexec, /etc) so
 # ccache can locate its storage helper after the COPY --from stage lands
 # the /install tree at /usr/local/ in the final image.
 TMPDIR_EXTRACT=$(mktemp -d)

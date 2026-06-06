@@ -117,7 +117,7 @@ runs:
             for s in "${SET_LINES[@]}"; do
               if [ -n "$s" ]; then
                 # Strip harbor prefix from docker-image:// context URIs so bake pulls from GHCR directly
-                stripped=$(printf '%s' "$s" | sed "s|docker-image://${INPUT_HARBOR_PREFIX}|docker-image://|g")
+                stripped="${s//"docker-image://${INPUT_HARBOR_PREFIX}"/"docker-image://"}"
                 FALLBACK_SETS+=(--set "$stripped")
               fi
             done

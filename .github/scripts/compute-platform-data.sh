@@ -86,7 +86,7 @@ MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manyli
 
 # Compute separate hashes for the two venv images so ci-build-venv is reusable
 # across ci-test-only dependency changes. Both hashes still include the shared
-# venv build inputs from docker-bake.hcl and the venv workflow.
+# venv build inputs from docker-bake.hcl.
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
