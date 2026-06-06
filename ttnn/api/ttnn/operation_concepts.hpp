@@ -201,11 +201,11 @@ concept AdvancedProgramSpecFactoryConcept = requires {
 //       static ttnn::device_operation::ProgramArtifacts create_program_artifacts(...);
 //   };
 //
-// The default-to-Option-2 choice matches the path of least surprise: a porter
-// who writes the factory without knowing about the distinction lands on the
-// less-restrictive contract and their code compiles. Opting into Option 1 is
-// the explicit "I've checked that my factory only varies tensor args between
-// dispatches, please give me the fast path."
+// The default-to-Option-2 choice matches the path of least surprise: an op
+// author who writes the factory without knowing about the distinction lands
+// on the less-restrictive contract and their code compiles. Opting into
+// Option 1 is the explicit "I've checked that my factory only varies tensor
+// args between dispatches, please give me the fast path."
 template <typename T>
 concept HasFastCacheHitPathOptIn = requires {
     typename T::fast_cache_hit_path;
