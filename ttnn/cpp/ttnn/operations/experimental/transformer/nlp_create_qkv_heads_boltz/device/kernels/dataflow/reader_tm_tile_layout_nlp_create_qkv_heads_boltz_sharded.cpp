@@ -18,8 +18,7 @@ void kernel_main() {
     uint32_t remote_q_head_start_idx = get_arg_val<uint32_t>(3);
     uint32_t start_q_x = get_arg_val<uint32_t>(4);
     uint32_t start_q_y = get_arg_val<uint32_t>(5);
-    uint32_t q_base_addr = get_arg_val<uint32_t>(6);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(7);
+    uint32_t q_base_addr = get_arg_val<uint32_t>(6) + get_arg_val<uint32_t>(7);
     uint32_t q_offset = get_arg_val<uint32_t>(8);
     constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(0);
 
@@ -36,7 +35,7 @@ void kernel_main() {
     uint32_t remote_q_head_idx = remote_q_head_start_idx;
     uint32_t q_read_noc_x = in0_mcast_noc_x[q_x];
     uint32_t q_read_noc_y = in0_mcast_noc_y[q_y];
-    uint32_t q_read_l1_addr = q_start_addr;
+    uint32_t q_read_l1_addr = q_base_addr + remote_q_head_start_idx * head_size;
     uint32_t q_write_addr = cb_q_out.get_write_ptr() + q_offset;
     UnicastEndpoint q_ep;
 
@@ -71,8 +70,7 @@ void kernel_main() {
         uint32_t remote_kv_head_start_idx = get_arg_val<uint32_t>(12);
         uint32_t start_kv_x = get_arg_val<uint32_t>(13);
         uint32_t start_kv_y = get_arg_val<uint32_t>(14);
-        uint32_t kv_base_addr = get_arg_val<uint32_t>(15);
-        uint32_t kv_start_addr = get_arg_val<uint32_t>(16);
+        uint32_t kv_base_addr = get_arg_val<uint32_t>(15) + get_arg_val<uint32_t>(16);
         uint32_t num_kv_tiles = get_arg_val<uint32_t>(17);
         constexpr uint32_t cb_id_kv_out = get_compile_time_arg_val(1);
 
@@ -83,7 +81,7 @@ void kernel_main() {
         uint32_t remote_kv_head_idx = remote_kv_head_start_idx;
         uint32_t kv_read_noc_x = in0_mcast_noc_x[kv_x];
         uint32_t kv_read_noc_y = in0_mcast_noc_y[kv_y];
-        uint32_t kv_read_l1_addr = kv_start_addr;
+        uint32_t kv_read_l1_addr = kv_base_addr + remote_kv_head_start_idx * head_size;
         cb_kv_out.reserve_back(num_kv_tiles);
         uint32_t kv_write_addr = cb_kv_out.get_write_ptr();
         UnicastEndpoint kv_ep;
