@@ -2,4 +2,5 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/// @brief Main kernel function for data flow processing in blank example.
 void kernel_main() {}
