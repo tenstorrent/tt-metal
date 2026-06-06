@@ -48,6 +48,10 @@ For each proposed bug in turn:
 
 Do not batch several unproven fixes together. The purpose of this skill is to connect each code change to a verified cause.
 
+For accuracy bugs, use a localization ladder before broad changes: compare module or layer boundaries, split prefill from decode, and run CPU oracle substitutions such as reference final norm, LM head, softcap, or sampling on accelerator hidden states. This separates hidden-state drift from final projection, postprocessing, and top-k extraction bugs. `models/common/validation_tools.py` has decorator-based tools that make it convenient to replace parts of a model with reference torch implementations, which can be a rapid and convenient way to prove or rule out whether a suspected accuracy bug is indeed caused by one specific part of the ttnn model code. You can even use this to "bisect" search the source code space of the model to find the smallest part of it that needs to be replaced with the torch reference code in order to fix the bug. For localisation or confirmation/refutation of a suspected bug this can be a significant timesaver.
+
+Treat "higher precision" or "safer numerics" as a hypothesis, not a fix. Test precision, compute-kernel, math-mode, and dtype changes with focused A/B runs, and revert them when they are unchanged or worse.
+
 If every AutoDebug hypothesis has been refuted or fixed and the original problem remains, do not keep guessing from the stale report. Update the visible evidence, then run `$autodebug` again in a fresh forked subagent from the new state. Continue with the new report.
 
 Stop only when the bug is fixed with evidence, the remaining blocker is outside the current environment or project scope, or the report plus experiments show a legitimate limitation that needs human/product direction.
@@ -55,6 +59,7 @@ Stop only when the bug is fixed with evidence, the remaining blocker is outside 
 ## TTNN Experiment Examples
 
 - Compare one decoder subcomponent against HF or the single-chip TTNN baseline with identical inputs and weights.
+- For top-k accuracy drift, probe the earliest layer/step where logits or hidden states diverge enough to change rank order, then substitute CPU/reference tail components to isolate whether the bug is in the hidden-state producer or the output head/postprocessing.
 - Print or assert the lowered TTNN op inputs: logical shape, physical/padded shape, dtype, layout, memory config, program config, compute config, mesh mapper, and runtime args.
 - Add a temporary targeted test for a suspicious cache/page-table/current-position boundary, then keep it only if it belongs as a durable regression.
 - Run a minimal watcher check when the hypothesis involves CCL, async completion, semaphores, NOC/L1 bounds, cache updates, or trace replay.
@@ -78,6 +83,7 @@ Record:
   Experiment:
   Result:
   Verdict: verified / refuted / still uncertain
+  Evidence artifact(s):
   Fix, if any:
   Verification:
 
