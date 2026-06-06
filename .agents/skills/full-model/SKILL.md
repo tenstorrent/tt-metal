@@ -18,7 +18,8 @@ Implement the model-specific pieces around the working block stack:
 - block or decoder stack, including multiple layer kinds when present;
 - KV-cache allocation, reset, page-table or position handling, and repeated decode reuse;
 - final norm and LM head, including tied embeddings when the HF config uses them;
-- logits and sampling path, preferably using shared project sampling helpers when available;
+- logits and on-device sampling path (use models.common.sampling for this);
+- full on-device tracing for the decoder from token in all the way to token out.
 - a generator that owns high-level token-in/token-out generation and exposes a clean low-level prefill/decode API for external callers.
 
 Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice.

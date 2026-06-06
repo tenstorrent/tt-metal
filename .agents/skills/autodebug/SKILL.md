@@ -32,6 +32,8 @@ Scope or parameter matrix:
 Current strongest hypotheses:
 ```
 
+For model-accuracy bugs, also pin the scoring contract before comparing outputs: checkpoint/config, reference generation command, dataset or sample count, prompt and generation lengths, number of scored rows, seed/sampling/top-k settings, and whether the first scored row is prefill or decode.
+
 Then build the causal chain. Read upstream and downstream from the failing point until you can say what value, shape, dtype, layout, cache entry, runtime argument, kernel setting, or state transition first diverges from the intended contract.
 
 Do not stop at the first plausible discrepancy. For each candidate root cause, ask which observations it explains, which it does not explain, and what additional code could create, transform, corrupt, mask, or amplify the bad state.
@@ -41,6 +43,8 @@ Before headlining a finding, revisit it and test it against the code. If it is m
 ## TTNN Debugging Patterns
 
 - Compare model code module by module against HuggingFace or the closest in-tree reference. Mathematical equivalence is fine; missing operations, wrong ordering, wrong axes, wrong cache semantics, or wrong residual/norm contracts are not.
+- Treat dtype, cast order, and activation variants as source-level model semantics. Inspect BF16/FP32 buffers and scales, linear input dtype, RMSNorm upcast points, softcaps, and exact-vs-approximate activations before calling a path mathematically equivalent.
+- For shared, skipped, tied, or adapter-like submodules, missing state-dict keys may be intentional. Check HF configs, layer types, sharing maps, tied projections, MoE/adapters, recurrence, and weight reuse before treating missing weights as a loader bug.
 - Map async completion boundaries. A host assertion passing before synchronization does not prove queued device work succeeded.
 - Trace operation chains through producer ops, consumer ops, shapes, dtypes, layouts, memory configs, broadcast axes, selected program factories, and kernels.
 - Verify canonical dispatch before blaming the visible Python call. Read wrappers that reorder operands, infer defaults, choose memory configs, and lower to C++.
