@@ -188,6 +188,21 @@ static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_fa
 static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::AdvancedFactory>);
 static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::DoubleShapeFactory>);
 
+// Guard: ProgramSpec must remain reflection-hashable (Metal 2.0 Option 2 spec-hash
+// path depends on this). If a future change to ProgramSpec or any nested type
+// breaks reflection-hashability, the next assertion or the inline call below
+// trips at compile time, pointing at exactly the offending type.
+static_assert(
+    std::is_aggregate_v<tt::tt_metal::experimental::ProgramSpec>,
+    "ProgramSpec must be an aggregate for reflection-based hashing");
+static_assert(
+    ttsl::concepts::Reflectable<tt::tt_metal::experimental::ProgramSpec>,
+    "ProgramSpec must satisfy ttsl Reflectable concept");
+[[maybe_unused]] inline ttsl::hash::hash_t _program_spec_must_stay_hashable() {
+    tt::tt_metal::experimental::ProgramSpec spec{};
+    return ttsl::hash::hash_objects_with_default_seed(spec);
+}
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
