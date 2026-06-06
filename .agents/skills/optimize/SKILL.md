@@ -11,6 +11,8 @@ This guide does not explain how to make more efficient multi-device mesh layout 
 
 Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is important to always measure the performance of a traced execution run. If there are significant op/host gaps you can note them but you should still follow the steps below to optimize on-device performance. Always perform optimization using real model shapes, do not use reduced shapes!
 
+When direct traced generator decode is already fast but vLLM/serving decode is slower, treat the gap as orchestration overhead before retuning decoder math. First audit the adapter/generator path for async decode split, nonblocking trace replay, on-device traced sampling, host readbacks, page-table/input refreshes, and fallback sampling. Keep same-harness serving before/after metrics and compare to the canonical implementation on the same machine when one exists.
+
 A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding (e.g. L1-sharded activations, DRAM-sharded weights) are sharded across the cores/dram banks of a single device (which is a grid of cores). You should absolutely consider these as in-scope for this stage! Multi-chip sharding (e.g. with a mesh mapper) is about distributing tensors across multiple devices in a mesh. Any time tt-perf-report mentions sharding it is probably talking about on-device sharding and is in-scope for you.
 
 Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversation with the hardware, not as an oracle: classify bottlenecks, try applicable advice, keep changes that improve the target without unacceptable correctness or complexity cost, and record why rejected advice was rejected. We'd like to improve tt-perf-report and its advice to be more useful so please call out potential improvements in your final report.
@@ -33,6 +35,7 @@ Final optimized evidence should show:
 - Warmed prefill and decode latency before/after optimization.
 - `tt-perf-report` output with advice enabled and the main performance conclusions.
 - Watcher still clean. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
+- For vLLM decode-serving optimization: same-harness vLLM before/after metrics, canonical same-machine comparison when available, and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
 - Optimization checklist:
 -[ ] Decoder path fully traced with no host fallbacks
 -[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
@@ -190,6 +193,8 @@ Avoid suppressing advice in the report used to guide optimization. When applicab
 - No unnecessary `InterleavedToSharded`, `ShardedToInterleaved`, `reshard`, `tilize`, `untilize`, `to_torch`, or `from_torch` in the optimized runtime path.
 - Decode trace replay still measures the optimized path, not a fallback path.
 - Program configs and compute-kernel configs are described in the final report or a compact structured summary.
+- If `supports_async_decode=True` is advertised, the split vLLM path has been exercised: `decode_forward(read_from_device=False)`, `read_decode_output(async_read=True)`, and `process_decode_output_host`.
+- On-device sampling returns device tokens/logprobs through decode; host top-1 or argmax fast paths are removed or proven unused by the measured benchmark.
 - PCC covers prefill and decode for every representative layer kind.
 - Optimized stress runs and passes for every representative layer kind and exercised mode; skipped stress is not a passing optimized result.
 - Final perf reports cover warmed prefill and warmed decode separately.
