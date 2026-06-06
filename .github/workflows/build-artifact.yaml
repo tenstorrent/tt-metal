@@ -609,6 +609,15 @@ jobs:
             fi
           fi
 
+      - name: Print ccache log
+        if: always()
+        run: |
+          if [ -f /tmp/ccache.log ]; then
+            echo "=== ccache log ===" && cat /tmp/ccache.log
+          else
+            echo "No ccache log found at /tmp/ccache.log"
+          fi
+
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
