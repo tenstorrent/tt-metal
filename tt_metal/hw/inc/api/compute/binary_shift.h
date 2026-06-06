@@ -124,7 +124,7 @@ ALWI void binary_logical_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32
     MATH((SFPU_BINARY_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_logical_right_shift_,
+        calculate_logical_right_shift,
         (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
         RC,
         idst0,

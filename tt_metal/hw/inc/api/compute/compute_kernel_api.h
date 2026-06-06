@@ -566,7 +566,7 @@ ALWI void exp2_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (true /* APPROXIMATE */))); }
+ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (APPROX, DST_ACCUM_MODE))); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off

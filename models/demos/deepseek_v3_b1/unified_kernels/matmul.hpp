@@ -18,9 +18,8 @@
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_sigmoid.h"
-#include "ckernel_sfpu_silu.h"
-#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_unary_sfpu_sigmoid.h"
+#include "llk_math_eltwise_unary_sfpu_silu.h"
 #endif
 #endif
 
@@ -148,9 +147,9 @@ struct Matmul {
             if constexpr (fuse_activation) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
-                    PACK(SFPU_INIT_CB(sigmoid, ckernel::sfpu::sigmoid_init, (CTArgs::fused_activation_approx_mode)));
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<CTArgs::fused_activation_approx_mode>()));
                 } else {
-                    PACK(SFPU_INIT_CB(silu, ckernel::sfpu::silu_init, (CTArgs::fused_activation_approx_mode)));
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<CTArgs::fused_activation_approx_mode>()));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
@@ -170,21 +169,12 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK(SFPU_CALL_MODE(
-                            DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
-                            calculate_sigmoid,
-                            (CTArgs::fused_activation_approx_mode, false /* is_fp32_dest_acc_en */, 2 /* ITER */),
-                            R,
-                            0));
+                        PACK((ckernel::
+                                  llk_math_eltwise_unary_sfpu_sigmoid<CTArgs::fused_activation_approx_mode, false, 2>(
+                                      0, ckernel::VectorMode::R)));
                     } else {
-                        PACK(SFPU_CALL_MODE(
-                            DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
-                            calculate_silu,
-                            (false /* is_fp32_dest_acc_en */, 2 /* ITER */),
-                            R,
-                            0));
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<CTArgs::fused_activation_approx_mode, false, 2>(
+                            0, VectorMode::R)));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
