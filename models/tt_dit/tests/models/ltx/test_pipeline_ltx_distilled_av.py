@@ -12,6 +12,46 @@ import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
+
+def _print_timing_table(
+    pipeline, *, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
+):
+    """Print a timing summary from ``pipeline.last_timings`` (stage, seconds) rows."""
+    timings = getattr(pipeline, "last_timings", None)
+    if not timings:
+        return
+
+    mesh = tuple(mesh_shape)
+    topo = str(topology).split(".")[-1]
+    prompt_short = prompt if len(prompt) <= 60 else prompt[:57] + "..."
+    meta = [
+        f"Resolution   {height}x{width} · {num_frames} frames",
+        f"Mesh         {mesh} · sp={mesh[sp_axis]} tp={mesh[tp_axis]} · {topo}",
+        f"Output       {output_path}",
+        f"Prompt       {prompt_short}",
+    ]
+    rows = [(name, f"{secs:.2f} s") for name, secs in timings]
+    rows.append(("Total", f"{sum(s for _, s in timings):.2f} s"))
+
+    lw = max([len(n) for n, _ in rows] + [len("Stage")])
+    rw = max([len(t) for _, t in rows] + [len("Time")])
+    full = max(lw + rw + 5, max(len(m) for m in meta) + 1)
+    lw = full - rw - 5  # widen the stage column so both sections share one outer width
+
+    out = ["", "┌" + "─" * full + "┐", "│" + "LTX DISTILLED — PERFORMANCE".center(full) + "│"]
+    for m in meta:
+        out.append("│ " + m.ljust(full - 1) + "│")
+    out.append("├" + "─" * (lw + 2) + "┬" + "─" * (rw + 2) + "┤")
+    out.append("│ " + "Stage".ljust(lw) + " │ " + "Time".rjust(rw) + " │")
+    out.append("├" + "─" * (lw + 2) + "┼" + "─" * (rw + 2) + "┤")
+    for name, t in rows[:-1]:
+        out.append("│ " + name.ljust(lw) + " │ " + t.rjust(rw) + " │")
+    out.append("├" + "─" * (lw + 2) + "┼" + "─" * (rw + 2) + "┤")
+    out.append("│ " + rows[-1][0].ljust(lw) + " │ " + rows[-1][1].rjust(rw) + " │")
+    out.append("└" + "─" * (lw + 2) + "┴" + "─" * (rw + 2) + "┘")
+    print("\n".join(out))
+
+
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
 ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
@@ -147,6 +187,18 @@ def test_pipeline_av_fast(
             seed=seed,
         )
         logger.info(f"Saved video to: {output_filename}")
+        _print_timing_table(
+            pipeline,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            output_path=output_filename,
+            prompt=prompt,
+        )
 
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))

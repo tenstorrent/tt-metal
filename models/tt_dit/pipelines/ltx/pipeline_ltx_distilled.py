@@ -608,7 +608,9 @@ class LTXDistilledPipeline(LTXPipeline):
 
         s1_height = height // 2
         s1_width = width // 2
-        total_t0 = time.time()
+
+        # (label, seconds) rows counted toward the total; prepares and export are excluded.
+        timings: list[tuple[str, float]] = []
 
         t0 = time.time()
         # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
@@ -618,12 +620,14 @@ class LTXDistilledPipeline(LTXPipeline):
             self.gemma_encoder_pair.ensure_loaded()
         enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {time.time() - t0:.1f}s")
+        t_encode = time.time() - t0
+        timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
+        logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
-        # Both distilled stages share variant 0 (no weight swap between stages).
         t0 = time.time()
         self._prepare_transformer(0)
-        logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
+        if self.dynamic_load:
+            logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
 
         logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
@@ -638,7 +642,9 @@ class LTXDistilledPipeline(LTXPipeline):
             traced=self._traced,
             trace_key="s1",
         )
-        logger.info(f"Stage 1 denoise: {time.time() - t0:.1f}s")
+        t_stage1 = time.time() - t0
+        timings.append(("Stage 1 denoise", t_stage1))
+        logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
 
         if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
             s1_path = output_path.replace(".mp4", "_s1.wav")
@@ -653,7 +659,9 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
         upsampled = self._upsample_latent(s1_spatial)
-        logger.info(f"Latent upsample: {time.time() - t0:.1f}s")
+        t_upsample = time.time() - t0
+        timings.append(("Latent upsample", t_upsample))
+        logger.info(f"Latent upsample: {t_upsample:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
@@ -673,24 +681,32 @@ class LTXDistilledPipeline(LTXPipeline):
             traced=self._traced,
             trace_key="s2",
         )
-        logger.info(f"Stage 2 denoise: {time.time() - t0:.1f}s")
+        t_stage2 = time.time() - t0
+        timings.append(("Stage 2 denoise", t_stage2))
+        logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
 
         t0 = time.time()
         self._prepare_vae()
-        logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
+        if self.dynamic_load:
+            logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
-        logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
+        t_vae_decode = time.time() - t0
+        timings.append(("VAE decode", t_vae_decode))
+        logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
-        logger.info(f"Audio decode: {time.time() - t0:.1f}s")
+        t_audio_decode = time.time() - t0
+        timings.append(("Audio decode", t_audio_decode))
+        logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
         t0 = time.time()
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
 
-        logger.info(f"Total: {time.time() - total_t0:.1f}s | Output: {output_path}")
+        self.last_timings = list(timings)
+        logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         return output_path
