@@ -108,7 +108,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     const uint32_t num_coord_varargs = (uint32_t)(total_subordinate_cores * 2);
 
     KernelSpec gatherer_spec{
-        .unique_id = "gatherer",
+        .unique_id = KernelSpecName{"gatherer"},
         .source = "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer_2_0.cpp",
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -138,14 +138,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel_spec_name = gatherer_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel = gatherer_spec.unique_id};
     gatherer_run_params.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {
              {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
              {"transaction_size_bytes", (uint32_t)transaction_size_bytes}}});
-    gatherer_run_params.advanced_options.runtime_varargs.push_back(
-        {test_config.master_core_coord, subordinate_phys_coords});
+    gatherer_run_params.advanced_options.runtime_varargs.emplace(
+        test_config.master_core_coord, subordinate_phys_coords);
     run_params.kernel_run_args.push_back(gatherer_run_params);
     SetProgramRunArgs(program, run_params);
 

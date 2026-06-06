@@ -88,7 +88,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     using namespace tt::tt_metal::experimental;
 
     SemaphoreSpec atomic_sem{
-        .unique_id = "atomic_sem",
+        .unique_id = SemaphoreSpecName{"atomic_sem"},
         .target_nodes = all_cores,
     };
 
@@ -99,7 +99,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
         {"test_id", (uint32_t)test_config.test_id}};
 
     KernelSpec sender_spec{
-        .unique_id = "sender",
+        .unique_id = KernelSpecName{"sender"},
         .source = "tests/tt_metal/tt_metal/data_movement/multicast_atomics/kernels/multicast_atomic_sender_2_0.cpp",
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
@@ -124,7 +124,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
         {"expected_value", (uint32_t)expected_value}, {"test_id", (uint32_t)test_config.test_id}};
 
     KernelSpec receiver_spec{
-        .unique_id = "receiver",
+        .unique_id = KernelSpecName{"receiver"},
         .source = "tests/tt_metal/tt_metal/data_movement/multicast_atomics/kernels/multicast_atomic_receiver_2_0.cpp",
         .num_threads = 1,
         .semaphore_bindings = {KernelSpec::SemaphoreBinding{
@@ -163,7 +163,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     for (const auto& sender_core : test_config.sender_cores) {
         sender_run_params.runtime_arg_values.push_back(
             {.node = sender_core,
@@ -175,7 +175,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     }
     run_params.kernel_run_args.push_back(sender_run_params);
 
-    ProgramRunArgs::KernelRunArgs receiver_run_params{.kernel_spec_name = receiver_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs receiver_run_params{.kernel = receiver_spec.unique_id};
     run_params.kernel_run_args.push_back(receiver_run_params);
 
     SetProgramRunArgs(program, run_params);
