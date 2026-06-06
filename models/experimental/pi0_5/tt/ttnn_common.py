@@ -245,6 +245,28 @@ def sdpa_prefill_chunk_sizes(
     k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
     q_chunk = min(base_q, q_aligned)
     k_chunk = min(base_k, k_aligned)
+    # Two opt-in force-overrides for shape-specific k_chunk tuning. Trade the
+    # divisor-aware "no waste" picker for a smaller iteration count when fewer
+    # SDPA inner iters beats less masking compute on the trailing iter. At
+    # bs=3 chunk=1024 the denoise shape is (Sq=32, Skv=1056); divisor-aware
+    # picks k_chunk=32 → 33 K-iters where dispatch overhead dominates. Force
+    # =128 → 9 iters (last masked), trades 75% waste on iter 9 for −24 saved
+    # iters. Sweep at 5 denoise steps: k=64 / k=128 both win −0.4 ms over
+    # the auto pick (k=32) on the bs=3 e2e trace.
+    import os as _os
+
+    if seq_len_q <= 64 and seq_len_kv >= 512:
+        _force = _os.environ.get("PI0_SDPA_DENOISE_K_FORCE", "").strip()
+        if _force.isdigit():
+            forced = int(_force)
+            if forced >= tile and forced <= base_k:
+                return max(q_chunk, tile), forced
+    if seq_len_q >= 512 and seq_len_kv >= 512:
+        _force = _os.environ.get("PI0_SDPA_PREFILL_K_FORCE", "").strip()
+        if _force.isdigit():
+            forced = int(_force)
+            if forced >= tile:
+                return max(q_chunk, tile), forced
     # Divisor-aware k_chunk: SDPA does not short-circuit on masked positions —
     # if k_chunk does not divide k_aligned the last K-iter still processes the
     # full k_chunk columns and masks the trailing ones, wasting compute. Prefer
