@@ -508,7 +508,10 @@ class TTSeamlessM4Tv2Encoder:
         m = self._linear_token_rows(x)
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
         tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
-        if tuned is not None:
+        # Block-sharded L1 matmul CBs clash with decode-trace L1 reservation at long prefill
+        # (``measure_perf`` / demo @ seq=4096). Use interleaved DRAM fallback above 2048 tokens.
+        _TP_BS_M_MAX = 2048
+        if tuned is not None and m <= _TP_BS_M_MAX:
             program_config, in0_mem, out_mem = tuned
             if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
                 # Upstream (block-sharded LN) already produced this matmul's in0 layout — feed it
@@ -553,16 +556,19 @@ class TTSeamlessM4Tv2Encoder:
         kwargs = {}
         if activation == "relu":
             kwargs["activation"] = "relu"
+        out_mc = ttnn.DRAM_MEMORY_CONFIG if m > _TP_BS_M_MAX else memory_config
         out = ttnn.linear(
             x_in,
             weight,
             bias=bias,
-            memory_config=memory_config,
+            memory_config=out_mc,
             compute_kernel_config=self._linear_ln_compute_cfg,
             **kwargs,
         )
         if owns_x_in:
             ttnn.deallocate(x_in)
+        if len(x.shape) >= 3:
+            out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
         return out
 
     def _attention(

@@ -47,10 +47,14 @@ _LONG_SEQ_LINEAR_CHUNK_ROWS = 16 * TILE
 _LONG_SEQ_LINEAR_IN0_BLOCK_W = 8
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # Keep conformer residuals in DRAM above this frame count (L1 CB pressure on long audio).
-_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
+# 512 subsampled frames (≈4096 mel): sharded LN persistent L1 clashes with decode-trace + T2U/vocoder.
+_LONG_AUDIO_RES_DRAM_THRESHOLD = 512
 # Query-block relative attention above this seq (avoids O(S²) L1 use).
 _ATTN_QUERY_CHUNK_THRESHOLD = 3072
 _ATTN_QUERY_CHUNK = 512
+# Adapter self-attn (non-relative fused SDPA): smaller chunks above this seq avoid L1 CB clash
+# with decode-trace reservation at ~512 subsampled frames (input ≈4096 mel).
+_ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD = 256
 
 
 def _drain_device_profiler(device: ttnn.Device, *, trace_no_profiler: bool) -> None:
@@ -179,7 +183,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Activation buffer type: DRAM on TP>1 so fused-op static CBs do not clash with persistent L1."""
         if self._tp > 1:
             return ttnn.DRAM_MEMORY_CONFIG
-        if seq_len is not None and seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD:
+        if seq_len is not None and seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD:
             return ttnn.DRAM_MEMORY_CONFIG
         return ttnn.L1_MEMORY_CONFIG
 
@@ -510,14 +514,18 @@ class TTSeamlessM4Tv2SpeechEncoder:
             return out_flat
         return ttnn.reshape(out_flat, (batch, seq, n))
 
-    def _sdpa_program_config(self, seq_q: int, seq_k: int) -> ttnn.SDPAProgramConfig:
-        key = (seq_q, seq_k)
+    def _sdpa_program_config(self, seq_q: int, seq_k: int, *, compact: bool = False) -> ttnn.SDPAProgramConfig:
+        key = (seq_q, seq_k, compact)
         cached = self._sdpa_pc_cache.get(key)
         if cached is not None:
             return cached
 
-        q_chunk = max(64, min(256, nearest_32(seq_q)))
-        k_chunk = max(64, min(256, nearest_32(seq_k)))
+        if compact:
+            q_chunk = max(32, min(64, nearest_32(seq_q)))
+            k_chunk = max(32, min(128, nearest_32(seq_k)))
+        else:
+            q_chunk = max(64, min(256, nearest_32(seq_q)))
+            k_chunk = max(64, min(256, nearest_32(seq_k)))
         out = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk,
@@ -606,7 +614,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # Plain ``ttnn.layer_norm`` runs on DRAM and adds no persistent L1 pressure.
         # ``residual_input_tensor`` is forwarded to ``ttnn.layer_norm`` in this path — the fused
         # add+LN kernel saves one DRAM add dispatch per call.
-        if use_sharded and seq_len > _LONG_AUDIO_RES_DRAM_THRESHOLD:
+        if use_sharded and seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD:
             x_in = x
             if ttnn.is_sharded(x):
                 x_in = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
@@ -1410,6 +1418,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if not use_relative:
             # Adapter self-attn has no relative positions — use fused SDPA.
             # K is in [B, H, S, D] form (k_transposed=False) as SDPA requires.
+            compact_sdpa = seq_len >= _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD
             attn_out = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k,
@@ -1417,7 +1426,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 attn_mask=attention_mask_4d,
                 is_causal=False,
                 scale=scale,
-                program_config=self._sdpa_program_config(seq_len, seq_len),
+                program_config=self._sdpa_program_config(seq_len, seq_len, compact=compact_sdpa),
                 compute_kernel_config=self._sdpa_compute_cfg,
                 memory_config=self._mc_act(seq_len=seq_len),
             )

@@ -506,9 +506,33 @@ class TTSeamlessM4Tv2Decoder:
             self._decode_pos_cache[key] = cached
         return cached
 
+    _CROSS_SDPA_COMPACT_ENC_THRESHOLD = 256
+
     def _sdpa_program_config(self, seq_q: int, seq_k: int, *, large_chunks: bool = True) -> ttnn.SDPAProgramConfig:
         """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys."""
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
+
+    def _sdpa_cross_program_config(self, seq_q: int, enc_seq: int) -> ttnn.SDPAProgramConfig:
+        """Cross-attention SDPA; compact chunks when encoder sequence is long (trace L1 budget)."""
+        large_chunks = enc_seq >= 64
+        compact = enc_seq >= self._CROSS_SDPA_COMPACT_ENC_THRESHOLD
+        key = (seq_q, enc_seq, large_chunks, compact, "cross")
+        cached = self._sdpa_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        if compact:
+            q_chunk = max(32, min(64, nearest_32(seq_q)))
+            k_chunk = max(32, min(128, nearest_32(enc_seq)))
+            result = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+                exp_approx_mode=False,
+            )
+        else:
+            result = sdpa_program_config(self.device, seq_q, enc_seq, self._sdpa_pc_cache, large_chunks=large_chunks)
+        self._sdpa_pc_cache[key] = result
+        return result
 
     def _decode_matmul_pc(self, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
         """Decode matmul PC at effective ``M=32`` tile rows (1D multicast via ``common``)."""
@@ -847,6 +871,9 @@ class TTSeamlessM4Tv2Decoder:
                 ttnn.copy(vh, cross_attn_cache[1])
                 kh, vh = cross_attn_cache[0], cross_attn_cache[1]
 
+        cross_sdpa_mc = (
+            ttnn.DRAM_MEMORY_CONFIG if enc_seq >= self._CROSS_SDPA_COMPACT_ENC_THRESHOLD else ttnn.L1_MEMORY_CONFIG
+        )
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             qh,
             kh,
@@ -856,7 +883,7 @@ class TTSeamlessM4Tv2Decoder:
             scale=attn_scale,
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_decode_slice_compute_cfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=cross_sdpa_mc,
         )
         ttnn.deallocate(qh)
 
@@ -1060,6 +1087,12 @@ class TTSeamlessM4Tv2Decoder:
                 ttnn.copy(kh, cross_attn_cache[0])
                 ttnn.copy(vh, cross_attn_cache[1])
 
+        is_cross_prefill = encoder_hidden_states is not None and "kv" in attn_module and "qkv" not in attn_module
+        cross_sdpa_mc = (
+            ttnn.DRAM_MEMORY_CONFIG
+            if is_cross_prefill and seq_k >= self._CROSS_SDPA_COMPACT_ENC_THRESHOLD
+            else ttnn.L1_MEMORY_CONFIG
+        )
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             qh,
             kh,
@@ -1069,7 +1102,7 @@ class TTSeamlessM4Tv2Decoder:
             scale=1.0,
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=cross_sdpa_mc,
         )
         ttnn.deallocate(qh)
         if not cross_kv_in_cache:
@@ -1151,8 +1184,7 @@ class TTSeamlessM4Tv2Decoder:
             cache_seq_len = None
 
         sdpa_self = self._sdpa_program_config(seq, seq, large_chunks=True)
-        # Encoder keys are often 32-wide after subsampling; k_chunk=64 mis-schedules SDPA vs PyTorch.
-        sdpa_cross = self._sdpa_program_config(seq, enc_seq, large_chunks=(enc_seq >= 64))
+        sdpa_cross = self._sdpa_cross_program_config(seq, enc_seq)
 
         # fc1.weight shape is [in, out//tp] for TP (column-parallel). shape[-1] = local ffn dim.
         ffn_intermediate = int(parameters.layers[0].ffn.fc1.weight.shape[-1])

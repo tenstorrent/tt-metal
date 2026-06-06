@@ -48,9 +48,9 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
-# 512-row matmul chunks with pinned K-block (matches speech-encoder long-seq recipe).
+# Matmul chunk rows: 256 for T2U linears (8 tiles) — 512-row chunks clash with decode-trace L1.
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 16 * TILE
-_T2U_LINEAR_CHUNK_ROWS = 16 * TILE
+_T2U_LINEAR_CHUNK_ROWS = 8 * TILE
 _T2U_LINEAR_IN0_BLOCK_W = 8
 _T2U_LONG_SDPA_TP_THRESHOLD = 128
 _T2U_SDPA_Q_CHUNK_ROWS = 512
