@@ -1,0 +1,20 @@
+/goal Use $vllm-integration and $optimize for the HF_MODEL vLLM serving path in the current tt-metal checkout.
+
+This goal creates the optimized-vLLM state. Start from completed vLLM integration and optimize the serving path in place; do not restart decoder or full-model bringup unless serving evidence proves a concrete bug there.
+
+Goal completion requirements:
+- The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py, not a standalone generator benchmark or eager fallback.
+- vLLM sampling tests, qualitative outputs, and serving benchmarks still pass; reproducibility-only sampling failures are separated from correctness, logprob, crash, or gibberish failures.
+- Warmed vLLM TTFT, ITL, aggregate output throughput, and mean per-user decode t/s/u are reported before and after using the same run_vllm_server workload, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
+- Optimized vLLM decode is about as fast as optimized full-model traced decode for comparable work. If a material gap remains, keep working until closed or isolated with profiler/trace evidence and a concrete TTNN, plugin, or scheduler limitation.
+- The adapter implements async decode: decode_forward(..., read_from_device=False) returns device tensors; read_decode_output(..., async_read=True) performs the minimal deferred read; process_decode_output_host(...) only formats host results; supports_async_decode is true only when vLLM exercises this path.
+- Serving decode reuses persistent trace inputs and calls ttnn.execute_trace(..., blocking=False). Required synchronization or host reads happen after the async boundary and are justified by the plugin contract.
+- sample_on_device_mode=all keeps sampling on device. The measured path has no host greedy/top-1 argmax, full-logits readback, or eager sampling fallback.
+- Token, position, RoPE, page-table, cache, and sampler trace inputs are refreshed only as needed. Stale-input tests cover changed token/current-position values plus changed and unchanged page tables.
+- tt-perf-report or equivalent profiler evidence exists for serving decode where possible; profiler limits have exact failure evidence and fallback timing.
+- Runtime fallback and cleanup are clean: no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, blocking readback, standalone-cache assumption, or leftover vLLM/EngineCore process in the measured path.
+- models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md summarize commands, before/after serving metrics, optimized-full-model comparison, trace/async decisions, profiler conclusions, rejected options, limitations, and exact artifacts.
+- Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
+- Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
+
+Do not mark blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE, vLLM serving, async decode, sampling, or benchmark validation currently fails. Those are expected optimization work. Before blocking, isolate the smallest repro, compare optimized full-model and vLLM integration baselines, try a concrete fix/refutation loop, and for subtle trace, cache, serving, scheduler, or sampling bugs use $autofix or document why it could not be used. Blocking requires evidence that continued debugging is no longer meaningful, not merely that a requirement still fails.
