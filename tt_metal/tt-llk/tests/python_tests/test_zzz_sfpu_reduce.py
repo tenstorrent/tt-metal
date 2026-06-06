@@ -121,6 +121,14 @@ def test_sfpu_reduce(
             reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
         )
 
+    if (
+        formats.input_format == DataFormat.UInt16
+        or formats.output_format == DataFormat.UInt16
+    ):
+        pytest.skip(
+            reason="Sfpu reduce on UInt16 depends on debug bit 11. https://github.com/tenstorrent/tt-metal/issues/46233"
+        )
+
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
