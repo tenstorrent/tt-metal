@@ -2,6 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Dev/perf fork of the AGMM linear unit test helpers and parametrizations.
+
+Contains platform-agnostic changes (skip_result_check, matmul isolation support)
+and Galaxy (4x8) Flux 2.2 test configs derived from the Loudbox (1x8) suite.
+The shared galaxy file (test_all_gather_minimal_matmul_async.py) tracks origin/main.
+"""
+
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -70,6 +79,7 @@ def run_test_linear_impl(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    skip_result_check=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -282,15 +292,15 @@ def run_test_linear_impl(
 
     # Check results
     check_result_list = []
+    if skip_result_check:
+        return check_result_list
+
     for n in range(num_iters):
         print(f"iteration {n}:")
         tt_output = tt_output_tensor_list[n]
 
         if use_non_fused:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis + 2, tp_axis + 2]
-            else:
-                concat_dims = [tp_axis + 2, sp_axis + 2]
+            concat_dims = [sp_axis + 2, tp_axis + 2]
         else:
             # Fused AGMM output: M on non-cluster axis, N on cluster axis
             concat_dims = [0, 0]
@@ -332,17 +342,6 @@ def run_test_linear_impl(
     return check_result_list
 
 
-def _create_cluster_submesh(mesh_device, cluster_axis):
-    """Create a 1xN (or Nx1) submesh sized to the cluster axis ring.
-
-    The op only operates along cluster_axis, so the non-cluster axis is just
-    redundant compute. Sub-meshing keeps the test focused on a single ring.
-    """
-    submesh_shape = [1, 1]
-    submesh_shape[cluster_axis] = mesh_device.shape[cluster_axis]
-    return mesh_device.create_submesh(ttnn.MeshShape(tuple(submesh_shape)))
-
-
 def run_test_linear(
     device,
     M,
@@ -375,6 +374,7 @@ def run_test_linear(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    skip_result_check=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -411,10 +411,7 @@ def run_test_linear(
 
     # Prepare TT tensors
     if use_non_fused:
-        if sp_axis == 1:
-            shard_dims = [sp_axis + 2, tp_axis + 2]
-        else:
-            shard_dims = [tp_axis + 2, sp_axis + 2]
+        shard_dims = [sp_axis + 2, tp_axis + 2]
     else:
         # Fused AGMM gathers K (last dim) across cluster_axis
         shard_dims = [0, 0]
@@ -469,183 +466,57 @@ def run_test_linear(
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
         broadcast_gate=broadcast_gate,
+        skip_result_check=skip_result_check,
     )
+
+
+GALAXY_MESH_CONFIG = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "fabric_router_config": create_fabric_router_config(4096),
+    "trace_region_size": 90112,
+}
 
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
         [
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
-            ttnn.Topology.Ring,
-            1,
-            4,
-            0,
-            1,
-            4,
-            4,
-            1,
-        ],
-        [
             (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Ring,
-            1,
-            8,
-            1,
-            0,
-            8,
-            8,
-            0,
-        ],
-        [
-            (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
+            GALAXY_MESH_CONFIG,
             ttnn.Topology.Ring,
             2,
-            4,
+            6,  # full grid requires force_transpose=True to divide core_grid_x=12
+            0,
             1,
-            0,
-            8,
-            8,
-            0,
-        ],
-        [
-            (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Ring,
-            4,
-            2,
-            1,
-            0,
-            8,
-            8,
-            0,
-        ],
-        [
-            (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-            4,
-            2,
-            1,
-            0,
-            8,
-            8,
-            0,
-        ],
-        [
-            (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Ring,
-            2,
-            6,
-            1,
-            0,
             12,
             9,
-            0,
+            1,
         ],
     ],
-    ids=[
-        "2x4links1",
-        "wh4x8links1",
-        "wh4x8links2",
-        "wh4x8links4_ring",
-        "wh4x8links4_linear",
-        "bh4x8links2",
-    ],
+    ids=["bh4x8fullgrid"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (32768, 4096, 4096, True, False, None, 1, False, 8, 8, 8, 2, 2),
-        (75776, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (75776, 5120, 1280, True, True, None, 1, True, 10, 8, 8, 2, 1),
-        (75776, 5120, 1280, True, True, None, 1, False, 10, 8, 8, 2, 1),
-        (75776, 5120, 3456, True, True, "gelu", 1, False, 9, 5, 12, 1, 2),
-        (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
-        (18944, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (18944, 5120, 1280, True, True, None, 1, True, 10, 8, 6, 2, 1),
-        (18944, 5120, 1280, True, True, None, 1, False, 10, 8, 6, 2, 1),
-        (18944, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
-        (49920, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (49920, 5120, 1280, True, True, None, 1, True, 10, 8, 6, 2, 1),
-        (49920, 5120, 1280, True, True, None, 1, False, 10, 8, 6, 2, 1),
-        (49920, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
-        (115200, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
-        (115200, 5120, 1280, True, True, None, 1, True, 10, 8, 6, 2, 1),
-        (115200, 5120, 1280, True, True, None, 1, False, 10, 8, 6, 2, 1),
-        (115200, 5120, 3456, True, True, "gelu", 1, False, 7, 5, 12, 1, 2),
-        # K-fractured-across-4-devices shapes (K_block_size chosen to evenly
-        # divide K-tiles per device: 40 for K=5120, 27 for K=3456).
-        (3072, 5120, 3840, True, True, None, 1, False, 8, 8, 8, 2, 2),
-        (3072, 5120, 1280, True, True, None, 1, False, 8, 8, 8, 2, 2),
-        (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
-        (3072, 3456, 5120, True, True, None, 1, False, 8, 9, 8, 2, 2),
+        # M scaled x4 vs Loudbox (1x8) to match 4x8 Galaxy topology
+        (4096, 6144, 2304, True, True, None, 1, False, 4, 4, 12, 1, 4),
+        (2048, 6144, 2304, True, True, None, 1, False, 4, 4, 24, 1, 4),
+        (2048, 6144, 768, True, True, None, 1, False, 8, 3, 16, 1, 2),
+        (4096, 6144, 4608, True, False, None, 1, False, 4, 4, 24, 1, 4),
+        (3072, 6144, 1536, True, True, "gelu", 2, False, 8, 2, 12, 1, 2),
     ],
-    ids=[
-        "4k4k4k",
-        "1xqkv",
-        "1xdenseattn1",
-        "1xdenseattn2",
-        "1xff1",
-        "unit",
-        "4xqkv",
-        "4xdenseattn1",
-        "4xdenseattn2",
-        "4xff1",
-        "1xssg480pqkv",
-        "1xssg480pdenseattn1",
-        "1xssg480pdenseattn2",
-        "1xssg480pff1",
-        "1xssg720pqkv",
-        "1xssg720pdenseattn1",
-        "1xssg720pdenseattn2",
-        "1xssg720pff1",
-        "3072x5120x7680",
-        "3072x5120x2560",
-        "3072x5120x6912",
-        "3072x3456x5120",
-    ],
+    ids=["flux22-1", "flux22-2", "flux22-4", "flux22-5", "flux22-6"],
 )
 @pytest.mark.parametrize(
-    "use_non_fused",
-    [
-        True,
-        False,
-    ],
-    ids=["separate", "fused"],
+    "mode",
+    ["full_fused", "matmul_isolation_fused", "separate"],
+    ids=["full_fused", "matmul_isolation_fused", "separate"],
 )
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
-    [
-        (False, 1),
-        (True, 2),
-    ],
-    ids=["check", "perf"],
+    [(False, 3)],
+    ids=["check"],
 )
 def test_linear(
     mesh_device,
@@ -662,7 +533,7 @@ def test_linear(
     core_grid_y,
     num_workers_per_link,
     num_links,
-    use_non_fused,
+    mode,
     force_transpose,
     sp_axis,
     tp_axis,
@@ -674,9 +545,13 @@ def test_linear(
     fuse_addcmul,
     chunks,
 ):
-    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    assert mesh_device.shape == ttnn.MeshShape(4, 8)
+
+    use_non_fused = mode == "separate"
+    matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
+
     check_result = run_test_linear(
-        submesh,
+        mesh_device,
         M,
         K,
         N,
@@ -700,120 +575,68 @@ def test_linear(
         cluster_axis=cluster_axis,
         fuse_addcmul=fuse_addcmul,
         chunks=chunks,
+        skip_result_check=matmul_isolation or enable_trace,
     )
+
+    if matmul_isolation or enable_trace:
+        return
 
     for n in range(num_iters):
         for c in range(chunks):
-            for i in range(submesh.get_num_devices()):
+            for i in range(mesh_device.get_num_devices()):
                 assert check_result[n][c][i]["pcc"] > 0.999_500
                 assert check_result[n][c][i]["relative_rmse"] < 0.02
 
 
+# Non-transposed core grid: with force_transpose=False the (M > N) heuristic leaves wide (N >= M)
+# outputs un-transposed. The mux cores then live on the RIGHT COLUMN, so the matmul grid is 11x10
+# (one column ceded to mux) and num_links must divide core_grid_y=10 (2 links -> 5 workers/link).
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
     [
         [
             (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
+            GALAXY_MESH_CONFIG,
             ttnn.Topology.Ring,
             2,
-            6,
+            5,  # right-column mux: 5 workers * 2 links = 10 = full grid height
+            0,
             1,
-            0,
-            12,
-            9,
-            0,
+            11,
+            10,
+            1,
         ],
     ],
-    ids=["bh4x8links2"],
+    ids=["bh4x8notranspose"],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("broadcast_gate", [True, False], ids=["broadcast_gate", "full_gate"])
-def test_linear_addcmul_gate(
-    mesh_device,
-    topology,
-    num_links,
-    num_workers_per_link,
-    sp_axis,
-    tp_axis,
-    core_grid_x,
-    core_grid_y,
-    cluster_axis,
-    broadcast_gate,
-):
-    """Test fused addcmul with both broadcast and non-broadcast (full) gate."""
-    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
-    check_result = run_test_linear(
-        submesh,
-        M=3072,
-        K=5120,
-        N=1280,
-        M_block_size=8,
-        K_block_size=8,
-        N_block_size=8,
-        subblock_h=2,
-        subblock_w=1,
-        topology=topology,
-        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
-        num_workers_per_link=num_workers_per_link,
-        num_links=num_links,
-        use_bias=True,
-        fuse_addcmul=True,
-        addcmul_scalar=1.0,
-        broadcast_gate=broadcast_gate,
-        use_non_fused=False,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        cluster_axis=cluster_axis,
-    )
-    for c in range(1):
-        for i in range(submesh.get_num_devices()):
-            assert check_result[0][c][i]["pcc"] > 0.999_500
-            assert check_result[0][c][i]["relative_rmse"] < 0.02
-
-
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        [
-            (4, 8),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(4096),
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-            4,
-            2,
-            1,
-            0,
-            8,
-            8,
-            0,
-        ],
+        # Block sizes from the standalone minimal_matmul sweep on THIS grid (11x10) with subblocks
+        # swept. Winners use tall subblocks (sh=M_block, sw=1) and N_block = full per-core N tiles
+        # (round_up(N_tiles, 11)/11). Directly transferable: same grid + same natural transpose
+        # (per_device_M > N) as this no-transpose path.
+        (4096, 6144, 2304, False, True, None, 1, False, 4, 4, 7, 4, 1),
+        (2048, 6144, 2304, False, True, None, 1, False, 2, 6, 7, 2, 1),
+        (4096, 6144, 768, False, True, None, 1, False, 3, 8, 3, 3, 1),
+        (2048, 6144, 768, False, True, None, 1, False, 2, 8, 3, 1, 3),
+        (4096, 6144, 4608, False, False, None, 1, False, 4, 6, 7, 4, 1),
+        (3072, 6144, 1536, False, True, "gelu", 2, False, 3, 8, 5, 3, 1),
     ],
-    ids=["wh4x8links4_linear"],
-    indirect=["mesh_device", "device_params"],
+    ids=["flux22-1", "flux22-2", "flux22-3", "flux22-4", "flux22-5", "flux22-6"],
 )
-# K=5120 → K_tiles_per_device = 40 (on a 4-device cluster axis).
-# K_block values chosen so they do NOT evenly divide 40, exercising the tail-block path:
-#   K_block=6  →  7 blocks/device, tail = 40 - 6*6 = 4
-#   K_block=9  →  5 blocks/device, tail = 40 - 4*9 = 4
-#   K_block=7  →  6 blocks/device, tail = 40 - 5*7 = 5
 @pytest.mark.parametrize(
-    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [
-        (3072, 5120, 3840, 8, 6, 8, 2, 2),
-        (3072, 5120, 1280, 8, 9, 8, 2, 2),
-        (3072, 5120, 3840, 8, 7, 8, 2, 2),
-    ],
-    ids=["kblk6_tail4", "kblk9_tail4", "kblk7_tail5"],
+    "mode",
+    ["full_fused", "matmul_isolation_fused", "separate"],
+    ids=["full_fused", "matmul_isolation_fused", "separate"],
 )
-def test_linear_k_tail(
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [(False, 3)],
+    ids=["check"],
+)
+def test_linear_no_transpose(
     mesh_device,
     M,
     K,
@@ -828,19 +651,35 @@ def test_linear_k_tail(
     core_grid_y,
     num_workers_per_link,
     num_links,
+    mode,
+    force_transpose,
     sp_axis,
     tp_axis,
+    use_bias,
+    activation,
+    enable_trace,
+    num_iters,
     cluster_axis,
+    fuse_addcmul,
+    chunks,
 ):
-    """Linear-only tests where K_block_size does not evenly divide K_tiles_per_device.
+    assert mesh_device.shape == ttnn.MeshShape(4, 8)
+    assert not force_transpose, "test_linear_no_transpose exercises the non-transposed path only"
 
-    Exercises the tail-block code path: each device's last K-block has fewer real tiles
-    than K_block_size, with the remainder zero-padded in L1 to preserve the K_block_size
-    row stride. Ring still requires divisibility and would reject these configs.
-    """
-    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
+    use_non_fused = mode == "separate"
+    matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
+
+    # Mirror fused kernel heuristic: M is per-device (from ag buffer), N is full weight width
+    per_device_M = M // mesh_device.shape[sp_axis]
+    transpose_core_grid = force_transpose if force_transpose else (per_device_M > N)
+    relevant_core_grid_dim = core_grid_x if transpose_core_grid else core_grid_y
+    if relevant_core_grid_dim % num_links != 0:
+        pytest.skip(
+            f"num_links ({num_links}) does not evenly divide relevant core grid dim ({'core_grid_x' if transpose_core_grid else 'core_grid_y'}={relevant_core_grid_dim})"
+        )
+
     check_result = run_test_linear(
-        submesh,
+        mesh_device,
         M,
         K,
         N,
@@ -853,94 +692,25 @@ def test_linear_k_tail(
         core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
         num_workers_per_link=num_workers_per_link,
         num_links=num_links,
-        force_transpose=True,
+        use_non_fused=use_non_fused,
+        force_transpose=force_transpose,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        use_bias=True,
+        use_bias=use_bias,
+        activation=activation,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
         cluster_axis=cluster_axis,
+        fuse_addcmul=fuse_addcmul,
+        chunks=chunks,
+        skip_result_check=matmul_isolation or enable_trace,
     )
-    for c in range(1):
-        for i in range(submesh.get_num_devices()):
-            assert check_result[0][c][i]["pcc"] > 0.999_500
-            assert check_result[0][c][i]["relative_rmse"] < 0.02
 
+    if matmul_isolation or enable_trace:
+        return
 
-@pytest.mark.parametrize(
-    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
-    [
-        [
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
-            ttnn.Topology.Linear,
-            1,
-            4,
-            0,
-            1,
-            4,
-            4,
-            1,
-        ],
-    ],
-    ids=["t3k_linear"],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
-    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [
-        (3072, 5120, 1280, 8, 8, 8, 2, 2),
-        (3072, 5120, 3840, 8, 8, 8, 2, 2),
-    ],
-    ids=["3072x5120x2560", "3072x5120x7680"],
-)
-def test_linear_t3k(
-    mesh_device,
-    M,
-    K,
-    N,
-    M_block_size,
-    K_block_size,
-    N_block_size,
-    subblock_h,
-    subblock_w,
-    topology,
-    core_grid_x,
-    core_grid_y,
-    num_workers_per_link,
-    num_links,
-    sp_axis,
-    tp_axis,
-    cluster_axis,
-):
-    """Linear topology PCC on a 2x4 (T3K) mesh.
-
-    Same uni-ring algorithm as `wh4x8links4_linear` in `test_linear`, but on the smaller
-    T3K mesh shape and with `num_links=1` / `num_workers_per_link=4` to exercise the mux
-    placement and worker_idx assignment at a different link/worker configuration than the
-    one TG uses (links=4, workers_per_link=2). cluster_axis=1 keeps the K-fractured layout
-    (4 devices along the AGMM ring axis).
-    """
-    submesh = _create_cluster_submesh(mesh_device, cluster_axis)
-    check_result = run_test_linear(
-        submesh,
-        M,
-        K,
-        N,
-        M_block_size,
-        K_block_size,
-        N_block_size,
-        subblock_h,
-        subblock_w,
-        topology,
-        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
-        num_workers_per_link=num_workers_per_link,
-        num_links=num_links,
-        force_transpose=True,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        use_bias=True,
-        cluster_axis=cluster_axis,
-    )
-    for c in range(1):
-        for i in range(submesh.get_num_devices()):
-            assert check_result[0][c][i]["pcc"] > 0.999_500
-            assert check_result[0][c][i]["relative_rmse"] < 0.02
+    for n in range(num_iters):
+        for c in range(chunks):
+            for i in range(mesh_device.get_num_devices()):
+                assert check_result[n][c][i]["pcc"] > 0.999_500
+                assert check_result[n][c][i]["relative_rmse"] < 0.02

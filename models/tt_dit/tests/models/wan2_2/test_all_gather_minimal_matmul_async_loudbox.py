@@ -8,7 +8,7 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch, is_wormhole_b0
-from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import (
+from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async_dev import (
     create_fabric_router_config,
     run_test_linear,
 )
@@ -234,8 +234,9 @@ def test_linear_loudbox_no_transpose(
     use_non_fused = mode == "separate"
     matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
 
-    # Determine if core grid is being transposed
-    transpose_core_grid = force_transpose if force_transpose else (M > N)
+    # Mirror fused kernel heuristic: M is per-device (from ag buffer), N is full weight width
+    per_device_M = M // mesh_device.shape[sp_axis]
+    transpose_core_grid = force_transpose if force_transpose else (per_device_M > N)
     relevant_core_grid_dim = core_grid_x if transpose_core_grid else core_grid_y
     if relevant_core_grid_dim % num_links != 0:
         pytest.skip(
