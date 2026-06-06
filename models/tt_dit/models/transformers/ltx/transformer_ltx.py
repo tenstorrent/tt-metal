@@ -893,8 +893,10 @@ class LTXTransformerModel(Module):
             )
         shifted_v = self.scale_shift_table.data + v_emb_1B1D
         v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
-        video_normed = self.norm_out(video_1BND)
-        video_1BND = ttnn.addcmul(v_shift_out, video_normed, v_scale_out_p1)
+        # Fuse the AdaLN (1 + scale) * normed + shift modulation into norm_out (WAN pattern).
+        video_1BND = self.norm_out(
+            video_1BND, dynamic_weight=v_scale_out_p1, dynamic_bias=v_shift_out, dtype=ttnn.float32
+        )
         if self.parallel_config.tensor_parallel.factor > 1:
             video_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 video_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -913,8 +915,10 @@ class LTXTransformerModel(Module):
                 )
             shifted_a = self.audio_scale_shift_table.data + a_emb_1B1D
             a_shift_out, a_scale_out_p1 = ttnn.chunk(shifted_a, 2, dim=2)
-            audio_normed = self.audio_norm_out(audio_1BND)
-            audio_1BND = ttnn.addcmul(a_shift_out, audio_normed, a_scale_out_p1)
+            # Fuse the AdaLN (1 + scale) * normed + shift modulation into audio_norm_out (WAN pattern).
+            audio_1BND = self.audio_norm_out(
+                audio_1BND, dynamic_weight=a_scale_out_p1, dynamic_bias=a_shift_out, dtype=ttnn.float32
+            )
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_1BND = self.ccl_manager.all_gather_persistent_buffer(
                     audio_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
