@@ -25,7 +25,8 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     WeightProvider,
 )
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineConfigEntry
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, TokenType, page_size_bytes, to_spec_input
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, page_size_bytes, to_spec_input
+
 
 class ModelPipeline:
     def __init__(
