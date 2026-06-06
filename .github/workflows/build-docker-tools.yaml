@@ -67,20 +67,13 @@ jobs:
           set -euo pipefail
           # Produce a JSON array of {tool, tag} entries for each missing tool.
           # tool-data keys follow the pattern: <tool>_exists and tool_tags.<tool>-tag
-          matrix=$(python3 << 'PYEOF'
-import json, os, sys
-data = json.loads(os.environ['TOOL_DATA'])
-tool_tags = data.get('tool_tags', {})
-entries = []
-for key, tag in tool_tags.items():
-    if not key.endswith('-tag'):
-        continue
-    tool = key[:-len('-tag')]
-    if data.get(f'{tool}_exists') != 'true':
-        entries.append({'tool': tool, 'tag': tag})
-print(json.dumps(entries))
-PYEOF
-          )
+          matrix=$(echo "$TOOL_DATA" | jq -ce '
+            . as $d |
+            [ $d.tool_tags | to_entries[]
+              | select(.key | endswith("-tag"))
+              | {tool: (.key[:-4]), tag: .value}
+              | select($d[(.tool + "_exists")] != "true") ]
+          ')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
