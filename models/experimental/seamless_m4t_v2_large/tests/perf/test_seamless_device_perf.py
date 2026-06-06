@@ -4,28 +4,18 @@
 """
 Seamless M4T v2 Large — device performance (per-op kernel time, tracy-measured, **no trace**).
 
-Measures the device-bound floor for each of the five inference tasks: how fast the device kernels
-can run, with all host overhead and trace-replay optimizations stripped out. This is what e2e
-perf approaches but cannot beat — the e2e test (``test_e2e_perf_2cq.py``) measures the production
-wall-clock (with trace + 2 CQ), so a healthy state has ``device tokens/sec ≥ e2e tokens/sec``.
+Measures the device-bound kernel floor for each of the five inference tasks. The inner forward
+test also runs ``generate(return_timings=True)`` and side-channels TT-catalog phase metrics
+(steady decode t/s/u, TTFT, encoder ms) so this driver reports the same headline numbers as
+``demo/demo.py``, alongside Tracy per-device kernel time.
 
 How:
   * Outer test (this file) does **not** import ttnn or open the cluster — tracy spawns the inner
-    pytest as a subprocess and opens devices itself. Touching UMD from the outer process makes
-    the subprocess deadlock waiting for ``CHIP_IN_USE_0_PCIe``.
-  * Inner ``test_device_perf_forwards.py::test_<task>`` runs **eager** (``use_decode_trace=False``,
-    ``use_2cq=False``) — tracy's per-op profiler can't reconcile host/device records across metal
-    trace replays, which is why traditional device perf disables trace.
-  * Tracy writes per-op kernel timings to ``cpp_device_perf_report.csv``. We sum kernel duration
-    across every row, then **divide by ``num_devices``** to get the per-device wall-clock-equivalent
-    kernel time (under TP all mesh devices run the same op in parallel; the sum is N× the
-    per-device floor).
-  * Throughput metric: tokens/sec for text outputs, samples/sec for speech outputs (sample count
-    side-channeled from the inner test via ``SAMPLES_PATH_FMT``).
-
-The inner pytest occasionally segfaults during teardown after PASSED on speech-output paths
-(``ReadDeviceProfiler`` + ``clear_program_cache`` race). We use ``check_test_return_code=False``
-so the already-captured per-op CSV survives — the timings are valid regardless of exit code.
+    pytest as a subprocess and opens devices itself.
+  * Inner ``test_device_perf_forwards.py::test_<task>`` runs **eager**
+    (``use_decode_trace=False``, ``use_2cq=False``).
+  * Tracy sums kernel duration across OP rows, **divides by ``num_devices``** for TP per-device floor.
+  * Inner test writes ``/tmp/seamless_dperf_<task>_timings.json`` and (speech tasks) sample count.
 
 Usage::
 
@@ -45,10 +35,8 @@ from models.perf.device_perf_utils import prep_device_perf_report
 
 _FWD_TEST = "models/experimental/seamless_m4t_v2_large/tests/perf/test_device_perf_forwards.py"
 _SAMPLES_PATH_FMT = "/tmp/seamless_dperf_{task}_samples.txt"
+_TIMINGS_PATH_FMT = "/tmp/seamless_dperf_{task}_timings.json"
 
-# Task definitions — mirror the inner forward tests' parametrization.
-# (task_id, generate_speech, max_new_tokens) — max_new_tokens must match ``_TEXT_KWARGS`` /
-# ``_SPEECH_KWARGS`` in ``test_device_perf_forwards.py``.
 _TASKS = (
     ("t2tt", False, 10),
     ("s2tt", False, 10),
@@ -57,10 +45,6 @@ _TASKS = (
     ("asr", False, 10),
 )
 
-# Per-op profiler buffer budget (ops × mesh_devices). Speech-output paths run a smaller
-# ``max_new_tokens`` (see ``_MAX_NEW_TOKENS_SPEECH``) so a moderate buffer is enough — pushing
-# this too high stresses the per-device DRAM allocation and triggers segfaults inside
-# ``ReadDeviceProfiler``.
 _MAX_MESH_DEVICES = 4
 _TASK_OP_SUPPORT_COUNT = {
     "t2tt": 20000,
@@ -73,6 +57,16 @@ _TASK_OP_SUPPORT_COUNT = {
 
 def _task_params():
     return [pytest.param(t, gs, mnt, id=t) for (t, gs, mnt) in _TASKS]
+
+
+def _read_timings_side_channel(task: str) -> dict:
+    path = _TIMINGS_PATH_FMT.format(task=task)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"Timings side-channel missing at {path}")
+        return {}
 
 
 # Do not open or touch ttnn in this process — tracy spawns the inner test as a subprocess.
@@ -89,15 +83,12 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
     duration_cols = [c + " DURATION [ns]" for c in cols]
     samples_cols = [c + " SAMPLES/S" for c in cols]
 
-    # Clear the side-channel file before the inner run so we don't pick up a stale sample count
-    # if the speech inner test failed early.
     sample_path = _SAMPLES_PATH_FMT.format(task=task)
-    if generate_speech and os.path.exists(sample_path):
-        os.remove(sample_path)
+    timings_path = _TIMINGS_PATH_FMT.format(task=task)
+    for path in (sample_path, timings_path):
+        if os.path.exists(path):
+            os.remove(path)
 
-    # ``check_test_return_code=False``: the inner pytest occasionally segfaults during teardown
-    # on speech-output paths *after* the test reports PASSED — by then tracy has already written
-    # the per-op CSV, so we want the post-processing to proceed even on non-zero exit.
     clear_profiler_runtime_artifacts()
     run_device_profiler(
         command,
@@ -107,9 +98,6 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
         op_support_count=_TASK_OP_SUPPORT_COUNT[task] * _MAX_MESH_DEVICES,
     )
 
-    # Tracy's ``post_process_ops_log(sum_vals=True)`` sums kernel durations across *every row* in
-    # the OPs CSV — under TP all mesh devices run the same op in parallel, so the sum is N× the
-    # per-device wall-clock-equivalent kernel time. Divide by ``num_devices`` to get the floor.
     raw = post_process_ops_log(subdir, duration_cols)
     num_devices = _MAX_MESH_DEVICES
     post_processed_results = {}
@@ -125,37 +113,64 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
     kernel_ns = post_processed_results.get("AVG DEVICE KERNEL DURATION [ns]", 0.0)
     kernel_seconds = kernel_ns / 1e9
 
-    # Pick the right throughput unit per task type:
-    #   text outputs  → tokens/sec  = max_new_tokens / per-device kernel time
-    #   speech outputs → samples/sec = num_audio_samples / per-device kernel time
-    # ``num_audio_samples`` comes from the side-channel file written by the inner forward test.
+    timings = _read_timings_side_channel(task)
+    output_tokens = int(timings.get("output_tokens", 0) or 0)
+    output_samples = int(timings.get("output_samples", 0) or 0)
+    steady_ms_per_tok = float(timings.get("steady_decode_ms_per_tok", 0.0) or 0.0)
+    decode_tok_s_u = float(timings.get("decode_tok_s_u", 0.0) or 0.0)
+    ttft_ms = float(timings.get("ttft_ms", 0.0) or 0.0)
+    encoder_ms = float(timings.get("encoder_ms", 0.0) or 0.0)
+    e2e_ms = float(timings.get("e2e_ms", 0.0) or 0.0)
+    t2u_ms = float(timings.get("t2u_ms", 0.0) or 0.0)
+    vocoder_ms = float(timings.get("vocoder_ms", 0.0) or 0.0)
+    rtf = float(timings.get("rtf", 0.0) or 0.0)
+
+    post_processed_results["STEADY_DECODE_MS_PER_TOK"] = steady_ms_per_tok
+    post_processed_results["DECODE_TOK_S_U"] = decode_tok_s_u
+    post_processed_results["TTFT_MS"] = ttft_ms
+    post_processed_results["ENCODER_MS"] = encoder_ms
+    post_processed_results["E2E_MS"] = e2e_ms
+    post_processed_results["OUTPUT_TOKENS"] = output_tokens
+    post_processed_results["T2U_MS"] = t2u_ms
+    post_processed_results["VOCODER_MS"] = vocoder_ms
+    post_processed_results["RTF"] = rtf
+
     if generate_speech:
         try:
             with open(sample_path) as f:
                 num_samples = int(f.read().strip())
         except FileNotFoundError:
-            logger.warning(f"Speech sample-count side-channel missing at {sample_path}; reporting 0")
-            num_samples = 0
-        throughput = (num_samples / kernel_seconds) if kernel_seconds > 0 else 0.0
-        throughput_unit = "samples/s"
-        workload_str = f"{num_samples} audio samples"
-        post_processed_results["AVG SAMPLES/S"] = throughput
+            num_samples = output_samples
+        device_vocoder_sps = (num_samples / kernel_seconds) if kernel_seconds > 0 else 0.0
+        post_processed_results["AVG VOCODER SAMPLES/S (kernel)"] = device_vocoder_sps
         post_processed_results["NUM_AUDIO_SAMPLES"] = num_samples
+        headline = (
+            f"decode {decode_tok_s_u:.2f} t/s/u ({steady_ms_per_tok:.1f} ms/tok steady), "
+            f"vocoder kernel {device_vocoder_sps:.0f} samples/s, RTF {rtf:.2f}x"
+        )
+        workload_str = f"{num_samples} audio samples, {output_tokens} text tokens"
     else:
-        throughput = (max_new_tokens / kernel_seconds) if kernel_seconds > 0 else 0.0
-        throughput_unit = "tokens/s"
-        workload_str = f"{max_new_tokens} new tokens"
-        post_processed_results["AVG TOKENS/S"] = throughput
+        token_workload = output_tokens if output_tokens > 0 else max_new_tokens
+        device_decode_tps = (token_workload / kernel_seconds) if kernel_seconds > 0 else 0.0
+        post_processed_results["AVG TOKENS/S (kernel)"] = device_decode_tps
         post_processed_results["MAX_NEW_TOKENS"] = max_new_tokens
+        headline = f"decode {decode_tok_s_u:.2f} t/s/u ({steady_ms_per_tok:.1f} ms/tok steady)"
+        workload_str = f"{output_tokens} output tokens (budget {max_new_tokens})"
 
     logger.info(f"\nTest: {command}\n{json.dumps(post_processed_results, indent=4)}")
     print(f"\n{'='*60}")
     print(f"Seamless M4T v2 Large Device Performance ({task.upper()})")
     print(f"{'='*60}")
     print(
-        f"  Measured: {throughput:.2f} {throughput_unit}  "
-        f"({kernel_ns / 1e6:.2f} ms per-device kernel, {workload_str}, TP={num_devices})"
+        f"  TT-aligned (wall): {headline}  "
+        f"(TTFT {ttft_ms:.1f} ms, encoder {encoder_ms:.1f} ms, e2e {e2e_ms:.1f} ms)"
     )
+    print(
+        f"  Tracy kernel floor: {kernel_ns / 1e6:.2f} ms per-device  "
+        f"({workload_str}, TP={num_devices}, eager no-trace)"
+    )
+    if generate_speech and t2u_ms > 0:
+        print(f"  Speech synth (wall): T2U {t2u_ms:.1f} ms, vocoder {vocoder_ms:.1f} ms")
     print(f"{'='*60}\n")
 
     prep_device_perf_report(
@@ -163,5 +178,5 @@ def test_perf_device_bare_metal_seamless(task: str, generate_speech: bool, max_n
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results={},
-        comments=f"seamless_m4t_v2_large_{task}_TP{num_devices}_eager_max_new_tokens{max_new_tokens}",
+        comments=(f"seamless_m4t_v2_large_{task}_TP{num_devices}_eager_" f"decode_tok_s_u_{decode_tok_s_u:.1f}"),
     )
