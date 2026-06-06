@@ -385,11 +385,14 @@ jobs:
         ${{
           (inputs.ci-build-docker-image != '' &&
             format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
-          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
         }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_COMPRESS: "true"
+        CCACHE_COMPRESSLEVEL: "3"
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -493,7 +496,11 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
-          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          key: >-
+            cpm-z22-${{ hashFiles(
+              'third_party/CMakeLists.txt',
+              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+              'tt-train/cmake/dependencies.cmake') }}
           restore-keys: cpm-z22-
 
       - name: 📦 Unpack CPM cache
@@ -599,7 +606,8 @@ jobs:
       - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples"
+          ARTIFACT_PATHS+=" build/test build/tools runtime tt_metal/pre-compiled"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
@@ -654,7 +662,8 @@ jobs:
         ${{
           (inputs.manylinux-docker-image != '' &&
             format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image)) ||
-          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
         }}
       ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
