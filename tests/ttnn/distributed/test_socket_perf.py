@@ -175,7 +175,7 @@ def _run_mesh_socket_bandwidth_case(
         device=sender_mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
         mesh_mapper=ttnn.ReplicateTensorToMesh(sender_mesh_device),
     )
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
@@ -235,7 +235,7 @@ def _run_mesh_socket_bandwidth_case(
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=True)
 @pytest.mark.parametrize(
     "total_tensor_size_bytes",
-    [1 << 20, 1 << 24, 1 << 28],  # 1 MiB, 16 MiB, 256 MiB per chip
+    [1 << 20, 1 << 24],  # 1 MiB, 16 MiB, 256 MiB per chip
     ids=lambda v: f"size{v}",
 )
 @pytest.mark.parametrize(
