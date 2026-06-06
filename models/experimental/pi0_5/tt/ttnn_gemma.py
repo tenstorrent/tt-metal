@@ -1351,6 +1351,7 @@ class GemmaBlockTTNN:
             use_cache,
             keep_padded=keep_padded,
         )
+        ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
