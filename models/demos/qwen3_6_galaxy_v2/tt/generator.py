@@ -374,6 +374,15 @@ class Generator(WarmupForwardMixin):
             _ccl = getattr(self.model, "tt_ccl", None)
             if _ccl is not None and hasattr(_ccl, "reset_gather_and_buffer_idx"):
                 _ccl.reset_gather_and_buffer_idx()
+            # NOTE: the decode trace is intentionally NOT invalidated here. The
+            # cross-request garbage was a PREFILL-side bug (the prefill persistent
+            # CCL buffers were overwritten by the decode sub-device manager's
+            # allocator -> stale-read inf in the prefill MLP at ISL >= ~4k), fixed
+            # in llama_model.switch_mode via tt_ccl.rebuild_prefill_persistent_buffers().
+            # Decode buffer addresses are stable across requests, so the captured
+            # decode trace (and its on-device sampling sub-trace) stay valid and are
+            # reused — invalidating it here would force a re-capture against a new
+            # logits tensor and trip the sampling generator's trace-input check.
 
         kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape

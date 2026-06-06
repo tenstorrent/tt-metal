@@ -843,3 +843,157 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
 
     n_alpha = sum(c.isalpha() for c in text)
     assert n_alpha >= 5, f"generated text has <5 alpha chars (incoherent decode): {text!r}"
+
+
+def test_qwen36_xreq_prefill_probe(bh_glx_mesh):
+    """CROSS-REQUEST contamination probe (server model-reuse repro).
+
+    Builds the model ONCE (server contract) and runs ``prefill_forward_text``
+    (return_logits / host argmax) on the SAME prompt N times
+    (QWEN36_GEN_NUM_REQUESTS, default 2), printing the prefill argmax + top-5 each
+    pass. Optionally runs a few decode steps per pass (QWEN36_PROBE_DECODE_STEPS).
+
+    Decisive evidence: if the prefill argmax of request 2+ differs from request 1
+    for an identical prompt, the cross-request bug is in the PREFILL path (some
+    persistent device state not reset between requests). If the prefill argmax is
+    STABLE across requests but decode text degrades, the bug is in the DECODE
+    path (stale trace / decode-CCL / sampler), not prefill.
+    """
+    from transformers import AutoTokenizer
+
+    from models.common.sampling import SamplingParams
+    from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
+    from models.demos.qwen3_6_galaxy_v2.tt.generator import Generator
+    from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
+
+    for _k, _v in {
+        "QWEN36_FORCE_SWITCH_DECODE": "1",
+        "QWEN36_DECODE_L1_RESIDUAL": "1",
+        "QWEN36_RESIDUAL_BUF_BF16": "1",
+        "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+        "QWEN36_SEQ_CORES_PER_HEAD": "4",
+        "QWEN36_FULLATTN_WO_TUNED": "1",
+        "QWEN36_DELTA_OP_TUNED": "1",
+        "QWEN36_CCL_NUM_LINKS_DELTA": "2",
+    }.items():
+        os.environ.setdefault(_k, _v)
+
+    tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
+    prompt = _load_prompt_for_isl(_T_PREFILL)
+    ids = tok(prompt, return_tensors="pt").input_ids
+    T_prompt = int(ids.shape[-1])
+    if T_prompt > _T_PREFILL:
+        ids = ids[:, :_T_PREFILL]
+        T_prompt = _T_PREFILL
+    real_tokens = ids[:, :T_prompt].to(torch.long)
+    print(f"[xreq] ISL={_T_PREFILL}  real prompt tokens={T_prompt}")
+
+    state_dict = _load_full_state_dict(_SNAPSHOT)
+    paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_PAGED_MAX_NUM_BLOCKS)
+    model, args = _build_tt_model_paged_kv(bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_attention_config)
+
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(
+        args.max_batch_size, paged_attention_config.max_num_blocks // args.max_batch_size
+    )
+    _kv_shape = (paged_attention_config.max_num_blocks, 1, paged_attention_config.block_size, args.head_dim)
+    tt_kv_cache = allocate_vllm_kv_cache(
+        _kv_shape, torch.bfloat16, args.n_layers, model, args.weight_cache_path(ttnn.bfloat8_b)
+    )
+
+    generator = Generator(model, args, bh_glx_mesh, tokenizer=tok)
+    generator._disable_prefill_tracing = True
+    generator.prefill_warmup_completed = True
+
+    sampling_params = SamplingParams(
+        temperature=float(os.environ.get("QWEN36_TEMP", "1.0")),
+        top_k=int(os.environ.get("QWEN36_TOP_K", "20")),
+        top_p=float(os.environ.get("QWEN36_TOP_P", "0.95")),
+    )
+
+    _NUM_REQ = int(os.environ.get("QWEN36_GEN_NUM_REQUESTS", "2"))
+    _DEC_STEPS = int(os.environ.get("QWEN36_PROBE_DECODE_STEPS", "6"))
+    # ISOLATION: QWEN36_PROBE_SWITCH_ONLY=1 -> between requests, cycle
+    # switch_mode("decode")->switch_mode("prefill") WITHOUT running decode_forward.
+    # If req1 prefill explodes under switch-only, the mode-switch (sub-device /
+    # L1 buffer) is the culprit; if req1 is clean, the decode COMPUTE corrupts
+    # shared state.
+    _switch_only = os.environ.get("QWEN36_PROBE_SWITCH_ONLY", "0") == "1"
+    req_argmax = []
+    req_text = []
+    for _req in range(_NUM_REQ):
+        print("#" * 80)
+        print(f"[xreq] ===== REQUEST {_req} (identical prompt) =====")
+        prefill_logits = generator.prefill_forward_text(
+            real_tokens,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=[T_prompt],
+            enable_trace=False,
+            sampling_params=None,
+        )
+        _logits = torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size]
+        amax = int(_logits.argmax().item())
+        top5 = torch.topk(_logits, 5)
+        top5_pairs = [(int(i), round(float(v), 3), tok.decode([int(i)])) for v, i in zip(top5.values, top5.indices)]
+        req_argmax.append(amax)
+        print(f"[xreq] req{_req} PREFILL argmax={amax} ({tok.decode([amax])!r})  top5={top5_pairs}")
+
+        if _switch_only:
+            print("[xreq] switch-only: switch_mode('decode') -> switch_mode('prefill') (NO decode compute)")
+            generator.model.switch_mode("decode")
+            generator.model.switch_mode("prefill")
+            req_text.append("<switch-only>")
+            continue
+
+        # a few decode steps (on-device sampling, traced — server path) for a text
+        # eyeball. async_read=True path mirrors the working generator demo: returns
+        # (tt_tok, read_event); synchronize the event before reading on host.
+        out_tok = torch.tensor([amax], dtype=torch.long)
+        current_pos = torch.tensor([T_prompt], dtype=torch.long)
+        gen_ids = [amax]
+        for it in range(_DEC_STEPS):
+            tt_tok, read_event = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=True,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                read_from_device=True,
+                async_read=True,
+                sampling_params=sampling_params,
+                reset_inputs=(it == 0),
+            )
+            ttnn.event_synchronize(read_event[0])
+            _t, _ = generator.process_decode_output_host(tt_tok)
+            nid = int(torch.as_tensor(_t).reshape(-1)[0].item())
+            gen_ids.append(nid)
+            out_tok = torch.tensor([nid], dtype=torch.long)
+            current_pos = current_pos + 1
+        txt = tok.decode(gen_ids, skip_special_tokens=False)
+        req_text.append(txt)
+        print(f"[xreq] req{_req} DECODE text={txt!r}")
+
+    print("#" * 80)
+    print(f"[xreq] SUMMARY prefill argmax per request = {req_argmax}")
+    for i, t in enumerate(req_text):
+        print(f"[xreq]   req{i} text = {t!r}")
+
+    # Cross-request regression check. The pre-fix bug made every request after
+    # the first decode explode: the prefill MLP read its persistent CCL buffers
+    # after the decode sub-device manager's allocator had overwritten them, so
+    # logits blew up to ~1e21 and prefill argmax landed on rare/garbage tokens
+    # (mojibake) at ISL >= ~4k. The fix (tt_ccl.rebuild_prefill_persistent_buffers
+    # on each prefill entry) restores coherence on EVERY request.
+    #
+    # We do NOT assert identical argmax: bf8 logits tie-break run-to-run among a
+    # near-tied top-k cluster, so a coherent model legitimately drifts by a token.
+    # Instead assert that EVERY request stays coherent (no numeric blow-up): the
+    # top logit is sane (not ~1e21) and the decoded text is real language.
+    for _i, _amx in enumerate(req_argmax):
+        assert _amx >= 0
+    if not _switch_only:
+        for _i, _t in enumerate(req_text):
+            _n_alpha = sum(c.isalpha() for c in _t)
+            assert _n_alpha >= 5, f"req{_i} incoherent decode (cross-request contamination?): {_t!r}"

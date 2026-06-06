@@ -352,6 +352,12 @@ class TtTransformer(LightweightModule):
             else:
                 self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_prefill)
                 self.tt_ccl = self.tt_ccl_prefill
+                # qwen3.6: rebuild the prefill persistent CCL buffers (DRAM) that a
+                # prior decode pass may have overwritten via the decode sub-device
+                # manager's independent allocator -> stale-read inf in the prefill
+                # MLP at ISL >= ~4k (cross-request). See rebuild_prefill_persistent_buffers.
+                if self.is_qwen36 and hasattr(self.tt_ccl, "rebuild_prefill_persistent_buffers"):
+                    self.tt_ccl.rebuild_prefill_persistent_buffers()
             self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
             self._worker_sub_device_id = worker_sub_device_id
             return

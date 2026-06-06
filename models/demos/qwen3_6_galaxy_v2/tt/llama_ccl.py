@@ -35,6 +35,7 @@ class TT_CCL:
         is_qwen36=None,
     ):
         self.mode = mode
+        self.allocate_prefill_buffers = allocate_prefill_buffers
         grid_size = mesh_device.compute_with_storage_grid_size()
         all_crs = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))]
@@ -615,6 +616,49 @@ class TT_CCL:
             self.qwen36_residual_buffers[cluster_axis] = tt_buffer
             self.qwen36_residual_output_memcfgs[cluster_axis] = residual_output_memcfg
             self.qwen36_residual_input_memcfgs[cluster_axis] = residual_output_memcfg
+
+    @staticmethod
+    def _free_buffer_tree(obj):
+        """Recursively deallocate a nested dict/list/tensor buffer collection."""
+        if obj is None:
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                TT_CCL._free_buffer_tree(v)
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                TT_CCL._free_buffer_tree(v)
+        elif hasattr(obj, "deallocate"):
+            try:
+                obj.deallocate(True)
+            except Exception:
+                pass
+
+    def rebuild_prefill_persistent_buffers(self):
+        """Re-allocate (fresh-zeroed) the prefill persistent CCL buffers.
+
+        The prefill MLP reduce_scatter / all_gather persistent buffers are DRAM
+        tensors built once at init. The decode-mode sub-device manager has an
+        INDEPENDENT allocator (qwen3.6 builds a separate all-cores manager per
+        mode), so while decode runs it can place its own buffers over the idle
+        prefill buffers' backing memory and fill them with large values. On the
+        next prefill the MLP CCL reads its persistent buffer's stale
+        (decode-written) content -> inf at ISL >= ~4k (coherent first request,
+        garbage on every request after the first decode — cross-request
+        contamination). At ISL-128 the small prefill buffers don't overlap, so
+        short prompts always worked. Rebuilding them fresh (zeroed) at each
+        prefill entry restores clean buffers; prefill is eager (no trace), so
+        re-placing the addresses is safe."""
+        if self.mode != "prefill" or not self.allocate_prefill_buffers:
+            return
+        self._free_buffer_tree(self.persistent_buffers)
+        self._free_buffer_tree(self.all_gather_buffers)
+        self.persistent_buffers = (
+            self.get_ring_prefill_reduce_scatter_buffers()
+            if self.use_ring_rs_prefill
+            else self.get_prefill_reduce_scatter_buffers()
+        )
+        self.all_gather_buffers = self.get_prefill_all_gather_buffers()
 
     def get_decode_reduce_scatter_buffers(self):
         """
