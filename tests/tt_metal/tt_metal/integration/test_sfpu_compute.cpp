@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -134,49 +135,47 @@ struct SfpuConfig {
     bool approx_mode = true;
 };
 
-/// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
-/// grayskull
-/// @param device
-/// @param test_config - Configuration of the test -- see struct
-/// @return
+// Build SFPU defines for eltwise_sfpu.cpp.
+std::map<std::string, std::string> build_sfpu_defines(const SfpuConfig& test_config) {
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+    return sfpu_defines;
+}
+
+/// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram.
 bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfig& test_config) {
+    auto* mesh_device = cq.device();
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
-    auto mesh_workload = distributed::MeshWorkload();
+    const size_t tile_byte_size = test_config.tile_byte_size;
+
+    const distributed::MeshCoordinate local_coord = distributed::MeshCoordinate(0, 0);
+    const distributed::MeshCoordinateRange device_range(local_coord, local_coord);
 
     const distributed::DeviceLocalBufferConfig device_local_config{
-        // One DRAM page holding all tiles: reader_unary walks the buffer linearly by
-        // tile size, which matches this layout (see test_EnqueueTrace.cpp for 1-tile case).
         .page_size = byte_size,
         .buffer_type = tt_metal::BufferType::DRAM,
     };
-
     const distributed::ReplicatedBufferConfig replicated_buffer_config{.size = byte_size};
     auto input_dram_buffer =
-        distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, cq.device());
+        distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, mesh_device);
     auto output_dram_buffer =
-        distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, cq.device());
+        distributed::MeshBuffer::create(replicated_buffer_config, device_local_config, mesh_device);
 
-    const distributed::MeshCoordinate local_coord = distributed::MeshCoordinate(0, 0);
-    auto* input_dev_buffer = input_dram_buffer->get_device_buffer(local_coord);
-    auto* output_dev_buffer = output_dram_buffer->get_device_buffer(local_coord);
+    Buffer* input_dev_buffer = input_dram_buffer->get_device_buffer(local_coord);
+    Buffer* output_dev_buffer = output_dram_buffer->get_device_buffer(local_coord);
     TT_FATAL(input_dev_buffer != nullptr && output_dev_buffer != nullptr, "Missing device buffer for local mesh coord");
-    const uint32_t input_dram_byte_address = input_dev_buffer->address();
-    const uint32_t output_dram_byte_address = output_dev_buffer->address();
-    const uint32_t num_pages = input_dev_buffer->num_pages();
-    TT_FATAL(num_pages == 1, "Expected a single contiguous DRAM page, got {}", num_pages);
 
-    // With single-tile CBs, use one block per tile so reserve_back(1) matches CB capacity.
-    vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1,                                // per_core_block_dim
-    };
-
-    // Input
     std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
         byte_size / sizeof(bfloat16), test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
 
-    // Golden output
     auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
     std::vector<bfloat16> golden(input.size());
     std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
@@ -184,29 +183,25 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
     });
     std::vector<uint32_t> packed_golden = pack_vector<uint32_t, bfloat16>(golden);
 
-    // Same runtime args for every core. Third arg is tile count (reader walks linearly).
-    vector<uint32_t> reader_rt_args = {
-        input_dram_byte_address,
-        0,
+    tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::MeshWorkload mesh_workload;
+
+    const std::map<std::string, std::string> sfpu_defines = build_sfpu_defines(test_config);
+    const vector<uint32_t> compute_kernel_args = {
         static_cast<uint32_t>(test_config.num_tiles),
+        1u,
     };
 
-    vector<uint32_t> writer_rt_args = {
-        output_dram_byte_address,
-        0,
-        static_cast<uint32_t>(test_config.num_tiles),
-    };
-
+    // Single-tile streaming CBs: one page per reserve/push, matching reader_unary/writer_unary.
     for (const CoreRange& core_range : test_config.cores.ranges()) {
         tt_metal::CircularBufferConfig l1_input_cb_config =
-            tt_metal::CircularBufferConfig(test_config.tile_byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
-                .set_page_size(tt::CBIndex::c_0, test_config.tile_byte_size);
+            tt_metal::CircularBufferConfig(tile_byte_size, {{tt::CBIndex::c_0, test_config.l1_input_data_format}})
+                .set_page_size(tt::CBIndex::c_0, tile_byte_size);
         tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
         tt_metal::CircularBufferConfig l1_output_cb_config =
-            tt_metal::CircularBufferConfig(
-                test_config.tile_byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
-                .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
+            tt_metal::CircularBufferConfig(tile_byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
+                .set_page_size(tt::CBIndex::c_16, tile_byte_size);
         tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
     }
 
@@ -224,39 +219,40 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
-    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
-
     tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         test_config.cores,
         tt_metal::ComputeConfig{
-            .math_approx_mode = test_config.approx_mode, .compile_args = compute_kernel_args, .defines = sfpu_defines});
+            .math_approx_mode = test_config.approx_mode,
+            .compile_args = compute_kernel_args,
+            .defines = sfpu_defines});
+
+    const vector<uint32_t> reader_rt_args = {
+        input_dev_buffer->address(),
+        0u,
+        static_cast<uint32_t>(test_config.num_tiles),
+    };
+    const vector<uint32_t> writer_rt_args = {
+        output_dev_buffer->address(),
+        0u,
+        static_cast<uint32_t>(test_config.num_tiles),
+    };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
         }
     }
 
-    mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
+    mesh_workload.add_program(device_range, std::move(program));
 
-    std::vector<uint32_t> dest_buffer_data;
-    distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);
-
+    distributed::WriteShard(cq, input_dram_buffer, packed_input, local_coord);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
+    std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, local_coord);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
