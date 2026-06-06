@@ -218,26 +218,24 @@ Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 
 **Compare decode t/s/u across tasks** — unlike legacy E2E `tokens/s`, it is not penalized by long input encoders (S2TT/ASR) or variable output length.
 
-Measured on **2026-06-06** via [`demo/demo.py`](demo/demo.py) (`return_timings=True`, warm JIT except where noted):
+Measured **2026-06-06** on BH QB from **one warm demo run** (3rd consecutive `demo/demo.py` invocation that day, JIT cache warm — not a cold-start process). All five tasks are from the **same** printed summary table.
 
 ### BH QB — `MeshShape(1, 4)`, replicated batch-1
 
 | Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
 |------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
-| T2TT | 131.5 ms | 26.0 ms | 51.3 ms | 115.9 | 8.6 | 687.8 ms | 64 tok |
-| T2ST | 196.0 ms | 39.5 ms | 69.7 ms | 111.2 | 9.0 | 4089.0 ms | 232000 smp (RTF **0.28×**) |
-| S2TT | 910.1 ms | 724.2 ms | 101.0 ms | 87.8 | 11.4 | 1200.0 ms | 26 tok (479 mel) |
-| S2ST | 1047.1 ms | 853.9 ms | 104.7 ms | 80.7 | 12.4 | 25064 ms* | 146880 smp (RTF 2.73×*) |
-| ASR | 1134.3 ms | 893.9 ms | 73.5 ms | 77.4 | 12.9 | 1504.2 ms | 29 tok (479 mel) |
+| T2TT | 129.5 ms | 24.7 ms | 50.0 ms | 116.6 | 8.6 | 682.6 ms | 64 tok |
+| T2ST | 205.4 ms | 57.3 ms | 67.5 ms | 107.6 | 9.3 | 4128.6 ms | 232000 smp (RTF **0.28×**) |
+| S2TT | 873.4 ms | 718.0 ms | 97.7 ms | 81.2 | 12.3 | 1186.5 ms | 26 tok (479 mel) |
+| S2ST | 1002.4 ms | 811.5 ms | 102.8 ms | 90.0 | 11.1 | 4040.1 ms | 146880 smp (RTF **0.44×**) |
+| ASR | 1103.1 ms | 872.2 ms | 73.2 ms | 76.1 | 13.1 | 1476.4 ms | 29 tok (479 mel) |
 
-\* **S2ST E2E outlier (this run):** first speech-synthesis task in a fresh process paid ~22.5 s vocoder JIT; decode t/s/u and ms/tok above are still representative. A warm rerun on the same host gave **E2E ~4.0 s** and **RTF ~0.28×** (comparable to T2ST).
+Speech-synthesis breakdown (same run):
 
-Speech-synthesis detail (T2ST, warm):
-
-| Phase | Time |
-|-------|-----:|
-| T2U | 1708.9 ms |
-| Vocoder | 1302.7 ms |
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1736 ms | 1285 ms | 0.28× |
+| S2ST | 1025 ms | 1560 ms | 0.44× |
 
 Reproduce:
 
