@@ -6,8 +6,13 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace tt::umd {
 class TlbWindow;
@@ -121,6 +126,23 @@ public:
     uint32_t get_page_size() const { return page_size_; }
 
     uint32_t get_config_buffer_address() const { return config_buffer_address_; }
+
+    uint32_t get_fifo_size() const { return fifo_size_; }
+
+    bool has_space(std::optional<uint32_t> num_bytes_to_check);
+
+    // Virtual ring-buffer producer offset (wraps modulo 2^32). Advanced by
+    // payload bytes on normal writes, and by an additional tail-padding amount
+    // on wrap (to skip the unusable tail of the page-aligned FIFO). The device
+    // advances bytes_acked by the same amounts, keeping both sides in lockstep.
+    // Snapshot this after a write() call to get a watermark, then pass it to
+    // acked_past() to test whether the device has consumed up to that point.
+    uint32_t get_bytes_sent() const { return bytes_sent_; }
+
+    // Returns true iff the device has acked past `watermark`. Uses the
+    // cached bytes_acked_ on the fast path; mfences + refreshes from
+    // bytes_acked_ptr_[0] only when the cache is insufficient.
+    bool acked_past(uint32_t watermark);
 
     void set_page_size(uint32_t page_size);
 
