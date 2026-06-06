@@ -210,7 +210,7 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         if (operation_attributes.norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
                 stats.value().padded_shape()[-1] % (2 * tile_width) == 0,
-                "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
+                "Stats is expected to have E(x^2) and E(x) for each device stacked interleaved in the last dimension");
         } else {
             TT_FATAL(
                 stats.value().padded_shape()[-1] % tile_width == 0,

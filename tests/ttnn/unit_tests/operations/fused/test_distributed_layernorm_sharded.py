@@ -256,8 +256,8 @@ def run_pre_allgather_layernorm(
                     frobenius_threshold=0.15,
                 )
             else:
-                tt_ex = tt_pre_allgather_torch[..., :1]
-                tt_ex2 = tt_pre_allgather_torch[..., 32:33]
+                tt_ex2 = tt_pre_allgather_torch[..., :1]
+                tt_ex = tt_pre_allgather_torch[..., 32:33]
                 torch_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
                 torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
                 assert_numeric_metrics(
@@ -421,8 +421,8 @@ def test_post_allgather_layernorm(
             local_ex = torch.nn.functional.pad(local_ex, (0, 31), "constant", 0)
             local_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
             local_ex2 = torch.nn.functional.pad(local_ex2, (0, 31), "constant", 0)
-            device_stats_list.append(local_ex)
             device_stats_list.append(local_ex2)
+            device_stats_list.append(local_ex)
 
     device_stats = torch.cat(device_stats_list, dim=-1)
     tt_device_stats = ttnn.from_torch(

@@ -172,7 +172,7 @@ void kernel_main() {
     cb_scaler_obj.wait_front(1);
 #endif  // RMSNORM
 
-    // RMS E(x2) #Layernorm //E(x) and E(x^2)
+    // Reduce the local x^2 partials. For layernorm, the final exported tile order is [E(x^2), E(x)].
     compute_kernel_lib::
         reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
             cb_x2,
@@ -203,15 +203,15 @@ void kernel_main() {
                     cb_scaler_global,
                     0,
                     scaler0,
-                    w % num_tiles_per_partial_result);  // E(x) and E(x^2) interleaved so we reduce each one into
-                                                        // different dest reg
+                    w % num_tiles_per_partial_result);  // SUM(X) and SUM(X^2) are interleaved, so we reduce each one
+                                                        // into a different dest reg
                 cb_ex_external2_obj.pop_front(1);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_reduction_out);
-#ifndef RMSNORM
             pack_tile(dst1, cb_reduction_out);
+#ifndef RMSNORM
+            pack_tile(dst0, cb_reduction_out);
 #endif
             tile_regs_release();
         }

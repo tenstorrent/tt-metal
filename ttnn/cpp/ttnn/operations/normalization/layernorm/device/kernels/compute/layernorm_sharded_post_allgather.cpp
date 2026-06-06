@@ -130,14 +130,14 @@ void kernel_main() {
             cb_scaler_global_obj.wait_front(1);
             reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_scaler_global, cb_var);
             tile_regs_acquire();
-            // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
+            // striding over cb_stats, consisting [E(X^2), E(X)] from all the distributed devices in interleaved order
             for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
                 reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
                     cb_stats,
                     cb_scaler_global,
                     0,
                     scaler0,
-                    w % stats_tiles);  // reducing E(x) and E(x^2) separately to different dst
+                    w % stats_tiles);  // reducing E(x^2) and E(x) separately to different dst
                 cb_stats_obj.pop_front(1);
             }
             tile_regs_commit();
@@ -146,8 +146,8 @@ void kernel_main() {
 #ifdef RMSNORM
             pack_tile(dst0, cb_var);
 #else
-            pack_tile(dst0, cb_stats_reduced);
-            pack_tile(dst1, cb_ex2);
+            pack_tile(dst1, cb_stats_reduced);
+            pack_tile(dst0, cb_ex2);
 #endif
             tile_regs_release();
             reduce_uninit();
@@ -166,7 +166,7 @@ void kernel_main() {
             cb_stats_reduced_obj.wait_front(1);
             tile_regs_acquire();
             mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-            mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
+            mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // cb_stats_reduced stores E(x)
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex_sqr);
