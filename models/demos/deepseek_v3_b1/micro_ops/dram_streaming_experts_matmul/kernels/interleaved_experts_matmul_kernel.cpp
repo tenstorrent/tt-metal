@@ -6,10 +6,16 @@
 // Streams only the router-selected experts from DRAM and matmuls them against a
 // per-row activation. Every operand is a plain INTERLEAVED DRAM tensor (the layout
 // the tt-xla compiler hands an opaque ttnn.tt_lang_op operand), read/written via
-// InterleavedAddrGenFast. The N output columns are split across compute cores:
-// core `core_id` owns column tiles [core_id*per_core_n, (core_id+1)*per_core_n),
-// reads only those weight columns, and writes only that output slice -> the
-// selected experts stream in parallel across cores. All CBs are working L1.
+// InterleavedAddrGenFast. The N output columns are split across compute cores; each
+// core owns columns { col_first + nl*col_stride : nl in [0,per_core_n) } and reads/
+// writes only that slice -> selected experts stream in parallel. All CBs working L1.
+//
+// Core->column mapping (set by the artifact):
+//   * Bank-local (when Nt is a multiple of the 12 DRAM banks, e.g. gate_up): one core
+//     per bank (col_first=core_id, col_stride=num_cores), so a core's columns all live
+//     in ONE bank -> no two cores contend on a bank (the read bottleneck) and a column's
+//     K tiles share a bank (in1_bank_step!=0 -> incremental addr, no per-tile division).
+//   * Contiguous slice otherwise (col_first=core_id*per_core_n, col_stride=1; e.g. down).
 //
 // Logical op:  out[r, 0, :] = in0[r, 0, :] @ in1[index[r], :, :]
 //   in0   : [R, 1, K]   in1 : [E, K, N]   index : [1, R] int32   out : [R, 1, N]
@@ -45,6 +51,9 @@ constexpr uint32_t kNumRows = get_compile_time_arg_val(6);
 // 7 = num_experts (unused). 8..11 = page sizes. 12..15 = data formats.
 constexpr uint32_t per_core_n = get_compile_time_arg_val(16);  // N tiles per core
 constexpr uint32_t k_reuse = get_compile_time_arg_val(17);     // rows/token sharing in0
+constexpr uint32_t in1_bank_step = get_compile_time_arg_val(18);  // in-bank tile stride; 0=per-tile
+constexpr uint32_t col_first_mul = get_compile_time_arg_val(19);  // this core's first column = core_id*this
+constexpr uint32_t col_stride = get_compile_time_arg_val(20);     // step between this core's columns
 }  // namespace
 
 void kernel_main() {
@@ -57,7 +66,7 @@ void kernel_main() {
     constexpr uint32_t in1_df = get_compile_time_arg_val(13);
     constexpr uint32_t idx_df = get_compile_time_arg_val(15);
 
-    const uint32_t col_base = get_arg_val<uint32_t>(0) * per_core_n;  // core_id * per_core_n
+    const uint32_t col_first = get_arg_val<uint32_t>(0) * col_first_mul;  // this core's first column
     const uint32_t in0_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t in1_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t index_addr = get_common_arg_val<uint32_t>(2);
@@ -103,12 +112,29 @@ void kernel_main() {
         }
 
         const uint32_t e_base = e * Kt * Nt;
+        // Per-column read+barrier+push (NOT batched across columns): the per-column
+        // barrier lets compute start column nl while the reader streams column nl+1,
+        // overlapping reads with the M=1 matmul. Batching the barrier across columns
+        // was measured slower (it serializes read-then-compute).
         for (uint32_t nl = 0; nl < per_core_n; ++nl) {
-            const uint32_t nt = col_base + nl;
+            const uint32_t nt = col_first + nl * col_stride;
             cb_reserve_back(cb_in1, Kt);
             uint32_t in1_l1 = get_write_ptr(cb_in1);
-            for (uint32_t kt = 0; kt < Kt; ++kt) {
-                noc_async_read_tile(e_base + kt * Nt + nt, in1_gen, in1_l1 + kt * in1_page);
+            if constexpr (in1_bank_step != 0) {
+                // Same-bank column (bank-local): all Kt tiles live in one DRAM bank.
+                // Resolve the first tile's NOC address once, then advance by a fixed
+                // in-bank byte step -- skips the per-tile non-pow2 bank division.
+                uint64_t noc = in1_gen.get_noc_addr(e_base + nt);
+                constexpr uint32_t step = in1_bank_step * in1_page;
+                for (uint32_t kt = 0; kt < Kt; ++kt) {
+                    noc_async_read(noc, in1_l1, in1_page);
+                    noc += step;
+                    in1_l1 += in1_page;
+                }
+            } else {
+                for (uint32_t kt = 0; kt < Kt; ++kt) {
+                    noc_async_read_tile(e_base + kt * Nt + nt, in1_gen, in1_l1 + kt * in1_page);
+                }
             }
             noc_async_read_barrier();
             cb_push_back(cb_in1, Kt);
@@ -145,7 +171,7 @@ void kernel_main() {
     // ---- writer: drain cb_out to out[R,1,N] tile-group r, this core's columns --
     constexpr uint32_t out_page = get_compile_time_arg_val(11);
     constexpr uint32_t out_df = get_compile_time_arg_val(14);
-    const uint32_t col_base = get_arg_val<uint32_t>(0) * per_core_n;
+    const uint32_t col_first = get_arg_val<uint32_t>(0) * col_first_mul;
     const uint32_t out_addr = get_common_arg_val<uint32_t>(3);
     const InterleavedAddrGenFast<true> out_gen = {
         .bank_base_address = out_addr, .page_size = out_page, .data_format = static_cast<DataFormat>(out_df)};
@@ -153,7 +179,7 @@ void kernel_main() {
         for (uint32_t nl = 0; nl < per_core_n; ++nl) {
             cb_wait_front(cb_out, 1);
             uint32_t out_l1 = get_read_ptr(cb_out);
-            noc_async_write_tile(r * Nt + (col_base + nl), out_gen, out_l1);
+            noc_async_write_tile(r * Nt + (col_first + nl * col_stride), out_gen, out_l1);
             noc_async_write_barrier();
             cb_pop_front(cb_out, 1);
         }
