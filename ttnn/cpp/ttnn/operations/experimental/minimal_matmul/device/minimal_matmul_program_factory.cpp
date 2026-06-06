@@ -266,6 +266,30 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
+    log_info(
+        tt::LogOp,
+        "[AGMM-DEBUG-FMT] MINIMAL M_block={} K_block={} N_block={} sh={} sw={} | in0_df={} in1_df={} "
+        "out_df={} interm_df={} | math_fidelity={} fp32_dest_acc={} math_approx={} packer_l1_acc={} "
+        "dst_full_sync={} use_bias={} | M_blocks_per_core={} N_blocks_per_core={} K_blocks={}",
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        subblock_h,
+        subblock_w,
+        in0_data_format,
+        in1_data_format,
+        output_data_format,
+        intermediate_data_format,
+        static_cast<int>(math_fidelity),
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        dst_full_sync_en,
+        use_bias,
+        M_blocks_per_core,
+        N_blocks_per_core,
+        K_blocks);
+
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
     log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);

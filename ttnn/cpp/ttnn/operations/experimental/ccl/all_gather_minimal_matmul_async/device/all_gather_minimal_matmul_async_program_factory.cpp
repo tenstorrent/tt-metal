@@ -354,6 +354,50 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "M_blocks_per_core: {}", M_blocks_per_core);
     log_debug(tt::LogOp, "N_blocks_per_core: {}", N_blocks_per_core);
 
+    // [AGMM-DEBUG] effective block sizes actually used by the fused matmul (log_info so it shows in
+    // Release builds, where log_debug is compiled out). Compares config-supplied vs default to catch
+    // any silent overwrite, and prints the values fed to the compute kernel.
+    log_info(
+        tt::LogOp,
+        "[AGMM-DEBUG] config_present={} | used M_block={} K_block={} N_block={} sh={} sw={} | "
+        "defaults M={} K={} N={} sh={} sw={} | M_tiles={} K_tiles={} N_tiles={} ring_size={} "
+        "transpose={} grid={}x{} | M_blocks_per_core={} N_blocks_per_core={} K_blocks(=compute K_num_blocks)={}",
+        config.has_value(),
+        M_block_tiles,
+        K_block_tiles,
+        N_block_tiles,
+        subblock_h,
+        subblock_w,
+        default_M_block_tiles,
+        default_K_block_tiles,
+        default_N_block_tiles,
+        default_subblock_h,
+        default_subblock_w,
+        M_tiles,
+        K_tiles,
+        N_tiles,
+        ring_size,
+        transpose_core_grid,
+        grid_size.x,
+        grid_size.y,
+        M_blocks_per_core,
+        N_blocks_per_core,
+        K_blocks);
+    log_info(
+        tt::LogOp,
+        "[AGMM-DEBUG-FMT] FUSED in0_df={} in1_df={} out_df={} interm_df={} | math_fidelity={} "
+        "fp32_dest_acc={} math_approx={} packer_l1_acc={} dst_full_sync={} use_bias={}",
+        in0_data_format,
+        in1_data_format,
+        output_data_format,
+        intermediate_data_format,
+        static_cast<int>(math_fidelity),
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        dst_full_sync_en,
+        use_bias);
+
     uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
