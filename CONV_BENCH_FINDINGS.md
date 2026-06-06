@@ -14,6 +14,8 @@
 - **Answer A (why the helper wins with the *same* subblock):** identical math, less orchestration. `pin_interm_to_captured_base` turns the matmul-partials CB from a churned FIFO (per-subblock reserve/push + a per-K-block full-block L1_ACC drain in `main`) into one reserve + fixed-offset packs + one push. The win tracks `packer_l1_acc=ON × deep-K × BLOCK_SHARDED`, and amplifies on Blackhole because that fixed overhead is a larger fraction of BH's faster math. See §1(a), §4.2.
 - **Answer B (why we don't use `helper_trm` for conv):** its only lever is unlocking DST-stranded subblocks, and on-device that lever is empty for real convs — BH: it engages but lands in the noise (+0.07%); WH: it can't engage at the real shape (odd `per_core_M`) and OOMs n150's L1 where it would. It also forfeits the Answer-A `pin` win. See §1(b), §5.
 - **Helper capability (most-asked):** the helper **can** drive TileRowMajor for conv today — verified on-device (PCC 0.9997) after a *conv-side* CB-sizing fix. It is **not** incapable. The only genuine helper feature-gap, relevant only if a future arch/trace makes TRM worth it, is the absence of a **TileRowMajor-compatible `pin`**. Everything else needed to flip conv to TRM is conv-side wiring, not a helper deficiency. See §6.
+- **Design question raised (for the team):** conv's `pin` is the *one* exception to the matmul helper's CB contract (which otherwise forbids CB dual-use + manual pointer manipulation — matmul callers do zero). Keeping it is what buys the migration win above; **dropping it for a consistent/robust CB model would forfeit that win — `helper_sbm` falls back to `main` — not merely cost L1.** See §9.
+- **New to this / found it confusing?** §10 is a plain-language FAQ for the points that trip people up (SubblockMajor vs row-major, who needs a reorder, why only TRM drops pin, "measured on TILE" vs "tested ROW_MAJOR").
 
 ---
 
@@ -147,6 +149,8 @@ A matmul's per-core output is an `M×N` grid of tiles, computed in `out_subblock
 
 A sharded output tensor wants **row-major tile order**. SubblockMajor order equals row-major order *only* when `out_subblock_w == per_core_N` (one N-subblock) **or** `out_subblock_h == 1` (each subblock is a one-tile-tall strip). That is exactly the conv op's sharded-output gate (`conv2d_device_operation.cpp`). Any other shape (`h>1` and `w<per_core_N`) interleaves columns wrong.
 
+> **Plain-language (this confused us — FAQ §10):** "SubblockMajor" and "row-major" are **not** two competing final orders. *Under the gate they are the same layout.* In the common `out_subblock_h==1` case (1×8, 1×3, …) each subblock is a single tile-row, so packing subblocks in order *is* row-major. So when conv finishes, its output **is** in row-major tile order — "SubblockMajor" only names the packing *strategy* that produces it. The gate is precisely the condition that makes that strategy land row-major; that is *why* the tuner is constrained to gate-legal subblocks.
+
 **What reads conv's output:** for the common TILE-output case the matmul packs *directly into the globally-allocated output CB* — the pack position **is** the final tile position in the sharded tensor; there is no separate writer kernel doing a reorder. So the compute must pack in the order the tensor's layout expects. SubblockMajor-under-the-gate delivers that for free, which is why the tuner is constrained to gate-legal subblocks.
 
 ### 4.2 `pin` — the source of the Answer-A win, and why TRM can't keep it
@@ -177,7 +181,7 @@ Real heavyweight convs are bf8 (ResNet/SDXL) or bf16 (vanilla), TILE-output, and
 - **ROW_MAJOR output:** an untilize step converts tiles → row-major bytes. SubblockMajor needs `reblock_and_untilize` (a gather, SubblockMajor-only by static_assert); TileRowMajor uses the plain `untilize` helper because its row strip is already contiguous.
 - A reorder is only ever needed for **SubblockMajor with a gate-violating subblock** — which is not a TRM scenario.
 
-So at no point does TRM require a reorder the helper lacks. (And per the framing of §6: a conv-side reorder, were one ever needed, would be conv's responsibility, not a helper deficiency.)
+**Mind the direction (this flipped on us repeatedly — FAQ §10):** it is **SBM** that needs the *complex* `reblock` gather; **TRM** uses the *simple* plain `untilize` (it is already row-ordered). And **TRM never needs a reorder — not even a gate-violating subblock on TILE output** — because it packs row-major directly for *any* subblock. The reorder is *SBM's* problem, and on TILE there is no untilize step to perform it, which is exactly why gate-violating **SBM** is simply illegal on TILE while **TRM** sidesteps it. So at no point does TRM require a reorder the helper lacks (and a conv-side reorder, were one ever needed, would be conv's responsibility, not a helper deficiency — §6).
 
 ### 4.5 The two TileRowMajor deadlocks (both conv-side wiring, now understood)
 
@@ -253,6 +257,8 @@ To flip conv to TileRowMajor in the future, the required work is almost entirely
 
 **Bottom line:** helper-capable now (with conv-side wiring); the only thing the *helper* would need for a future TRM-on-conv that also keeps today's pin win is a TileRowMajor-compatible `pin`.
 
+(For the *separate* design question — whether conv should keep `pin` at all, since it is the lone exception to the matmul helper's CB contract — see §9.)
+
 ---
 
 ## 7. Background — the forced regime (prior sessions)
@@ -267,6 +273,51 @@ To make `helper_trm` runnable before the real-config rewire, the harness forced 
 - **Structurally ineligible:** yolo/mobilenet/efficientnet heavy convs are depthwise (different kernel); segformer/swin heavy convs are depthwise/width-sharded. Only low-FLOP non-depthwise stems are eligible.
 - **Eligible but does not fit single-chip even on BH:** the 512²/1024²-spatial SDXL VAE convs and the 128×128 high-channel SDXL convs — genuinely need DRAM activation slicing, which this single-chip harness does not express.
 - **Out of scope:** conv1d / conv_transpose2d / conv3d (separate ops, no bench wiring).
+
+---
+
+## 9. Pinning, the CB contract, and the open design question
+
+The matmul helper enforces a **CB contract**: `in0` / `in1` / `out` must be **distinct** CBs — in-place aliasing "is NOT supported and will silently corrupt FIFO state" (`matmul_block_helpers.hpp`; `ASSERT(in0_cb_id != out_cb_id)` in `.inl`). The broader intent is that **no caller manually manipulates a CB's FIFO pointers**, so every other user of that CB can trust the pointers point where the CB API says they do. The contract names **exactly one exception**: *"the one supported aliasing is interm_buf overlaying out_buf in L1 (conv2d's `partials_cb_uses_output` path); opt in via `pin_interm_to_captured_base`."*
+
+**Conv is that exception, and it is not consistent with matmul:**
+
+| | matmul callers (`zm_fused`, gathered, CCL) | conv (`conv_bmm_tilize.cpp`) |
+|---|---|---|
+| in/out CBs | **distinct** | partials **aliases** out (`partials_cb_uses_output`) |
+| `pin_interm_to_captured_base` | **false** (every caller) | **true** |
+| manual `fifo_rd/wr_ptr` pokes | **0** | **~9** (partials capture/reset) |
+
+So conv uses exactly the CB-dual-use + manual-pointer-manipulation the contract otherwise forbids — behind a documented, asserted carve-out, driven by conv's L1 pressure (overlaying partials on the output buffer saves a whole output-block of L1, and conv is L1-bound).
+
+**Two things the team should weigh:**
+
+1. **Dropping `pin` from conv forfeits the migration win — not just L1.** The −5…−10.5% in §3 *is* the pin win (Answer A, §1a). Without pin, `helper_sbm` reverts to `main`'s per-subblock churn + L1_ACC drain → the migration goes **perf-neutral** (`helper_sbm` ≈ `main`, possibly a hair worse from per-subblock reconfig) **and** costs more L1 (separate partials buffer). So "drop the exception for a robust CB model" trades **both** the perf win and L1 — a legitimate choice, but the cost is two-axis, not L1-only.
+2. **There are two separable "abuses."** (a) the CB dual-use (aliasing partials/out), and (b) `pin`'s pointer manipulation. Dropping *only* (a) — give partials its own CB, keep pin — **keeps the win** and costs L1, removing the dual-use but not the pointer manipulation. Dropping pin removes **both** but loses the win. Which lever to pull depends on which objection you are targeting.
+
+**On TRM+pin specifically:** not directly tested — it does not exist (the helper has no TileRowMajor-compatible pin). But the §5 factorial isolated the *only* thing TRM+pin would add over today's SBM+pin — the pure subblock lever, both pin-off — at −0.17% (noise). Pinning is shared with SBM, so TRM+pin's marginal benefit on real convs is ~nil; building a row-strided pin is poor ROI unless a future arch/trace makes the lever real.
+
+**Open design question (no decision recorded here):** keep conv's `pin` exception (it *is* the migration win, and it minimizes L1 on an L1-bound op) or drop it (a consistent, more robust CB model, at the cost of the win + extra L1, with L1 pressure pushed elsewhere / onto newer HW)?
+
+---
+
+## 10. Common confusions, clarified (plain-language FAQ)
+
+**Q: Don't we want row-major tile order, not subblock-major?** Yes — and **under the gate, SubblockMajor *is* row-major.** They are not competing orders. With `out_subblock_h==1` (the common 1×8 / 1×3 / … case) each subblock is one tile-row, so packing subblocks in order is literally row-major. "SubblockMajor" names the packing *strategy*; under the gate the *result* is row-major. (§4.1)
+
+**Q: Isn't SBM just TRM for the subblock shapes we actually pick?** For gate-legal subblocks (all the tuner picks for real convs): **yes — byte-identical output.** TRM only diverges for *gate-violating* shapes, which real convs never pick. Even at the same shape, though, **SBM is the faster of the two** because it keeps `pin` and TRM cannot. (§4.6, §5)
+
+**Q: Which untilize does each use (ROW_MAJOR output)?** **SBM → `reblock_and_untilize`** (the complex *gather*). **TRM → plain `untilize`** (simple), because TRM is already row-ordered. Don't flip these — the *simple* one goes with TRM. (§4.4)
+
+**Q: If we violate the gate with TRM (even on TILE output), don't we need a reorder?** **No — TRM never needs a reorder, for any subblock.** It packs row-major directly, which is exactly what the output wants. The reorder is *SBM's* problem; on TILE there is no untilize step to perform it, which is why gate-violating *SBM* is illegal there — but TRM sidesteps the whole issue. (§4.4)
+
+**Q: Why does only TRM have to drop `pin`, not SBM?** `pin` packs each subblock to a *subblock-contiguous* fixed offset and reloads it as a contiguous run — that layout **is** SubblockMajor. TRM's tiles are row-strided (a subblock's tiles are not contiguous), so pin's offset math cannot address them. Pin is a SubblockMajor-shaped feature: SBM keeps it natively, TRM cannot use it. (§4.2)
+
+**Q: We "measured on TILE" but "tested only ROW_MAJOR" — which is it?** Two different experiments: the **migration** (`main` vs `helper_sbm`, both SBM) ran at each conv's real config = **TILE output** → that is the headline win; the **TRM relaxation** (`helper_sbm` vs `helper_trm`) was forced to **ROW_MAJOR** (the only format the factory lets TRM run in) → that is the null lever. Different comparisons, different formats — not a contradiction. (§2)
+
+**Q: Will real models (TILE output) see the helper win?** Yes — the migration win **is** a TILE result (the entire §3 dataset is at real TILE configs). It does not depend on TRM, and TRM is moot for real convs regardless of output format. (§2, §3)
+
+**Q: Does dropping conv's `pin` just cost L1?** No — it also **erases the migration win** (`helper_sbm` falls back to `main`, §1a/§9). The win comes *from* pin, so dropping pin costs perf **and** L1. (§9)
 
 ---
 
