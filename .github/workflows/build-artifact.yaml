@@ -594,17 +594,25 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          # Surface any remote storage errors from the log so they are visible
-          # in the job summary without having to download a full log artifact.
+          # Show a capped sample of remote storage errors in the summary.
+          # The full log is uploaded as an artifact below for deeper inspection.
           if [ -f /tmp/ccache.log ]; then
-            ERRORS=$(grep -i 'error\|failed\|timeout' /tmp/ccache.log || true)
-            if [ -n "$ERRORS" ]; then
-              echo '## CCache Errors' >> $GITHUB_STEP_SUMMARY
+            ERROR_COUNT=$(grep -ci 'error\|failed\|timeout' /tmp/ccache.log || true)
+            if [ "${ERROR_COUNT:-0}" -gt 0 ]; then
+              echo "## CCache Errors (${ERROR_COUNT} lines — first 20 shown)" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "$ERRORS" >> $GITHUB_STEP_SUMMARY
+              grep -i 'error\|failed\|timeout' /tmp/ccache.log | head -20 >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
             fi
           fi
+
+      - name: Upload ccache log
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ccache-log-${{ env.ARTIFACT_NAME }}
+          path: /tmp/ccache.log
+          if-no-files-found: ignore
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
