@@ -148,15 +148,26 @@ void bind_fill_cache(nb::module_& mod) {
 void bind_zero_cache_range(nb::module_& mod) {
     const auto* doc = R"doc(
         Zeroes a range of tokens in the cache tensor in-place. Token positions are rounded
-        to tile boundaries (multiples of 32): start_token rounds down, end_token rounds up.
+        to tile boundaries (multiples of 32): ``start_token`` rounds down, ``end_token`` rounds up.
+
+        This is useful for clearing stale or padding regions of a KV cache between decode iterations.
 
         Args:
-            cache (ttnn.Tensor): the cache tensor to be modified.
+            cache (ttnn.Tensor): the cache tensor to be modified. Must be on device, TILE layout,
+                ND_SHARDED memory layout, and dtype one of FLOAT32, BFLOAT16, or BFLOAT8_B.
             start_token (int): first token position to zero (inclusive, rounds down to tile boundary).
             end_token (int): last token position to zero (exclusive, rounds up to tile boundary).
+                Must be greater than ``start_token``.
 
         Returns:
             ttnn.Tensor: the cache tensor (modified in-place).
+
+        Note:
+            The actual zeroed region is ``[floor(start_token/32)*32, ceil(end_token/32)*32)``.
+            For example, ``start_token=40, end_token=128`` zeroes tokens ``[32, 128)``.
+
+        Example:
+            >>> cache = ttnn.kv_cache.zero_cache_range(cache, start_token=40, end_token=128)
 
         )doc";
 

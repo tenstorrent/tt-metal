@@ -137,6 +137,22 @@ RealtimeProfilerEligibility evaluate_realtime_profiler_eligibility(IDevice* devi
         return {};
     }
 
+    // ttsim: the simulator's D2H socket exists but its device kernels run many orders of
+    // magnitude slower than real silicon, so the 2 s WriteToDeviceL1/sync poll deadline
+    // in run_sync() always trips before the profiler core can respond. That burns ~30 s
+    // per chip during MeshDevice bring-up, and on WH (where the 64-bit-PCIe gate below
+    // does NOT fire) it deadlocks downstream waiters that depend on first_unthrottled
+    // finish_sync. Skip the profiler entirely on Simulator targets; performance traces
+    // are not interesting on the sim anyway.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Simulator) {
+        log_debug(
+            tt::LogMetal,
+            "Real-time profiler disabled on device {}: target is Simulator; D2H sync polls "
+            "cannot meet real-time deadlines against ttsim's emulated PCIe.",
+            device_id);
+        return {};
+    }
+
     if (!device->is_mmio_capable()) {
         log_debug(
             tt::LogMetal,

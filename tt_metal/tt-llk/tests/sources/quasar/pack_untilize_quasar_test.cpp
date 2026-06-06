@@ -178,9 +178,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_desc.buf_desc_id     = buf_desc_id;
     tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
 
-    constexpr std::uint32_t num_faces_c_dim = 2;                        // Tile width in faces (narrow tile is 0 (false) )
-    constexpr std::uint32_t num_faces_r_dim = (num_faces == 2) ? 1 : 2; // Tile height in faces (narrow tile is 0 (false))
-    constexpr TensorShape tensor_shape      = {TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+    constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);

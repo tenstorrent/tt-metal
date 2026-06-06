@@ -42,6 +42,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):

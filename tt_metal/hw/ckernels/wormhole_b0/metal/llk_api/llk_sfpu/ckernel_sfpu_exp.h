@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -169,124 +170,96 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 }
 
 /*
- * Unsafe core of FP32 exp: Cody-Waite range reduction + 7th-order Taylor.
+ * The _sfpu_exp_fp32_accurate_ code is derived from code by Norbert Juffa.
  *
- * Skips the overflow / underflow / NaN guards present in _sfpu_exp_fp32_accurate_.
- * The caller MUST ensure |val| stays inside the safe range (roughly val ∈ [-87, 88]
- * after scaling by 1/ln(2) the magnitude must be < 128) — otherwise the exponent
- * arithmetic in setexp() can wrap and produce garbage.
+ * Copyright (c) 2015-2021, Norbert Juffa
+ * All rights reserved.
  *
- * Use this variant when the caller has already clamped its input (e.g. i1's
- * asymptotic path operates on |x| ∈ [10, 88.5]) and the safety branches would
- * be dead code.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
  *
- * @param val The input value, must be in the safe range described above.
- * @return sfpi::vFloat Result of exp(val), accurate to <1 FP32 ULP.
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat val) {
-    // Step 1: Compute k = round(x / ln(2))
-    constexpr float INV_LN2 = 1.4426950408889634f;  // 1/ln(2)
-    sfpi::vFloat z = val * INV_LN2;
 
-    // Round z to nearest integer using round-to-nearest-even
-    sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+template <bool unsafe = false>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    sfpi::vInt i, e;
+    sfpi::vFloat f, r, j, y;
 
-    // Step 2: Cody-Waite range reduction
-    // Compute r = x - k*ln(2) in extended precision
-    // r = x - k*LN2_HI - k*LN2_LO
-    // This provides better accuracy than simple r = x - k*ln(2)
-    // Cody-Waite constants: ln(2) split into high and low parts for extended precision.
-    // LN2_HI is chosen so that k*LN2_HI can be computed exactly for integer k in the valid range.
-    // LN2_LO contains the remainder: LN2_HI + LN2_LO ≈ -ln(2)
+    // j = round(a / ln2)
+    // interleaved with first coefficient of polynomial
+    j = 1.442695f * a;
+    r = 1.37805939e-3f;
+    i = sfpi::float_to_int16(j, sfpi::RoundMode::NearestEven);
+    j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
 
-    // We want to do:
-    // 1) r_hi = val - k * LN2_HI
-    // 2) r = r_hi - k * LN2_LO
-    // Since SFPMAD on Wormhole can only do VD = VA * VB + VC,
-    // this expression would require additional instructions,
-    // To avoid this, we transform the expressions to:
-    // 1) r_hi = val + k * (-LN2_HI)
-    // 2) r = r_hi + k * (-LN2_LO)
-    // Where LN2_HI and LN2_LO are negated.
-    // This way, compiler can more easily optimize this expression to a single SFPMAD instruction.
-    constexpr float LN2_HI = -0.6931152343750000f;  // High bits of ln(2)
-    constexpr float LN2_LO = -3.19461832987e-05f;   // Low bits of ln(2)
+    // f = a - i*j (two-part cody-waite)
+    f = j * -6.93145752e-1f + a;
+    f = j * -1.42860677e-6f + f;
 
-    sfpi::vFloat r_hi = k * LN2_HI + val;
-    sfpi::vFloat r = k * LN2_LO + r_hi;
+    // approximate r = exp(f) on [-ln2/2, ln2/2]
+    // interleaved with conversion of i from sign-mag to two's complement
+    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
+    r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
+    r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
+    r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    i = sfpi::abs(i);
+    y = r * f + 1.0f;
+    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
+    r = y * f + 1.0f;
 
-    // Step 3: Polynomial approximation for exp(r) using Taylor series
-    // exp(r) ~= 1 + r + r²/2! + r³/3! + r⁴/4! + r⁵/5! + r⁶/6! + r⁷/7!
-    // Use 7th order polynomial (Taylor series coefficients) for < 1 ULP accuracy
-    // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
-    sfpi::vFloat p = PolynomialEvaluator::eval(
-        r,
-        sfpi::vConst1,  // c0 = 1
-        sfpi::vConst1,  // c1 = 1
-        0.5f,           // c2 = 1/2!
-        1.0f / 6.0f,    // c3 = 1/3!
-        1.0f / 24.0f,   // c4 = 1/4!
-        1.0f / 120.0f,  // c5 = 1/5!
-        1.0f / 720.0f,  // c6 = 1/6!
-        1.0f / 5040.0f  // c7 = 1/7!
-    );
+    if constexpr (unsafe) {
+        // y = 2**i * r
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        e += i;
+        y = sfpi::setexp(r, e);
+    } else {
+        // overflow: y = infinity or NaN
+        y *= std::numeric_limits<float>::infinity();
 
-    // Step 4: Scale by 2^k via direct exponent injection: setexp(p, exexp(p)+k_int).
-    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
-    sfpi::vInt new_exp = p_exp + k_int;
+        e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        e += i;
 
-    return sfpi::setexp(p, new_exp);
+        // if e < 255
+        v_block {
+            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+
+            // y = 2**i * r
+            y = sfpi::setexp(r, e);
+
+            // if e < 1
+            v_if(e_lt_255 < -254) {
+                // underflow, including subnormals
+                y = 0.0f;
+            }
+            v_endif;
+        }
+        v_endblock;
+    }
+
+    return y;
 }
 
-/*
- * This function implements exp(x) using Cody-Waite range reduction for improved accuracy.
- * Target accuracy: < 1 ULP for float32.
- *
- * Algorithm:
- * 1. Handle special cases (overflow, underflow, NaN)
- * 2. For in-range inputs, dispatch to _sfpu_exp_fp32_accurate_unsafe_.
- *
- * @param val The input value (sfpi::vFloat vector), can be any floating point number
- * @return sfpi::vFloat Result of exp(val)
- */
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat val) {
-    sfpi::vFloat result = sfpi::vConst0;
-
-    // Exp computation uses bit-wise manipulation using exponent and mantissa fields
-    // For large values (e.g. |x| > 89), some intermediate values can overflow
-    // To avoid this, we check the value of the input using two thresholds.
-    //
-    // These thresholds are applied after scaling x by 1/log(2) (i.e., on z = x * 1/ln(2)).
-    // Mapped back to the original x domain, they correspond to approximately -88 and 89.
-    constexpr float OVERFLOW_THRESHOLD = 128.0f;
-    constexpr float UNDERFLOW_THRESHOLD = -127.0f;
-
-    constexpr float INV_LN2 = 1.4426950408889634f;  // 1/ln(2)
-    sfpi::vFloat z = val * INV_LN2;
-
-    // Check for special cases
-    sfpi::vInt exp_bits = sfpi::exexp(z);
-
-    v_if(z >= OVERFLOW_THRESHOLD) {
-        // Overflow
-        result = std::numeric_limits<float>::infinity();
-    }
-    v_elseif(z <= UNDERFLOW_THRESHOLD) {
-        // Underflow
-        result = sfpi::vConst0;
-    }
-    v_elseif(exp_bits == 255) {
-        // infinity (exp = 255 && man != 0) already taken care of by previous conditionals:
-        // if input is infinity or -infinity, then either z >= OVERFLOW_THRESHOLD or z <= UNDERFLOW_THRESHOLD
-        // would have been true and their cases have already been handled.
-        // Thus, we know that if exp == 0 here, then man != 0 as well.
-        result = std::numeric_limits<float>::quiet_NaN();
-    }
-    v_else { result = _sfpu_exp_fp32_accurate_unsafe_(val); }
-    v_endif;
-
-    return result;
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_<true>(x);
 }
 
 /*
