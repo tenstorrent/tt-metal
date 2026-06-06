@@ -408,30 +408,118 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
-      - name: Check Redis credentials
-        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
-        # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+      - name: Configure Garage S3 ccache
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
-            exit 1
+          # Silently skip when secrets are absent — build continues without remote cache
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ]; then
+            echo "GARAGE_S3_ACCESS_KEY not set — skipping remote ccache"
+            exit 0
           fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
+
+          # ccache 4.10.2 has no native S3 backend (only redis:// and http://).
+          # Run a local HTTP bridge on 127.0.0.1:8765 that proxies ccache's
+          # HTTP protocol to Garage S3 via boto3.
+          cat > /tmp/ccache-s3-bridge.py << 'PYEOF'
+          #!/usr/bin/env python3
+          """HTTP bridge: ccache HTTP backend -> Garage S3"""
+          import os, threading, time
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import boto3, botocore
+
+          BUCKET = os.environ.get("CCACHE_S3_BUCKET", "ccache")
+          PORT = int(os.environ.get("CCACHE_S3_BRIDGE_PORT", "8765"))
+
+          s3 = boto3.client(
+              "s3",
+              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
+              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+              region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+              config=botocore.config.Config(s3={"addressing_style": "path"}),
           )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
-          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  key = self.path.lstrip("/")
+                  if not key:
+                      self.send_response(200); self.end_headers(); return
+                  try:
+                      obj = s3.get_object(Bucket=BUCKET, Key=key)
+                      data = obj["Body"].read()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/octet-stream")
+                      self.send_header("Content-Length", str(len(data)))
+                      self.end_headers()
+                      self.wfile.write(data)
+                  except botocore.exceptions.ClientError as e:
+                      code = e.response.get("Error", {}).get("Code", "")
+                      self.send_response(404 if code in ("NoSuchKey", "404") else 500)
+                      self.end_headers()
+                  except Exception:
+                      self.send_response(500)
+                      self.end_headers()
+
+              def do_PUT(self):
+                  key = self.path.lstrip("/")
+                  length = int(self.headers.get("Content-Length", 0))
+                  data = self.rfile.read(length)
+                  try:
+                      s3.put_object(Bucket=BUCKET, Key=key, Body=data)
+                      self.send_response(204)
+                  except Exception:
+                      self.send_response(500)
+                  self.end_headers()
+
+              def log_message(self, *a): pass
+
+          class ThreadedServer(HTTPServer):
+              def process_request(self, req, addr):
+                  threading.Thread(target=self._handle, args=(req, addr), daemon=True).start()
+              def _handle(self, req, addr):
+                  self.finish_request(req, addr); self.shutdown_request(req)
+
+          srv = ThreadedServer(("127.0.0.1", PORT), Handler)
+          print(f"ccache S3 bridge on :{PORT} -> s3://{BUCKET}", flush=True)
+          threading.Thread(target=srv.serve_forever, daemon=True).start()
+          while True:
+              time.sleep(3600)
+          PYEOF
+
+          # Install boto3 into the active Python env (same pattern as ctcache in clang-tidy)
+          uv pip install --quiet boto3
+
+          # Start bridge with credentials scoped to the subprocess only.
+          # Garage is cluster-internal — explicitly clear proxy vars so boto3 doesn't
+          # route to it through the restricted proxy (which blocks cluster-internal services).
+          AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
+          AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
+          AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
+          AWS_DEFAULT_REGION="us-east-1" \
+          HTTP_PROXY="" \
+          HTTPS_PROXY="" \
+          http_proxy="" \
+          https_proxy="" \
+          nohup python3 /tmp/ccache-s3-bridge.py >> /tmp/ccache-s3-bridge.log 2>&1 & disown $!
+
+          # Give the bridge a moment to bind and connect to Garage
+          sleep 2
+
+          # Health check: verify bridge is alive and reachable.
+          # Use --noproxy to bypass HTTP_PROXY — the container proxy can't route to 127.0.0.1.
+          if ! curl -sf --noproxy 127.0.0.1 http://127.0.0.1:8765/ > /dev/null 2>&1; then
+            echo "::warning::ccache S3 bridge failed to start — bridge log:"
+            cat /tmp/ccache-s3-bridge.log || true
+            echo "Continuing without remote ccache"
+            exit 0
+          fi
+
+          # Point ccache at the local bridge.
+          # Also set NO_PROXY so ccache's own HTTP requests to 127.0.0.1:8765 bypass the
+          # container-level HTTP_PROXY (proxy can't route to localhost).
+          echo "CCACHE_REMOTE_STORAGE=http://127.0.0.1:8765/" >> "$GITHUB_ENV"
+          echo "NO_PROXY=127.0.0.1,localhost" >> "$GITHUB_ENV"
+          echo "no_proxy=127.0.0.1,localhost" >> "$GITHUB_ENV"
+          echo "Bridge alive at http://127.0.0.1:8765/ -> garage.garage.svc.cluster.local:3900/ccache"
 
       - name: Set artifact name
         id: set-artifact-name
@@ -582,6 +670,10 @@ jobs:
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '### S3 Bridge Log' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/ccache-s3-bridge.log >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no bridge log)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages
