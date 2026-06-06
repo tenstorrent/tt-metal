@@ -34,6 +34,51 @@ def _tp_requires_ccl(device):
     return not (hasattr(device, "shape") and list(device.shape)[-1] == 1)
 
 
+def _mesh_ccl_all_gather(
+    device,
+    tensor: ttnn.Tensor,
+    device_state,
+    *,
+    dim: int,
+    memory_config=None,
+):
+    """All-gather a mesh-sharded axis (fabric CCL when available, else host compose).
+
+      Used before TP column-parallel matmuls when activations arrive K-sharded
+    (e.g. 384/dev) and the weight expects the full K (1536) on every device.
+    """
+    num_devices = int(device.get_num_devices()) if hasattr(device, "get_num_devices") else 1
+    if num_devices <= 1:
+        return tensor
+
+    dim_pos = dim if dim >= 0 else dim + len(tensor.shape)
+    out_mc = memory_config or tensor.memory_config()
+
+    if _tp_requires_ccl(device):
+        gathered = ttnn.all_gather(
+            tensor,
+            dim=dim_pos,
+            num_links=_ccl_num_links(device),
+            cluster_axis=1,
+            memory_config=out_mc,
+            topology=ttnn.Topology.Linear,
+        )
+        return gathered
+
+    # Host compose fallback (no fabric / 1-wide mesh): concat shards, replicate back.
+    _ = device_state
+    composer = ttnn.ConcatMeshToTensor(device, dim=dim_pos)
+    full = ttnn.to_torch(tensor, mesh_composer=composer)
+    return ttnn.from_torch(
+        full,
+        dtype=tensor.dtype,
+        layout=tensor.layout,
+        device=device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=out_mc,
+    )
+
+
 def _ccl_num_links(device) -> int:
     """Number of ethernet links to use for reduce_scatter / all_gather.
 
@@ -396,6 +441,38 @@ def _decode_gate_up_dram_sharded_program_config(input_shape, weight_shape):
         in0_block_w=_GATE_UP_DRAM_SHARDED_IN0_BLOCK_W,
         per_core_M=_GATE_UP_DRAM_SHARDED_PER_CORE_M,
         per_core_N=_GATE_UP_DRAM_SHARDED_PER_CORE_N,
+        fused_activation=None,
+    )
+
+
+# TP column-parallel gate-up decode: weight N-sharded across the mesh so each device
+# runs 32x1536x4480 (17920/TP4). 4480 cols = 140 N-tiles; 4 compute cores x
+# per_core_N=35 matches the single-device 16c/per_core_N=35 recipe scaled down.
+_GATE_UP_TP_N_SHARDED_GRID = (4, 1)
+_GATE_UP_TP_N_SHARDED_NUM_CORES = _GATE_UP_TP_N_SHARDED_GRID[0] * _GATE_UP_TP_N_SHARDED_GRID[1]
+_GATE_UP_TP_N_SHARDED_IN0_BLOCK_W = 3
+_GATE_UP_TP_N_SHARDED_PER_CORE_M = 1
+_GATE_UP_TP_N_SHARDED_PER_CORE_N = 35
+_GATE_UP_TP_N_SHARDED_N_PER_DEVICE = 4480  # 17920 / TP4
+
+
+def _decode_gate_up_n_sharded_per_device_program_config(input_shape, weight_shape):
+    """Gate-up DRAM-sharded decode for TP N-sharded weight: 32x1536x4480 per device."""
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+    n_per_dev = int(weight_shape[-1])
+    if int(input_shape[-1]) != 1536 or int(weight_shape[-2]) != 1536:
+        return None
+    if n_per_dev != _GATE_UP_TP_N_SHARDED_N_PER_DEVICE:
+        return None
+    n_tiles = n_per_dev // ttnn.TILE_SIZE
+    if n_tiles != _GATE_UP_TP_N_SHARDED_NUM_CORES * _GATE_UP_TP_N_SHARDED_PER_CORE_N:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=_GATE_UP_TP_N_SHARDED_IN0_BLOCK_W,
+        per_core_M=_GATE_UP_TP_N_SHARDED_PER_CORE_M,
+        per_core_N=_GATE_UP_TP_N_SHARDED_PER_CORE_N,
         fused_activation=None,
     )
 
@@ -1121,18 +1198,34 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
 
     def move_weights_to_device_impl(self):
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # The DRAM-width-sharded weight layout is only a valid operand-B for the
+        # ``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig`` decode kernel
+        # (engaged in ``forward`` only when ``not _tp_requires_ccl``). On the
+        # multi-device / CCL path that kernel never runs, so the weight is fed
+        # to a generic 2D-mcast (or auto-selected) matmul, which requires a
+        # DRAM_INTERLEAVED operand B. Pairing DRAM_WIDTH_SHARDED with the generic
+        # kernel is undefined and arch-dependent (it happens to read correctly on
+        # Wormhole's 12-bank DRAM grid but produces garbage on Blackhole's 8-bank
+        # grid, collapsing PCC to ~0). So only width-shard the weight on the
+        # single-device path; otherwise keep it DRAM_INTERLEAVED.
+        use_dram_sharded = not _tp_requires_ccl(self.device)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             weight_n_per_device = math.ceil(int(weight.shape[-1]) / num_tp)
+            weight_mem_cfg = (
+                _dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device)
+                if use_dram_sharded
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             self.tt_weight = ttnn.as_tensor(
                 weight,
                 device=self.device,
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device),
+                memory_config=weight_mem_cfg,
             )
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
@@ -1141,13 +1234,18 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             bias_n_per_device = math.ceil(int(bias.shape[-1]) / num_tp)
+            bias_mem_cfg = (
+                _dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device)
+                if use_dram_sharded
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             self.tt_bias = ttnn.as_tensor(
                 bias,
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device),
+                memory_config=bias_mem_cfg,
             )
         else:
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None

@@ -15,6 +15,7 @@ vision block, patch merger, and the top-level vision tower.
 from __future__ import annotations
 
 
+import math
 import os
 
 import torch
@@ -212,20 +213,13 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     k_tiles = k_dim // tile
     n_tiles = n_dim // tile
 
-    if m_tiles % grid_y != 0:
-        _VISION_MATMUL_PC_CACHE[cache_key] = None
-        return None
-
-    # ``num_blocks_x = ceil(n_tiles / per_core_n)`` in the 2D mcast factory
-    # (matmul_multicore_reuse_mcast_2d_program_factory.cpp:1669), so n_tiles
-    # doesn't need to divide grid_x cleanly -- the kernel pads the trailing
-    # output tiles internally. This unlocks the MLP gate/up matmuls
-    # (12288 x 1536 x 4224, n_tiles=132) which were falling back to the
-    # auto-config because 132 % 8 != 0. With per_core_n=ceil(132/8)=17 the
-    # 8x8 grid covers 136 tiles (4 padded) and we get the same in0_block_w
-    # tuning as the divisible matmuls.
-    per_core_m = m_tiles // grid_y
-    per_core_n = (n_tiles + grid_x - 1) // grid_x
+    # The 2D mcast factory requires num_blocks_y <= grid_y and num_blocks_x <= grid_x;
+    # ceil division ensures both hold without requiring exact divisibility. This
+    # lets the config work on grids like Blackhole's 11x10 where m_tiles=88 and
+    # grid_y=10 don't divide cleanly (88 % 10 != 0), which previously fell back to
+    # auto-config and used far fewer cores.
+    per_core_m = math.ceil(m_tiles / grid_y)
+    per_core_n = math.ceil(n_tiles / grid_x)
 
     if per_core_n > 24 or per_core_m > 64:
         _VISION_MATMUL_PC_CACHE[cache_key] = None
@@ -267,7 +261,7 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     # at ~1.7 MB. Empirically out_block_h=8 fits all four vision shapes
     # at full DST when out_block_h=12 doesn't.
     dst_tiles_budget = 8
-    candidate_out_block_h = [16, 12, 8, 6, 4, 3, 2, 1]
+    candidate_out_block_h = sorted(set([16, 12, 8, 6, 4, 3, 2, 1, per_core_m]), reverse=True)
     best_area = 0
     best_out_block_h = 1
     best_subblock_h = 1

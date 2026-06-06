@@ -17,11 +17,22 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_gate_up_dram_sharded_program_config,
     _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
+    _mesh_ccl_all_gather,
     _tp_requires_ccl,
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
     _ccl_num_links,
 )
+
+
+def _dots_ocr_mlp_compute_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
 
 class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFusedGateUp):
@@ -33,51 +44,58 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
         if not _tp_requires_ccl(self.device):
             return super().move_weights_to_device_impl()
 
+        # TP column-parallel on fused N=17920. Pack per device as [g_i, u_i] along
+        # out-rows so each device's N-shard is gate_i|up_i (chunk(2) stays local).
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         intermediate = self._gate_weight_torch.shape[0]
         shard = intermediate // num_devices
-        weight_chunks = []
-        bias_chunks = []
+        weight_rows = []
+        bias_rows = []
+        has_bias = self._gate_bias_torch is not None or self._up_bias_torch is not None
+        zeros_dtype = self._gate_weight_torch.dtype
         for i in range(num_devices):
-            start = i * shard
-            end = (i + 1) * shard
-            weight_chunks.extend([self._gate_weight_torch[start:end], self._up_weight_torch[start:end]])
-            if self._gate_bias_torch is not None or self._up_bias_torch is not None:
-                dtype = self._gate_weight_torch.dtype
-                gate_bias = (
+            start, end = i * shard, (i + 1) * shard
+            weight_rows.extend([self._gate_weight_torch[start:end], self._up_weight_torch[start:end]])
+            if has_bias:
+                g = (
                     self._gate_bias_torch[start:end]
                     if self._gate_bias_torch is not None
-                    else torch.zeros(shard, dtype=dtype)
+                    else torch.zeros(shard, dtype=zeros_dtype)
                 )
-                up_bias = (
+                u = (
                     self._up_bias_torch[start:end]
                     if self._up_bias_torch is not None
-                    else torch.zeros(shard, dtype=dtype)
+                    else torch.zeros(shard, dtype=zeros_dtype)
                 )
-                bias_chunks.extend([gate_bias, up_bias])
+                bias_rows.extend([g, u])
 
-        weight = torch.cat(weight_chunks, dim=0)
+        fused_weight_torch = torch.cat(weight_rows, dim=0)
+        weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
         self.tt_weight_host = preprocess_linear_weight(
-            weight,
-            dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+            fused_weight_torch,
+            dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            weights_mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+            weights_mesh_mapper=_tp_mesh_mapper(self.device, -1),
         )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
 
-        if bias_chunks:
-            bias = torch.cat(bias_chunks, dim=0)
+        if has_bias:
+            fused_bias_torch = torch.cat(bias_rows, dim=0)
             self.tt_bias_host = preprocess_linear_bias(
-                bias,
+                fused_bias_torch,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=_tp_mesh_mapper(self.device, self.input_dim),
+                weights_mesh_mapper=_tp_mesh_mapper(self.device, -1),
             )
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device)
         else:
             self.tt_bias = None
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        self.compute_kernel_config = _dots_ocr_mlp_compute_config(self.device)
+        self._gate_up_dram_input_shard_cfg = None
+        self._gate_up_dram_weight = None
+        self._gate_up_dram_bias = None
+        self._gate_up_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
@@ -123,34 +141,35 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             )
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
-        matmul_mc = ttnn.DRAM_MEMORY_CONFIG if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
-        # Fuse bias into the matmul kernel on single-device (no CCL would scale
-        # the bias by num_devices). Saves one BinaryNg per layer when bias is set.
-        fused_bias = None if needs_ccl else self.tt_bias
+        is_decode_shape = int(input_shape[-2]) <= ttnn.TILE_SIZE
+        out_mc = output_memory_config or (ttnn.L1_MEMORY_CONFIG if is_decode_shape else ttnn.DRAM_MEMORY_CONFIG)
 
-        prefill_compute_config = (
-            self._gate_up_decode_compute_kernel_config if not needs_ccl else self.compute_kernel_config
+        # TP column-parallel: hidden may arrive K-sharded (384/dev); gather to full
+        # K before the 32×1536×N matmul. Output stays N-sharded (4480/dev).
+        in_features = int(self._gate_weight_torch.shape[1])
+        if needs_ccl and int(input_tensor.shape[-1]) < in_features:
+            gather_dim = len(input_shape) - 1
+            input_tensor = _mesh_ccl_all_gather(
+                self.device,
+                input_tensor,
+                getattr(self, "device_state", None),
+                dim=gather_dim,
+                memory_config=out_mc,
+            )
+
+        matmul_mc = out_mc if needs_ccl else (output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        matmul_compute_config = (
+            self._gate_up_decode_compute_kernel_config if is_decode_shape else self.compute_kernel_config
         )
         tt_output = ttnn.linear(
             input_tensor,
             self.tt_weight,
-            bias=fused_bias,
+            bias=self.tt_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
-            compute_kernel_config=prefill_compute_config,
+            compute_kernel_config=matmul_compute_config,
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
-        if needs_ccl:
-            tt_output = ttnn.reduce_scatter(
-                tt_output,
-                dim=3,
-                num_links=_ccl_num_links(self.device),
-                cluster_axis=1,
-                memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
-            )
-            if self.tt_bias is not None:
-                tt_output += self.tt_bias
         return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 
 
@@ -193,12 +212,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        self.compute_kernel_config = _dots_ocr_mlp_compute_config(self.device)
         # Second weight (DRAM_WIDTH_SHARDED) for the decode DRAM-sharded matmul.
         # Allocated via ``as_tensor`` so no reshard kernel is launched. Prefill
         # uses ``self.tt_weight`` (DRAM_INTERLEAVED). Memory cost: ~7 MB / layer
@@ -244,6 +258,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             input_shape.insert(1, 1)
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         needs_ccl = _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device)
+        is_decode_shape = int(input_shape[-2]) <= ttnn.TILE_SIZE
         fused_bias = None if needs_ccl else self.tt_bias
 
         # Decode fast path: DRAM-sharded 8c (8x1 grid) matmul with
@@ -307,12 +322,17 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if needs_ccl:
+            rs_out_mc = (
+                output_memory_config
+                if (is_decode_shape and output_memory_config is not None)
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
             tt_output = ttnn.reduce_scatter(
                 tt_output,
                 dim=3,
                 num_links=_ccl_num_links(self.device),
                 cluster_axis=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=rs_out_mc,
                 topology=ttnn.Topology.Linear,
             )
             if self.tt_bias is not None:

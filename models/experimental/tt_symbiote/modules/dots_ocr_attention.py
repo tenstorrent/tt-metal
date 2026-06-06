@@ -18,10 +18,102 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _dp_matmul_program_config,
+    _mesh_ccl_all_gather,
     _tp_mesh_mapper,
     _tp_requires_ccl,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
+
+
+def _dots_ocr_compute_kernel_config(
+    device,
+    *,
+    math_fidelity: ttnn.MathFidelity,
+    math_approx_mode: bool = False,
+    fp32_dest_acc_en: bool = False,
+    packer_l1_acc: bool = True,
+):
+    """Wormhole or Blackhole compute kernel config (P150 / N150 TP meshes)."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+
+def _attn_tp_degree(device) -> int:
+    if device is None or not _tp_requires_ccl(device):
+        return 1
+    return max(1, int(device.get_num_devices()))
+
+
+def _text_tp_prefill_qkv_slabs(
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    *,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    tp: int,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Per-device fused QKV weight for text-decoder TP prefill (Q-shard, one KV head/device).
+
+      Device ``d`` owns Q heads ``[d*q_pd : (d+1)*q_pd]`` and the KV head those Q heads
+    attend to (GQA group ``num_q_heads // num_kv_heads``). Output width per device is
+      ``q_pd*head_dim + 2*head_dim`` (one K + one V head).
+    """
+    if num_q_heads % tp != 0:
+        raise ValueError(f"{num_q_heads} Q heads not divisible by TP={tp}")
+    q_pd = num_q_heads // tp
+    group = num_q_heads // num_kv_heads
+    q_w = num_q_heads * head_dim
+    kv_w = num_kv_heads * head_dim
+    q_part, k_part, v_part = torch.split(weight, [q_w, kv_w, kv_w], dim=0)
+    q_rows = q_pd * head_dim
+
+    slabs_w: list[torch.Tensor] = []
+    slabs_b: list[torch.Tensor] = [] if bias is not None else []
+    for d in range(tp):
+        q_global = d * q_pd
+        kv_head = q_global // group
+        q_sl = q_part[d * q_rows : (d + 1) * q_rows]
+        k_sl = k_part[kv_head * head_dim : (kv_head + 1) * head_dim]
+        v_sl = v_part[kv_head * head_dim : (kv_head + 1) * head_dim]
+        slabs_w.append(torch.cat([q_sl, k_sl, v_sl], dim=0))
+        if bias is not None:
+            bq, bk, bv = torch.split(bias, [q_w, kv_w, kv_w], dim=0)
+            slabs_b.append(
+                torch.cat(
+                    [
+                        bq[d * q_rows : (d + 1) * q_rows],
+                        bk[kv_head * head_dim : (kv_head + 1) * head_dim],
+                        bv[kv_head * head_dim : (kv_head + 1) * head_dim],
+                    ],
+                    dim=0,
+                )
+            )
+
+    stacked_w = torch.stack([slab.T.contiguous() for slab in slabs_w], dim=0)
+    stacked_b = None
+    if bias is not None:
+        stacked_b = torch.stack([slab.reshape(1, -1).contiguous() for slab in slabs_b], dim=0)
+    return stacked_w, stacked_b
+
+
+def _tp_kv_cache_gather_devices(tp: int, num_q_heads: int, num_kv_heads: int) -> list[int]:
+    """Mesh device indices that own distinct KV heads (GQA text @ TP4: devices 0 and 2)."""
+    group = num_q_heads // num_kv_heads
+    q_pd = num_q_heads // tp
+    seen: dict[int, int] = {}
+    for d in range(tp):
+        kv_head = (d * q_pd) // group
+        if kv_head not in seen:
+            seen[kv_head] = d
+    return [seen[h] for h in range(num_kv_heads)]
+
 
 try:
     from transformers.cache_utils import Cache
@@ -293,6 +385,10 @@ class TTNNDotsOCRAttention(TTNNModule):
             kb_conv = k_bias if k_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
             vb_conv = v_bias if v_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
             fused_linear_conv.bias.data = torch.cat([qb_conv, kb_conv, vb_conv], dim=0)
+        new_attn._prefill_qkv_weight_torch = fused_linear_conv.weight.data.clone()
+        new_attn._prefill_qkv_bias_torch = (
+            fused_linear_conv.bias.data.clone() if fused_linear_conv.bias is not None else None
+        )
         new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
 
         # O projection (block-sharded tuned prefill matmul + decode DRAM-sharded fast path)
@@ -326,11 +422,10 @@ class TTNNDotsOCRAttention(TTNNModule):
                 k_chunk_size=0,
                 exp_approx_mode=True,
             )
-            self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            self.sdpa.compute_kernel_config = _dots_ocr_compute_kernel_config(
+                self.device,
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
             )
             # Decode SDPA: HiFi2 (was LoFi in commit d1b17d1a3c6 -- swapped back
             # because LoFi at the per-token batch=1 K/V cache reads produces
@@ -338,20 +433,16 @@ class TTNNDotsOCRAttention(TTNNModule):
             # earlier "validation" run that approved LoFi was confounded by the
             # broken DRAM-sharded LM head also in that commit, so the LoFi delta
             # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
-            self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            self.sdpa.decode_compute_kernel_config = _dots_ocr_compute_kernel_config(
+                self.device,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
             )
 
-        # Override QKV compute config: HiFi2 for decode
-        self.qkv_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # Override QKV compute config: HiFi2 for decode (both fused QKV linears).
+        qkv_ck = _dots_ocr_compute_kernel_config(self.device, math_fidelity=ttnn.MathFidelity.HiFi2)
+        self.qkv_proj.compute_kernel_config = qkv_ck
+        self.qkv_proj_prefill.compute_kernel_config = qkv_ck
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -385,6 +476,45 @@ class TTNNDotsOCRAttention(TTNNModule):
                 rope_convention="half_half",
             )
         self._rotary_setup = TTNNDotsOCRAttention._shared_rotary_setups[setup_key]
+
+        self._tp_degree = _attn_tp_degree(self.device)
+        self._q_heads_per_device = (
+            self.num_attention_heads // self._tp_degree if self._tp_degree > 1 else self.num_attention_heads
+        )
+        self._kv_heads_per_device = 1 if self._tp_degree > 1 else self.num_key_value_heads
+        self._tt_qkv_prefill_tp_weight = None
+        self._tt_qkv_prefill_tp_bias = None
+        prefill_w = getattr(self, "_prefill_qkv_weight_torch", None)
+        if self._tp_degree > 1 and prefill_w is not None:
+            stacked_w, stacked_b = _text_tp_prefill_qkv_slabs(
+                prefill_w,
+                getattr(self, "_prefill_qkv_bias_torch", None),
+                num_q_heads=self.num_attention_heads,
+                num_kv_heads=self.num_key_value_heads,
+                head_dim=self.head_dim,
+                tp=self._tp_degree,
+            )
+            mapper = ttnn.ShardTensorToMesh(self.device, dim=0)
+            self._tt_qkv_prefill_tp_weight = ttnn.from_torch(
+                stacked_w,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mapper,
+            )
+            if stacked_b is not None:
+                self._tt_qkv_prefill_tp_bias = ttnn.from_torch(
+                    stacked_b,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                )
+            self._tp_kv_cache_src_devs = _tp_kv_cache_gather_devices(
+                self._tp_degree, self.num_attention_heads, self.num_key_value_heads
+            )
 
     def _get_cur_pos_device_tensor(self, cache_position, batch_size):
         cp = cache_position
@@ -430,7 +560,138 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         return qkv_states
 
+    def _gather_mesh_shards(self, tensor: ttnn.Tensor, dim: int, full_width: int) -> ttnn.Tensor:
+        """All-gather a mesh-sharded axis (fabric CCL when available, else host compose)."""
+        if int(tensor.shape[dim]) == full_width:
+            return tensor
+        return _mesh_ccl_all_gather(
+            self.device,
+            tensor,
+            getattr(self, "device_state", None),
+            dim=dim,
+            memory_config=tensor.memory_config(),
+        )
+
+    def _gather_hidden_k_for_tp(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """All-gather K-sharded hidden (384/dev) to full width (1536) on every device."""
+        return self._gather_mesh_shards(hidden_states, dim=-1, full_width=int(self.hidden_size))
+
+    def _project_qkv_prefill_tp(self, hidden_states, batch_size, seq_length):
+        """Head-sharded QKV matmul: ``2816×1536×896`` per device after K all-gather, no output AR."""
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        hidden_full = self._gather_hidden_k_for_tp(hidden_states)
+
+        input_shape = list(hidden_full.shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        x = ttnn.reshape(hidden_full, input_shape)
+        program_config = _dp_matmul_program_config(self.device, input_shape, self._tt_qkv_prefill_tp_weight.shape)
+        qkv_states = ttnn.linear(
+            x,
+            self._tt_qkv_prefill_tp_weight,
+            bias=self._tt_qkv_prefill_tp_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.qkv_proj_prefill.compute_kernel_config,
+            program_config=program_config,
+        )
+        if hidden_full is not hidden_states:
+            ttnn.deallocate(hidden_full)
+        return ttnn.reshape(qkv_states, (batch_size, 1, seq_length, -1))
+
+    def _tp_gather_kv_for_paged_cache(self, key_states: ttnn.Tensor, value_states: ttnn.Tensor):
+        """Rebuild full ``num_kv_heads`` K/V on every device for paged cache fill."""
+        composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        k_cat = ttnn.to_torch(key_states, mesh_composer=composer)
+        v_cat = ttnn.to_torch(value_states, mesh_composer=composer)
+        src = self._tp_kv_cache_src_devs
+        k_heads = torch.cat([k_cat[i] for i in src], dim=0)
+        v_heads = torch.cat([v_cat[i] for i in src], dim=0)
+        if k_heads.dim() == 4 and int(k_heads.shape[1]) == 1:
+            k_heads = k_heads.squeeze(1)
+            v_heads = v_heads.squeeze(1)
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        mem = ttnn.L1_MEMORY_CONFIG
+        k_full = ttnn.from_torch(
+            k_heads.unsqueeze(0),
+            dtype=key_states.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=mem,
+            mesh_mapper=rep,
+        )
+        v_full = ttnn.from_torch(
+            v_heads.unsqueeze(0),
+            dtype=value_states.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=mem,
+            mesh_mapper=rep,
+        )
+        return k_full, v_full
+
+    def _forward_prefill_tp(self, hidden_states, attention_mask, past_key_values, cache_position):
+        """TP prefill: head-sharded QKV/SDPA/concat; K-sharded hidden in/out."""
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        qkv_states = self._project_qkv_prefill_tp(hidden_states, batch_size, seq_length)
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_states,
+            num_heads=self._q_heads_per_device,
+            num_kv_heads=self._kv_heads_per_device,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_states)
+
+        seq_len = query_states.shape[2]
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
+        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
+
+        if query_states.shape[2] != seq_len:
+            query_states = query_states[:, :, :seq_len, :]
+        if key_states.shape[2] != seq_len:
+            key_states = key_states[:, :, :seq_len, :]
+
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        if past_key_values is not None and use_paged:
+            k_fill, v_fill = self._tp_gather_kv_for_paged_cache(key_states, value_states)
+            if k_fill.dtype != ttnn.bfloat16:
+                k_fill = ttnn.typecast(k_fill, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if v_fill.dtype != ttnn.bfloat16:
+                v_fill = ttnn.typecast(v_fill, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
+            if k_fill is not key_states:
+                ttnn.deallocate(k_fill)
+            if v_fill is not value_states:
+                ttnn.deallocate(v_fill)
+
+        self.sdpa.memory_config = ttnn.L1_MEMORY_CONFIG
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            is_causal=self.is_causal,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            attn_mask=attention_mask,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+            memory_config=self.sdpa.memory_config,
+        )
+
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.squeeze(attn_output, 1)
+        # Column-sharded o_proj needs full concat width (1536); keep L1 if concat wrote L1.
+        attn_output = self._gather_mesh_shards(attn_output, dim=-1, full_width=int(self.hidden_size))
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
+
     def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
+        if getattr(self, "_tp_degree", 1) > 1 and getattr(self, "_tt_qkv_prefill_tp_weight", None) is not None:
+            return self._forward_prefill_tp(hidden_states, attention_mask, past_key_values, cache_position)
+
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
 
         # Prefill uses qkv_proj_prefill (conventional [Q_all|K_all|V_all] weight),
