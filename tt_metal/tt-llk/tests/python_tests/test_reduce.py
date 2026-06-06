@@ -5,6 +5,7 @@ import math
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
@@ -151,6 +152,12 @@ def test_reduce(
         )
         else DestAccumulation.No
     )
+
+    if (
+        TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("https://github.com/tenstorrent/tt-llk/issues/1568")
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
 
@@ -331,6 +338,12 @@ def test_reduce_bfp4_b(
         )
         else DestAccumulation.No
     )
+
+    if (
+        TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip("https://github.com/tenstorrent/tt-llk/issues/1568")
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
 
