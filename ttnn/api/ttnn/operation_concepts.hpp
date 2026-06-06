@@ -150,8 +150,27 @@ concept AdvancedProgramSpecFactoryConcept = requires {
     &T::extract_immutable_info;
 };
 
-// TODO: Define how the "switch" to select between Option 1 and 2 works.
+// Option 1 vs Option 2 selector.
 //
+// Both options expose the same factory signature (create_program_artifacts), so the
+// adapter cannot tell them apart by shape alone. The factory opts into the Ryan-fast
+// Option 1 path explicitly via a type-level marker:
+//
+//   struct MyFactory {
+//       using fast_cache_hit_path = std::true_type;  // opt into Option 1
+//       static ttnn::device_operation::ProgramArtifacts create_program_artifacts(...);
+//   };
+//
+// The default is Option 2 (safe by construction): the factory is re-run on every
+// cache hit and the full ProgramRunArgs is re-applied via SetProgramRunArgs. Porters
+// who don't know about the distinction get correct behavior automatically; opting
+// into Option 1 is "I know what I'm doing, run the fast path".
+template <typename T>
+concept HasFastCacheHitPathOptIn = requires {
+    typename T::fast_cache_hit_path;
+    requires T::fast_cache_hit_path::value;
+};
+
 // "Exactly one of the three forms is satisfied" is enforced by sum-equals-1
 // (the same pattern Diego uses for outer-factory disambiguation in
 // AllFactoriesValid below). A factory that accidentally exposes two shapes
