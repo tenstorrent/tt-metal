@@ -349,7 +349,7 @@ One thing to be aware of: `TensorSpec` is a property of a `MeshTensor`. This pre
 
 **Spec-validator: every TensorParameter needs ≥1 TensorBinding across the program's kernels.** Symmetric sibling of the DFB producer/consumer rule. A `TensorParameter` declared on `ProgramSpec` but never bound by any kernel is rejected by the validator. If you find yourself with an unbound `TensorParameter`, either drop the declaration (the tensor isn't actually needed by the program) or add the missing `TensorBinding` on the kernel that uses it.
 
-> **⚠ Pre-migration check.** Before migrating an op, grep its kernel sources for `ArgConfig::Runtime`. If any kernel uses **`ArgConfig::RuntimeTensorShape`**, this op cannot migrate to Metal 2.0 yet. Metal 2.0 has no positional-CTA mechanism, so the legacy `TensorAccessorArgs(buffer, ArgConfig::RuntimeTensorShape).append_to(...)` plumbing has no equivalent in the current API. Stay on the legacy `ProgramDescriptor` path until the follow-up PR adds runtime-shape support. (The other deferred flavors — `RuntimeRank`, `RuntimeNumBanks`, `RuntimeShardShape`, `RuntimeBankCoords` — have zero user sites outside tests, so this check almost always reduces to "is `RuntimeTensorShape` present?".)
+> **⚠ Pre-migration check.** Before migrating an op, grep its kernel sources for `ArgConfig::Runtime`. If any kernel uses **`ArgConfig::RuntimeTensorShape`** (or the closely related `RuntimeShardShape` / `RuntimeBankCoords`), Metal 2.0 supports the capability via `TensorParameter::advanced_options.dynamic_tensor_shape = true` (full relaxation: `logical_shape` and `padded_shape` may both vary at enqueue) or `match_padded_shape_only = true` (weaker: `logical_shape` may vary, `padded_shape` must match). Both opt-ins are documented **UNSAFE** in the framework header — most kernels won't function correctly if the bound tensor's spec deviates from the declared spec — and adopting them has structural implications for the factory's interaction with the framework's per-dispatch caching path. Treat their use as a deliberate design choice, not a drop-in fix. The remaining flavors — `RuntimeRank`, `RuntimeNumBanks` — do not have a clean translation today; they have ~zero user sites outside tests, so this rarely matters in practice.
 
 #### Legacy
 
@@ -417,7 +417,7 @@ The buffer-address RTA is gone — the binding mechanism auto-injects the per-en
 
 For each op:
 
-1. **Pre-flight.** Grep the op's kernel sources for `ArgConfig::Runtime`. If `RuntimeTensorShape` appears anywhere, **do not migrate this op** (see callout above).
+1. **Pre-flight.** Grep the op's kernel sources for `ArgConfig::Runtime`. If `RuntimeTensorShape` (or `RuntimeShardShape` / `RuntimeBankCoords`) appears anywhere, the migration is possible but the `TensorParameter`s for the affected tensors need `advanced_options.dynamic_tensor_shape = true` (or the weaker `match_padded_shape_only = true`) — see callout above for the safety and structural caveats before adopting either.
 2. **Find each `TensorAccessor`.** In each kernel, locate every `TensorAccessor(args, addr)` construction. For each, trace `addr` back through the host code to the originating `Tensor`.
 3. **Declare `TensorParameter`s.** Add one entry per tensor to `ProgramSpec::tensor_parameters`, using `tensor.tensor_spec()`. Pick a stable `unique_id`; reuse a `constexpr const char*` constant per the convention.
 4. **Add `TensorBinding`s.** On each `KernelSpec` whose kernel accesses the tensor, add an entry to `tensor_bindings` referencing the parameter by name. The `accessor_name` is the kernel-side identifier — it will appear as `ta::<accessor_name>`.
@@ -437,7 +437,6 @@ The common case (matmul reader + compute reading the same input; reshard reader/
 
 #### What's not covered yet
 
-- **`RuntimeTensorShape`** — eltwise unary/ternary/binary_ng currently rely on this. Follow-up PR ships shortly.
 - **Manual `DistributionSpec` reuse** (the "advanced reuse-bank-coords-across-accessors" path from the [TensorAccessor guide](../../../../tech_reports/tensor_accessor/tensor_accessor.md)). Not commonly used in production ops.
 - **Tensor bindings on compute kernels** are out of scope. `TensorAccessor` was never supported for compute kernels (TRISC builds don't compile its NoC-using includes), so migration should not encounter any.
 

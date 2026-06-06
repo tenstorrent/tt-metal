@@ -705,11 +705,18 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 - `ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp` (literal `1`)
 - `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/moe_gpt_program_factory.cpp` (`INVALID` / `INVALID_SEM` sentinels)
 
-### Dynamic TensorAccessor (`ArgConfig::Runtime*` flavors: RuntimeTensorShape, RuntimeRank, RuntimeNumBanks, RuntimeShardShape, RuntimeBankCoords) — UNSUPPORTED
+### Dynamic TensorAccessor (`ArgConfig::Runtime*` flavors: RuntimeTensorShape, RuntimeRank, RuntimeNumBanks, RuntimeShardShape, RuntimeBankCoords) — DISCOURAGED
 
-**Status**: Not yet supported in Metal 2.0. The legacy `TensorAccessorArgs(buffer, ArgConfig::Runtime*)` family lets the host defer parts of the tensor accessor's metadata (shape, rank, bank info) to runtime, threading them through positional CTAs. Metal 2.0 has no positional-CTA mechanism, so this plumbing has no equivalent yet.
+**Status**: Supported by Metal 2.0 today via two opt-ins on `TensorParameter::advanced_options` — but their use carries caveats that make this a yellow rather than green entry.
 
-**Recognition — definitely this feature** (refuse and report):
+- `TensorParameterAdvancedOptions::dynamic_tensor_shape = true` — full relaxation. The bound `MeshTensor`'s `logical_shape` *and* `padded_shape` may differ from the `TensorParameter`'s declared spec. For interleaved tensors the `TensorAccessor` configuration is unchanged; for sharded tensors the accessor reflects the argument's actual shape (shape becomes an implicit runtime argument). This is the translation path for the legacy `ArgConfig::RuntimeTensorShape` (and the closely related `RuntimeShardShape` / `RuntimeBankCoords` flavors).
+- `TensorParameterAdvancedOptions::match_padded_shape_only = true` — weaker relaxation. The bound tensor's `logical_shape` may vary, but its `padded_shape` must match the declared spec exactly. `TensorAccessor` configuration is completely unchanged.
+
+Both options are documented **UNSAFE** in the framework header: most kernels will not function correctly if the tensor argument's spec deviates from the declared spec. Adopting them also has structural implications for how the op's factory interacts with the framework's per-dispatch caching path — implications that warrant discussion before a port commits to either opt-in.
+
+The remaining `ArgConfig::Runtime*` flavors — `RuntimeRank`, `RuntimeNumBanks` — do not have a clean translation via these options. Both have ~zero user sites outside tests, so in practice this rarely matters; flag them in the audit for the user's awareness if they appear.
+
+**Recognition — definitely this feature** (report yellow; await user decision):
 
 - Any reference to one of the following enumerators in op host code:
   - `tensor_accessor::ArgConfig::RuntimeTensorShape`
@@ -726,7 +733,12 @@ In practice, `RuntimeTensorShape` is the dominant flavor; the other four have ~z
 
 The single-argument form `TensorAccessorArgs(buffer)` (with no second arg, or with a non-`Runtime*` `ArgConfig` value) is the standard path → supported in Metal 2.0 via `TensorParameter` + `TensorBinding`. Do not refuse these. The disambiguator is the literal token `Runtime` on an `ArgConfig::` qualifier.
 
-**Action**: STOP. Report to the user that this op uses one or more `ArgConfig::Runtime*` tensor-accessor flavors, which Metal 2.0 does not yet support. Do not invent a workaround. Note that the op may otherwise look ready for Metal 2.0 — the gating signal is just the `ArgConfig::Runtime*` token, possibly buried in an otherwise-standard `TensorAccessorArgs(...)` call chain.
+**Action**: Report **yellow** in the audit. Include in the report:
+- Each site of `ArgConfig::Runtime*` use (`file:line`) and the flavor in use.
+- A note that Metal 2.0 supports the runtime-shape capability via `TensorParameterAdvancedOptions::dynamic_tensor_shape` (or the weaker `match_padded_shape_only`), but the options are marked **UNSAFE** in the framework header and adopting them has structural implications for the factory's interaction with per-dispatch caching — the decision belongs to the user.
+- If any of the niche flavors (`RuntimeRank`, `RuntimeNumBanks`) appear, surface them separately: those do not have a clean advanced-options translation today.
+
+**Do not refuse the port outright on this signal alone.** On override, the translation is: set `TensorParameter::advanced_options.dynamic_tensor_shape = true` (full relaxation) or `match_padded_shape_only = true` (padded-shape-only relaxation) on the affected `TensorParameter`(s). The recognition-signal sites — the `ArgConfig::Runtime*` tokens in the legacy code — are the porter's anchor for which `TensorParameter`s need the opt-in.
 
 **Examples in the wild** (for ground-truthing your match):
 - `ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_hc_tiled_interleaved_program_factory.cpp`
