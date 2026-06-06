@@ -365,7 +365,7 @@ RUN umask 000 && /bin/bash -c "./build_metal.sh \
     echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 
 # Extra system deps
-RUN apt update && apt install -y \
+RUN apt-get update && apt-get install -y \
     # required
     gosu \
     libgl1 \
