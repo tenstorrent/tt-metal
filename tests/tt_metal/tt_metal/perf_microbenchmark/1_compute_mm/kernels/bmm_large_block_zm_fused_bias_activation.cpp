@@ -54,7 +54,7 @@ void kernel_main() {
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    tile_regs_acquire();
+                    acquire_dst();
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -89,13 +89,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
                         // Move matmul result to interm buffer
                         cb_reserve_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                        tile_regs_commit();
-                        tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, mm_bias_intermediate_cb_id);
                         }
                         cb_push_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                        tile_regs_release();
+                        release_dst();
 
                         // Redundant wait since we know data was just pushed
                         cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
@@ -105,7 +103,7 @@ void kernel_main() {
                         reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                         // reconfigure packer df for out
                         pack_reconfig_data_format(out_cb_id);
-                        tile_regs_acquire();
+                        acquire_dst();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bcast_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
@@ -133,8 +131,6 @@ void kernel_main() {
 #endif
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
-                        tile_regs_commit();
-                        tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, out_cb_id);
                         }
@@ -150,15 +146,13 @@ void kernel_main() {
 #endif
                         // Move partial result to interm buffer
                         cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
-                        tile_regs_commit();
-                        tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, mm_partials_cb_id);
                         }
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    tile_regs_release();
+                    release_dst();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;

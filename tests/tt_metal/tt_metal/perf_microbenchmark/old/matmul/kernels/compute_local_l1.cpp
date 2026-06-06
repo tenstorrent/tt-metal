@@ -15,16 +15,14 @@ void kernel_main() {
 
     for (uint32_t mt = 0; mt < sub_Mt; ++mt) {
         for (uint32_t nt = 0; nt < sub_Nt; ++nt) {
-            tile_regs_acquire();
+            acquire_dst();
             for (uint32_t kt = 0; kt < Kt; ++kt) {
                 matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, mt * Kt + kt, nt * Kt + kt, 0);
             }
             cb_reserve_back(tt::CBIndex::c_16, onetile);
-            tile_regs_commit();
-            tile_regs_wait();
             pack_tile(0, tt::CBIndex::c_16);
             cb_push_back(tt::CBIndex::c_16, onetile);
-            tile_regs_release();
+            release_dst();
         }
     }
 }

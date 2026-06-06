@@ -23,14 +23,8 @@
 #include "api/compute/tile_move_copy.h"
 
 // Deprecated
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 namespace ckernel {
 
