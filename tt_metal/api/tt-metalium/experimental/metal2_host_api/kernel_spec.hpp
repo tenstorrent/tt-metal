@@ -17,7 +17,9 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -60,7 +62,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = std::string;
+using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 //------------------------------------------------
 // KernelSpec
@@ -98,7 +100,7 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
         using IncludePaths = std::vector<std::filesystem::path>;
-        using Defines = std::vector<std::pair<std::string, std::string>>;
+        using Defines = Table<std::string, std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths;         // -I <path>
@@ -144,7 +146,7 @@ struct KernelSpec {
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
     // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
     struct TensorBinding {
-        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
     std::vector<TensorBinding> tensor_bindings;
@@ -162,7 +164,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    using CompileTimeArgs = Table<std::string, uint32_t>;
     CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 

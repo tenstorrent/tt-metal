@@ -373,11 +373,11 @@ bool run_sfpu_all_same_buffer(
     const CoreCoord core = core_range.start_coord;
     const experimental::NodeCoord node{core.x, core.y};
 
-    constexpr const char* IN_DFB = "in_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName IN_DFB{"in_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
@@ -438,7 +438,7 @@ bool run_sfpu_all_same_buffer(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : sfpu_defines) {
-        compute_defines.emplace_back(k, v);
+        compute_defines.emplace(k, v);
     }
 
     experimental::KernelSpec compute_spec{
@@ -493,27 +493,23 @@ bool run_sfpu_all_same_buffer(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", input_dram_buffer->address()},
-                       {"bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", output_dram_buffer->address()},
-                       {"bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"src_addr", input_dram_buffer->address()},
+                    {"bank_id", 0u},
+                    {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"dst_addr", output_dram_buffer->address()},
+                    {"bank_id", 0u},
+                    {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}},
+         }},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 
@@ -539,7 +535,8 @@ experimental::NodeCoord extract_single_core_node(const SfpuConfig& cfg, const ch
 
 // Builds a DataflowBufferSpec. `entry_size` is derived from `fmt` so that input and output
 // DFBs are correctly sized even when their formats differ (e.g. Int8 in → Int32 out).
-experimental::DataflowBufferSpec make_dfb_spec(const char* id, const SfpuConfig& cfg, tt::DataFormat fmt) {
+experimental::DataflowBufferSpec make_dfb_spec(
+    const experimental::DFBSpecName& id, const SfpuConfig& cfg, tt::DataFormat fmt) {
     return {
         .unique_id = id,
         .entry_size = static_cast<uint32_t>(tt::tile_size(fmt)),
@@ -552,13 +549,14 @@ experimental::DataflowBufferSpec make_dfb_spec(const char* id, const SfpuConfig&
 experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::map<std::string, std::string>& m) {
     experimental::KernelSpec::CompilerOptions::Defines defines;
     for (const auto& [k, v] : m) {
-        defines.emplace_back(k, v);
+        defines.emplace(k, v);
     }
     return defines;
 }
 
 // Builds a writer_unary KernelSpec bound to a single output DFB.
-experimental::KernelSpec make_writer_unary_quasar_spec(const char* kernel_id, const char* out_dfb_id) {
+experimental::KernelSpec make_writer_unary_quasar_spec(
+    const experimental::KernelSpecName& kernel_id, const experimental::DFBSpecName& out_dfb_id) {
     return {
         .unique_id = kernel_id,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
@@ -579,12 +577,11 @@ experimental::KernelSpec make_writer_unary_quasar_spec(const char* kernel_id, co
 
 // Builds writer KernelRunArgs for a single-node Quasar program.
 experimental::ProgramRunArgs::KernelRunArgs make_writer_run_args(
-    const char* kernel_id, const experimental::NodeCoord& node, uint32_t dst_addr, uint32_t num_tiles) {
+    const experimental::NodeCoord& node, uint32_t dst_addr, uint32_t num_tiles) {
     return {
-        .kernel_spec_name = kernel_id,
         .runtime_arg_values = {{
-            .node = node,
-            .args = {{"dst_addr", dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}},
+            node,
+            {{"dst_addr", dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}},
         }},
     };
 }
@@ -686,12 +683,12 @@ bool run_sfpu_binary_two_input_buffer(
     }
 
     const auto node = extract_single_core_node(test_config, "Metal 2.0 binary SFPU path");
-    constexpr const char* IN0_DFB = "in0_dfb";
-    constexpr const char* IN1_DFB = "in1_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
+    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
@@ -765,18 +762,17 @@ bool run_sfpu_binary_two_input_buffer(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", input0_dram_buffer->address()},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", input1_dram_buffer->address()},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}}},
-        make_writer_run_args(WRITER, node, output_dram_buffer->address(), test_config.num_tiles),
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"src0_addr", input0_dram_buffer->address()},
+                    {"src0_bank_id", 0u},
+                    {"src1_addr", input1_dram_buffer->address()},
+                    {"src1_bank_id", 0u},
+                    {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)}}}}}},
+        {WRITER, make_writer_run_args(node, output_dram_buffer->address(), test_config.num_tiles)},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
 
     const auto dest = sfpu_quasar_run(
@@ -833,13 +829,13 @@ bool run_sfpu_ternary_three_input_buffer(
 
     std::vector<uint32_t> dest_buffer_data;
     if (device->arch() == ARCH::QUASAR) {
-        constexpr const char* IN0_DFB = "in0_dfb";
-        constexpr const char* IN1_DFB = "in1_dfb";
-        constexpr const char* IN2_DFB = "in2_dfb";
-        constexpr const char* OUT_DFB = "out_dfb";
-        constexpr const char* READER = "reader";
-        constexpr const char* WRITER = "writer";
-        constexpr const char* COMPUTE = "compute";
+        const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
+        const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
+        const experimental::DFBSpecName IN2_DFB{"in2_dfb"};
+        const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+        const experimental::KernelSpecName READER{"reader"};
+        const experimental::KernelSpecName WRITER{"writer"};
+        const experimental::KernelSpecName COMPUTE{"compute"};
 
         const auto node = extract_single_core_node(test_config, "Metal 2.0 ternary SFPU path");
 
@@ -935,21 +931,20 @@ bool run_sfpu_ternary_three_input_buffer(
 
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {
-            experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel_spec_name = READER,
-                .runtime_arg_values =
-                    {{.node = node,
-                      .args =
-                          {{"src0_addr", input0_dram_buffer->address()},
-                           {"src0_bank_id", 0u},
-                           {"src1_addr", input1_dram_buffer->address()},
-                           {"src1_bank_id", 0u},
-                           {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
-                           {"src2_addr", input2_dram_buffer->address()},
-                           {"src2_bank_id", 0u}}}},
-            },
-            make_writer_run_args(WRITER, node, output_dram_buffer->address(), test_config.num_tiles),
-            experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
+            {READER,
+             experimental::ProgramRunArgs::KernelRunArgs{
+                 .runtime_arg_values =
+                     {{node,
+                       {{"src0_addr", input0_dram_buffer->address()},
+                        {"src0_bank_id", 0u},
+                        {"src1_addr", input1_dram_buffer->address()},
+                        {"src1_bank_id", 0u},
+                        {"num_tiles", static_cast<uint32_t>(test_config.num_tiles)},
+                        {"src2_addr", input2_dram_buffer->address()},
+                        {"src2_bank_id", 0u}}}},
+             }},
+            {WRITER, make_writer_run_args(node, output_dram_buffer->address(), test_config.num_tiles)},
+            {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
         };
         dest_buffer_data = sfpu_quasar_run(
             mesh_device,

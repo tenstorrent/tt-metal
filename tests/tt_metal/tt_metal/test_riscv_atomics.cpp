@@ -67,7 +67,7 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines.begin(), dm_defines.end());
+        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines);
 
         // Quasar: one multi-threaded DM kernel spans the user DMs (DM2..DM7).
         // Gen1 (BH): one KernelSpec per DM processor (BRISC, NCRISC), each single-threaded with its
@@ -75,18 +75,16 @@ protected:
         // (Gen1) — see riscv_atomics.cpp.
         std::vector<experimental::KernelSpec> kernel_specs;
         std::vector<experimental::KernelSpecName> kernel_names;
-        std::vector<experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
-        const auto make_run_params = [&](const std::string& name) {
+        experimental::Table<experimental::KernelSpecName, experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
+        const auto make_run_params = [&]() {
             return experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel_spec_name = name,
                 .runtime_arg_values =
-                    {{.node = core,
-                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                    {{core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             };
         };
 
         if (is_quasar) {
-            const std::string DM_KERNEL = "dm_kernel";
+            const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_path,
@@ -98,10 +96,10 @@ protected:
                         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
             });
             kernel_names.push_back(DM_KERNEL);
-            kernel_run_args.push_back(make_run_params(DM_KERNEL));
+            kernel_run_args.emplace(DM_KERNEL, make_run_params());
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                const std::string name = "dm_kernel_" + std::to_string(dm_id);
+                const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
                 kernel_specs.push_back(experimental::KernelSpec{
                     .unique_id = name,
                     .source = kernel_path,
@@ -117,7 +115,7 @@ protected:
                                 }},
                 });
                 kernel_names.push_back(name);
-                kernel_run_args.push_back(make_run_params(name));
+                kernel_run_args.emplace(name, make_run_params());
             }
         }
 

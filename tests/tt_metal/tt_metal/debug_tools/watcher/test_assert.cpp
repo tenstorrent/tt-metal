@@ -73,7 +73,7 @@ static void RunTest(
     CoreCoord logical_core, virtual_core;
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel = 0;
-    constexpr const char* ASSERT_KERNEL_NAME = "assert_kernel";
+    const experimental::KernelSpecName ASSERT_KERNEL_NAME{"assert_kernel"};
     auto processor_idx =
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
@@ -188,13 +188,13 @@ static void RunTest(
             SetRuntimeArgs(prog, assert_kernel, logical_core, args);
         } else {
             experimental::ProgramRunArgs params;
-            params.kernel_run_args = {{
-                .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .runtime_arg_values =
-                    {{.node = experimental::NodeCoord{logical_core},
-                      .args =
-                          {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
-            }};
+            params.kernel_run_args = {
+                {ASSERT_KERNEL_NAME,
+                 experimental::ProgramRunArgs::KernelRunArgs{
+                     .runtime_arg_values =
+                         {{experimental::NodeCoord{logical_core},
+                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
+                 }}};
             experimental::SetProgramRunArgs(prog, params);
         }
     };

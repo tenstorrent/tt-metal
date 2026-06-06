@@ -170,13 +170,13 @@ void run_single_core_transpose(
     constexpr uint32_t num_buffer_tiles = 32;
     constexpr uint32_t num_output_buffer_tiles = 32;
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     experimental::DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
@@ -229,7 +229,7 @@ void run_single_core_transpose(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.short_init) {
-        compute_defines.emplace_back("SHORT_INIT", "1");
+        compute_defines.emplace("SHORT_INIT", "1");
     }
 
     const char* compute_kernel_path = test_config.transpose_dest
@@ -286,21 +286,19 @@ void run_single_core_transpose(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values = {{.node = node, .args = {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", num_tensor_tiles}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{node, {{"num_tiles", num_tensor_tiles}}}},
+         }},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{.tensor = in_tensor}},
+        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{.tensor = out_tensor}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

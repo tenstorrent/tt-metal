@@ -114,10 +114,10 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         {"RESULTS_ADDR", std::to_string(rta_base_dm)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        dm_defines.push_back({"COMMON_RUNTIME_ARGS", "1"});
+        dm_defines.emplace("COMMON_RUNTIME_ARGS", "1");
     }
 
-    constexpr const char* KERNEL = "dm_runtime_args";
+    const experimental::KernelSpecName KERNEL{"dm_runtime_args"};
 
     // Both gen1 and gen2 DM configs are populated; the runtime selects the one
     // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
@@ -198,19 +198,19 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         {"RESULTS_ADDR", std::to_string(rta_base)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        defines_vec.push_back({"COMMON_RUNTIME_ARGS", "1"});
+        defines_vec.emplace("COMMON_RUNTIME_ARGS", "1");
     }
 
     std::vector<std::string> kernel_names(num_kernels);
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> wu_kernel_names;
+    std::vector<experimental::KernelSpecName> wu_kernel_names;
     kernel_specs.reserve(num_kernels);
     wu_kernel_names.reserve(num_kernels);
 
     for (uint32_t k = 0; k < num_kernels; k++) {
         kernel_names[k] = "dm_kernel_" + std::to_string(k);
         kernel_specs.push_back(experimental::KernelSpec{
-            .unique_id = kernel_names[k],
+            .unique_id = experimental::KernelSpecName{kernel_names[k]},
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
@@ -225,7 +225,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
                     .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
                 },
         });
-        wu_kernel_names.push_back(kernel_names[k]);
+        wu_kernel_names.push_back(experimental::KernelSpecName{kernel_names[k]});
     }
 
     experimental::WorkUnitSpec main_wu{
@@ -999,14 +999,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto& program = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = kernel_names[0],
-        .advanced_options =
-            experimental::AdvancedKernelRunArgs{
-                .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
-                .common_runtime_varargs = common_rtas,
-            },
-    }};
+    params.kernel_run_args = {
+        {experimental::KernelSpecName{kernel_names[0]},
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 experimental::AdvancedKernelRunArgs{
+                     .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
+                     .common_runtime_varargs = common_rtas,
+                 },
+         }}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -1041,14 +1042,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        params.kernel_run_args.push_back({
-            .kernel_spec_name = kernel_names[i],
-            .advanced_options =
-                experimental::AdvancedKernelRunArgs{
-                    .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
-                    .common_runtime_varargs = kernel_crtas,
-                },
-        });
+        params.kernel_run_args.emplace(
+            experimental::KernelSpecName{kernel_names[i]},
+            experimental::ProgramRunArgs::KernelRunArgs{
+                .advanced_options =
+                    experimental::AdvancedKernelRunArgs{
+                        .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
+                        .common_runtime_varargs = kernel_crtas,
+                    },
+            });
     }
     experimental::SetProgramRunArgs(program, params);
 
