@@ -246,9 +246,30 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<ProgramSpecFactoryConcept T>(const T&) {
-                using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
-                fn.template operator()<AdaptedMeshWorkloadFactory>();
+                // ProgramSpecFactoryConcept is an umbrella over three sub-shapes; dispatch
+                // each to its own adapter.  The sub-concepts are mutually exclusive by
+                // construction (sum-equals-1 in the umbrella concept), so the branches
+                // here are exhaustive.
+                if constexpr (WorkloadArtifactConcept<T>) {
+                    using AdaptedMeshWorkloadFactory =
+                        mesh_device_operation_t::template WorkloadArtifactMeshWorkloadAdapter<T>;
+                    fn.template operator()<AdaptedMeshWorkloadFactory>();
+                } else if constexpr (AdvancedProgramSpecFactoryConcept<T>) {
+                    // Option 3 — deferred to a future stage. The umbrella concept admits
+                    // it so factories can be written ahead of adapter support, but the
+                    // adapter is not yet implemented.
+                    static_assert(
+                        ttsl::concepts::always_false_v<T>,
+                        "AdvancedProgramSpecFactoryConcept (Option 3) is not yet supported by "
+                        "the mesh dispatch adapter. Use create_program_artifacts "
+                        "(Options 1 or 2) or create_workload_artifacts in the meantime.");
+                } else {
+                    // create_program_artifacts — Options 1 and 2; the adapter branches
+                    // internally on the HasFastCacheHitPathOptIn marker.
+                    using AdaptedMeshWorkloadFactory =
+                        mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
+                    fn.template operator()<AdaptedMeshWorkloadFactory>();
+                }
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
                 fn.template operator()<WorkloadFactory>();
