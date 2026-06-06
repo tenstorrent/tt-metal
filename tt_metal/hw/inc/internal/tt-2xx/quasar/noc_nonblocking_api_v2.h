@@ -133,7 +133,7 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    // change NOC_TARG_ADDR_* to SRC_{ADDR,COORD}: remote side for reads, local side for writes
+    // NOC_TARG_ADDR_* -> cmd-buf SRC_{ADDR,COORD} (data source: remote for reads, local for writes)
     if (addr == NOC_TARG_ADDR_LO) {
         return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
             buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8);
@@ -145,7 +145,7 @@ inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc
         return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
             buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8);
     }
-    // change NOC_RET_ADDR_* to DEST_{ADDR,COORD}: local side for reads, remote side for writes
+    // NOC_RET_ADDR_* -> cmd-buf DEST_{ADDR,COORD} (data dest: local for reads, remote for writes)
     else if (addr == NOC_RET_ADDR_LO) {
         return (uint32_t)__builtin_riscv_ttrocc_cmdbuf_rd_reg(
             buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8);
@@ -172,8 +172,9 @@ inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc
     else if (addr == NOC_CMD_CTRL) {
         return 0;
     }
-    // NOC_NODE_ID and other NOC config registers are true MMIO - not cmd buf registers.
+    // NOC_NODE_ID and other NOC config registers are true MMIO globals - not cmd buf registers (buf-independent).
     else {
+        ASSERT(buf == 0);  // cmd-buf regs route through RoCC above; this path is globals-only
         uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
         return *((volatile uint32_t*)offset);
     }
