@@ -598,25 +598,13 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-          # Surface any remote storage errors from the log so they are visible
-          # in the job summary without having to download a full log artifact.
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            ERRORS=$(grep -i 'error\|failed\|timeout' /tmp/ccache.log || true)
-            if [ -n "$ERRORS" ]; then
-              echo '## CCache Errors' >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "$ERRORS" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-
-      - name: Print ccache log
-        if: always()
-        run: |
-          if [ -f /tmp/ccache.log ]; then
-            echo "=== ccache log ===" && cat /tmp/ccache.log
-          else
-            echo "No ccache log found at /tmp/ccache.log"
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: ☁️ Upload packages
