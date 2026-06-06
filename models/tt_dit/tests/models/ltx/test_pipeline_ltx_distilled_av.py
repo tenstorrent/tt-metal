@@ -29,18 +29,9 @@ def _default_checkpoint() -> str:
 
 
 def _default_gemma() -> str:
-    """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
-    explicit = os.environ.get("GEMMA_PATH")
-    if explicit:
-        return explicit
-    import glob
-
-    candidates = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
-    if candidates:
-        return candidates[0].rstrip("/")
-    return "google/gemma-3-12b-it-qat-q4_0-unquantized"
+    """Resolve Gemma: env var > HF repo id (the pipeline resolves + caches it). Passing the
+    repo id (not a pre-resolved snapshot dir) keeps the on-device cache under a readable name."""
+    return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
 @pytest.mark.parametrize(

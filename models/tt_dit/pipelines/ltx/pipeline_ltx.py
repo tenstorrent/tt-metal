@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import torch
-from huggingface_hub import hf_hub_download, snapshot_download
+from huggingface_hub import hf_hub_download
 from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import load_file
@@ -265,13 +265,11 @@ class LTXPipeline:
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
-        self.gemma_path: str | None = LTXPipeline._resolve_gemma_dir(gemma_path) if gemma_path else None
-
-        # On-device Gemma text encoder + embeddings connectors. Lazy: no modules are built
-        # until the first ensure_loaded(). Coresident peers (DiT/VAE) are registered in
-        # _register_coresident_exclusions once those modules exist.
+        # On-device Gemma text encoder + embeddings connectors. The encoder resolves its own
+        # reference and owns its cache name (T5 pattern); reuse its resolved dir for the host
+        # reference path. Lazy: no modules are built until the first ensure_loaded().
         self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
-            self.gemma_path,
+            gemma_path,
             mesh_device=self.mesh_device,
             ccl_manager=self.vae_ccl_manager,
             parallel_config=self.encoder_parallel_config,
@@ -279,6 +277,7 @@ class LTXPipeline:
             mode=self.mode,
             dynamic_load=self.dynamic_load,
         )
+        self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
         # ``self.transformer`` always points at the active variant, set via
         # ``_prepare_transformer(idx)``.
@@ -335,17 +334,6 @@ class LTXPipeline:
             repo_id, filename = checkpoint, default_filename
         logger.info(f"Resolving HuggingFace checkpoint {repo_id}:{filename} (auto-download if missing)")
         return hf_hub_download(repo_id=repo_id, filename=filename)
-
-    @staticmethod
-    def _resolve_gemma_dir(gemma: str) -> str:
-        """Resolve a Gemma reference to a local directory path.
-
-        Accepts a local directory or a HuggingFace repo ID. Auto-snapshot-downloads if needed.
-        """
-        if os.path.isdir(gemma):
-            return gemma
-        logger.info(f"Resolving HuggingFace Gemma repo {gemma} (auto-download if missing)")
-        return snapshot_download(repo_id=gemma)
 
     @staticmethod
     def create_pipeline(

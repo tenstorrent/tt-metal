@@ -13,6 +13,7 @@ import time
 from typing import Callable
 
 import torch
+from huggingface_hub import snapshot_download
 from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import load_file
@@ -38,6 +39,16 @@ _CONNECTOR_PREFIXES = (
     "model.diffusion_model.video_embeddings_connector.",
     "model.diffusion_model.audio_embeddings_connector.",
 )
+
+
+def _resolve_gemma_dir(gemma: str) -> str:
+    """Resolve a Gemma reference to a local directory: a local dir is returned as-is, a
+    HuggingFace repo id is snapshot-downloaded (cached). The original reference — not this
+    resolved snapshot dir, whose basename is an opaque revision hash — names the cache."""
+    if os.path.isdir(gemma):
+        return gemma
+    logger.info(f"Resolving HuggingFace Gemma repo {gemma} (auto-download if missing)")
+    return snapshot_download(repo_id=gemma)
 
 
 # --- source state dicts (lazy: only read on a cache miss) -------------------
@@ -116,7 +127,10 @@ class GemmaTokenizerEncoderPair:
         num_layers: int = 48,
         hidden_layer_index: int = -1,
     ) -> None:
-        self.gemma_path = gemma_path
+        # Name the cache by the caller's reference (a repo id / dir basenames cleanly),
+        # mirroring T5; resolve it to a local dir for tokenizer + weight loading.
+        self.gemma_ref = gemma_path
+        self.gemma_path = _resolve_gemma_dir(gemma_path) if gemma_path else None
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -201,7 +215,7 @@ class GemmaTokenizerEncoderPair:
         t0 = time.time()
         cache_module.load_model(
             self.gemma_encoder,
-            model_name=os.path.basename(os.path.normpath(gemma_path)),
+            model_name=os.path.basename(os.path.normpath(self.gemma_ref)),
             subfolder="text_encoder",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
