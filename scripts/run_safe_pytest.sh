@@ -120,7 +120,7 @@ if [[ "$SIM_MODE" == false ]]; then
         echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
         echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
     fi
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --llm-output > ${TRIAGE_LOG} 2>&1"
 fi
 
 if [[ "$DEV_MODE" == true ]]; then
