@@ -13,7 +13,7 @@ mesh_descriptors {
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  # Instances: mesh ids 0..79 (all 2x4)
+  # Instances: mesh ids 0..1 (all 2x4)
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
@@ -78,22 +78,6 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 61 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 62 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 64 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 65 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 66 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 67 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 68 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 69 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 70 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 71 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 72 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 73 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 74 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 75 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 76 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 77 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 78 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 79 } }
 
 
   connections {
@@ -171,10 +155,12 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     channels { count: 8 policy: RELAXED }
   }
+
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
+    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
@@ -254,7 +240,8 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
+    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
@@ -326,6 +313,7 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     channels { count: 8 policy: RELAXED }
   }
+
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
@@ -334,7 +322,8 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
+    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
@@ -413,88 +402,9 @@ graph_descriptors {
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 64 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 64 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 65 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 65 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 66 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 66 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 67 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 67 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 68 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 68 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 69 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 69 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 70 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 70 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 71 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 71 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 72 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 72 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 73 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 73 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 74 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 74 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 75 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 75 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 76 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 76 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 77 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 77 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 78 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 78 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 79 } }
-    channels { count: 8 policy: RELAXED }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 79 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
+    assign_z_direction: true
   }
 }
 

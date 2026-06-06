@@ -86,9 +86,6 @@ class SamplingOp:
         unnorm_exp = torch.exp((scaled - scaled_max) * inv_temperature)
         unnorm_exp_sum = unnorm_exp.sum(dim=-1)
         probs = unnorm_exp / unnorm_exp_sum
-        logger.debug(f"Stable softmax max(scaled): {scaled_max.squeeze(-1)}")
-        logger.debug(f"Stable softmax exp(scaled - max) [unnormalized]: {unnorm_exp}")
-        logger.debug(f"Stable softmax sum(exp(scaled - max)): {unnorm_exp.sum(dim=-1)}")
         logger.debug(f"Raw Probabilities: {probs}")
 
         cum_probs = torch.cumsum(probs, dim=-1)

@@ -17,13 +17,6 @@
 #endif
 #endif
 
-// ============================================================================
-// Pure C++ bit-cast / bf16 helpers -- visible from every RISC (BR / NC / TR).
-// Must live OUTSIDE the BRISC/NCRISC dataflow include guard because TRISC also
-// calls `float_to_bf16_rne` from `trisc_fused_softmax_top_p_sampling_block`
-// (metadata-direct temperature read) and `float_to_bf16_packed` is referenced
-// from BRISC's metadata path.
-// ============================================================================
 constexpr uint32_t FACE_ELEMS = 256;
 constexpr uint16_t BF16_ONE = 0x3F80;
 constexpr uint32_t ELEMS_PER_FACE_ROW = 16;
@@ -170,15 +163,6 @@ ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_recip_scalar<legacy_compat>, idst, VectorMode::None);
 }
 
-// Clamp the scalar at DST[idst][0] to at most `param` (passed as an fp32
-// bit-pattern). Used after the top-p MIN reduce to bound `cum_kept` by 1.0:
-// if the cumsum (computed in DST FP32) ever saturates strictly below `p` --
-// which happens for sharp distributions where the tail probs vanish to bf16
-// zero in the pack-reload between softmax and cumsum -- every lane is still
-// "below cutoff" and the MIN-reduce returns ~BIG instead of the true kept
-// mass. Since the kept mass is mathematically <= 1.0, clamping here turns
-// that pathological case into a no-op rescale (1/1.0 = 1.0) and keeps the
-// surviving probs unscaled.
 inline void calculate_sampling_clamp_max_scalar(uint32_t param) {
     const sfpi::vFloat max_val = ckernel::sfpu::Converter::as_float(param);
     sfpi::vFloat in = sfpi::dst_reg[0];
@@ -189,42 +173,6 @@ inline void calculate_sampling_clamp_max_scalar(uint32_t param) {
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
     _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
 }
-
-// ----------------------------------------------------------------------------
-// Sampling-local "first-column" SFPU ops for Steps 12-14 and Step 21.
-//
-// All four ops here (le_binary, mul_unary by scalar, add_binary, ge_binary)
-// operate on tiles whose only meaningful data lives in col 0 of every row:
-//   * Step 10's cumsum_tile output sits in col 0 (its input was a column
-//     strip from the upstream Step-7 softmax pack).
-//   * Step 11 / Step 20 stage `p` / `rand` as column-0 broadcasts in their
-//     respective CBs.
-//   * Step 15 packs DST[0] -> out_cb (col 0 = real cumsum); Step 19's
-//     ELWMUL with the bcast scalar therefore lands the rescaled CDF in
-//     col 0 of DST[0] again.
-//   * Step 16 packs DST[3] -> exp_cb for the Pass-4 MIN reduce; Step 22
-//     packs DST[2] -> mask_cb for BRISC's col-0 scan. Both consumers read
-//     only col 0; the other 31 cols are dead.
-//
-// Two-axis pruning vs. the stock LLK helpers:
-//   1. Faces: pass `VectorMode::C` so the binary/unary LLK launcher
-//      iterates only Face 0 + Face 2 (the left column of the tile) and
-//      SETRWC-skips Face 1 / Face 3 (which only carry zeros/noise).
-//   2. Within a face: 4 iterations of `dst_reg += 2` instead of 8 ×
-//      `dst_reg++`. On Blackhole each even slot is the (4-row × cols 0-7)
-//      half-band of the face, so this hits all 16 rows × cols 0-7 of the
-//      face -- col 0 is covered, cols 1-7 are along-for-the-ride waste,
-//      cols 8-15 are skipped entirely.
-//
-// Net per LLK call: 2 faces × 4 slots = 8 SFPU vec ops vs. the stock
-// `VectorMode::RC` × 8 iter = 32 ops. The body advances dst_reg by 8
-// slots either way (4×2 == 8×1), so the launcher's between-face SETRWC
-// math is unchanged -- same trick the SDPA `recip_tile_first_column` uses.
-//
-// The compare bodies also drop the NaN / ±inf / signed-zero branches that
-// `binary_comp_fp32_ordered_mask` carries (3 extra v_if blocks each):
-// sampling inputs are bf16 values in [0, 1] with no special floats.
-// ----------------------------------------------------------------------------
 
 template <SfpuType OP>
 inline void calculate_sampling_binary_comp_first_column(
@@ -367,7 +315,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     if constexpr (enable_metadata) {
         auto* metadata_ptr =
             reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
-        const float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.0f);
+        const float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.01f);
         temp_bf16 = float_to_bf16_rne(1.0f / temperature);
     } else {
         temp_bf16 = static_cast<uint16_t>(inv_temp_bf16_ct);
@@ -484,19 +432,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-9");
         // Step 12: DST[2] = (cumsum < p) ? 1.0 : 0.0
-        //
-        // Uses strict-less-than (not <=) on purpose. The boundary lane where
-        // `cumsum == p` must be treated as ABOVE the cutoff so it isn't
-        // inflated by Step 13's BIG. This matters in two cases:
-        //   (a) `p = 1.0`: the final cumsum lane is exactly 1.0, and we need
-        //       that lane to survive as the MIN-reduce winner = cum_kept.
-        //   (b) bf16 saturation: when the tail probs are below bf16 ULP near
-        //       1.0, the packed cumsum stops moving and saturates at exactly
-        //       `p_bf16`. With `<=`, every saturated lane is "kept" and
-        //       inflated, so MIN returns ~BIG -> cum_kept ~= 100 -> all
-        //       output probs come out ~100x too small.
-        // This also matches BRISC's `if (!(cum[i] < p_bf16))` num_kept rule
-        // so TRISC's rescale denominator and BRISC's num_kept stay consistent.
         lt_binary_tile_init();
         MATH((sampling_lt_binary_tile_first_column(0, 1, 2)));
         // Step 13: DST[2] *= BIG. Below-cutoff lanes blow up to ~BIG so the
@@ -543,15 +478,6 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13");
         // Step 17.5: Clamp cum_kept <= 1.0. The MIN-reduce sentinel trick
-        // (filtered = cumsum + BIG*mask, then MIN) only works when at least one
-        // lane has mask=0 (i.e. cumsum >= p). When the DST FP32 cumsum
-        // saturates strictly below p_bf16 -- which happens for sharp
-        // distributions whose tail probs round to 0 in bf16 when packed to
-        // probs_cb between Steps 8 and 9 -- every lane stays "below cutoff"
-        // and MIN returns ~BIG instead of cum_kept. Clamping to 1.0 here turns
-        // that into a no-op rescale (1/1.0 = 1.0), preserving the surviving
-        // probs unscaled; for the well-conditioned case cum_kept is already
-        // <= 1.0 by construction, so the clamp is a true no-op.
         constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         // Step 18: Compute DST[0] = 1/cum_kept
