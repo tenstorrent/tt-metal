@@ -211,21 +211,24 @@ void kernel_main() {
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
         // is_causal: diagonal only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
-        LightweightMaskContext lw_mask;
+        // The 9 compile-time-constant mask fields are template params (static constexpr, no stack
+        // storage); only the 3 per-iter runtime fields are set below.
+        RingStreamingMaskCtx<
+            neginf_tile_idx,
+            causal_diag_tile_idx,
+            local_n_padded_tiles,
+            joint_n_padded_tiles,
+            global_n_partial_col,
+            joint_l_partial_col,
+            global_n_partial_tile_idx,
+            joint_l_partial_tile_idx,
+            straddle_chunk_id>
+            lw_mask;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
-        lw_mask.neginf_tile_idx = neginf_tile_idx;
-        lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
-        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
-        lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-        lw_mask.global_n_partial_col = global_n_partial_col;
-        lw_mask.joint_l_partial_col = joint_l_partial_col;
-        lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
-        lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
         // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
         // the straddle chunk. Must agree with the K-loop extension condition below.
         const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
         lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
-        lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
             // Tile-aligned: valid_tiles == global_nt_within_ring_iter % Sk_chunk_t
             const uint32_t valid_tiles = global_nt_within_ring_iter % Sk_chunk_t;
