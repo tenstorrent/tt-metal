@@ -148,6 +148,23 @@ class Qwen3_5ForConditionalGeneration(Generator):
         assert (
             tt_data_parallel == 1
         ), f"Qwen3.6 v2 galaxy is TP-only; data parallel > 1 unsupported, got tt_data_parallel={tt_data_parallel}"
+        # Bake the known-good decode-CCL config as DEFAULTS so the SERVER gets the same coherent
+        # path as the demo (test_qwen36_demo_generator_batch1) without per-deploy env wiring;
+        # setdefault keeps any explicit override. Read during the model build + decode below.
+        #   FORCE_SWITCH_DECODE/DECODE_L1_RESIDUAL : decode-mode tt_ccl tail + 32-row L1 residual norm
+        #   LM_HEAD_PLAIN_DECODE                   : decode lm_head via minimal_matmul (coherence fix)
+        #   SEQ_CORES_PER_HEAD / *_TUNED / CCL_NUM_LINKS_DELTA / RESIDUAL_BUF_BF16 : prefill+perf tuning
+        for _k, _v in {
+            "QWEN36_FORCE_SWITCH_DECODE": "1",
+            "QWEN36_DECODE_L1_RESIDUAL": "1",
+            "QWEN36_RESIDUAL_BUF_BF16": "1",
+            "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+            "QWEN36_SEQ_CORES_PER_HEAD": "4",
+            "QWEN36_FULLATTN_WO_TUNED": "1",
+            "QWEN36_DELTA_OP_TUNED": "1",
+            "QWEN36_CCL_NUM_LINKS_DELTA": "2",
+        }.items():
+            os.environ.setdefault(_k, _v)
         tt_model, model_args = initialize_vllm_text_transformer_qwen36(
             hf_config,
             mesh_device,
