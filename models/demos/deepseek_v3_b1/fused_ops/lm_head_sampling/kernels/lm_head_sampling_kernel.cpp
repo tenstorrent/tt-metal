@@ -212,13 +212,6 @@ void kernel_main() {
     deepseek_b1_ops::Matmul::ReaderArgs matmul_args{};
 
     // ── Sampling reader (matmul cores) ──────────────────────────────
-    // Full CT-arg list from sampling.hpp :: TopKSampling::ReaderCTArgs<>
-    // (mirrors micro_ops/sampling/kernels/sampling_kernel.cpp).
-    //
-    // ScoresCBId/ScoresNumPages enable the CB-backed scores read path
-    // inside sampling.hpp (cb_wait_front + get_read_ptr + cb_pop_front).
-    // We wire them to the matmul-output CB so phase-1 sees the matmul
-    // result via cb_wait, not via a raw RT address.
     using SamplingCTArgs = deepseek_b1_ops::TopKSampling::ReaderCTArgs<
         get_named_compile_time_arg_val("sampling_num_values"),
         get_named_compile_time_arg_val("sampling_topk_k"),
