@@ -72,73 +72,102 @@ template <typename T>
 concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } || WorkloadDescriptorConcept<T>) &&
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
-// Metal 2.0 factory concept:
-// Factories that return EITHER:
-//  - ProgramArtifacts (a ProgramSpec + ProgramRunArgs) from create_program_artifacts, or
-//  - A separate ProgramSpec from create_program_spec, ProgramRunArgs from create_program_run_args,
-//    and a minimal struct of extracted data from the input args, chained into create_program_spec.
+// Metal 2.0 factory concept.
 //
-//-----------------------------------------------------------------------------------
-// "Option 1" (via create_program_artifacts):
+// ============================================================================
+// What this concept is protecting against
+// ============================================================================
 //
-// The framework adapter stamps a Program from the spec onto each mesh coordinate range on
-// cache miss, and patches ONLY the tensor arguments on cache hit.
+// The legacy TTNN op infrastructure had TWO independent bug generators around the
+// ProgramCache, and any successor design has to close both:
 //
-// The ProgramCache hash key is automatically computed by the TTNN infrastructure based on
-// the op's type and arguments (taking into account any TensorParameter relaxations).
-// The factory author writes NO fast-path-specific code.
+//  (A) Immutable-side bug generator — over-permissive hash.
+//      An op author who supplies a custom hash function may accidentally OMIT an
+//      attribute that actually affects the immutable Program. The first dispatch
+//      builds and caches the correct Program. Subsequent dispatches that vary
+//      ONLY the omitted attribute generate the same hash, hit the cache, and
+//      silently resurrect the WRONG Program — the device performs the wrong
+//      computation. The author's only feedback is a wrong answer.
 //
-// The factory-provided create_program_artifacts is only called on cache miss.
+//  (B) Mutable-side bug generator — stale runtime args.
+//      The fast cache-hit path updates some subset of the Program's runtime
+//      state. If the author's update logic misses a field that varies between
+//      dispatches sharing a cache entry, every hit silently uses the stale
+//      value from the previous dispatch. Same failure mode: wrong answer.
 //
-// NOTE: Each TensorArgument.tensor in ProgramRunArgs MUST reference a MeshTensor reachable
-//   from the factory's `tensor_args` / `tensor_return_value` parameters — the adapter
-//   matches by pointer identity.
+// The three factory shapes below sit at different points on the
+// simplicity / cache-hit-perf / safety-by-construction trade-off triangle,
+// but ALL of them close both bug generators by construction.
 //
-// CAUTION: Do not pass raw tensor addresses through runtime arguments!
-//   If a raw address is passed as a user-defined runtime argument, only the first dispatch
-//   succeeds; every subsequent program-cache hit then silently uses a stale address.
-//   A Metal 2.0 program factory should NEVER take the address of any tensor or buffer.
-//   Instead, declare a TensorParameter on the ProgramSpec and pass MeshTensor arguments
-//   directly through the ProgramRunArgs. The Metal 2.0 runtime infrastructure implicitly
-//   captures the pointer (and other tensor properties), which the kernel retrieves via
-//   TensorAccessor.
+// ----------------------------------------------------------------------------
+// "Option 1" (via create_program_artifacts, with `using fast_cache_hit_path = std::true_type;`):
 //
-//-----------------------------------------------------------------------------------
-// "Option 2" (ALSO via create_program_artifacts):
+// On cache miss:    factory called, full ProgramRunArgs set on every Program.
+// On cache hit:     ONLY tensor args refreshed via UpdateTensorArgs; factory NOT called.
 //
-// The framework adapter stamps a Program from the spec onto each mesh coordinate range on
-// cache miss, and applies the FULL ProgramRunArgs on cache hit.
+// Closes (A) by FORBIDDING a custom compute_program_hash on the DeviceOperation.
+// The framework's automatic hash of (op type + attrs + tensor args + mesh coords)
+// is the only sanctioned cache key. The author can't omit anything because they
+// can't write a hash function at all. The trifecta adapter rejects the
+// combination at compile time.
 //
-// The ProgramCache hash key is automatically computed by the TTNN infrastructure by hashing
-// the immutable ProgramSpec struct. The factory author writes NO fast-path-specific code.
+// Closes (B) by FORBIDDING any non-tensor mutation in ProgramRunArgs that varies
+// across dispatches sharing a cache entry. Concretely, the adapter rejects DFB
+// size overrides and common (broadcast) runtime args; per-node RTAs are still
+// legal because they're the standard mechanism for per-node work distribution
+// AND must be deterministic from the cache key (the hash hashes the args those
+// values are derived from).
 //
-// The factory-provided create_program_artifacts is always called (both cache miss and hit).
+// The one residual unsafety is the "raw-address-smuggling" anti-pattern:
+// if a factory bypasses TensorParameter and stuffs a raw tensor base pointer
+// into a per-node RTA, the address is set ONCE at cache-miss and persists on
+// every hit — even when the underlying tensor's allocation changes. This is a
+// hand-crafted backdoor, not something a typed factory accidentally does.
+// See the anti-pattern block at the concept definition below.
 //
-// NOTE: Compared to Option 1, Option 2:
-//   - Exposes all of Metalium's ProgramRunArgs (not limited to tensor arguments) for maximum
-//     fast path flexibility.
-//   - Is always safe. The cache key and mutable Program update are guaranteed to be correct
-//     by construction.
-//   - Has greater host overhead on cache hit; create_program_artifacts is always invoked.
+// ----------------------------------------------------------------------------
+// "Option 2" (default, via create_program_artifacts, no marker):
 //
-//-----------------------------------------------------------------------------------
-// "Option 3" (AdvancedProgramSpecFactoryConcept):
+// On cache miss:    factory called, full ProgramRunArgs set on every Program.
+// On cache hit:     factory called AGAIN, full ProgramRunArgs re-applied via
+//                   SetProgramRunArgs. The factory pays its full cost every dispatch.
 //
-// The framework adapter:
-//  - Calls extract_immutable_info and computes the hash key from the returned struct.
-//  - On cache miss, create_program_spec is called using the returned immutable info struct.
-//    The resulting Program is cached; create_program_run_args is then called to generate
-//    the ProgramRunArgs to run the Program.
-//  - On cache hit, ONLY create_program_run_args is called.
+// Closes (A) the same way Option 1 does (no custom hash allowed). The design
+// intent is that Option 2's hash key be the immutable ProgramSpec struct itself
+// (since the spec captures everything pertinent to the immutable Program by
+// definition); the current implementation falls back to the same auto-hash over
+// op args that Option 1 uses, which is conservative-correct (over-keys
+// occasionally but never under-keys). Spec-hashing is deferred as a perf
+// optimization; correctness does not depend on it.
 //
-// For the most efficient fast path, minimize the logic in extract_immutable_info.
+// Closes (B) by re-running the factory on every cache hit and re-applying the
+// FULL ProgramRunArgs. Every mutable field is built fresh from the current
+// dispatch's inputs, so nothing can carry stale state. Any ProgramRunArgs
+// channel is legal (RTAs, CRTAs, DFB size overrides — all of it).
 //
-// NOTE: Compared to Options 1 and 2:
-//  - Option 3 is the most complex factory to implement.
-//  - Like Option 2, it is always safe (guaranteed to be correct by construction).
-//  - It provides the greatest fast-path flexibility of all options. The factory author
-//    can leverage the full Program mutability, and can also minimize fast-path host
-//    overhead.
+// Greater host overhead than Option 1, in exchange for "I don't need to think
+// about cache-hit semantics" as the factory author's contract.
+//
+// ----------------------------------------------------------------------------
+// "Option 3" (AdvancedProgramSpecFactoryConcept) — not yet implemented:
+//
+// The factory is split into three pieces:
+//   1. extract_immutable_info(op_args) → ImmutableInfo
+//   2. create_program_spec(const ImmutableInfo&) → ProgramSpec  [cache-miss only]
+//   3. create_program_run_args(op_args) → ProgramRunArgs        [every dispatch]
+//
+// Closes (A) by hashing ImmutableInfo as the cache key AND by feeding ONLY the
+// ImmutableInfo (not the raw op_args) into create_program_spec. The factory
+// physically can't depend on a field it didn't declare in ImmutableInfo,
+// because it doesn't have access to anything else. This is a structural
+// guarantee, not a discipline.
+//
+// Closes (B) by calling create_program_run_args fresh on every dispatch.
+//
+// Combines Option 1's fast cache-hit path (the spec isn't rebuilt) with Option
+// 2's safety (the mutable side is fresh every dispatch), at the cost of
+// authoring complexity: the split forces the factory to be explicit about which
+// inputs affect the spec.
 //
 template <typename T>
 concept WorkloadArtifactConcept = requires { &T::create_workload_artifacts; };
@@ -152,19 +181,31 @@ concept AdvancedProgramSpecFactoryConcept = requires {
 
 // Option 1 vs Option 2 selector.
 //
-// Both options expose the same factory signature (create_program_artifacts), so the
-// adapter cannot tell them apart by shape alone. The factory opts into the Ryan-fast
-// Option 1 path explicitly via a type-level marker:
+// Both options expose the same factory signature (create_program_artifacts) and
+// both close both bug generators (see comment block above). The difference is
+// how restrictive the factory contract is:
+//
+//   - Option 2 (default) — no constraints on the ProgramRunArgs returned by the
+//     factory. Anything mutable per dispatch is fine: per-node RTAs, CRTAs, DFB
+//     size overrides. Cost: factory re-runs on every cache hit.
+//
+//   - Option 1 (opt-in) — restricts the factory to per-node RTAs and tensor
+//     args only (no CRTAs, no DFB size overrides). The cache-hit path skips the
+//     factory and refreshes only tensor args. Cheap, but the author has to live
+//     within the restrictions.
+//
+// Opt-in to Option 1 via a type-level marker:
 //
 //   struct MyFactory {
 //       using fast_cache_hit_path = std::true_type;  // opt into Option 1
 //       static ttnn::device_operation::ProgramArtifacts create_program_artifacts(...);
 //   };
 //
-// The default is Option 2 (safe by construction): the factory is re-run on every
-// cache hit and the full ProgramRunArgs is re-applied via SetProgramRunArgs. Porters
-// who don't know about the distinction get correct behavior automatically; opting
-// into Option 1 is "I know what I'm doing, run the fast path".
+// The default-to-Option-2 choice matches the path of least surprise: a porter
+// who writes the factory without knowing about the distinction lands on the
+// less-restrictive contract and their code compiles. Opting into Option 1 is
+// the explicit "I've checked that my factory only varies tensor args between
+// dispatches, please give me the fast path."
 template <typename T>
 concept HasFastCacheHitPathOptIn = requires {
     typename T::fast_cache_hit_path;
