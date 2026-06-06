@@ -53,10 +53,16 @@ class DotsOCRLMHeadTP4:
         m.lm_head_w = shard_to_mesh(w.t().contiguous(), mesh_device, dim=-1, dtype=weight_dtype)
         return m
 
-    def forward(self, hidden: ttnn.Tensor, last_token_only: bool = True, return_token: bool = True):
+    def forward(self, hidden: ttnn.Tensor, last_token_only: bool = True, return_token: bool = True, token_index=None):
         """hidden: replicated [B, S, H]. Returns (logits, token_ids_torch_or_None).
 
         logits: replicated [B, T, vocab]; T = 1 if last_token_only else S.
+
+        ``token_index`` selects which sequence position to read when
+        ``last_token_only`` (default = the last, S-1). When the sequence is
+        right-padded to a tile multiple, pass the real last position here:
+        causal attention makes the padded tail "future" tokens that don't
+        affect earlier positions, so the logits at ``token_index`` are exact.
         """
         x = hidden
         if x.layout != ttnn.TILE_LAYOUT:
@@ -66,7 +72,8 @@ class DotsOCRLMHeadTP4:
 
         if last_token_only:
             B, _, S, H = (int(d) for d in x.shape)
-            x = ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, H])  # [B, 1, 1, H]
+            idx = (S - 1) if token_index is None else int(token_index)
+            x = ttnn.slice(x, [0, 0, idx, 0], [B, 1, idx + 1, H])  # [B, 1, 1, H]
 
         x = self.norm.forward(x)
 

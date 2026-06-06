@@ -48,10 +48,16 @@ class DotsOCRPrefillModelTP4:
             x = layer.forward(x)
         return x
 
-    def forward_with_head(self, x: ttnn.Tensor, last_token_only: bool = True, return_token: bool = True):
+    def forward_with_head(
+        self, x: ttnn.Tensor, last_token_only: bool = True, return_token: bool = True, token_index=None
+    ):
         """Full prefill: decoder body + final norm + LM head + argmax.
 
-        Returns (logits, token_ids). Requires the head to have been built."""
+        Returns (logits, token_ids). Requires the head to have been built.
+        ``token_index`` selects the sequence position to read (see the LM head;
+        used to read the real last token when the input is right-padded)."""
         assert self.head is not None, "model head not built; pass torch_norm/torch_lm_head to from_torch"
         hidden = self.forward(x)
-        return self.head.forward(hidden, last_token_only=last_token_only, return_token=return_token)
+        return self.head.forward(
+            hidden, last_token_only=last_token_only, return_token=return_token, token_index=token_index
+        )
