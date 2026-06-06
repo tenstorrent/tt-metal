@@ -779,11 +779,22 @@ class GemmaAttentionTTNN:
         oproj_k = (self.num_heads * self.head_dim) // 32
         oproj_n = self.hidden_size // 32
         oproj_pcfg = build_matmul_pcfg(m_tiles, oproj_k, oproj_n, self.grid_size[0], self.grid_size[1], in0_block_w=8)
+        # PI0_VLM_MLP_BF8_OUT=1 also controls the attention O-proj output dtype.
+        # Saves ~17 KB / core (33 KB bf16 → 16 KB bf8) at chunk=1024 — needed to
+        # close the ~32 KB CB-clash gap that blocks chunk=1024 at LIBERO bs=3.
+        # Same PCC-safety expectation as MLP gate/up outputs (validated 0.9964 PCC).
+        import os as _os_oproj
+
+        _oproj_dtype = (
+            ttnn.bfloat8_b
+            if _os_oproj.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
+            else ttnn.bfloat16
+        )
         if oproj_pcfg is not None:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat16,
+                dtype=_oproj_dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=oproj_pcfg,
@@ -792,7 +803,7 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat16,
+                dtype=_oproj_dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
@@ -1063,6 +1074,16 @@ class GemmaMLPTTNN:
             # MLP gate/up/down — let the helper auto-pick in0_block_w based on
             # per_core_N. Large-N (gate/up, per_core_N=43) keeps block_w=4;
             # small-N (down, per_core_N=6-22 depending on width) gets block_w=8.
+            #
+            # PI0_VLM_MLP_IBW=<N> opt-in: forces in0_block_w on gate/up only.
+            # Use to shrink in0 CB when fitting larger chunks (e.g. chunk=992
+            # CB-clashes with default ibw=4; ibw=2 halves the in0 CB at the
+            # cost of more K-trips per matmul). Must divide K_tiles=64.
+            import os as _os_ibw
+
+            _ibw_env = _os_ibw.environ.get("PI0_VLM_MLP_IBW", "").strip()
+            _ibw_override = int(_ibw_env) if _ibw_env.isdigit() else None
+            _gate_up_kwargs = {"in0_block_w": _ibw_override} if _ibw_override else {}
             gate_pcfg = build_matmul_pcfg(
                 m_tiles,
                 k_to_intermediate,
@@ -1070,6 +1091,7 @@ class GemmaMLPTTNN:
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
                 activation=(ttnn.UnaryOpType.GELU, True),
+                **_gate_up_kwargs,
             )
             up_pcfg = build_matmul_pcfg(
                 m_tiles,
@@ -1077,6 +1099,7 @@ class GemmaMLPTTNN:
                 n_intermediate,
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
+                **_gate_up_kwargs,
             )
             down_pcfg = build_matmul_pcfg(
                 m_tiles,
@@ -1086,22 +1109,84 @@ class GemmaMLPTTNN:
                 self._pcfg_grid[1],
             )
 
+            # PI0_VLM_MLP_BF8_OUT=1 opt-in: store gate/up matmul outputs as bf8_b
+            # instead of bf16. Halves the peak L1 footprint of the two
+            # intermediate (1, M, 16384) tensors (~660 KB/core → ~330 KB/core at
+            # chunk_size=1024). Required to make chunk_size=1024 fit alongside
+            # the matmul kernel's static CB region. PCC risk: bf8 quantization
+            # of post-GELU activations compounds across 18 layers — validate via
+            # test_pcc_pi05_model_libero.py before promoting to default.
+            import os as _os_mlp
+
+            _mlp_bf8_out = _os_mlp.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
             common_kwargs = dict(
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-            if gate_pcfg is not None:
-                gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
-            else:
-                gate_activated = ttnn.linear(
-                    x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
+            # PI0_VLM_MLP_MINIMAL=1 opt-in: switch gate/up from ttnn.linear
+            # (2D-mcast) to ttnn.experimental.minimal_matmul. minimal_matmul
+            # streams K in K_block_size chunks via ONE reused in0 CB instead
+            # of the 2D-mcast's per_core_M × in0_block_w double-buffered CB,
+            # collapsing the static-CB L1 footprint (per PERF_PLAYBOOKS/05 §4).
+            # The escape hatch when 2D-mcast can't fit chunk=1024 even with
+            # PI0_VLM_MLP_BF8_OUT=1 + PI0_VLM_MLP_IBW=2. NOTE: minimal_matmul
+            # requires input.dtype == weight.dtype, so x_chunk must be cast
+            # to bf8_b (weights are bf8_b). Only kicks in for VLM-sized M
+            # (m_tiles ≥ 8); expert (m_tiles=1-2) stays on the 1D-width path.
+            _mlp_minimal = _os_mlp.environ.get("PI0_VLM_MLP_MINIMAL", "").lower() in ("1", "true", "yes", "on")
+            use_minimal = _mlp_minimal and m_tiles >= 8
+
+            if use_minimal:
+                x_chunk_bf8 = ttnn.typecast(x_chunk, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x_chunk)
+                # Playbook 05 §5: LoFi + fp32_dest=False unlocks subblock h*w cap 4 → 8.
+                # bf8b weights tolerate LoFi (PCC validated layer-by-layer in BGE-M3).
+                minimal_compute = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
                 )
-            if up_pcfg is not None:
-                up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
+                minimal_cfg = ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self._pcfg_grid[0], self._pcfg_grid[1]),
+                )
+                gate_activated = ttnn.experimental.minimal_matmul(
+                    x_chunk_bf8,
+                    self.gate_proj,
+                    fused_activation=(ttnn.UnaryOpType.GELU, True),
+                    config=minimal_cfg,
+                    compute_kernel_config=minimal_compute,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
+                )
+                up = ttnn.experimental.minimal_matmul(
+                    x_chunk_bf8,
+                    self.up_proj,
+                    config=minimal_cfg,
+                    compute_kernel_config=minimal_compute,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
+                )
+                ttnn.deallocate(x_chunk_bf8)
             else:
-                up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
-            ttnn.deallocate(x_chunk)
+                if gate_pcfg is not None:
+                    gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
+                else:
+                    gate_activated = ttnn.linear(
+                        x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
+                    )
+                if up_pcfg is not None:
+                    up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
+                else:
+                    up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
+                ttnn.deallocate(x_chunk)
 
             # Element-wise multiply (keep on L1 — feeds the down-proj matmul next)
             hidden_out = ttnn.multiply(gate_activated, up, memory_config=ttnn.L1_MEMORY_CONFIG)
