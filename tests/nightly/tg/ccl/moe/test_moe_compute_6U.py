@@ -23,6 +23,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
+    get_tilize_drain_core,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -672,9 +673,9 @@ def validate_matmul(
 
                 if not allclose_passed:
                     mask = (tt_layer_output - torch_layer_output).abs() > ATOL_THRESHOLD
-                    # logger.warning(
-            #                         f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
-            #                     )
+                    logger.warning(
+                        f"AllClose variation result: {tt_layer_output[mask]}, ref: {torch_layer_output[mask]} indices: {mask.nonzero(as_tuple=True)}"
+                    )
             else:
                 logger.info(
                     f"Layer {layer_id}, Expert {expert_id} (buffer {buffer_idx}): PCC={pcc_val:.6f} RMSE: {relative_rmse_val} (Passed)"
@@ -722,7 +723,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
             logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
             if not allclose_passed:
                 mask = (vals - refs).abs() > ATOL_THRESHOLD
-                # logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
+                logger.warning(f"AllClose variation result: {vals[mask]}, ref: {refs[mask]}")
         else:
             logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
 
@@ -1418,8 +1419,7 @@ def run_moe_compute_test(
     # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
     #   WH (max_tilize_cores[0]): (6, 9)
     #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
-    is_blackhole_arch = mesh_device.arch() == ttnn.Arch.BLACKHOLE
-    drain_core_coord = ttnn.CoreCoord(10, 9) if is_blackhole_arch else ttnn.CoreCoord(6, 9)
+    drain_core_coord = get_tilize_drain_core()
     tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###

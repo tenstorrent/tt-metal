@@ -241,6 +241,11 @@ void run_single_core_tilize_program(
         .num_entries = num_tiles,
         .data_format_metadata = output_buf_format,
     };
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+        // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
+        output_dfb_spec.unpack_face_geometry_metadata =
+            tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
     // UNPACK_A tilize uses the push-N variant (`reader_unary_push_n_2_0`) so the reader
@@ -302,10 +307,6 @@ void run_single_core_tilize_program(
             return std::tolower(c);
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
-        if (test_config.untilize_type == UntilizeType::DST) {
-            compute_cta_bindings.push_back({"num_faces", test_config.num_faces_per_tile});
-            compute_cta_bindings.push_back({"num_rows_per_face", test_config.face_r_dim});
-        }
     } else if (is_unpack_a_tilize) {
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
@@ -814,13 +815,9 @@ static void run_quasar_tilize_untilize_test(
             break;
         case QuasarTestMode::UNTILIZE_DST: {
             compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize.cpp";
-            uint32_t num_faces = 4;
-            uint32_t face_r_dim = 16;
             compute_cta_bindings = {
                 {"per_core_block_cnt", num_tiles_r},
                 {"per_core_block_tile_cnt", num_tiles_c},
-                {"num_faces", num_faces},
-                {"num_rows_per_face", face_r_dim},
             };
             break;
         }

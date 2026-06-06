@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 
 #include "sort_dataflow_common.hpp"
 
@@ -14,8 +18,8 @@ void kernel_main() {
     const uint32_t start_core_physical_coord_y = get_arg_val<uint32_t>(1);
     const uint32_t end_core_physical_coord_x = get_arg_val<uint32_t>(2);
     const uint32_t end_core_physical_coord_y = get_arg_val<uint32_t>(3);
-    const uint32_t coordinator_to_cores_semaphore_id = get_semaphore(get_arg_val<uint32_t>(4));
-    const uint32_t cores_to_coordinator_semaphore_id = get_semaphore(get_arg_val<uint32_t>(5));
+    const uint32_t coordinator_to_cores_semaphore_arg = get_arg_val<uint32_t>(4);
+    const uint32_t cores_to_coordinator_semaphore_arg = get_arg_val<uint32_t>(5);
     const uint32_t number_of_dest = get_arg_val<uint32_t>(6);
     const uint32_t input_tensor_buffer_addr = get_arg_val<uint32_t>(7);
     const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(8);
@@ -45,15 +49,15 @@ void kernel_main() {
     // Output index tensor config
     const auto output_index_tensor_addr_gen = TensorAccessor(output_index_tensor_args, output_index_tensor_buffer_addr);
 
+    Noc noc;
+    CircularBuffer input_tensor_cb(input_tensor_cb_index);
+    CircularBuffer index_tensor_cb(index_tensor_cb_index);
+    const uint32_t input_tile_bytes = get_tile_size(input_tensor_cb_index);
+    const uint32_t index_tile_bytes = get_tile_size(index_tensor_cb_index);
+
     // Semaphore setup
-    volatile tt_l1_ptr uint32_t* semaphore_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cores_to_coordinator_semaphore_id);
-    const uint64_t semaphore_global_multicast_addr = get_noc_multicast_addr(
-        start_core_physical_coord_x,
-        start_core_physical_coord_y,
-        end_core_physical_coord_x,
-        end_core_physical_coord_y,
-        coordinator_to_cores_semaphore_id);
+    Semaphore<> coordinator_to_cores_sem(coordinator_to_cores_semaphore_arg);
+    Semaphore<> cores_to_coordinator_sem(cores_to_coordinator_semaphore_arg);
 
     const uint32_t number_of_confirmations = Wt / 2;
 
@@ -69,35 +73,53 @@ void kernel_main() {
             }
 
             // Save index tile to output index tensor
-            cb_wait_front(index_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_index_tensor_cb = get_read_ptr(index_tensor_cb_index);
-            noc_async_write_page(h * Wt + w, output_index_tensor_addr_gen, l1_write_addr_index_tensor_cb);
-            noc_async_write_barrier();
-            cb_pop_front(index_tensor_cb_index, one_tile);
+            index_tensor_cb.wait_front(one_tile);
+            noc.async_write(
+                index_tensor_cb,
+                output_index_tensor_addr_gen,
+                index_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = h * Wt + w, .offset_bytes = 0});
+            noc.async_write_barrier();
+            index_tensor_cb.pop_front(one_tile);
 
             // Read input value data
-            cb_reserve_back(input_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_input_tensor_cb = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_page(h * Wt + w, input_tensor_addr_ger, l1_write_addr_input_tensor_cb);
-            noc_async_read_barrier();
-            cb_push_back(input_tensor_cb_index, one_tile);
+            input_tensor_cb.reserve_back(one_tile);
+            noc.async_read(
+                input_tensor_addr_ger,
+                input_tensor_cb,
+                input_tile_bytes,
+                {.page_id = h * Wt + w, .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            input_tensor_cb.push_back(one_tile);
 
             // Write output value data
-            cb_wait_front(input_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_output_tensor_cb = get_read_ptr(input_tensor_cb_index);
-            noc_async_write_page(h * Wt + w, output_tensor_addr_gen, l1_write_addr_output_tensor_cb);
-            noc_async_write_barrier();
-            cb_pop_front(input_tensor_cb_index, one_tile);
+            input_tensor_cb.wait_front(one_tile);
+            noc.async_write(
+                input_tensor_cb,
+                output_tensor_addr_gen,
+                input_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = h * Wt + w, .offset_bytes = 0});
+            noc.async_write_barrier();
+            input_tensor_cb.pop_front(one_tile);
 
         }  // Wt loop
 
         // Wait until all cores are ready to start
-        noc_semaphore_wait(semaphore_ptr, number_of_dest);
-        noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
+        cores_to_coordinator_sem.wait(number_of_dest);
+        cores_to_coordinator_sem.set(0);  // Reset the semaphore
 
         // Set signal to start processing
-        noc_semaphore_set_multicast(coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
-        noc_async_write_barrier();
+        coordinator_to_cores_sem.set_multicast<NocOptions::DEFAULT>(
+            noc,
+            start_core_physical_coord_x,
+            start_core_physical_coord_y,
+            end_core_physical_coord_x,
+            end_core_physical_coord_y,
+            number_of_dest);
+        noc.async_write_barrier();
 
         // Calculate sorting stages
         uint32_t stages = 0;
@@ -108,13 +130,18 @@ void kernel_main() {
         for (uint32_t stage = 1; stage <= stages; stage++) {
             for (uint32_t sub = stage; sub > 0; sub--) {
                 // Set signal to start processing next sub-stage
-                noc_semaphore_set_multicast(
-                    coordinator_to_cores_semaphore_id, semaphore_global_multicast_addr, number_of_dest);
-                noc_async_write_barrier();
+                coordinator_to_cores_sem.set_multicast<NocOptions::DEFAULT>(
+                    noc,
+                    start_core_physical_coord_x,
+                    start_core_physical_coord_y,
+                    end_core_physical_coord_x,
+                    end_core_physical_coord_y,
+                    number_of_dest);
+                noc.async_write_barrier();
 
                 // Wait until cores will process and save data
-                noc_semaphore_wait(semaphore_ptr, number_of_confirmations);
-                noc_semaphore_set(semaphore_ptr, 0);  // Reset the semaphore
+                cores_to_coordinator_sem.wait(number_of_confirmations);
+                cores_to_coordinator_sem.set(0);  // Reset the semaphore
             }  // sub loop
         }  // stage loop
     }  // Ht loop

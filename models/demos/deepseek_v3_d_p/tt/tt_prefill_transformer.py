@@ -295,9 +295,13 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["lm_head"] = logits_host
             intermediates["logits"] = first_token_logits
 
-        # Reorder intermediates if balanced
+        # Reorder intermediates if balanced. Skip reordering for logits and lm_head in zigzag mode.
+        no_reorder_keys = {"logits", "lm_head"}
         if return_intermediates and self.is_balanced:
             for key, tensor in intermediates.items():
+                if key in no_reorder_keys:
+                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
+                    continue
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)

@@ -72,12 +72,14 @@ using namespace tt::tt_fabric::linear::experimental;
 #endif
 
 #ifdef IS_IN0
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     bool is_first_n_block,
@@ -91,12 +93,14 @@ void compute_actual_k_block(
     uint32_t& k_left_start_tile,
     uint32_t& k_right_start_tile) {
 #else
+template <bool IsLinear>
 void compute_actual_k_block(
     uint32_t k_block_iter,
     uint32_t total_k_block_count,
     uint32_t my_rank,
     uint32_t k_blocks_per_device,
     uint32_t k_tiles_per_block,
+    uint32_t k_tiles_per_device,
     uint32_t num_devices,
     bool is_forward,
     uint32_t k_left_tiles,
@@ -104,43 +108,80 @@ void compute_actual_k_block(
     uint32_t& k_right_start_tile) {
 #endif
     // Start with self
-    // Then for each device_iter, you are reading k_blocks_per_device half blocks from each direction
-    // Left block coming from your forward device, and right block coming from your backward device
+    // Then for each device_iter, read k_blocks_per_device blocks from each direction.
+    // Ring: left half from forward device, right half from backward device (bidirectional half-block).
+    // Linear: full block from one direction (k_left=K_block_tiles, k_right=0), relayed hop-by-hop.
+    //
+    // K-tile address = device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block.
+    // k_tiles_per_device is the *actual* K-tile span per device (not k_blocks_per_device *
+    // k_tiles_per_block, which over-counts by k_tiles_per_block - K_block_tail_tiles when the
+    // last block per device is a tail block).
     uint32_t actual_k_block_iter = is_forward ? k_block_iter : (total_k_block_count - 1 - k_block_iter);
     uint32_t device_iter = actual_k_block_iter / k_blocks_per_device;
     uint32_t device_k_block_iter = actual_k_block_iter % k_blocks_per_device;
     if (device_iter == 0) {
         // Local
-        k_left_start_tile = (my_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        k_left_start_tile = my_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
         k_right_start_tile = k_left_start_tile + k_left_tiles;
     } else {
-        // Remote
-        // Forward rank (origin of left half)
-        int32_t actual_device_rank = my_rank + device_iter;
-        if ((uint32_t)actual_device_rank >= num_devices) {
-            actual_device_rank = actual_device_rank - num_devices;
-        }
-        k_left_start_tile = (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block;
+        if constexpr (IsLinear) {
+            // Linear uni-ring: slice at iter K = (my_rank + K) mod N. Data flows leftward
+            // around a virtual ring (Dev k -> Dev k-1 each iter; Dev 0 long-sends to Dev N-1).
+            uint32_t actual_device_rank = my_rank + device_iter;
+            if (actual_device_rank >= num_devices) {
+                actual_device_rank -= num_devices;
+            }
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
+            k_right_start_tile = k_left_start_tile;  // unused: k_right_tiles == 0
+        } else {
+            // Ring: bidirectional half-block. Left half from forward device, right half from
+            // backward device (modular wrap-around).
+            int32_t actual_device_rank = my_rank + device_iter;
+            if ((uint32_t)actual_device_rank >= num_devices) {
+                actual_device_rank = actual_device_rank - num_devices;
+            }
+            k_left_start_tile = actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block;
 
-        // Backward rank
-        actual_device_rank = my_rank - device_iter;
-        if (actual_device_rank < 0) {
-            actual_device_rank = num_devices + actual_device_rank;
+            actual_device_rank = my_rank - device_iter;
+            if (actual_device_rank < 0) {
+                actual_device_rank = num_devices + actual_device_rank;
+            }
+            k_right_start_tile =
+                actual_device_rank * k_tiles_per_device + device_k_block_iter * k_tiles_per_block + k_left_tiles;
         }
-        k_right_start_tile =
-            (actual_device_rank * k_blocks_per_device + device_k_block_iter) * k_tiles_per_block + k_left_tiles;
     }
 #ifdef IS_IN0
-    if (device_iter > 0 && is_first_n_block) {
-        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
+    if (is_first_n_block) {
         if (is_injector_core) {
-            noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
-            sem_target_forward += in0_core_order_size;
-            noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
-            sem_target_backward += in0_core_order_size;
+            if constexpr (IsLinear) {
+                // Linear uni-ring: one slice per iter from "successor" (Dev k+1 normally; for
+                // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
+                // at the receiver — single sem per iter.
+                //
+                // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). Receiver waits
+                // (N-1)*K_blocks_per_device times — leaves K_blocks_per_device extra sem incs
+                // unconsumed per m_block. Without compensation, sem accumulates past sem_target
+                // and the NEXT m_block's first wait passes BEFORE sender has written that
+                // m_block's data, causing stale reads. Fix: at the last K-block iter of each
+                // m_block, advance sem_target by K_blocks_per_device to consume those extras.
+                if (device_iter > 0) {
+                    noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
+                    sem_target_forward += 1;
+                }
+                if (k_block_iter == total_k_block_count - 1) {
+                    sem_target_forward += k_blocks_per_device;
+                }
+            } else if (device_iter > 0) {
+                // Ring: both halves arrive simultaneously from both directions
+                // (both neighbors always exist for Ring topology by construction).
+                noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + in0_core_order_size);
+                sem_target_forward += in0_core_order_size;
+                noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + in0_core_order_size);
+                sem_target_backward += in0_core_order_size;
+            }
         }
     }
-#endif
+#endif  // IS_IN0
 }
 
 #ifdef USE_MUX
@@ -806,12 +847,15 @@ FORCE_INLINE PacketHeaders allocate_and_init_packet_headers(
     const AddrGen& in0_reader,
     uint32_t num_tiles_to_write_per_packet,
     uint32_t in3_tile_size) {
-    PacketHeaders hdrs;
+    PacketHeaders hdrs{};  // zero-initialized (nullptrs) when !valid
+    if (!valid) {
+        return hdrs;
+    }
     hdrs.scatter_hdr = PacketHeaderPool::allocate_header();
     hdrs.unicast_hdr = PacketHeaderPool::allocate_header();
     hdrs.sem_inc_hdr = PacketHeaderPool::allocate_header();
 
-    if (valid) {
+    {
         uint16_t page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(in0_reader);
         uint64_t dummy_addrs[4] = {0, 0, 0, 0};
         uint16_t chunk_sizes[3] = {page_size, page_size, page_size};

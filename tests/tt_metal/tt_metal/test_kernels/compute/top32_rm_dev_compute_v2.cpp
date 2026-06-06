@@ -8,14 +8,22 @@
 #include "api/compute/transpose_wh.h"
 #include "api/dataflow/circular_buffer.h"
 
-// DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
+// DeepSeek Top32 headers — Blackhole only; no WH B0 port exists yet.
 #if defined(TRISC_UNPACK)
+#if defined(ARCH_BLACKHOLE)
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_top32_rm_api.h"
+#else
+#error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
+#endif
 #endif
 
 #if defined(TRISC_MATH)
+#if defined(ARCH_BLACKHOLE)
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_top32_rm.h"
 #include "../../../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
+#else
+#error "top32_rm_dev_compute_v2: unsupported architecture (Blackhole only)"
+#endif
 #endif
 
 void kernel_main() {
@@ -46,7 +54,7 @@ void kernel_main() {
     cb16.reserve_back(num_output_tiles);
     cb17.reserve_back(num_output_tiles);
 
-    acquire_dst();
+    tile_regs_acquire();
 
     /*
     Algorithm implementation:
@@ -165,13 +173,16 @@ void kernel_main() {
     // }
     // #endif
 
+    tile_regs_commit();
+    tile_regs_wait();
+
     // step 10
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
     ckernel::pack_tile(value_offset_tiles, cb_out0);
     ckernel::pack_reconfig_data_format(cb_out0, cb_out1);
     ckernel::pack_tile(index_offset_tiles, cb_out1);
 
-    release_dst();
+    tile_regs_release();
 
     cb0.pop_front(num_input_tiles);
     cb1.pop_front(num_input_tiles);

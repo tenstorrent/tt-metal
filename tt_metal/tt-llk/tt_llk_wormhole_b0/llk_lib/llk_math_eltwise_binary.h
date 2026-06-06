@@ -256,8 +256,8 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                     {
                         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                         {
-                            // HiFi: only advance dest and carry register, src was cleared by ADDR_MOD_3
-                            TTI_INCRWC(MAX_FPU_ROWS, MAX_FPU_ROWS, 0, 0);
+                            // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
+                            TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
                         }
                     }
                     // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed
@@ -278,8 +278,8 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
                 {
                     if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
                     {
-                        // HiFi: only advance dest and carry register, src was cleared by ADDR_MOD_3
-                        TTI_INCRWC(MAX_FPU_ROWS, MAX_FPU_ROWS, 0, 0);
+                        // HiFi: only advance dest register, src was cleared by ADDR_MOD_3
+                        TTI_INCRWC(0, MAX_FPU_ROWS, 0, 0);
                     }
                 }
                 // LoFi: MOP handles face spacing internally via loop_op1, no runtime INCRWC needed

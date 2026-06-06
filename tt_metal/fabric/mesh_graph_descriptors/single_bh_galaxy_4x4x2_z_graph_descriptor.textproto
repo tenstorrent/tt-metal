@@ -1,6 +1,9 @@
 # --- Meshes ---------------------------------------------------------------
 # Single BH galaxy (32 chips) carved into 4 Z-connected meshes ("4x4x2"):
-#   - Z dimension = 4 meshes (mesh_id 0..3), wired in a ring with Z links.
+#   - Z dimension = 4 meshes (mesh_id 0..3), cyclic 2x2 layout (BH_GLX_QUAD trays):
+#         [0, 1]   row 0 (trays 1, 3)
+#         [2, 3]   row 1 (trays 4, 2)
+#     Z links follow bh_galaxy_split_4x2_multi_mesh: 0-1, 1-2, 2-3, 0-3
 #   - Each mesh is a 4x2 grid (8 chips) -> intra-mesh neighbor hops use the
 #     non-Z N/S/E/W routing directions.
 # Neighbor-exchange therefore exercises BOTH:
@@ -45,8 +48,8 @@ graph_descriptors {
     assign_z_direction: true
   }
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
     channels { count: 8 policy: RELAXED }
     assign_z_direction: true
   }

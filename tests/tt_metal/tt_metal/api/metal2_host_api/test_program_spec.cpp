@@ -43,7 +43,7 @@
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include <tt-metalium/experimental/mock_device.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
 #include "test_helpers.hpp"
 
@@ -57,6 +57,7 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalRoleDMKernel;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
@@ -375,7 +376,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
-    auto consumer1 = MakeMinimalComputeKernel("consumer1");
+    // Both consumers DM (same kind) so the per-role kind-uniformity check passes and the
+    // WU-disjointness check is what fires.
+    auto consumer1 = MakeMinimalDMKernel("consumer1");
     auto consumer2 = MakeMinimalDMKernel("consumer2");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -544,6 +547,40 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
             ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs with mismatched num_threads")));
 }
 
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    // Producer side mixes a DM and a compute kernel on disjoint zones. Each individually
+    // would form a valid binding, but the DFB's hardware config carries a single producer
+    // processor mask per role; the two kinds occupy disjoint mask bit ranges and cannot
+    // share a mask. The validator must reject upfront.
+    auto dm_producer = MakeMinimalDMKernel("dm_producer");
+    auto compute_producer = MakeMinimalComputeKernel("compute_producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    dm_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    compute_producer.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+
+    spec.kernels = {dm_producer, compute_producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"dm_producer", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"compute_producer", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -588,9 +625,12 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // an unrelated producer-only kernel is bound, while extra_consumer covers the consume side.
     // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
-    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    //
+    // All three kernels are DM (an unusual self-loop pattern but mechanically valid) so the
+    // per-role kind-uniformity check passes and the self-loop refinement check is reached.
+    auto self_loop_1 = MakeMinimalDMKernel("self_loop_1");
     auto extra_producer = MakeMinimalDMKernel("extra_producer");
-    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
+    auto extra_consumer = MakeMinimalDMKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -712,14 +752,16 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllSucceeds) {
+    // On Gen2 a DM kernel needs no config at all: the role hint is moot (Gen2 has a unified
+    // NOC and fully automated DM placement), and gen2_config is optional (absence = defaults).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
-    // Remove both Gen1 and Gen2 configs
+    // Remove both Gen1 and Gen2 configs, leaving a default (UNSPECIFIED role) config.
     auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
     dm_config.gen1_config = std::nullopt;
     dm_config.gen2_config = std::nullopt;
@@ -727,10 +769,23 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("KernelSpec 'kernel' must specify a DM config for Gen1, Gen2, or both")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
+    // A READER/WRITER role hint is a Gen1 concept; on Gen2 it is informational and imposes no
+    // requirement (no explicit Gen1Config needed, gen2_config still optional).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalRoleDMKernel("kernel", DataMovementRoleHint::READER);
+
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 // Remote DFBs are part of the API surface but not yet supported by the runtime.
@@ -2012,7 +2067,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 // ============================================================================
 // SECTION 6: Processor Assignment Edge Cases
 // ============================================================================
-// Here, we test two edge cases:
+// Here, we test several edge cases:
 //
 // A) ALGORITHM FAILURE
 //    The original naive greedy algorithm could either pass or fail on logically
@@ -2025,8 +2080,17 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 //    Some strictly legal ProgramSpecs are unsolvable if we assume that a kernel
 //    must uses the same processor indices on all nodes it runs on.
 //
-// Our plan is to keep the simplifying assumption for now.
-// We issue a clear message if the assumption is ever violated in the real world.
+//    NOTE: Our plan is to keep the simplifying assumption for now.
+//    We issue a clear message if the assumption is ever violated in the real world.
+//
+// C) KERNELS COUPLED THROUGH MULTI-DFB BINDINGS
+//    Until LLK APIs adopt DFBAccessor, we cannot specialize DFBs (multiple DFBs
+//    for a single DataflowBufferSpec). This induces additional DM solver constraints
+//    when a DFB endpoint is bound by more than one KernelSpec.
+//
+//    NOTE: The plan is to lift this artificial constraint once LLK support is in
+//    place. DFB IDs will then be passed as implicit RTAs rather than implicit CTAs
+//    on Quasar only.
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
@@ -2191,6 +2255,51 @@ TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNod
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Failed to find valid processor assignments for DM kernels")));
+}
+
+// Category C: Coupling-group constraint exercised
+// Multi-bound same-role DM kernels must end up with identical DM RISC masks (the DFB's
+// hardware config carries one producer_risc_mask / consumer_risc_mask per side). The
+// solver implements this by treating each coupling-group equivalence class as a single
+// "super-kernel" with merged node coverage. Without that constraint, an unrelated DM
+// kernel competing for lanes on one zone could push the producers to different lanes on
+// their respective nodes — passing the greedy assignment but failing per-role mask
+// uniformity.
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducers) {
+    // Scenario: zone-specialized DM producers (producer_a on node0, producer_b on node1)
+    // both bound as PRODUCER of the same DFB. An unrelated 2-thread DM kernel on node0
+    // consumes lanes DM2-DM3 (the lanes the un-constrained solver would greedily hand to
+    // producer_a). If the producers weren't coupled, producer_a would get bumped to DM4
+    // on node0 while producer_b kept DM2 on node1 — different masks. The coupling-group
+    // solver instead picks a lane available on BOTH producer nodes first, then lets the
+    // unrelated kernel work around it.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer_a = MakeMinimalDMKernel("producer_a", /*num_threads=*/1);
+    auto producer_b = MakeMinimalDMKernel("producer_b", /*num_threads=*/1);
+    auto unrelated_dm = MakeMinimalDMKernel("unrelated_dm", /*num_threads=*/2);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    producer_a.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    producer_b.dfb_bindings.push_back(ProducerOf("dfb", "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
+    // unrelated_dm intentionally has no DFB bindings — it just consumes DM lanes on node0.
+
+    spec.kernels = {producer_a, producer_b, unrelated_dm, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_a", "unrelated_dm", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_b", "consumer"}),
+    };
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 // ============================================================================
@@ -2594,13 +2703,14 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // On gen1, a DM kernel that only has Gen2Config must be rejected
+    // On Gen1, a DM kernel that declares neither a role hint nor an explicit Gen1Config must be
+    // rejected: it has no way to resolve its processor/NOC placement.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config
+    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config (UNSPECIFIED role, no Gen1Config).
     auto kernel = MakeMinimalDMKernel("dm_kernel");
 
     spec.kernels = {kernel};
@@ -2608,7 +2718,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must specify a Gen1 DM config")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("specifies neither a role hint")));
 }
 
 TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
@@ -2627,6 +2737,64 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {
+    // A READER and a WRITER role resolve to distinct processors (RISCV_1 and RISCV_0
+    // respectively), so two role-driven DM kernels coexist on one node without conflict.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto reader = MakeMinimalRoleDMKernel("reader", DataMovementRoleHint::READER);
+    auto writer = MakeMinimalRoleDMKernel("writer", DataMovementRoleHint::WRITER);
+
+    spec.kernels = {reader, writer};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
+    // Both READER kernels resolve to the same processor (RISCV_1), so placing them on the
+    // same node is a conflict — confirming the role hint resolves to a fixed, deterministic
+    // processor (the same uniqueness rule as explicit configs).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto r0 = MakeMinimalRoleDMKernel("r0", DataMovementRoleHint::READER);
+    auto r1 = MakeMinimalRoleDMKernel("r1", DataMovementRoleHint::READER);
+
+    spec.kernels = {r0, r1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, RoleHintWithExplicitGen1ConfigFails) {
+    // A role hint and an explicit Gen1Config are mutually exclusive: the hint already fills
+    // in the config, so supplying both is contradictory and must be rejected.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementRoleHint::READER);
+    auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
+    dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1};
+
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("sets both a READER/WRITER role hint and an explicit Gen1 config")));
 }
 
 // WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):

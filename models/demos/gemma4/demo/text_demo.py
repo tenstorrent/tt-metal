@@ -361,26 +361,25 @@ def run_generation(
         trace_device_inputs = None
 
         # ── Decode helpers ─────────────────────────────────────────────────
-        # Embedding + PLI computed on host (fast for single-token decode),
-        # transferred as ROW_MAJOR to device.  Trace captures decoder layers onward.
+        # Token IDs (+ optional PLI) staged on host; embedding lookup runs on
+        # device inside ``ttnn_decode_forward``. Trace captures decoder onward.
         # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
         on_device_sampling = model.sampling is not None
 
         def _make_decode_inputs(tok, pos):
             """Create host tensors for one decode iteration."""
-            embeds_torch, pli_torch = model.compute_host_embeddings(tok)
-            # ROW_MAJOR on host — TILE conversion happens on device inside the trace.
-            embeds_h = ttnn.from_torch(
-                embeds_torch,
+            pli_torch = model.compute_host_pli(tok)
+            tokens_h = ttnn.from_torch(
+                torch.tensor([[tok]], dtype=torch.int32),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.uint32,
                 mesh_mapper=replicate,
             )
             pos_padded = torch.nn.functional.pad(
                 torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
             )
             inputs = {
-                "embeds": embeds_h,
+                "tokens": tokens_h,
                 "position": ttnn.from_torch(
                     pos_padded,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -396,7 +395,7 @@ def run_generation(
             }
             if pli_torch is not None:
                 inputs["pli"] = ttnn.from_torch(
-                    pli_torch,
+                    pli_torch.to(torch.bfloat16),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=ttnn.bfloat16,
                     mesh_mapper=replicate,
@@ -405,7 +404,7 @@ def run_generation(
 
         def _fwd(device_inputs):
             return model.ttnn_decode_forward(
-                x=device_inputs["embeds"],
+                x=device_inputs["tokens"],
                 current_pos=device_inputs["position"],
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
@@ -434,7 +433,8 @@ def run_generation(
 
         sample_mode = "device" if on_device_sampling else "host"
         logger.info(
-            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, " f"embedding=host, sampling={sample_mode})..."
+            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, "
+            f"embedding=device, sampling={sample_mode})..."
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 

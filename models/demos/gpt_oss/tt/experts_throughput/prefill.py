@@ -330,14 +330,8 @@ def _forward_prefill_deepseek_chunk(
     ttnn.deallocate(idx_for_routing)
 
     # Step 3: Format indices/scores for dispatch
-    if topk_expert_indices.dtype != ttnn.int32:
-        indices_tile = ttnn.to_layout(topk_expert_indices, ttnn.TILE_LAYOUT)
-        indices_i32 = ttnn.typecast(indices_tile, ttnn.int32)
-        ttnn.deallocate(indices_tile)
-        indices_rm = ttnn.to_layout(indices_i32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(indices_i32)
-    else:
-        indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
+    # Indices stay as uint16 from the gate - dispatch reads them natively.
+    indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     scores_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     scores_for_reduce = ttnn.clone(scores_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 

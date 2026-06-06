@@ -27,8 +27,8 @@ jobs:
     name: didt tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}

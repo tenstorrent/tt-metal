@@ -42,7 +42,7 @@ void kernel_main() {
             for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                    acquire_dst();
+                    tile_regs_acquire();
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -73,6 +73,9 @@ void kernel_main() {
                         in0_index_h_offset += in0_block_w;
                     }
 
+                    tile_regs_commit();
+                    tile_regs_wait();
+
                     if (last_out) {
                         // Pack out to output buffer
                         cb_reserve_back(out_cb_id, out_subblock_num_tiles);
@@ -94,7 +97,7 @@ void kernel_main() {
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    release_dst();
+                    tile_regs_release();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;
