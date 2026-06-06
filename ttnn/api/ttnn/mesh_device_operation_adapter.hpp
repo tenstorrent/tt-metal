@@ -652,6 +652,25 @@ public:
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
         requires requires { &ProgramSpecFactory::create_program_artifacts; }
     struct ProgramSpecMeshWorkloadFactoryAdapter {
+        // ProgramSpecFactoryConcept closes the immutable-side cache-key bug generator by
+        // construction: the framework's automatic hash of (op type + attrs + tensor args
+        // + mesh coords) is the ONLY sanctioned cache key — a custom compute_program_hash
+        // on the DeviceOperation could under-specify (omit args that actually affect the
+        // immutable Program) and silently resurrect the wrong Program on cache hit. Force
+        // the user to choose: trifecta factory (no custom hash) or a legacy factory shape
+        // (custom hash allowed at their own risk).
+        static_assert(
+            !requires(const operation_attributes_t& a, const tensor_args_t& t) {
+                DeviceOperation::compute_program_hash(a, t);
+            },
+            "DeviceOperations using a ProgramSpecFactoryConcept factory (Option 1 or Option 2 — "
+            "create_program_artifacts) cannot also define a custom compute_program_hash. The "
+            "framework's automatic hash is the only sanctioned cache key for these factories; "
+            "it closes the immutable-side bug generator (over-permissive hash → cache hit "
+            "resurrects an incorrect Program) by construction. If you need a custom hash for "
+            "performance reasons, use a legacy ProgramFactory or ProgramDescriptorFactory "
+            "factory shape instead.");
+
         // Option 1 (opt-in via the `fast_cache_hit_path` type marker) restores the
         // narrow-but-cheap UpdateTensorArgs fast path; the default is Option 2's
         // safe-by-construction full re-apply.
@@ -721,6 +740,50 @@ public:
                 "Option 2 path (full ProgramRunArgs re-apply on cache hit).");
         }
 
+        // Disallow common (broadcast-to-every-node) runtime args on the Option 1 path.
+        // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
+        //
+        // The Option 1 cache-hit path runs only UpdateTensorArgs, which does NOT refresh
+        // any RunArgs channel other than tensor args. Per-node RTAs are still legal
+        // (they're the standard mechanism for per-node work distribution: a single
+        // compiled binary takes different per-node values, and as long as those values
+        // are deterministic from the cache key, miss-time SetProgramRunArgs is enough).
+        // Common runtime args are different: by definition they're identical across all
+        // nodes for a single dispatch, so the per-node-distribution rationale doesn't
+        // apply. They fall into one of two cases:
+        //
+        //   - The CRTA value is constant for this Program. Then it belongs as a CTA
+        //     (compile-time arg) in the ProgramSpec — cleaner, and the framework will
+        //     bake it into the compiled kernel binary.
+        //
+        //   - The CRTA value varies between dispatches that share a cache entry. Then
+        //     Option 1 will silently use the stale value set at miss-time — exactly the
+        //     mutable-side bug class the trifecta design is built to avoid. Drop the
+        //     `fast_cache_hit_path` opt-in to use Option 2 (full ProgramRunArgs re-apply
+        //     on every cache hit handles varying CRTAs correctly).
+        //
+        // Note: this check applies only to user-channel CRTAs (KernelRunArgs::
+        // common_runtime_arg_values and AdvancedKernelRunArgs::common_runtime_varargs).
+        // The framework-managed CRTAs that route tensor metadata through TensorParameter
+        // relaxations (dynamic_tensor_shape and friends) live in a typed channel outside
+        // ProgramRunArgs and are correctly handled by UpdateTensorArgs.
+        static void assert_no_common_runtime_args(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+            for (const auto& kernel : run_args.kernel_run_args) {
+                TT_FATAL(
+                    kernel.common_runtime_arg_values.empty() && kernel.advanced_options.common_runtime_varargs.empty(),
+                    "ProgramRunArgs returned by create_program_artifacts sets common runtime "
+                    "args (kernel '{}'). The Option 1 fast cache-hit path of "
+                    "ProgramSpecFactoryConcept (opted into via `using fast_cache_hit_path = "
+                    "std::true_type;`) restricts factories to tensor-only per-dispatch "
+                    "mutation, and per-node distribution is the only sanctioned use of "
+                    "runtime args on this path. If the CRTA value is constant for this "
+                    "Program, declare it as a CTA on the ProgramSpec instead. If it varies "
+                    "between dispatches, drop the `fast_cache_hit_path` opt-in to use the "
+                    "default Option 2 path (full ProgramRunArgs re-apply on cache hit).",
+                    kernel.kernel_spec_name);
+            }
+        }
+
         // Match each TensorArgument's MeshTensor reference back to its index in the
         // io_tensor enumeration. Cache-miss path only.
         // TT_FATALs on a TensorArgument that doesn't reference an io_tensor — see
@@ -785,6 +848,7 @@ public:
                 // once; copy the (identical) bindings into each per-range shared state so
                 // they're available on cache hits for UpdateTensorArgs.
                 assert_no_dfb_size_overrides(artifacts.run_params);
+                assert_no_common_runtime_args(artifacts.run_params);
                 auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
                 auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
                 for (const auto& range : tensor_coords.ranges()) {
@@ -902,6 +966,19 @@ public:
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
         requires WorkloadArtifactConcept<ProgramSpecFactory>
     struct WorkloadArtifactMeshWorkloadAdapter {
+        // Same immutable-side bug-generator closure as ProgramSpecMeshWorkloadFactoryAdapter:
+        // the framework's auto-hash is the only sanctioned cache key.
+        static_assert(
+            !requires(const operation_attributes_t& a, const tensor_args_t& t) {
+                DeviceOperation::compute_program_hash(a, t);
+            },
+            "DeviceOperations using a WorkloadArtifactConcept factory (create_workload_artifacts) "
+            "cannot also define a custom compute_program_hash. The framework's automatic hash is "
+            "the only sanctioned cache key for these factories; it closes the immutable-side bug "
+            "generator (over-permissive hash → cache hit resurrects an incorrect Program) by "
+            "construction. If you need a custom hash for performance reasons, use a legacy "
+            "ProgramFactory or ProgramDescriptorFactory factory shape instead.");
+
         using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
