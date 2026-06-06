@@ -208,6 +208,13 @@ concept AdvancedProgramSpecFactoryConcept = requires {
 // on the less-restrictive contract and their code compiles. Opting into
 // Option 1 is the explicit "I've checked that my factory only varies tensor
 // args between dispatches, please give me the fast path."
+//
+// Note that because both options expose the same factory signature, the
+// marker is a cheap perf experiment: an op author can prototype with the
+// default (Option 2) and flip `fast_cache_hit_path` on once the factory is
+// otherwise stable to A/B-test whether the fast cache-hit path actually
+// matters for this op's workload — the factory body stays the same, only
+// the marker (and the framework's dispatch path) changes.
 template <typename T>
 concept HasFastCacheHitPathOptIn = requires {
     typename T::fast_cache_hit_path;
