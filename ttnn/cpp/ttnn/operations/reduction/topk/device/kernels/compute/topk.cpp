@@ -41,6 +41,8 @@ FORCE_INLINE void transpose_and_pack(
         transpose_wh_tile(input_cb_index, i, 0);
 
         // Pack transposed tile to destination
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, dest_cb_index);
         dest_cb.push_back(1);
         tile_regs_release();
@@ -355,6 +357,8 @@ void kernel_main() {
                 result_prep_ind_cb.reserve_back(incr);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
                 pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
 

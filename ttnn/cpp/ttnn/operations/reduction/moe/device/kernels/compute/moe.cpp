@@ -80,6 +80,8 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
             add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
             in0_cb_obj.pop_front(1);
             in0_cb_obj.reserve_back(1);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_reconfig_data_format(in0_cb);
             pack_tile(0, in0_cb);
             in0_cb_obj.push_back(1);
@@ -104,6 +106,8 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         in0_cb_obj.pop_front(1);
         in0_cb_obj.reserve_back(1);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         in0_cb_obj.push_back(1);
@@ -129,6 +133,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             in0_cb_obj.pop_front(1);
             in0_cb_obj.reserve_back(1);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, in0_cb);
             in0_cb_obj.push_back(1);
             tile_regs_release();
@@ -153,6 +159,8 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
         eqz_tile(0);
         in0_cb_obj.pop_front(1);
         in0_cb_obj.reserve_back(1);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         in0_cb_obj.push_back(1);
@@ -175,6 +183,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         in_cb_obj.pop_front(1);
         recip_tile(0);
         in_cb_obj.reserve_back(1);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, in_cb);
         in_cb_obj.push_back(1);
         tile_regs_release();
@@ -255,6 +265,8 @@ void top_k() {
             ckernel::topk_local_sort(0, (int)ascending, logk - 1);
 
             // pack value tiles into cb_intermed0
+            tile_regs_commit();
+            tile_regs_wait();
             pack_reconfig_data_format(input_transposed_cb_index);
             pack_tile(0, input_transposed_cb_index);
             pack_tile(1, input_transposed_cb_index);
@@ -301,6 +313,8 @@ void top_k() {
 
                 // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for
                 // topk, which was in input_dest_start
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_reconfig_data_format(input_transposed_cb_index);
                 pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
 
@@ -333,6 +347,8 @@ void top_k() {
             tile_regs_acquire();
             values_cb.reserve_back(1);
             transpose_wh_tile(input_transposed_cb_index, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, values_cb_index);
             values_cb.push_back(1);
             tile_regs_release();
@@ -349,6 +365,8 @@ void top_k() {
             tile_regs_acquire();
             output_ind_cb.reserve_back(1);
             transpose_wh_tile(index_transposed_cb_index, i, 0);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, output_ind_cb_index);
             output_ind_cb.push_back(1);
             tile_regs_release();

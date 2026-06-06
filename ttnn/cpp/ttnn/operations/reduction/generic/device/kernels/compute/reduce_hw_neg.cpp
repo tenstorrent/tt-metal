@@ -54,6 +54,8 @@ void kernel_main() {
                 negative_tile(reduce_dst_idx);
                 cb_input_obj.pop_front(onetile);
                 cb_ineg_obj.reserve_back(onetile);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(reduce_dst_idx, cb_ineg);
                 cb_ineg_obj.push_back(onetile);
                 tile_regs_release();
@@ -74,6 +76,8 @@ void kernel_main() {
                     cb_acc_obj.pop_front(onetile);
                 }
                 cb_acc_obj.reserve_back(onetile);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(reduce_dst_idx, cb_acc);
                 cb_acc_obj.push_back(onetile);
                 tile_regs_release();
@@ -95,6 +99,8 @@ void kernel_main() {
 #endif
         cb_acc_obj.pop_front(onetile);
         cb_output_obj.reserve_back(onetile);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, cb_output);
         cb_output_obj.push_back(onetile);
         tile_regs_release();

@@ -94,6 +94,8 @@ void kernel_main() {
             tile_regs_acquire();
             input_transposed_cb.reserve_back(1);
             copy_tile(input_cb_index, wt, 0);         // Copy tile from local core wt
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, input_transposed_cb_index);  // Pack to staging buffer
             tile_regs_release();
         }  // wt loop
@@ -108,6 +110,8 @@ void kernel_main() {
             tile_regs_acquire();
             index_transposed_cb.reserve_back(1);
             copy_tile(index_cb_index, wt, 0);         // Copy index tile from local core wt
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(0, index_transposed_cb_index);  // Pack to staging buffer
             index_transposed_cb.push_back(1);
             tile_regs_release();
