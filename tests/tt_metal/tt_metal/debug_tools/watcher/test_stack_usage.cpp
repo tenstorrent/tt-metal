@@ -62,8 +62,8 @@ void RunOneTest(
     auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
 
     // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
-    std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
 
     if (is_quasar) {
         // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only run on DM2..DM7.
@@ -84,27 +84,26 @@ void RunOneTest(
 
         for (uint32_t i = 0; i < num_kernels; i++) {
             std::string name = fmt::format("dm_{}", i);
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
-                .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
-                .num_threads = static_cast<uint8_t>(dms_per_kernel),
-                .compile_time_arg_bindings = {{"usage", free}},
-                .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = experimental::KernelSpecName{name},
+                .source = path_metal2,
+                .num_threads = dms_per_kernel,
+                .compile_time_args = {{"usage", free}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
             });
-            kernel_names.push_back(name);
+            kernel_names.emplace_back(name);
         }
-        constexpr const char* COMPUTE_NAME = "compute";
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+            .source = path_metal2,
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
-            .compile_time_arg_bindings = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .compile_time_args = {{"usage", free}},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -115,41 +114,40 @@ void RunOneTest(
             std::string name = fmt::format("dm_{}", type_idx);
             auto processor = static_cast<tt::tt_metal::DataMovementProcessor>(type_idx);
             auto noc = (type_idx == 1) ? tt::tt_metal::NOC::RISCV_1_default : tt::tt_metal::NOC::RISCV_0_default;
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
-                .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = experimental::KernelSpecName{name},
+                .source = path_metal2,
                 .num_threads = 1,
-                .compile_time_arg_bindings = {{"usage", free}},
-                .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen1_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                                .processor = processor, .noc = noc}},
+                .compile_time_args = {{"usage", free}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .gen1_config =
+                            experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc}},
             });
-            kernel_names.push_back(name);
+            kernel_names.emplace_back(name);
         }
-        constexpr const char* COMPUTE_NAME = "compute";
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+            .source = path_metal2,
             .num_threads = 1,
-            .compile_time_arg_bindings = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .compile_time_args = {{"usage", free}},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     }
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::metal2_host_api::NodeCoord{coord},
+        .target_nodes = experimental::NodeCoord{coord},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "watcher_stack",
+    experimental::ProgramSpec spec{
+        .name = "watcher_stack",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

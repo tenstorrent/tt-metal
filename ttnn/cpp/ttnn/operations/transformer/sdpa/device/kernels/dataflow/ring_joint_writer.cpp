@@ -363,7 +363,8 @@ void kernel_main() {
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slot 11 is retained for compile-time arg index stability; live logical_nt is a runtime arg below.
+    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -384,6 +385,11 @@ void kernel_main() {
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(28);
     constexpr bool chunked_enabled = get_compile_time_arg_val(29) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(30);
+    // Slots 31-33 are retained for compile-time arg index stability; live ring-work masks
+    // are runtime args below.
+    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
+    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
+    constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
@@ -394,7 +400,7 @@ void kernel_main() {
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<31>();
+    constexpr auto out_args = TensorAccessorArgs<34>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -404,7 +410,9 @@ void kernel_main() {
     const uint32_t stats_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    const uint32_t single_valid_kv_chunk_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
@@ -465,9 +473,6 @@ void kernel_main() {
         generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, diag_tile_enabled>();
     }
 
-    const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_receiver.seq, kv_local_padded_Nt, logical_nt - 1, L, is_causal, is_balanced, chunked_enabled);
-
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
 
@@ -485,6 +490,11 @@ void kernel_main() {
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
+        // still advances above so writer stays aligned with reader, compute, and all-gather.
+        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+            continue;
+        }
         const bool do_joint_kv = ring_id == ring_size - 1;
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
@@ -493,29 +503,13 @@ void kernel_main() {
             }
         }
 
-        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        // Last tile id holding any real K data; partial trailing tile is included here and gets
-        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
-        const uint32_t global_n_tile_id = logical_nt - 1;
-        const bool ring_iter_processes_KV_chunks =
-            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
-        const bool joint_contributes = (has_joint_k && L != 0) ? do_joint_kv : false;
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || joint_contributes) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
-        if (!ring_iter_does_work) {
-            continue;
-        }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
-        // When total_valid_kv == 1, compute's sole K chunk triggers save_to_staging on K0,
+        // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
         // prefetch that blocks on cb_prev_out, or the writer and compute deadlock.
-        const uint32_t total_valid_kv =
-            count_valid_kv_chunks<chunked_enabled, kv_local_padded_Nt, Sk_chunk_t, chunk_size_t, q_local_padded_Nt>(
-                num_kv_chunks, num_local_k_chunks, ring_id, logical_nt);
-        const bool single_valid_kv_chunk = (total_valid_kv <= 1);
+        const bool single_valid_kv_chunk = ((single_valid_kv_chunk_mask >> ring_iter) & 1u) != 0;
 
         /**
         We have 3 possible masks
@@ -561,7 +555,7 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
@@ -630,8 +624,8 @@ void kernel_main() {
             };
 
             // Drain pending deferred save (raw accumulators -> DRAM) for the prior Q. Called at
-            // the early-flush site (before prefetch when total_valid_kv<=1 or q_per_core==2) and
-            // the late-flush site (after prefetch in the K-loop window).
+            // the early-flush site (before prefetch for single-valid-K iters or q_per_core==2)
+            // and the late-flush site (after prefetch in the K-loop window).
             auto flush_deferred_save = [&]() {
                 constexpr uint32_t all_tiles_valid = 0xFFFFFFFF;
                 const auto& gen = [&]() -> const auto& {
@@ -690,7 +684,7 @@ void kernel_main() {
                 }
 
                 // 2. Early flush: drain staging before prefetch when needed.
-                // - total_valid_kv <= 1: compute's sole K chunk triggers save_to_staging on K0,
+                // - single valid K chunk: compute saves to staging on K0,
                 //   reserving staging CBs immediately — deadlock if they're still full.
                 // - q_per_core == 2: next Q == last Q whose deferred data isn't in DRAM yet,
                 //   so prefetch would read stale data without flushing first.

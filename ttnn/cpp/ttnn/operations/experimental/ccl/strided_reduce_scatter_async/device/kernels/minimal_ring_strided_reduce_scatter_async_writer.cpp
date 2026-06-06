@@ -424,8 +424,7 @@ void kernel_main() {
                                         // Write the tile to the output buffer on this device.
                                         if (num_in_bounds_tiles > 0) {
                                             const uint32_t output_tile_id = output_tile_id_start + slice_tile_idx_first;
-                                            const uint64_t local_noc_addr =
-                                                get_noc_addr(output_tile_id, output_addrgen);
+                                            const uint64_t local_noc_addr = output_addrgen.get_noc_addr(output_tile_id);
                                             noc_async_write(valid_l1_addrs[0], local_noc_addr, page_size);
                                         }
                                     }

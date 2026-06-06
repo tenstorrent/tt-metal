@@ -21,9 +21,16 @@ from pathlib import Path
 import yaml
 
 from compute_sweep_matrix import chunk_modules
-from constants import format_hardware_suffix, parse_hardware_suffix, strip_grouping_suffix
+from constants import (
+    format_hardware_suffix,
+    parse_hardware_suffix,
+    parse_mesh_suffix,
+    strip_grouping_suffix,
+    strip_mesh_suffix,
+)
 from matrix_runner_config import (
     GENERATION_MANIFEST_FILENAME,
+    LEAD_MODELS_BATCH_POLICY,
     get_lead_models_test_group_name_for_hardware_group,
     get_runner_config,
     get_test_group_name_for_hardware_group,
@@ -158,7 +165,7 @@ def compute_validation_matrix(
     hardware_modules = defaultdict(list)
     unmatched_modules = []
     for module in vector_modules:
-        hardware_group = parse_hardware_suffix(module)
+        hardware_group = parse_hardware_suffix(strip_mesh_suffix(module))
         if hardware_group is None:
             unmatched_modules.append(module)
         else:
@@ -174,32 +181,77 @@ def compute_validation_matrix(
         if not base_modules:
             continue
 
+        # Sub-group by mesh shape only when the hardware group has multiple
+        # distinct mesh topologies (e.g. N300 with both [1,1] and [1,2]).
+        mesh_to_modules = defaultdict(set)
+        for module in grouped_modules:
+            mesh = parse_mesh_suffix(module)
+            base = strip_grouping_suffix(module)
+            mesh_str = f"{mesh[0]}x{mesh[1]}" if mesh else ""
+            mesh_to_modules[mesh_str].add(base)
+
+        needs_mesh_split = len(mesh_to_modules) > 1
+
         hardware_label = _get_hardware_display_label(hardware_group)
         if validation_scope == "lead_models":
             test_group_name = get_lead_models_test_group_name_for_hardware_group(hardware_group)
         else:
             test_group_name = get_test_group_name_for_hardware_group(hardware_group)
         runner_config = get_runner_config(test_group_name)
-        runner_batches = chunk_modules(base_modules, batch_size)
-        total_batches = len(runner_batches)
         trace_id_list = sorted(trace_ids_by_hardware.get(hardware_group, []))
 
-        for index, batch in enumerate(runner_batches, start=1):
-            include.append(
-                {
-                    **runner_config,
-                    "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
-                    "batch_ordinal": f"{index}/{total_batches}",
-                    "batch_index": index,
-                    "module_selector": batch,
-                    "suite_name": "model_traced",
-                    "validation_scope": validation_scope,
-                    "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
-                    "trace_ids": trace_id_list,
-                    "hardware_group": hardware_label,
-                }
-            )
+        solo_modules = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
 
+        if needs_mesh_split:
+            for mesh_str, mesh_modules in sorted(mesh_to_modules.items()):
+                sorted_modules = sorted(mesh_modules)
+                solo = [m for m in sorted_modules if m in solo_modules]
+                rest = [m for m in sorted_modules if m not in solo_modules]
+                runner_batches = chunk_modules(rest, batch_size)
+                for sm in solo:
+                    runner_batches.append(sm)
+                total_batches = len(runner_batches)
+                mesh_label = f".{mesh_str}" if mesh_str else ""
+
+                for index, batch in enumerate(runner_batches, start=1):
+                    entry = {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}{mesh_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                    }
+                    if mesh_str:
+                        entry["mesh_device_shape"] = mesh_str
+                    include.append(entry)
+        else:
+            solo = [m for m in base_modules if m in solo_modules]
+            rest = [m for m in base_modules if m not in solo_modules]
+            runner_batches = chunk_modules(rest, batch_size)
+            for sm in solo:
+                runner_batches.append(sm)
+            total_batches = len(runner_batches)
+            for index, batch in enumerate(runner_batches, start=1):
+                include.append(
+                    {
+                        **runner_config,
+                        "batch_display": f"{validation_scope}:{hardware_label}:{batch}",
+                        "batch_ordinal": f"{index}/{total_batches}",
+                        "batch_index": index,
+                        "module_selector": batch,
+                        "suite_name": "model_traced",
+                        "validation_scope": validation_scope,
+                        "vectors_artifact_name": f"sweeps-vectors-{validation_scope}",
+                        "trace_ids": trace_id_list,
+                        "hardware_group": hardware_label,
+                        "mesh_device_shape": "",
+                    }
+                )
     return {"include": include}
 
 
@@ -230,7 +282,7 @@ def compute_pinned_validation_matrix(
     hardware_modules = defaultdict(list)
     unmatched_modules = []
     for module in vector_modules:
-        parsed = parse_hardware_suffix(module)
+        parsed = parse_hardware_suffix(strip_mesh_suffix(module))
         if parsed is None:
             unmatched_modules.append(module)
         else:

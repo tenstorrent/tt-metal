@@ -71,6 +71,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
     cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
@@ -171,6 +174,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp
     cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
@@ -185,6 +189,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/plusone/plusone_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.cpp
@@ -307,7 +312,9 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/sort/sort_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/gather_nanobind.cpp
     cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_nanobind.cpp
+    cpp/ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.cpp
+    cpp/ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp
@@ -317,6 +324,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/events.cpp
     cpp/ttnn-nanobind/fabric.cpp
     cpp/ttnn-nanobind/disaggregation.cpp
+    cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp

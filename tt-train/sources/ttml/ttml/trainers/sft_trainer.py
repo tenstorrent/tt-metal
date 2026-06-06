@@ -55,6 +55,19 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
+        enable_fsdp: Wrap the model with :func:`ttml.fsdp.fully_shard`
+            (per-block + root) so parameters, gradients, and optimizer
+            state are sharded across the ``"fsdp"`` mesh axis.  See
+            ``tt-train/docs/FSDP.md``.  Requires an open mesh with an
+            ``"fsdp"`` axis of size > 1.  Mutually exclusive with
+            ``max_grad_norm > 0`` (per-rank shard L2 norm is not the
+            global norm) and ``save_interval > 0`` (the pickle checkpoint
+            format would store per-rank shards, not full tensors).
+        fsdp_reshard_after_forward: When ``True`` (default), forward
+            re-shards weights between forward and backward to keep peak
+            memory low; the backward-pre callback re-gathers just in
+            time. ``False`` keeps weights gathered between forward and
+            backward — cheaper in CCL but uses more memory.
     """
 
     # ---- loop ----
@@ -70,6 +83,9 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
+    # ---- FSDP ----
+    enable_fsdp: bool = False
+    fsdp_reshard_after_forward: bool = True
 
 
 class SFTTrainer:
@@ -91,6 +107,16 @@ class SFTTrainer:
     Loss aggregation across devices is handled automatically via a default
     ``concat_mesh_to_tensor_composer(device, 0)``.  Pass a custom
     ``loss_composer`` to override.
+
+    **FSDP**: setting ``config.enable_fsdp=True`` wraps the model with
+    :func:`ttml.fsdp.fully_shard` (per-block + root, FSDP2-style) before
+    the optimizer is built so optimizer state is sized against the
+    sharded shapes.  Gradients are then auto-synchronised across the
+    ``("dp", "fsdp")`` axes inside the training loop (``ttml.sync_gradients``
+    skips the FSDP axis per-param because the FSDP backward hook has
+    already reduce-scattered it). With pure FSDP no DDP callback is
+    needed; with HSDP the same call covers both axes. See
+    ``tt-train/docs/FSDP.md`` for the full picture.
 
     Example::
 
@@ -168,11 +194,38 @@ class SFTTrainer:
         if config.gradient_checkpointing:
             self._enable_gradient_checkpointing(model)
 
+        if config.enable_fsdp:
+            # The pickle checkpoint format dumps per-rank tensors via
+            # to_numpy(); under FSDP that captures only a per-rank shard,
+            # not the full weight. clip_grad_norm is similarly broken
+            # because the per-rank shard L2 norm is not the global norm
+            # (sharding-aware variants are tracked in tt-train/docs/FSDP.md).
+            if config.max_grad_norm > 0:
+                raise ValueError(
+                    "SFTConfig.max_grad_norm > 0 is not supported with enable_fsdp=True; "
+                    "the per-rank shard L2 norm is not the global norm. "
+                    "See tt-train/docs/FSDP.md."
+                )
+            if config.save_interval > 0:
+                raise ValueError(
+                    "SFTConfig.save_interval > 0 is not supported with enable_fsdp=True; "
+                    "the pickle checkpoint format would store per-rank shards. "
+                    "Set save_interval=0 or disable FSDP."
+                )
+            self._apply_fsdp(model, config.fsdp_reshard_after_forward)
+
         self.model = model
         self.train_dataloader = train_dataloader
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
+
+        # Mesh axes to sync gradients across before each optimizer step
+        # when FSDP is enabled. Empty tuple disables the auto-sync (DDP
+        # users keep the existing callback-based path).
+        self._sync_axes: tuple[str, ...] = ()
+        if config.enable_fsdp:
+            self._sync_axes = self._resolve_sync_axes()
 
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
@@ -229,6 +282,9 @@ class SFTTrainer:
                 loss.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
                 profiler_marker(None, "backward_pass_done")
+
+            if self._sync_axes:
+                ttml.sync_gradients(self.model.parameters(), axis_names=self._sync_axes)
 
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
@@ -436,3 +492,35 @@ class SFTTrainer:
         if cfg is None or not hasattr(cfg, "runner_type"):
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
+
+    @staticmethod
+    def _apply_fsdp(model: Any, reshard_after_forward: bool) -> None:
+        """Wrap ``model`` with FSDP2-style ``fully_shard`` (per-block + root).
+
+        For LoraModel-wrapped models we descend into the inner ``model.model``
+        to find ``.blocks`` (LoraModel itself doesn't expose them). The root
+        wrapper then claims any params not already managed by a block wrapper.
+        """
+        target = model.model if hasattr(model, "model") and hasattr(model.model, "blocks") else model
+        blocks = getattr(target, "blocks", None)
+        if blocks is None:
+            raise RuntimeError(
+                "SFTConfig.enable_fsdp=True requires a model with a `.blocks` "
+                f"attribute (got {type(target).__name__}). Wrap your model so it "
+                "exposes a list of transformer blocks (matching Llama / NanoGPT)."
+            )
+        for block in blocks:
+            ttml.fsdp.fully_shard(block, reshard_after_forward=reshard_after_forward)
+        ttml.fsdp.fully_shard(target, reshard_after_forward=reshard_after_forward)
+
+    @staticmethod
+    def _resolve_sync_axes() -> tuple[str, ...]:
+        """Pick the mesh axes to all-reduce gradients across.
+
+        Returns the subset of ``("dp", "fsdp")`` whose axis is present on
+        the active mesh AND has size > 1.  Empty tuple = no sync needed
+        """
+        mesh = ttml.maybe_mesh()
+        if mesh is None:
+            return ()
+        return tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)

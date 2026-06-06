@@ -20,7 +20,6 @@ from loguru import logger
 import ttnn
 from conftest import requires_hybrid_allocator
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.decoder_stage import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.demo.weight_provider import resolve_sram_expert_ids
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
@@ -60,7 +59,7 @@ _SRAM_HOT_EXPERTS_CEILING = 64
 
 
 def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
-    """Build the ``(sram_hot_experts, sram_core_grids, sram_assigner)`` triple.
+    """Build the ``(sram_hot_experts, sram_core_grids)`` pair.
 
     Core grids come from :meth:`SramExpertCoreGrids.shared_expert_mirror` (same
     CRS as shared-expert gate/up/down in ``overlap_configs``).
@@ -72,14 +71,6 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
     budgeting is applied here.
     """
     sram_core_grids = SramExpertCoreGrids.shared_expert_mirror()
-    # Routed experts in DRAM are already BFP4 (see prepare_routed_expert_weights);
-    # force the SRAM copies to match so every tile is the expected 25 KiB/expert
-    # binding-core footprint -- this is the lever that unlocks the 26+ expert
-    # target under the 960 KiB combined attn+SRAM cap.  Dropping BFP8 from the
-    # format list makes the assigner pick BFP4 on every tile regardless of PCC;
-    # add BFP2 back if accuracy drops unacceptably.
-    sram_assigner = CompressedTensorAssigner(metric="pcc", threshold=0.993, formats=["bfp4"])
-
     freqs = _load_routing_frequencies()
     full_config = build_sram_hot_expert_config([layer_idx], freqs)
     sram_hot_experts = {k: v[:_SRAM_HOT_EXPERTS_CEILING] for k, v in full_config.items()}
@@ -88,7 +79,7 @@ def _build_sram_hot_expert_kwargs(state_dict, submesh, layer_idx: int):
         layer_idx,
         len(sram_hot_experts.get(layer_idx, [])),
     )
-    return sram_hot_experts, sram_core_grids, sram_assigner
+    return sram_hot_experts, sram_core_grids
 
 
 def _optional_bspm_dir():
@@ -360,15 +351,6 @@ _KNOWN_DECODER_MOE_FAILURE_SKIPS = {
     (6644, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
     (9916, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
     (11664, True, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43118",
-    (0, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (127, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (511, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (1023, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (2047, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (4096, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (6644, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (9916, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
-    (11664, False, False): "DecoderBlock MoE golden tensor creation segfaults. Issue: #43122",
 }
 
 
@@ -560,6 +542,17 @@ def skip_known_decoder_moe_failure(
         pytest.param("t8_all_picked", marks=pytest.mark.skip_post_commit),
     ],
 )
+# enable_sram_bspm: opt-in BSPM mixed precision for SRAM experts. Independent
+# of DRAM BSPM (which is always on when BSPM_DIR is set). When True, the test
+# uses the deferred SRAM build pattern so SDPA buffer lands at uniform L1
+# addresses before SRAM CTs allocate below it.
+@pytest.mark.parametrize(
+    "enable_sram_bspm",
+    [
+        pytest.param(False, id="sram_bspm_off"),
+        pytest.param(True, id="sram_bspm_on", marks=pytest.mark.skip_post_commit),
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -609,6 +602,7 @@ def test_decoder(
     num_internal_iterations,
     expert_upload_mode,
     sram_scenario,
+    enable_sram_bspm,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -687,11 +681,8 @@ def test_decoder(
     # present -- skip SRAM for them.
     sram_hot_experts = None
     sram_core_grids = None
-    sram_assigner = None
     if effective_num_routed_experts == 256:
-        sram_hot_experts, sram_core_grids, sram_assigner = _build_sram_hot_expert_kwargs(
-            state_dict, submesh, ROUTED_EXPERT_LAYER_IDX
-        )
+        sram_hot_experts, sram_core_grids = _build_sram_hot_expert_kwargs(state_dict, submesh, ROUTED_EXPERT_LAYER_IDX)
 
     # SRAM placement scenarios — feeds the SRAM kernel pipeline via sram_expert_ids.
     #   "default":  no override; sram_hot_experts (built above when 256-experts) is
@@ -715,7 +706,6 @@ def test_decoder(
         # Disable sram_slots build so SRAM truly doesn't fire.
         sram_hot_experts = None
         sram_core_grids = None
-        sram_assigner = None
     elif rigged_expert_ids is not None:
         winners = [grp * 32 + e for grp in rigged_group_ids for e in rigged_expert_ids[grp]]
         non_winners = [eid for eid in range(256) if eid not in winners]
@@ -802,6 +792,21 @@ def test_decoder(
     # This test only builds candidates for ``ROUTED_EXPERT_LAYER_IDX`` (see
     # ``_build_sram_hot_expert_kwargs``), so the dict has a single key; multi-layer
     # callers use the same shape with more entries.
+    #
+    # Deferred SRAM alloc under enable_sram_bspm: when BSPM-SRAM is on, SRAM CT
+    # sizes diverge per device → if allocated before create_decoder_block_tensors,
+    # SDPA buffer (allocated after) lands at per-device-different L1 addresses,
+    # breaking MLA's uniform-address assumption. Build DRAM weights first, then
+    # SDPA via create_decoder_block_tensors, then SRAM CTs (which land below the
+    # uniform SDPA address). Under uniform-BFP4 the direct path is fine (SRAM
+    # sizes are uniform per device). The parametrized flag requires BSPM_DIR
+    # to be set (otherwise there's no BSPM source to use).
+    if enable_sram_bspm and _optional_bspm_dir() is None:
+        pytest.skip("enable_sram_bspm=True requires BSPM_DIR env var to be set")
+    # Unified path: prepare_moe_layer_weights handles both explicit-list and
+    # auto-fit SRAM scenarios via prepare_compressed_sram_slots.
+    _prep_sram_ids = sram_expert_ids
+    _prep_enable_sram_bspm = enable_sram_bspm
     layer_weights = prepare_moe_layer_weights(
         submesh,
         state_dict,
@@ -810,11 +815,11 @@ def test_decoder(
         move_to_device=True,
         sram_hot_experts=sram_hot_experts,
         sram_core_grids=sram_core_grids,
-        sram_assigner=sram_assigner,
-        worker_l1_size=device_params.get("worker_l1_size") if sram_hot_experts is not None else None,
+        worker_l1_size=device_params.get("worker_l1_size"),
         compressed_tp8=True,
         bspm_dir=_optional_bspm_dir(),
-        sram_expert_ids=sram_expert_ids,
+        enable_sram_bspm=_prep_enable_sram_bspm,
+        sram_expert_ids=_prep_sram_ids,
     )
 
     # When no explicit override (the "default" scenario) and sram_slots got built,
@@ -1014,6 +1019,7 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        enable_sram_bspm=enable_sram_bspm,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)

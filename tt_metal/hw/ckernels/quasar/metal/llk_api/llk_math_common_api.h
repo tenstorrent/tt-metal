@@ -17,25 +17,6 @@
  *************************************************************************/
 
 /**
- * @brief Determines whether the source register format and Float32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_fp32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Float16_b || src_reg_fmt == DataFormat::Float16 ||
-           src_reg_fmt == DataFormat::Tf32;
-}
-
-/**
- * @brief Determines whether the source register format and Int32 destination format are a supported combination
- *
- * @param src_reg_fmt: The source register format
- */
-inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
-    return src_reg_fmt == DataFormat::Int8 || src_reg_fmt == DataFormat::UInt8;
-}
-
-/**
  *
  * @brief Configures math hardware.
  * Sets up ALU formats for math destination register and source registers.
@@ -57,16 +38,16 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
 
     // TODO: AM; introduce dest mode enum, issue #37483
     // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
-        is_src_fmt_fp32_dest_compatible(srcb_format)) {
+    if (EN_32BIT_DEST_FORMAT && _is_src_fmt_fp32_dest_compatible_(srca_format) &&
+        _is_src_fmt_fp32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
             true /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
-        EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
-        is_src_fmt_int32_dest_compatible(srcb_format)) {
+        EN_32BIT_DEST_FORMAT && _is_src_fmt_int32_dest_compatible_(srca_format) &&
+        _is_src_fmt_int32_dest_compatible_(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,

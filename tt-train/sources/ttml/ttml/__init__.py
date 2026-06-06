@@ -45,3 +45,5 @@ optimizers = _ttml.optimizers
 sys.modules[f"{__name__}.optimizers"] = optimizers
 
 from ._mesh import Mesh, open_device_mesh, maybe_mesh, mesh, sync_gradients
+
+from . import fsdp

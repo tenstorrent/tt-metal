@@ -30,6 +30,8 @@ void kernel_main() {
 
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
 
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
+
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
 
@@ -143,7 +145,7 @@ void kernel_main() {
         // Read input token (or portion of it in payload split mode)
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
-        uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
+        uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(i);
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 
@@ -174,7 +176,10 @@ void kernel_main() {
         // Wait for all other devices to finish dispatching their input tokens and metadata.
         // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
         // so we no longer need to copy from the intermediate buffer to the final output here.
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
-        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+        constexpr uint32_t expected_dispatch_device_inc =
+            (topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) : dispatch_devices;
+        auto* global_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_address);
+        noc_semaphore_wait(global_semaphore_ptr, expected_dispatch_device_inc);
+        noc_semaphore_set(global_semaphore_ptr, 0);
     }
 }

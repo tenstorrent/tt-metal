@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -47,6 +50,8 @@ void batch_loop(
     uint32_t start_row) {
     uint32_t q_write_addr = cb_write_ptr_base + start * output_row_size;
     for (uint32_t q = start; q < end; ++q) {
+        // Device 2.0 migration: legacy primitive retained: source is a precomposed uint64_t NoC address
+        // and destination is a raw offset into a pre-resolved CB write pointer.
         noc_async_read(qkv_read_addr, q_write_addr, output_row_size);
         q_write_addr += output_row_size;
         cur_core_idx++;
@@ -61,9 +66,10 @@ void batch_loop(
 };
 
 void nlp_concat(
+    const Noc& noc_obj,
+    CircularBuffer& cb_q_out,
     uint32_t q_start_addr,
     uint32_t tensor_address0,
-    uint32_t cb_id_q_out,
     bool nlp_local,
     uint32_t start_local,
     std::array<uint32_t, 8> core_noc_x,
@@ -87,7 +93,7 @@ void nlp_concat(
                         output_row_size * second_half_core + start_row * input_row_size;
     }
     uint32_t q_write_addr = 0;
-    const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
+    const uint32_t cb_write_ptr_base = cb_q_out.get_write_ptr();
 
     for (uint32_t batch_range = 0; batch_range < idx_end; batch_range++) {
         batch_loop(
@@ -113,7 +119,7 @@ void nlp_concat(
                         output_row_size * second_half_core + start_row * input_row_size;
     }
 
-    noc_async_read_barrier();
+    noc_obj.async_read_barrier();
 };
 
 void kernel_main() {
@@ -123,13 +129,8 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     uint32_t q_start_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t signal_semaphore_addr2 = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-
-    volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr2 =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr2);
+    Semaphore<> signal_sem(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> signal_sem2(get_arg_val<uint32_t>(arg_idx++));
 
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += in_num_cores;
@@ -141,10 +142,14 @@ void kernel_main() {
     std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
     std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
 
+    Noc noc_obj;
+    CircularBuffer cb_q_out(cb_id_q_out);
+
     nlp_concat(
+        noc_obj,
+        cb_q_out,
         q_start_addr,
         tensor_address0,
-        cb_id_q_out,
         1,
         start_local,
         core_noc_x,
@@ -154,17 +159,18 @@ void kernel_main() {
         second_half_core,
         start_row);
     if (ROWS_TO_READ == 1) {
-        noc_semaphore_wait(signal_semaphore_addr_ptr, 1);
-        noc_semaphore_set(signal_semaphore_addr_ptr, 0);
+        signal_sem.wait(1);
+        signal_sem.set(0);
     } else if (ROWS_TO_READ == 2) {
-        noc_semaphore_wait(signal_semaphore_addr_ptr2, 1);
-        noc_semaphore_set(signal_semaphore_addr_ptr2, 0);
+        signal_sem2.wait(1);
+        signal_sem2.set(0);
     }
 
     nlp_concat(
+        noc_obj,
+        cb_q_out,
         q_start_addr,
         tensor_address0,
-        cb_id_q_out,
         0,
         start_local,
         core_noc_x,
@@ -173,5 +179,5 @@ void kernel_main() {
         in0_mcast_noc_y,
         second_half_core,
         start_row);
-    cb_push_back(cb_id_q_out, 2);
+    cb_q_out.push_back(2);
 }

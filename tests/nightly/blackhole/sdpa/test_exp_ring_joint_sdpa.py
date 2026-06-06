@@ -791,7 +791,7 @@ EXP_RING_JOINT_PERF_CHECK_CONFIGS = [
     # (ring_size_expected, max_payload_size, payload_id, expected_util)
     # 4-device ring (QuietBox, 4xGalaxy analog)
     (4, 4096, "4k", 65.3),
-    (4, 8192, "8k", 65.2),
+    (4, 8192, "8k", 65.6),
 ]
 
 

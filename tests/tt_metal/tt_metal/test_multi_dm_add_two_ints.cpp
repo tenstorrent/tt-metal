@@ -42,27 +42,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* KERNEL_0 = "kernel_0";
-    constexpr const char* KERNEL_1 = "kernel_1";
-    constexpr const char* KERNEL_2 = "kernel_2";
-    constexpr const char* KERNEL_3 = "kernel_3";
+    const experimental::KernelSpecName KERNEL_0{"kernel_0"};
+    const experimental::KernelSpecName KERNEL_1{"kernel_1"};
+    const experimental::KernelSpecName KERNEL_2{"kernel_2"};
+    const experimental::KernelSpecName KERNEL_3{"kernel_3"};
 
-    auto make_dm_kernel_spec = [](const char* id, uint8_t num_threads, uint32_t l1_addr) {
-        return experimental::metal2_host_api::KernelSpec{
+    auto make_dm_kernel_spec = [](const experimental::KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
+        return experimental::KernelSpec{
             .unique_id = id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp"},
+
+                "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints_2_0.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"l1_address", l1_addr}},
-            .runtime_arguments_schema =
+            .compile_time_args = {{"l1_address", l1_addr}},
+            .runtime_arg_schema =
                 {
-                    .named_runtime_args = {"a", "b"},
+                    .runtime_arg_names = {"a", "b"},
                 },
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
@@ -71,42 +70,42 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     auto k2 = make_dm_kernel_spec(KERNEL_2, 2, MEM_L1_UNCACHED_BASE + (2 * sizeof(int)));
     auto k3 = make_dm_kernel_spec(KERNEL_3, 2, MEM_L1_UNCACHED_BASE + (2 * sizeof(int)));
 
-    experimental::metal2_host_api::WorkUnitSpec wu_core0{
-        .unique_id = "wu_core0",
+    experimental::WorkUnitSpec wu_core0{
+        .name = "wu_core0",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_2},
-        .target_nodes = experimental::metal2_host_api::NodeCoord{0, 0},
+        .target_nodes = experimental::NodeCoord{0, 0},
     };
-    experimental::metal2_host_api::WorkUnitSpec wu_core1{
-        .unique_id = "wu_core1",
+    experimental::WorkUnitSpec wu_core1{
+        .name = "wu_core1",
         .kernels = {KERNEL_0, KERNEL_1, KERNEL_3},
-        .target_nodes = experimental::metal2_host_api::NodeCoord{1, 0},
+        .target_nodes = experimental::NodeCoord{1, 0},
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "multi_dm_add_two_ints",
+    experimental::ProgramSpec spec{
+        .name = "multi_dm_add_two_ints",
         .kernels = {k0, k1, k2, k3},
         .work_units = {wu_core0, wu_core1},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        {.kernel_spec_name = KERNEL_0,
-         .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
-              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}}},
-        {.kernel_spec_name = KERNEL_1,
-         .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
-              {.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}}},
-        {.kernel_spec_name = KERNEL_2,
-         .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
-        {.kernel_spec_name = KERNEL_3,
-         .named_runtime_args =
-             {{.node = experimental::metal2_host_api::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KERNEL_0,
+            .runtime_arg_values =
+                {{experimental::NodeCoord{0, 0}, {{"a", 1}, {"b", 2}}},
+                 {experimental::NodeCoord{1, 0}, {{"a", 1}, {"b", 2}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KERNEL_1,
+            .runtime_arg_values =
+                {{experimental::NodeCoord{0, 0}, {{"a", 3}, {"b", 4}}},
+                 {experimental::NodeCoord{1, 0}, {{"a", 3}, {"b", 4}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KERNEL_2, .runtime_arg_values = {{experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}}}}},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = KERNEL_3, .runtime_arg_values = {{experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}}}}},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

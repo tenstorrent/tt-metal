@@ -25,10 +25,11 @@ jobs:
     name: ${{ inputs.arch }} fabric cpu unit tests
     runs-on: tt-ubuntu-2204-large-stable
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
         TT_METAL_HOME: /work

@@ -25,6 +25,5 @@ void kernel_main() {
     CoreLocalMem<std::uint32_t> result(l1_address);
 
     result[0] = a + b;
-    DPRINT << "Adding two ints: " << a << " + " << b << " = " << result[0] << ENDL();
-    DEVICE_PRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
+    DPRINT("Adding two ints: {} + {} = {}\n", a, b, result[0]);
 }

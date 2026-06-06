@@ -28,9 +28,14 @@ inline void _add_int_(const DataFormat fmt, const int iterations, const int in0_
         TT_SFPLOAD(p_sfpu::LREG0, instr_mod, ADDR_MOD_7, 0, in0_offset_idx + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, in1_offset_idx + (d << 1));
 
-        // On Quasar, SFPU kernels should assume that integer inputs are in 2's complement format
-        // TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag -> 2SC
-        // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag-> 2SC
+        // Dest layout depends on how operands reached dest:
+        //   UNP_DEST / Int32 L1 with 2's-comp tiles → 2's-comp Int32
+        //   copy_tile Int8 + fp32_dest_acc FPU → sign-mag Int32 (SIGN_MAGNITUDE_FORMAT=true)
+        if constexpr (SIGN_MAGNITUDE_FORMAT)
+        {
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag -> 2SC
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC); // Sign+Mag-> 2SC
+        }
 
         TTI_SFPIADD(
             0x0,
@@ -38,7 +43,10 @@ inline void _add_int_(const DataFormat fmt, const int iterations, const int in0_
             p_sfpu::LREG1,
             p_sfpu::sfp_binary_mod::SFPIADD_DISABLE_CC); // SFPIADD needs to explicitly disable CC output since CC exu is enabled by default
 
-        // TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2SC -> Sing+Mag
+        if constexpr (SIGN_MAGNITUDE_FORMAT)
+        {
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM); // 2SC -> Sing+Mag
+        }
 
         TT_SFPSTORE(p_sfpu::LREG1, instr_mod, ADDR_MOD_7, 0, out_offset_idx + (d << 1));
     }
