@@ -144,10 +144,14 @@ decltype(auto) validate_and_get_reference_value(
     return reference_value;
 }
 
-ChipId get_reference_physical_device_id(const MeshDeviceView& view, ContextId context_id) {
+ChipId get_reference_physical_device_id(
+    const MeshDeviceView& view, const std::map<ChipId, IDevice*>& opened_local_devices, ContextId context_id) {
     auto devices = view.get_devices();
     if (!devices.empty()) {
         return devices.front()->id();
+    }
+    if (!opened_local_devices.empty()) {
+        return opened_local_devices.begin()->first;
     }
 
     auto fabric_node_ids = view.get_fabric_node_ids();
@@ -158,10 +162,11 @@ ChipId get_reference_physical_device_id(const MeshDeviceView& view, ContextId co
         .get_physical_chip_id_from_fabric_node_id(fabric_node_ids.front());
 }
 
-const metal_SocDescriptor& get_reference_soc_desc(const MeshDeviceView& view, ContextId context_id) {
+const metal_SocDescriptor& get_reference_soc_desc(
+    const MeshDeviceView& view, const std::map<ChipId, IDevice*>& opened_local_devices, ContextId context_id) {
     return tt_metal::MetalContext::instance(context_id)
         .get_cluster()
-        .get_soc_desc(get_reference_physical_device_id(view, context_id));
+        .get_soc_desc(get_reference_physical_device_id(view, opened_local_devices, context_id));
 }
 
 // Returns offset of the mesh device view in the system mesh.
@@ -275,7 +280,7 @@ bool MeshDeviceImpl::is_remote_only() const {
 
 uint32_t MeshDeviceImpl::l1_size_per_core() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).worker_l1_size;
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_).worker_l1_size;
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->l1_size_per_core(); });
@@ -283,7 +288,7 @@ uint32_t MeshDeviceImpl::l1_size_per_core() const {
 
 uint32_t MeshDeviceImpl::dram_size_per_channel() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).dram_view_size;
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_).dram_view_size;
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_size_per_channel(); });
@@ -811,7 +816,10 @@ CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
         auto& env_impl = MetalEnvAccessor(metal_context.get_env()).impl();
         const auto& dispatch_core_config = metal_context.get_dispatch_core_manager().get_dispatch_core_config();
         return tt::get_compute_grid_size(
-            env_impl, get_reference_physical_device_id(*view_, context_id_), this->num_hw_cqs(), dispatch_core_config);
+            env_impl,
+            get_reference_physical_device_id(*view_, scoped_devices_->opened_local_devices(), context_id_),
+            this->num_hw_cqs(),
+            dispatch_core_config);
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->compute_with_storage_grid_size(); });
@@ -1021,7 +1029,9 @@ const MeshDeviceView& MeshDeviceImpl::get_view() const {
 
 int MeshDeviceImpl::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
-ChipId MeshDeviceImpl::build_id() const { return get_reference_physical_device_id(*view_, context_id_); }
+ChipId MeshDeviceImpl::build_id() const {
+    return get_reference_physical_device_id(*view_, scoped_devices_->opened_local_devices(), context_id_);
+}
 
 bool MeshDeviceImpl::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
@@ -1099,7 +1109,7 @@ void MeshDeviceImpl::clear_loaded_sub_device_manager() {
 
 CoreCoord MeshDeviceImpl::dram_grid_size() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).get_dram_grid_size();
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_).get_dram_grid_size();
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->dram_grid_size(); });
@@ -1108,14 +1118,15 @@ CoreCoord MeshDeviceImpl::dram_grid_size() const {
 // Device property methods that can be delegated to reference device
 CoreCoord MeshDeviceImpl::grid_size() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).grid_size;
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_).grid_size;
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->grid_size(); });
 }
 CoreCoord MeshDeviceImpl::logical_grid_size() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).get_grid_size(CoreType::TENSIX);
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_)
+            .get_grid_size(CoreType::TENSIX);
     }
     return validate_and_get_reference_value(
         this->get_devices(), [](const auto* device) { return device->logical_grid_size(); });
@@ -1209,7 +1220,7 @@ uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, Sub
 // Bank and memory management methods
 int MeshDeviceImpl::num_dram_channels() const {
     if (view_->get_devices().empty()) {
-        return get_reference_soc_desc(*view_, context_id_).get_num_dram_views();
+        return get_reference_soc_desc(*view_, scoped_devices_->opened_local_devices(), context_id_).get_num_dram_views();
     }
     return reference_device()->num_dram_channels();
 }
@@ -1218,7 +1229,8 @@ int MeshDeviceImpl::get_clock_rate_mhz() const {
     if (view_->get_devices().empty()) {
         return tt_metal::MetalContext::instance(context_id_)
             .get_cluster()
-            .get_device_aiclk(get_reference_physical_device_id(*view_, context_id_));
+            .get_device_aiclk(
+                get_reference_physical_device_id(*view_, scoped_devices_->opened_local_devices(), context_id_));
     }
     return reference_device()->get_clock_rate_mhz();
 }
