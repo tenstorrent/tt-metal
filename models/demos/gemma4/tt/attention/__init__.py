@@ -76,6 +76,7 @@ class Gemma4Attention:
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
+        is_kv_shared: bool = False,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -104,6 +105,7 @@ class Gemma4Attention:
             mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
+            is_kv_shared=is_kv_shared,
         )
 
         if create_kv_cache:

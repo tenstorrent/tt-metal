@@ -42,6 +42,7 @@ def load_attention_weights(
     mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    is_kv_shared=False,
 ) -> AttentionWeights:
     """
     Load and fuse attention weights with tensor parallelism.
@@ -65,10 +66,18 @@ def load_attention_weights(
 
     if state_dict:
         q_w = state_dict["q_proj.weight"]  # [q_size, H]
-        k_w = state_dict["k_proj.weight"]  # [kv_size, H]
+        if is_kv_shared:
+            k_w = state_dict.get("k_proj.weight", torch.zeros(kv_size, hidden_size, dtype=q_w.dtype, device=q_w.device))
+        else:
+            k_w = state_dict["k_proj.weight"]  # [kv_size, H]
 
         if not is_global:
-            v_w = state_dict["v_proj.weight"]  # [kv_size, H]
+            if is_kv_shared:
+                v_w = state_dict.get(
+                    "v_proj.weight", torch.zeros(kv_size, hidden_size, dtype=q_w.dtype, device=q_w.device)
+                )
+            else:
+                v_w = state_dict["v_proj.weight"]  # [kv_size, H]
         else:
             v_w = k_w  # K=V tying: duplicate K as V
 
@@ -115,8 +124,15 @@ def load_attention_weights(
             o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)
 
         # Per-head norm weights: [head_dim] -> [1, 1, head_dim/TILE_SIZE, TILE_SIZE]
-        q_norm_w = state_dict["q_norm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
-        k_norm_w = state_dict["k_norm.weight"].reshape(1, 1, -1, ttnn.TILE_SIZE)
+        q_norm = state_dict["q_norm.weight"]
+        q_norm_w = q_norm.reshape(1, 1, -1, ttnn.TILE_SIZE)
+        if is_kv_shared:
+            k_norm = state_dict.get(
+                "k_norm.weight", torch.zeros(config.head_dim, dtype=q_norm.dtype, device=q_norm.device)
+            )
+        else:
+            k_norm = state_dict["k_norm.weight"]
+        k_norm_w = k_norm.reshape(1, 1, -1, ttnn.TILE_SIZE)
     else:
         qkv = None
         o_w = None

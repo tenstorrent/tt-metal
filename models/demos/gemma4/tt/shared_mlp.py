@@ -101,7 +101,7 @@ class SharedMLP:
         """
         # gate = GELU(x @ gate_proj)
         gate = ttnn.linear(hidden_states, self.gate_proj)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+        gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
 
         # up = x @ up_proj
         up = ttnn.linear(hidden_states, self.up_proj)
