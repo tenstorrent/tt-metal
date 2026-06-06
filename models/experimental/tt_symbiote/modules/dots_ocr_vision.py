@@ -24,9 +24,8 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
 from models.experimental.tt_symbiote.modules.linear import (
-    _tp_requires_ccl,
-    _tp_mesh_mapper,
     _ccl_num_links,
+    _linear_mesh_num_devices,
 )
 from ttnn.operations.transformer import SDPAProgramConfig
 
@@ -1604,6 +1603,48 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         return new_attn
 
+    def _attn_tp_ndev(self) -> int:
+        """Number of devices the attention heads are tensor-parallel sharded over.
+
+        Decided purely from the *physical* mesh so it stays independent of the
+        decoder's forced-replicate flag (``DOTS_OCR_REST_TP1`` /
+        ``linear._REST_REPLICATE``): a ``(1, N)`` TP-layout mesh with ``N > 1``
+        head-shards across the ranks when ``num_heads`` divides evenly; the
+        ``(N, 1)`` DP mesh and single-device (P100) keep the replicated path.
+        This module builds its own shard mappers (``shard_tensor_to_mesh_mapper``)
+        and CCLs, so it never routes through the flag-aware ``_tp_*`` helpers.
+        """
+        dev = getattr(self, "device", None)
+        n = _linear_mesh_num_devices(dev)
+        is_tp_mesh = hasattr(dev, "shape") and len(list(dev.shape)) >= 1 and int(list(dev.shape)[-1]) > 1
+        if n > 1 and is_tp_mesh and self.num_heads % n == 0:
+            return n
+        return 1
+
+    def _qkv_head_shard_perm(self, ndev: int) -> list[int]:
+        """Column permutation that regroups the fused QKV output dim by device.
+
+        The fused QKV weight emits ``[Q(num_heads*hd) | K(...) | V(...)]``. To
+        head-shard across ``ndev`` ranks, device ``d`` must own a contiguous
+        block ``[Q_heads(d) | K_heads(d) | V_heads(d)]`` so a plain dim=-1 shard
+        (``shard_tensor_to_mesh_mapper``) hands each rank exactly its heads, and
+        ``nlp_create_qkv_heads(num_heads=heads_per_dev)`` then splits it locally.
+        Whole 128-wide heads are permuted, so each head's internal half-half
+        RoPE layout is preserved.
+        """
+        nh = int(self.num_heads)
+        hd = int(self.head_dim)
+        block = nh * hd  # width of each of the Q/K/V blocks in the fused output
+        heads_per_dev = nh // ndev
+        perm: list[int] = []
+        for d in range(ndev):
+            for blk in range(3):  # Q, K, V
+                for local_h in range(heads_per_dev):
+                    g = d * heads_per_dev + local_h  # global head index
+                    start = blk * block + g * hd
+                    perm.extend(range(start, start + hd))
+        return perm
+
     def preprocess_weights_impl(self):
         # QKV weights/bias are kept in the native HF "half-half" head_dim
         # layout. Combined with cos/sin built in the same half-half layout
@@ -1612,6 +1653,22 @@ class TTNNDotsVisionAttention(TTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
+        ndev = self._attn_tp_ndev()
+        if ndev > 1:
+            # TP head-sharding: regroup the fused QKV columns by device, then
+            # keep transposed [in, out] torch weights so move_weights can build
+            # the per-device shards with a mesh mapper (mirrors the decoder TP
+            # linears). o_proj is row-parallel (contraction dim sharded), so its
+            # input head order already matches the per-device concat order -- no
+            # permutation needed there.
+            perm = self._qkv_head_shard_perm(ndev)
+            qkv_w = self._qkv_weight[perm, :].contiguous()  # [out=3*H, in=H]
+            self._qkv_weight_t_tp = qkv_w.t().contiguous()  # [in=H, out=3*H]
+            self._qkv_bias_tp = self._qkv_bias[perm].contiguous().reshape(1, -1) if self._qkv_bias is not None else None
+            self._o_proj_weight_t_tp = self._o_proj_weight.t().contiguous()  # [in=H, out=H]
+            self._o_proj_bias_tp = self._o_proj_bias  # replicated, added post all-reduce
+            return
+
         self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
         if self._qkv_bias is not None:
             self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
@@ -1635,10 +1692,58 @@ class TTNNDotsVisionAttention(TTNNModule):
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
-        self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
-        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
-        self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
-        self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
+        self._tp_ndev = self._attn_tp_ndev()
+        if self._tp_ndev > 1:
+            # Column-shard the (head-regrouped) QKV weight/bias on the output dim
+            # -> each rank holds its heads' Q/K/V. Row-shard the o_proj weight on
+            # the contraction dim -> each rank multiplies its head outputs; the
+            # partial sums are all-reduced in forward. o_proj bias stays
+            # replicated (added once, post all-reduce).
+            self.tt_qkv_weight = ttnn.as_tensor(
+                self._qkv_weight_t_tp,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                memory_config=mem,
+            )
+            self.tt_qkv_bias = (
+                ttnn.as_tensor(
+                    self._qkv_bias_tp,
+                    device=self.device,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                    memory_config=mem,
+                )
+                if self._qkv_bias_tp is not None
+                else None
+            )
+            self.tt_o_proj_weight = ttnn.as_tensor(
+                self._o_proj_weight_t_tp,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-2),
+                memory_config=mem,
+            )
+            self.tt_o_proj_bias = (
+                ttnn.as_tensor(
+                    self._o_proj_bias_tp.reshape(1, -1),
+                    device=self.device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                    memory_config=mem,
+                )
+                if self._o_proj_bias_tp is not None
+                else None
+            )
+        else:
+            self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
+            self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
+            self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
+            self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
         self.sdpa_compute_kernel_config = _vision_sdpa_compute_config(
             self.device, math_fidelity=VISION_SDPA_MATH_FIDELITY
@@ -1783,7 +1888,11 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
         s = int(hidden_states.shape[2])
-        h = self.num_heads
+        # In TP head-sharded mode each rank owns ``num_heads / ndev`` heads; the
+        # QKV weight is column-sharded so the matmul + nlp_create_qkv_heads only
+        # ever see this rank's local heads.
+        ndev = int(getattr(self, "_tp_ndev", 1))
+        h = self.num_heads // ndev
         hd = self.head_dim
 
         # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
@@ -1819,8 +1928,8 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
+            num_heads=self.num_heads // ndev,
+            num_kv_heads=self.num_kv_heads // ndev,
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -1856,11 +1965,50 @@ class TTNNDotsVisionAttention(TTNNModule):
         o_k = int(self.tt_o_proj_weight.shape[-2])
         o_n = int(self.tt_o_proj_weight.shape[-1])
         o_pc = _vision_matmul_program_config(self.device, qkv_m, o_k, o_n)
-        out_bs = _vision_block_sharded_mem(self.device, qkv_m, o_n)
-        o_bs_pc = _vision_o_proj_bs_program_config(self.device)
+        # The block-sharded o_proj fast path is for the single-device replicated
+        # case only. In TP the o_proj is row-parallel (in0 holds this rank's
+        # heads, weight is contraction-sharded) and the partial sums must be
+        # all-reduced, so use the DRAM-interleaved path + reduce_scatter/all_gather.
+        out_bs = None if ndev > 1 else _vision_block_sharded_mem(self.device, qkv_m, o_n)
+        o_bs_pc = None if ndev > 1 else _vision_o_proj_bs_program_config(self.device)
 
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
+            if ndev > 1:
+                # Row-parallel o_proj: each rank multiplies its head outputs by
+                # its weight shard -> partial [1,1,S,o_n]; all-reduce (decomposed
+                # into reduce_scatter + all_gather for trace stability, matching
+                # the decoder TP linears) sums the partials so every rank holds
+                # the full output. Bias is added once, after the reduction.
+                partial = ttnn.linear(
+                    ctx,
+                    self.tt_o_proj_weight,
+                    bias=None,
+                    dtype=ttnn.bfloat16,
+                    memory_config=mem,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=o_pc,
+                )
+                num_links = _ccl_num_links(self.device)
+                partial = ttnn.reduce_scatter(
+                    partial,
+                    dim=3,
+                    num_links=num_links,
+                    cluster_axis=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                )
+                out = ttnn.all_gather(
+                    partial,
+                    dim=3,
+                    num_links=num_links,
+                    cluster_axis=1,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=ttnn.Topology.Linear,
+                )
+                if self.tt_o_proj_bias is not None:
+                    out = ttnn.add(out, self.tt_o_proj_bias)
+                return out
             # BFP8 output keeps the post-attn residual on the BFP8 stream.
             if out_bs is not None and o_bs_pc is not None:
                 return ttnn.linear(
@@ -2225,19 +2373,22 @@ class TTNNDotsPatchMerger(TTNNModule):
         new_r = flat // int(self.mlp_size)
 
         # Block-sharded merger MLP. fc1 in0 is L1-interleaved BF16; fc1 output is L1
-        # BLOCK_SHARDED over an 8x8 core rectangle; fc2 consumes that shard with no
-        # reshard. Keep this rectangle fixed on BH, whose full compute grid can be
-        # taller than 8 rows and therefore not divide smaller folded buckets.
-        merger_grid = (8, 8)
-        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device, new_r)
-        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device, new_r)
-        bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size), grid_size=merger_grid)
-        if fc1_bs_pc is None or fc2_bs_pc is None or bs_mem is None:
-            raise RuntimeError(
-                f"PatchMerger block-sharded path requires an available 8x8 grid and folded M={new_r} "
-                "divisible by that shard grid; got an incompatible device/shape."
-            )
-        print("pre patch merger hidden_states.shape:", hidden_states.shape)
+        # BLOCK_SHARDED over the 8x8 grid ([M/8, N/8] = [384, 768] shards); fc2
+        # consumes the fc1 output shard with no reshard. Requires the production
+        # 8x8 grid with M (= folded S/4) divisible by the shard grid.
+        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
+        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
+        bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
+        # The block-sharded fast path is tuned for the Wormhole 8x8 compute grid
+        # with the production M (= folded S/4 = 3072). On other grids -- e.g. the
+        # Blackhole 11x10 grid, or any folded M that doesn't divide the shard
+        # extents -- the shard spec / program configs above come back None. Fall
+        # back to plain DRAM-interleaved matmuls (auto program config when the
+        # generic 2D-mcast config also can't tile the shape), mirroring the
+        # o_proj fallback in the vision block. GELU is applied explicitly since
+        # it can no longer be fused into the fc1 program config.
+        use_bs = fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
+
         if self._use_layer_norm:
             print("Using LayerNorm")
             hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_ln_weight, bias=self.tt_ln_bias, epsilon=1e-6)
@@ -2255,24 +2406,52 @@ class TTNNDotsPatchMerger(TTNNModule):
 
         compute_kc = getattr(self, "compute_kernel_config", None)
 
-        # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
+        if use_bs:
+            # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w1,
+                bias=self.tt_w1_bias,
+                dtype=ttnn.bfloat4_b,
+                memory_config=bs_mem,
+                program_config=fc1_bs_pc,
+                compute_kernel_config=compute_kc,
+            )
+            # fc2: consumes the fc1 output shard directly -> L1 interleaved out.
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w2,
+                bias=self.tt_w2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=fc2_bs_pc,
+                compute_kernel_config=compute_kc,
+            )
+            return hidden_states
+
+        # Generic DRAM-interleaved fallback (e.g. Blackhole 11x10 grid).
+        fc1_n = int(self.tt_w1.shape[-1])
+        fc1_pc = _vision_matmul_program_config(self.device, new_r, int(self.mlp_size), fc1_n)
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w1,
             bias=self.tt_w1_bias,
-            dtype=ttnn.bfloat4_b,
-            memory_config=bs_mem,
-            program_config=fc1_bs_pc,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=fc1_pc,
             compute_kernel_config=compute_kc,
         )
-        # fc2: consumes the fc1 output shard directly -> L1 interleaved out.
+        hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        fc2_k = int(self.tt_w2.shape[-2])
+        fc2_n = int(self.tt_w2.shape[-1])
+        fc2_pc = _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
         hidden_states = ttnn.linear(
             hidden_states,
             self.tt_w2,
             bias=self.tt_w2_bias,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=fc2_bs_pc,
+            program_config=fc2_pc,
             compute_kernel_config=compute_kc,
         )
 

@@ -29,6 +29,7 @@ MESH_DEVICE_MAP = {
     "N150x4": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
+    "P100": (1, 1),
     "P150": (1, 1),
     "P300": (1, 2),
     "P150x4": (1, 4),
@@ -1429,3 +1430,90 @@ def test_dots_ocr_vision(mesh_device, image_link):
 
     DispatchManager.save_stats_to_file("dots_ocr_vision_timing_stats.csv")
     pipeline.release()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [_dots_ocr_device_params()],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [_resolve_mesh_device_shape()],
+    indirect=True,
+)
+def test_dots_ocr_vision_tower_dump(mesh_device):
+    """Dump the full vision-tower output embeddings for the demo image.
+
+    Used to validate vision-attention tensor parallelism: run once on a single
+    chip (``MESH_DEVICE=P100``) and once on 4 chips (``MESH_DEVICE=P150x4``),
+    then PCC-compare the two saved tensors. Real model weights + identical input
+    mean the only difference is the attention head-sharding, so a high PCC proves
+    the TP path matches the replicated single-chip path. Output is saved to
+    ``/tmp/vis_tower_out_<MESH_DEVICE>.pt``.
+    """
+    pytest.importorskip("qwen_vl_utils")
+    import json
+
+    from qwen_vl_utils import process_vision_info
+    from PIL import Image
+    import requests
+    from transformers import AutoImageProcessor, AutoModelForCausalLM, AutoVideoProcessor, Qwen2_5_VLProcessor
+
+    torch.manual_seed(0)
+    torch.set_grad_enabled(False)
+
+    image_link = "https://raw.githubusercontent.com/rednote-hilab/dots.ocr/master/demo/demo_image1.jpg"
+    image_processor = AutoImageProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
+    _tokenizer = AutoTokenizer.from_pretrained(DOTS_OCR_LOCAL_PATH, trust_remote_code=True)
+    video_processor = AutoVideoProcessor.from_pretrained(DOTS_OCR_LOCAL_PATH)
+    with open(os.path.join(DOTS_OCR_LOCAL_PATH, "chat_template.json")) as f:
+        chat_template = json.load(f)["chat_template"]
+    processor = Qwen2_5_VLProcessor(image_processor, _tokenizer, video_processor, chat_template=chat_template)
+    processor.image_token = "<|imgpad|>"
+    processor.image_token_id = 151665
+
+    image = Image.open(requests.get(image_link, stream=True).raw)
+    w, h = image.size
+    image = image.crop((0, 0, w, int(h * 0.575)))
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}],
+        }
+    ]
+    text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(text=[text_prompt], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+    pixel_values = inputs["pixel_values"].to(torch.bfloat16)
+    image_grid_thw = inputs["image_grid_thw"]
+
+    hf_model = AutoModelForCausalLM.from_pretrained(
+        DOTS_OCR_LOCAL_PATH, trust_remote_code=True, torch_dtype=torch.bfloat16
+    ).eval()
+    vision_tower = TTNNDotsOCRVisionTower.from_torch(hf_model.vision_tower, hf_model.config)
+    vision_tower._unique_name = "vision_tower"
+    vision_tower.override_children_module_names()
+    del hf_model
+
+    set_device(vision_tower, mesh_device, register_forward_hook=False, dump_visualization=False)
+    vision_tower.preprocess_weights()
+    vision_tower.move_weights_to_device()
+
+    out = vision_tower.forward(pixel_values, image_grid_thw)
+    ttnn.synchronize_device(mesh_device)
+
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    if num_devices > 1:
+        # The vision tower output is col-sharded along the channel/hidden dim
+        # (H/num_devices per device). Concat the per-device shards along -1 to
+        # reconstruct the full [1, 1, N, H] for a like-for-like PCC vs P100.
+        out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    else:
+        out_t = ttnn.to_torch(out)
+    out_t = out_t.to(torch.float32)
+
+    md = os.environ.get("MESH_DEVICE", "NONE")
+    path = f"/tmp/vis_tower_out_{md}.pt"
+    torch.save(out_t, path)
+    print(f"[vis-dump] MESH_DEVICE={md} num_devices={num_devices} output shape={tuple(out_t.shape)} saved={path}")
