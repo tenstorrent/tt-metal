@@ -209,7 +209,8 @@ jobs:
           set -euo pipefail
           LLK="tt_metal/tt-llk"
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base)." \
+              "Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
@@ -520,14 +521,18 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == 'true' || needs.ubuntu.result == 'success'
+        if: >-
+          fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == 'true' ||
+          needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == 'true' || needs.ubuntu.result == 'success'
+        if: >-
+          fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == 'true' ||
+          needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_ttnn_tag }}
@@ -536,7 +541,8 @@ jobs:
       - name: "Push latest Manylinux tag"
         if: |
           inputs.build-manylinux == true &&
-          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == 'true' || needs.manylinux.result == 'success')
+          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == 'true' ||
+           needs.manylinux.result == 'success')
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).manylinux_tag }}
