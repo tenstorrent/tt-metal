@@ -153,6 +153,7 @@ COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
 COPY --from=mold-layer /install/ /usr/local/
 RUN test -x /usr/local/bin/ccache || { echo "ERROR: ccache not found in ccache-layer" >&2; exit 1; } && \
+    test -x /usr/local/libexec/ccache-storage-redis || { echo "ERROR: ccache-storage-redis not found — Redis remote storage will fail" >&2; exit 1; } && \
     test -x /usr/local/bin/doxygen || { echo "ERROR: doxygen not found in doxygen-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/yq || { echo "ERROR: yq not found in yq-layer" >&2; exit 1; } && \
     test -x /usr/local/bin/mold || { echo "ERROR: mold not found in mold-layer" >&2; exit 1; }

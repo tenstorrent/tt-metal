@@ -43,12 +43,14 @@ mkdir -p "${INSTALL_DIR}/bin"
     --libexecdir=/usr/local/libexec \
     --sysconfdir=/etc
 
-# The storage helper is the ccache binary itself, invoked as a background
-# daemon for async remote storage.  ccache looks for it in libexec_dirs
-# (baked in above as /usr/local/libexec).  Place a copy there so it is
-# present after the COPY --from stage maps /install/ → /usr/local/.
+# install.sh bakes /usr/local/libexec into the ccache binary (via patch-binary.py)
+# AND installs the storage helpers (ccache-storage-redis, etc.) to that absolute
+# path — not under ${INSTALL_DIR}.  The Docker COPY --from=ccache-layer /install/
+# only captures the /install/ tree, so helpers installed to /usr/local/libexec/
+# would be silently lost.  Copy them into ${INSTALL_DIR}/libexec/ so they land
+# at /usr/local/libexec/ in the final image after the COPY.
 mkdir -p "${INSTALL_DIR}/libexec"
-cp "${INSTALL_DIR}/bin/ccache" "${INSTALL_DIR}/libexec/ccache"
+cp /usr/local/libexec/ccache-storage-* "${INSTALL_DIR}/libexec/"
 
 # Cleanup
 rm -rf "${TMPDIR_EXTRACT}"
