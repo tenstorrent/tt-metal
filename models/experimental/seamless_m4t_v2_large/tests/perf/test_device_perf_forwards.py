@@ -10,17 +10,17 @@ that measurement clean:
   * **Eager decode** — ``use_decode_trace=False``, ``use_2cq=False``. Tracy's per-op profiler
     can't reliably reconcile host/device records across metal trace replays (replays reuse the
     captured global-call-counts, host tracer logs new ones), so trace is intentionally disabled
-    here even though it's the production path. The outer e2e perf test measures the trace path.
+    here even though it's the production path. Demo ``demo/demo.py`` reports trace+2CQ wall times.
   * **HF correctness skipped** — pure TT-only forward with fixed dummy inputs. The PCC test
     covers correctness.
-  * **Audio sample count side-channeled** — for speech-output tasks we write the
-    ``waveform_lengths`` value to a file under ``/tmp/`` so the outer driver can read it back
-    and compute ``samples/sec``. The outer process can't sync-read from the inner pytest's
-    device tensors (different process), so a small text file is the simplest channel.
+  * **Phase timings side-channeled** — ``generate(return_timings=True)`` writes
+    ``SeamlessGenerateTimings`` JSON so the outer driver can report TT-catalog decode
+    t/s/u alongside Tracy kernel floors.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Tuple
 
@@ -60,12 +60,10 @@ _TEXT_KWARGS = dict(do_sample=False, num_beams=1, max_new_tokens=_MAX_NEW_TOKENS
 _SPEECH_KWARGS = dict(do_sample=False, num_beams=1, max_new_tokens=_MAX_NEW_TOKENS_SPEECH)
 _ASR_KWARGS = {**_TEXT_KWARGS, "repetition_penalty": 1.0}
 # Eager decode: tracy's per-op records don't reconcile across trace replays. KV cache stays on.
-_TT_EXTRA = dict(use_kv_cache=True, use_decode_trace=False, use_2cq=False)
+_TT_EXTRA = dict(use_kv_cache=True, use_decode_trace=False, use_2cq=False, return_timings=True)
 
-# Path where speech-output tasks write the actual generated audio-sample count so the outer
-# tracy driver (different process) can pick it up and compute ``samples/sec`` from the
-# per-device kernel time.
 SAMPLES_PATH_FMT = "/tmp/seamless_dperf_{task}_samples.txt"
+TIMINGS_PATH_FMT = "/tmp/seamless_dperf_{task}_timings.json"
 
 
 def _weights_dir_or_skip() -> str:
@@ -161,9 +159,17 @@ def _synthetic_speech_inputs(processor: Any) -> Tuple[torch.Tensor, torch.Tensor
     return audio["input_features"].to(torch.bfloat16), audio["attention_mask"]
 
 
+def _write_timings_side_channel(task: str, tt_out: Any) -> None:
+    timings = getattr(tt_out, "timings", None)
+    if timings is None:
+        return
+    with open(TIMINGS_PATH_FMT.format(task=task), "w") as f:
+        json.dump(timings.to_dict(), f)
+
+
 def _release_and_record(task: str, tt_out: Any, generate_speech: bool) -> None:
-    """Release TT generate output. For speech-output tasks, side-channel the audio-sample count
-    to ``SAMPLES_PATH_FMT`` so the outer tracy driver can compute ``samples/sec``."""
+    """Release TT generate output; side-channel sample count and phase timings for the outer driver."""
+    _write_timings_side_channel(task, tt_out)
     if generate_speech:
         if isinstance(tt_out, TTSeamlessM4Tv2GenerationOutput):
             wav_tt, lens_tt = tt_out.waveform, tt_out.waveform_lengths

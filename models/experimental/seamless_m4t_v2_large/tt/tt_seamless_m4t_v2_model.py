@@ -16,6 +16,7 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, Union
 
@@ -61,10 +62,75 @@ _SPEECH_ENC_SEQ_BUCKET = 256
 
 
 @dataclass
+class SeamlessGenerateTimings:
+    """Phase-separated ``generate()`` timings (TT catalog style: TTFT + steady decode t/s/u)."""
+
+    input_is_speech: bool = False
+    mel_frames: int = 0
+    encoder_ms: float = 0.0
+    prefill_ms: float = 0.0
+    ttft_ms: float = 0.0
+    ttft_audio_ms: float = 0.0
+    decode_step_ms: List[float] = field(default_factory=list)
+    t2u_ms: float = 0.0
+    vocoder_ms: float = 0.0
+    output_tokens: int = 0
+    output_samples: int = 0
+    e2e_ms: float = 0.0
+    per_step_tracking: bool = True
+
+    @property
+    def steady_decode_ms_per_tok(self) -> float:
+        """Mean decode-step latency excluding the first step (trace/compile outlier), Qwen3-TTS style."""
+        steps = self.decode_step_ms[1:] if len(self.decode_step_ms) > 1 else self.decode_step_ms
+        if not steps:
+            return 0.0
+        return sum(steps) / len(steps)
+
+    @property
+    def decode_tok_s_u(self) -> float:
+        ms = self.steady_decode_ms_per_tok
+        return 1000.0 / ms if ms > 0 else 0.0
+
+    @property
+    def rtf(self) -> float:
+        """Real-time factor: ``e2e_s / audio_duration_s`` (<1 is faster than real time)."""
+        if self.output_samples <= 0:
+            return 0.0
+        sample_rate = 16000
+        audio_dur_s = self.output_samples / float(sample_rate)
+        if audio_dur_s <= 0:
+            return 0.0
+        return (self.e2e_ms / 1000.0) / audio_dur_s
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-serializable summary for demo logs and tracy side-channel files."""
+        return {
+            "input_is_speech": self.input_is_speech,
+            "mel_frames": self.mel_frames,
+            "encoder_ms": self.encoder_ms,
+            "prefill_ms": self.prefill_ms,
+            "ttft_ms": self.ttft_ms,
+            "ttft_audio_ms": self.ttft_audio_ms,
+            "decode_step_ms": list(self.decode_step_ms),
+            "steady_decode_ms_per_tok": self.steady_decode_ms_per_tok,
+            "decode_tok_s_u": self.decode_tok_s_u,
+            "t2u_ms": self.t2u_ms,
+            "vocoder_ms": self.vocoder_ms,
+            "output_tokens": self.output_tokens,
+            "output_samples": self.output_samples,
+            "e2e_ms": self.e2e_ms,
+            "rtf": self.rtf,
+            "per_step_tracking": self.per_step_tracking,
+        }
+
+
+@dataclass
 class TTSeamlessM4Tv2GreedySearchOutput:
     """``generate(generate_speech=False)`` output."""
 
     sequences: ttnn.Tensor
+    timings: Optional[SeamlessGenerateTimings] = None
 
 
 @dataclass
@@ -75,6 +141,79 @@ class TTSeamlessM4Tv2GenerationOutput:
     waveform_lengths: ttnn.Tensor
     sequences: ttnn.Tensor
     unit_sequences: ttnn.Tensor
+    timings: Optional[SeamlessGenerateTimings] = None
+
+
+class _GeneratePhaseTimer:
+    """Collects synced device phase times inside ``generate()`` when ``return_timings=True``."""
+
+    def __init__(self, device: ttnn.Device, enabled: bool, *, input_is_speech: bool) -> None:
+        self.device = device
+        self.enabled = enabled
+        self.input_is_speech = input_is_speech
+        self.mel_frames = 0
+        self.encoder_ms = 0.0
+        self.prefill_ms = 0.0
+        self.ttft_ms = 0.0
+        self.ttft_audio_ms = 0.0
+        self.decode_step_ms: List[float] = []
+        self.t2u_ms = 0.0
+        self.vocoder_ms = 0.0
+        self.per_step_tracking = True
+        self._t0: Optional[float] = None
+        self._ttft_recorded = False
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        ttnn.synchronize_device(self.device)
+        self._t0 = time.perf_counter()
+
+    def sync_now(self) -> float:
+        if self.enabled:
+            ttnn.synchronize_device(self.device)
+        return time.perf_counter()
+
+    def elapsed_ms(self, t_start: float) -> float:
+        return (self.sync_now() - t_start) * 1000.0
+
+    def begin_step(self) -> Optional[float]:
+        if not self.enabled or not self.per_step_tracking:
+            return None
+        return self.sync_now()
+
+    def end_step(self, t_step: Optional[float]) -> None:
+        if not self.enabled or t_step is None or not self.per_step_tracking:
+            return
+        self.decode_step_ms.append(self.elapsed_ms(t_step))
+        if not self._ttft_recorded and self._t0 is not None:
+            self.ttft_ms = (self.sync_now() - self._t0) * 1000.0
+            self._ttft_recorded = True
+
+    def finish(
+        self,
+        *,
+        seed_len: int,
+        seq_host: List[int],
+        output_samples: int,
+        generate_speech: bool,
+    ) -> SeamlessGenerateTimings:
+        e2e_ms = self.elapsed_ms(self._t0) if self.enabled and self._t0 is not None else 0.0
+        return SeamlessGenerateTimings(
+            input_is_speech=self.input_is_speech,
+            mel_frames=self.mel_frames,
+            encoder_ms=self.encoder_ms,
+            prefill_ms=self.prefill_ms,
+            ttft_ms=self.ttft_ms,
+            ttft_audio_ms=self.ttft_audio_ms if generate_speech else 0.0,
+            decode_step_ms=list(self.decode_step_ms),
+            t2u_ms=self.t2u_ms,
+            vocoder_ms=self.vocoder_ms,
+            output_tokens=max(0, len(seq_host) - seed_len),
+            output_samples=output_samples,
+            e2e_ms=e2e_ms,
+            per_step_tracking=self.per_step_tracking,
+        )
 
 
 @dataclass
@@ -1467,6 +1606,7 @@ class TTSeamlessM4Tv2Model:
         use_2cq: bool = False,
         repetition_penalty: float = 1.0,
         prev_token_ids: Optional["Collection[int]"] = None,
+        phase_timer: Optional[_GeneratePhaseTimer] = None,
     ) -> list:
         """Traced greedy decode on TP>1: trace replay, chunk D2H, host argmax combine, token upload."""
         rt = self._ensure_kv_decode_runtime(batch_size)
@@ -1476,6 +1616,7 @@ class TTSeamlessM4Tv2Model:
         cache_seq_len = self._fixed_decode_trace_sdpa_len()
 
         cur_tok = int(seq_host[cur_pos])
+        t_step = phase_timer.begin_step() if phase_timer is not None else None
         if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
             self.capture_text_decoder_decode_trace(
                 cur_tok,
@@ -1502,6 +1643,8 @@ class TTSeamlessM4Tv2Model:
             prev_token_ids=prev_set,
             read_cq_id=0,
         )
+        if phase_timer is not None:
+            phase_timer.end_step(t_step)
         prev_set.add(next_id)
         seq_host.append(next_id)
         cur_pos += 1
@@ -1513,6 +1656,7 @@ class TTSeamlessM4Tv2Model:
 
         for _ in range(max_steps - 1):
             d2h_event = None
+            t_step = phase_timer.begin_step() if phase_timer is not None else None
             if use_2cq:
                 if cq0_idle is not None:
                     ttnn.wait_for_event(1, cq0_idle)
@@ -1536,6 +1680,8 @@ class TTSeamlessM4Tv2Model:
                 read_cq_id=0,
                 d2h_event=d2h_event,
             )
+            if phase_timer is not None:
+                phase_timer.end_step(t_step)
             prev_set.add(next_id)
             seq_host.append(next_id)
             cur_pos += 1
@@ -2096,6 +2242,7 @@ class TTSeamlessM4Tv2Model:
             tgt_lang = tgt_lang.replace("__", "")
         if text_sequences is not None and not generate_speech:
             raise ValueError("`text_sequences` is only valid when `generate_speech=True`.")
+        return_timings = bool(kwargs.pop("return_timings", False))
         kwargs_text, kwargs_speech = format_speech_generation_kwargs(kwargs)
         if self.generation_config is not None:
             kwargs_text = apply_hf_generation_defaults(kwargs_text, self.generation_config)
@@ -2123,6 +2270,11 @@ class TTSeamlessM4Tv2Model:
             eos_ids |= _eos_id_set(getattr(self.generation_config, "eos_token_id", None))
         attn_tt_text = kwargs_text.get("attention_mask")
 
+        input_is_speech = input_features is not None
+        phase_timer = _GeneratePhaseTimer(self.device, return_timings, input_is_speech=input_is_speech)
+        phase_timer.start()
+        t_phase = phase_timer.sync_now()
+
         batch_size = int((input_features if input_features is not None else input_ids).shape[0])
         if batch_size != 1:
             raise NotImplementedError("TT generate supports batch_size=1.")
@@ -2145,8 +2297,13 @@ class TTSeamlessM4Tv2Model:
             # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
             self.clear_runtime_program_cache()
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
+            if return_timings and attn_tt_text is not None:
+                phase_timer.mel_frames = int(
+                    to_torch_replicated_first_shard(attn_tt_text).long().reshape(-1).sum().item()
+                )
         else:
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_text(input_ids, attn_tt_text)  # type: ignore[arg-type]
+        phase_timer.encoder_ms = phase_timer.elapsed_ms(t_phase)
 
         reuse_text_sequences = text_sequences is not None
 
@@ -2188,8 +2345,9 @@ class TTSeamlessM4Tv2Model:
         gen_mask_key: Optional[Tuple[int, int, int]] = None
 
         if reuse_text_sequences:
-            pass
+            phase_timer.per_step_tracking = False
         elif num_beams > 1 and use_kv_cache:
+            phase_timer.per_step_tracking = False
             # Multi-beam search path. Allocates K independent KV caches and runs per-beam decoder
             # forwards with host-side top-K scoring + length-normalized beam selection.
             seq_host = self._generate_beam_kv(
@@ -2237,6 +2395,7 @@ class TTSeamlessM4Tv2Model:
             decode_steps_remaining = max_new_tokens
 
             if seed_len > 0:
+                t_prefill = phase_timer.sync_now()
                 warm_tt = _ttnn_ids_from_list([seq_host], self.device)
                 warm_out = self._prefill_text_decoder_kv_cache(
                     warm_tt,
@@ -2245,8 +2404,10 @@ class TTSeamlessM4Tv2Model:
                     kv_cache,
                     cross_attn_cache,
                 )
+                phase_timer.prefill_ms = phase_timer.elapsed_ms(t_prefill)
                 ttnn.deallocate(warm_tt)
                 cross_valid = True
+                t_first = phase_timer.begin_step()
                 logits = self._lm_head(warm_out)
                 ttnn.deallocate(warm_out)
                 # Sampling is only applied during the decode loop; the first token after prefill
@@ -2254,6 +2415,7 @@ class TTSeamlessM4Tv2Model:
                 next_tt, next_id = self._greedy_next_token(
                     logits, seed_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
                 )
+                phase_timer.end_step(t_first)
                 ttnn.deallocate(logits)
                 ttnn.deallocate(next_tt)
                 seq_host.append(next_id)
@@ -2288,11 +2450,13 @@ class TTSeamlessM4Tv2Model:
                     use_2cq=use_2cq,
                     repetition_penalty=repetition_penalty,
                     prev_token_ids=seq_host_set,
+                    phase_timer=phase_timer if return_timings else None,
                 )
                 decode_steps_remaining = 0
 
             for _decode_step in range(decode_steps_remaining):
                 cur_tok = int(seq_host[cur_pos])
+                t_step = phase_timer.begin_step()
                 # Sampling does not use the trace (random token breaks the traced path).
                 # Trace path: greedy only; eager path: greedy or sampling.
                 if use_decode_trace and decode_trace_ready and not do_sample:
@@ -2390,6 +2554,7 @@ class TTSeamlessM4Tv2Model:
                         logits, 1, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
                     )
                     ttnn.deallocate(next_tt)
+                phase_timer.end_step(t_step)
                 # Keep traced logits buffer alive across decode steps.
                 # In trace mode ``logits`` may alias runtime-owned DRAM buffers.
                 if not (use_decode_trace and decode_trace_ready and not do_sample):
@@ -2406,6 +2571,7 @@ class TTSeamlessM4Tv2Model:
         else:
             sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
             for _ in range(max_new_tokens):
+                t_step = phase_timer.begin_step()
                 batch_i = int(sequences_tt.shape[0])
                 dec_len = len(seq_host)
                 padded_i = tile_align(dec_len)
@@ -2428,6 +2594,7 @@ class TTSeamlessM4Tv2Model:
                 next_tt, next_id = self._greedy_next_token(
                     logits, dec_len, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
                 )
+                phase_timer.end_step(t_step)
                 ttnn.deallocate(logits)
                 ttnn.deallocate(sequences_tt)
                 ttnn.deallocate(next_tt)
@@ -2445,7 +2612,17 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(enc_tt)
             if enc_attn_owned:
                 ttnn.deallocate(enc_attn_tt)
-            return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt)
+            timings = (
+                phase_timer.finish(
+                    seed_len=seed_len,
+                    seq_host=seq_host,
+                    output_samples=0,
+                    generate_speech=False,
+                )
+                if return_timings
+                else None
+            )
+            return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt, timings=timings)
 
         # Text decode may leave a captured Metal trace active; T2U / full-decoder forwards must
         # not allocate while it is live (corrupt buffers → "Tensor is not allocated").
@@ -2480,6 +2657,7 @@ class TTSeamlessM4Tv2Model:
 
         # T2U decoder hidden states come from running text-decoder on ``sequences[:, :-1]`` (HF
         # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
+        t_t2u = phase_timer.sync_now()
         logical_seq_len = len(seq_host)
         dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_seq_len - 1], (1, 1))
         dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
@@ -2528,6 +2706,7 @@ class TTSeamlessM4Tv2Model:
             cc_list,
             reference_discrete_durations=None,
         )
+        phase_timer.t2u_ms = phase_timer.elapsed_ms(t_t2u)
         ttnn.deallocate(dec_hidden_padded)
         ttnn.deallocate(t2u_mask_4d)
         ttnn.deallocate(char_ids_tt)
@@ -2646,7 +2825,11 @@ class TTSeamlessM4Tv2Model:
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
         self.clear_runtime_program_cache()
         ttnn.synchronize_device(self.device)
+        t_voc = phase_timer.sync_now()
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
+        phase_timer.vocoder_ms = phase_timer.elapsed_ms(t_voc)
+        if return_timings and phase_timer._t0 is not None:
+            phase_timer.ttft_audio_ms = (phase_timer.sync_now() - phase_timer._t0) * 1000.0
         ttnn.deallocate(vocoder_input)
         ttnn.deallocate(voc_tt)
         ttnn.deallocate(spk_tt)
@@ -2655,12 +2838,27 @@ class TTSeamlessM4Tv2Model:
         if len(tuple(lengths_tt.shape)) == 1:
             lengths_tt = ttnn.reshape(lengths_tt, (1, int(lengths_tt.shape[0])))
 
+        output_samples = 0
+        if return_timings:
+            output_samples = int(to_torch_replicated_first_shard(lengths_tt).long().reshape(-1)[0].item())
+        timings = (
+            phase_timer.finish(
+                seed_len=seed_len,
+                seq_host=seq_host,
+                output_samples=output_samples,
+                generate_speech=True,
+            )
+            if return_timings
+            else None
+        )
+
         if return_intermediate_token_ids:
             return TTSeamlessM4Tv2GenerationOutput(
                 waveform=wav_tt,
                 waveform_lengths=lengths_tt,
                 sequences=sequences_tt,
                 unit_sequences=output_unit_ids_tt,
+                timings=timings,
             )
         ttnn.deallocate(sequences_tt)
         ttnn.deallocate(output_unit_ids_tt)
