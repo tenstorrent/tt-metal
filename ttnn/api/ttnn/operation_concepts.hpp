@@ -132,13 +132,15 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // On cache hit:     factory called AGAIN, full ProgramRunArgs re-applied via
 //                   SetProgramRunArgs. The factory pays its full cost every dispatch.
 //
-// Closes (A) the same way Option 1 does (no custom hash allowed). The design
-// intent is that Option 2's hash key be the immutable ProgramSpec struct itself
-// (since the spec captures everything pertinent to the immutable Program by
-// definition); the current implementation falls back to the same auto-hash over
-// op args that Option 1 uses, which is conservative-correct (over-keys
-// occasionally but never under-keys). Spec-hashing is deferred as a perf
-// optimization; correctness does not depend on it.
+// Closes (A) by FORBIDDING custom compute_program_hash (same as Option 1) AND by
+// keying the cache off the immutable ProgramSpec itself — not the op args. The
+// spec captures everything pertinent to the immutable Program by definition, so
+// any two dispatches whose factories produce equal specs map to the same cache
+// entry (cache reuse across arg variations the spec doesn't distinguish, e.g.
+// TensorParameter relaxations that route shape variation through CRTAs). The
+// factory has to run BEFORE the cache lookup to produce the spec — that's the
+// structural cost Option 2 pays for safety-by-construction plus this cache-reuse
+// breadth.
 //
 // Closes (B) by re-running the factory on every cache hit and re-applying the
 // FULL ProgramRunArgs. Every mutable field is built fresh from the current

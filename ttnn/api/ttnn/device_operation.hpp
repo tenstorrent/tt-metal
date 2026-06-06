@@ -263,12 +263,23 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                         "AdvancedProgramSpecFactoryConcept (Option 3) is not yet supported by "
                         "the mesh dispatch adapter. Use create_program_artifacts "
                         "(Options 1 or 2) or create_workload_artifacts in the meantime.");
-                } else {
-                    // create_program_artifacts — Options 1 and 2; the adapter branches
-                    // internally on the HasFastCacheHitPathOptIn marker.
+                } else if constexpr (HasFastCacheHitPathOptIn<T>) {
+                    // Option 1: create_program_artifacts + fast_cache_hit_path opt-in.
                     using AdaptedMeshWorkloadFactory =
                         mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                     fn.template operator()<AdaptedMeshWorkloadFactory>();
+                } else {
+                    // Option 2 — create_program_artifacts without the fast_cache_hit_path
+                    // opt-in. Option 2 is routed by launch_operation_with_adapter through
+                    // dispatch_option2_spec_hash BEFORE the cache-hit / cache-miss handlers
+                    // that call this function are reached; arriving here means the routing
+                    // was bypassed and this path can't be served.
+                    static_assert(
+                        ttsl::concepts::always_false_v<T>,
+                        "Option 2 (ProgramSpecFactoryConcept create_program_artifacts without "
+                        "fast_cache_hit_path) is dispatched via dispatch_option2_spec_hash. "
+                        "Reaching this branch means launch_operation_with_adapter's Option 2 "
+                        "routing was bypassed.");
                 }
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -387,6 +398,162 @@ void create_and_cache_mesh_workload(
         });
 }
 
+// Option 2 (ProgramSpecFactoryConcept create_program_artifacts shape, no
+// fast_cache_hit_path opt-in): the factory runs on every dispatch and the cache
+// key is the immutable ProgramSpec — not the op-args. The Option 2 path is
+// structurally different from handle_mesh_adapter_cache_hit /
+// create_and_cache_mesh_workload because it must call the factory BEFORE the
+// cache lookup (the spec doesn't exist until the factory has run). It's an
+// end-to-end alternative to those two functions, branched away from in
+// launch_operation_with_adapter.
+//
+// Cache-key shape: hash_objects_with_default_seed(type_hash<DeviceOperation>,
+// spec) mixed with mesh coords — exact same shape as compute_mesh_workload_hash
+// (the framework's args-hash entry point), except the second argument is the
+// freshly-built ProgramSpec instead of (attrs, tensor_args). This means two
+// dispatches whose args differ but produce the same compiled Program share a
+// cache entry — the cache-reuse benefit Option 2 was designed for, e.g. when
+// TensorParameter relaxations route shape variation through CRTAs.
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramSpecFactory>
+void dispatch_option2_spec_hash(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    ttnn::MeshDevice* mesh_device,
+    tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
+    std::size_t program_factory_index) {
+    using Adapter =
+        typename mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
+    using cached_mesh_workload_t = typename Adapter::cached_mesh_workload_t;
+
+    // Always run cache-miss validation; if cache hit and a separate cache-hit
+    // validator is provided, also run that below.
+    mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+
+    // Defining characteristic of Option 2: factory runs BEFORE the cache lookup
+    // because the cache key is derived from the factory's output.
+    auto artifacts =
+        ProgramSpecFactory::create_program_artifacts(operation_attributes, tensor_args, tensor_return_value);
+
+    // Validate io-tensor reachability (op-owned MeshTensors die at factory
+    // return and would leave SetProgramRunArgs's copy with freed device
+    // addresses). The resolved bindings are discarded — Option 2 doesn't store
+    // them, the factory is re-run every dispatch.
+    auto io_mesh_tensors = Adapter::collect_mesh_tensors(tensor_args, tensor_return_value);
+    (void)Adapter::resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+
+    ttsl::hash::hash_t program_hash = 0;
+    bool program_cache_hit = false;
+    if (program_cache.is_enabled()) {
+        program_hash =
+            ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<mesh_device_operation_t>, artifacts.spec);
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+            program_hash = ttsl::hash::hash_objects(program_hash, coord);
+        }
+        program_cache_hit = program_cache.contains(program_hash);
+        if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
+            auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+            TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
+        }
+    }
+
+    log_operation<mesh_device_operation_t>(
+        mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+    ttsl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+
+    if (program_cache_hit) {
+        if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
+            mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
+        }
+        // Re-apply the freshly-built ProgramRunArgs to every cached Program.
+        auto& cached_program_factory = program_cache.get(program_hash);
+        auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+        for (auto& [coordinate_range, program] : cached_mesh_workload.workload.get_programs()) {
+            tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+        }
+        enqueue_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
+        return;
+    }
+
+    // Cache miss: build Program(s) from the spec, apply RunArgs, optionally cache.
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
+    } else {
+        log_warning(
+            tt::LogOp,
+            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
+            tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
+        }
+    }
+
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, typename Adapter::shared_variables_t> shared_variables;
+    for (const auto& range : tensor_coords.ranges()) {
+        auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+        tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+        shared_variables.emplace(range, typename Adapter::shared_variables_t{});
+        mesh_workload.add_program(range, std::move(program));
+    }
+    auto cached_workload = cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+
+    // Don't cache during NO_DISPATCH graph capture (mirrors create_and_cache_mesh_workload).
+    bool hook_blocks = false;
+    if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+        auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
+        if (processor_hooks) {
+            hook_blocks = processor_hooks->get_block();
+        }
+    }
+    bool should_cache = program_cache.is_enabled() && !hook_blocks;
+    if (should_cache) {
+        program_cache.insert(program_hash, CachedProgramFactory{std::move(cached_workload), program_factory_index});
+        auto& workload = program_cache.get(program_hash).cached_program.template get<cached_mesh_workload_t>().workload;
+        enqueue_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+    } else {
+        enqueue_mesh_workload<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+    }
+}
+
+// Detect whether the active factory variant arm is Option 2 (ProgramSpecFactoryConcept
+// create_program_artifacts shape, no fast_cache_hit_path marker, neither Workload nor
+// the deferred Advanced shape). Returns true and dispatches to dispatch_option2_spec_hash
+// if so; returns false to indicate the caller should use the existing args-hash flow.
+template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+bool try_dispatch_option2_spec_hash(
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
+    ttnn::MeshDevice* mesh_device,
+    tt::tt_metal::program_cache::detail::ProgramCache& program_cache) {
+    auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
+    auto program_factory_index = program_factory.index();
+
+    bool handled = false;
+    std::visit(
+        [&](const auto& factory) {
+            using F = std::decay_t<decltype(factory)>;
+            if constexpr (
+                ProgramSpecFactoryConcept<F> && !HasFastCacheHitPathOptIn<F> && !WorkloadArtifactConcept<F> &&
+                !AdvancedProgramSpecFactoryConcept<F>) {
+                dispatch_option2_spec_hash<mesh_device_operation_t, F>(
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    program_cache,
+                    program_factory_index);
+                handled = true;
+            }
+        },
+        program_factory);
+    return handled;
+}
+
 // Main function to launch operations on mesh devices with special handling for MeshDeviceOperationAdapter
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
@@ -402,6 +569,16 @@ void launch_operation_with_adapter(
     }
 
     auto& program_cache = mesh_device->get_program_cache();
+
+    // Option 2 (default ProgramSpecFactoryConcept create_program_artifacts shape) requires the
+    // factory to run before the cache lookup so the immutable ProgramSpec can be the cache key.
+    // Route those calls to the dedicated spec-hash dispatch; everything else stays on the
+    // args-hash flow below.
+    if (try_dispatch_option2_spec_hash<mesh_device_operation_t>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache)) {
+        return;
+    }
+
     auto program_hash = 0;
     bool program_cache_hit = false;
 
