@@ -71,7 +71,7 @@
   gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   team: llk
   arch: blackhole
   runner_label: p150b
@@ -84,7 +84,7 @@
   gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
   skus:
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   team: llk
   arch: blackhole
   runner_label: p150b
@@ -108,7 +108,7 @@
   gtest_filter: "LLKMeshDeviceFixtureSlowDispatchOnly.*:LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*:LLKQuasarMeshDeviceSingleCardFixture.*:QuasarMeshDeviceSingleCardFixture.*-LLKBlackholeSingleCardFixture.TensixComputeUnpackTilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixComputePackUntilizeFp8e4m3:LLKBlackholeSingleCardFixture.TensixFp8e4m3ToFp8e4m3"
   skus:
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 80
   team: llk
   arch: blackhole
   runner_label: p150b

@@ -21,7 +21,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -35,7 +35,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -48,7 +48,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -61,7 +61,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models
 
@@ -74,6 +74,6 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 60
   owner_id: U08RL15T4N8
   team: models

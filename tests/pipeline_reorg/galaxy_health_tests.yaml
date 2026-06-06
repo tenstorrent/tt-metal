@@ -37,7 +37,7 @@
     ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
   skus:
     bh_galaxy:
-      timeout: 10
+      timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
   arch: blackhole

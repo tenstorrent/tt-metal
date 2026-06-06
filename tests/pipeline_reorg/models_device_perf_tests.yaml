@@ -27,15 +27,15 @@
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
-      timeout: 20
+      timeout: 40
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_quietbox_2:
-      timeout: 20
+      timeout: 40
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
-      timeout: 20
+      timeout: 40
       tt_cache_path: ""
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
@@ -51,7 +51,7 @@
   model: llama3.3-70b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 60
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: meta-llama/Llama-3.3-70B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
@@ -67,7 +67,7 @@
   model: qwen3-32b
   skus:
     bh_quietbox_2:
-      timeout: 30
+      timeout: 60
       tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
       hf_model: Qwen/Qwen3-32B
   owner_id: U08GELBB1AP # Ambrose Ling

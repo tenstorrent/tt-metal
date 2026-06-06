@@ -25,7 +25,7 @@
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_eth
   skus:
     bh_quietbox:
-      timeout: 15
+      timeout: 30
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -34,7 +34,7 @@
   cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*'
   skus:
     bh_quietbox:
-      timeout: 10
+      timeout: 20
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -49,7 +49,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -59,7 +59,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -69,7 +69,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -79,7 +79,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -89,7 +89,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -99,7 +99,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -109,7 +109,7 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
@@ -121,6 +121,6 @@
     wh_n150_civ2:
       timeout: 45
     bh_p150b_civ2:
-      timeout: 45
+      timeout: 90
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime

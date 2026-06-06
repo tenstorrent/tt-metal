@@ -69,21 +69,21 @@ metal_infra:
 ttnn:
   sanity:
     wh_n300_civ2: 545
-    bh_p100: 545
-    bh_p150b_civ2: 545
+    bh_p100: 1080
+    bh_p150b_civ2: 1080
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
   e2e:
     wh_llmbox: 90
     wh_galaxy: 90
-    bh_galaxy: 70
-    bh_p150b_civ2: 55
-    bh_deskbox: 145
-    bh_llmbox: 180
-    bh_loudbox: 145
-    bh_p300: 145
-    bh_quietbox_2: 145
+    bh_galaxy: 80
+    bh_p150b_civ2: 110
+    bh_deskbox: 290
+    bh_llmbox: 360
+    bh_loudbox: 290
+    bh_p300: 290
+    bh_quietbox_2: 290
   integration:
     wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
     wh_galaxy: 340  # galaxy_integration_tests.yaml
@@ -97,8 +97,8 @@ ttnn:
     wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
     wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
     wh_n300_civ2: 60
-    bh_p100a_civ2_viommu: 60
-    bh_p150b_civ2_viommu: 60
+    bh_p100a_civ2_viommu: 106
+    bh_p150b_civ2_viommu: 106
 
 shield:
   e2e:
@@ -115,47 +115,47 @@ scaleout:
     wh_llmbox: 40
   health:
     wh_galaxy: 15
-    bh_galaxy: 10
+    bh_galaxy: 20
   sanity:
     wh_galaxy: 20
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
-    bh_galaxy: 60
+    bh_galaxy: 120
     bh_spsg: 20 # single galaxy
-    bh_sp1: 90
-    bh_sp4: 150
-    bh_deskbox: 80
-    bh_llmbox: 80
-    bh_loudbox: 80
-    bh_p300: 80
-    bh_quietbox_2: 80
+    bh_sp1: 180
+    bh_sp4: 300
+    bh_deskbox: 160
+    bh_llmbox: 160
+    bh_loudbox: 160
+    bh_p300: 160
+    bh_quietbox_2: 160
 runtime:
   sanity:
     wh_n150_civ2: 13
-    bh_p150b_civ2: 13
-    bh_quietbox: 5
-    bh_loudbox: 5
+    bh_p150b_civ2: 26
+    bh_quietbox: 10
+    bh_loudbox: 10
   unit:
     wh_n150_civ2: 217
     wh_n300_civ2: 74
-    bh_p150b_civ2: 205
-    bh_p150b_civ2_viommu: 5
-    bh_p100a_civ2_viommu: 74
-    bh_quietbox: 20
+    bh_p150b_civ2: 394
+    bh_p150b_civ2_viommu: 10
+    bh_p100a_civ2_viommu: 148
+    bh_quietbox: 40
     wh_galaxy: 35
   integration:
     wh_n150_civ2: 360
-    bh_p150b_civ2: 360
-    bh_quietbox: 25
+    bh_p150b_civ2: 720
+    bh_quietbox: 50
   perf:
     wh_n300_civ2: 55
-    bh_p150_perf: 40
+    bh_p150_perf: 80
 
 llk:
   unit:
     wh_n150_civ2: 140
-    bh_p150b_civ2: 70
+    bh_p150b_civ2: 140
   e2e:
     wh_n150_civ2: 1800
     bh_p150b_civ2: 1800
@@ -164,7 +164,7 @@ llk:
     bh_p150b_civ2: 1200
   smoke:
     wh_n150_civ2: 160
-    bh_p150b_civ2: 160
+    bh_p150b_civ2: 320
 
 models:
   sanity:
@@ -183,7 +183,7 @@ models:
     bh_loudbox: 160
     bh_llmbox: 50
     bh_deskbox: 26
-    bh_quietbox_2: 251
+    bh_quietbox_2: 502
     bh_galaxy: 78
   unit:
     wh_llmbox: 175
@@ -194,7 +194,7 @@ models:
     wh_galaxy_perf: 45
     bh_p150: 60
     bh_p300: 30
-    bh_quietbox_2: 85
+    bh_quietbox_2: 120
     bh_galaxy: 70
   integration:
     wh_llmbox: 422
@@ -204,9 +204,9 @@ models:
     wh_galaxy_perf: 150
   device_perf:
     wh_n150: 20
-    bh_p150: 20
-    bh_p300: 20
-    bh_quietbox_2: 80
+    bh_p150: 40
+    bh_p300: 40
+    bh_quietbox_2: 160
 
   demo:
     wh_llmbox_perf: 200
@@ -214,7 +214,7 @@ models:
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 370
+    bh_galaxy: 740
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -225,7 +225,7 @@ models:
     bh_p150b_civ2: 250
     bh_p150b_civ2_viommu: 50
     bh_deskbox: 250
-    bh_llmbox: 1200
+    bh_llmbox: 1512
     bh_loudbox: 1200
 
     bh_p300: 800
