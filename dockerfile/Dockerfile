@@ -147,7 +147,7 @@ ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Copy pre-built tools from GHCR tool images
 # These images are built by Dockerfile.tools and pushed by build-docker-artifact.yaml
-COPY --from=ccache-layer /install/bin/ccache /usr/local/bin/
+COPY --from=ccache-layer /install/ /usr/local/
 COPY --from=doxygen-layer /install/ /usr/local/
 COPY --from=clangbuildanalyzer-layer /install/ /usr/local/
 COPY --from=yq-layer /install/bin/yq /usr/local/bin/
@@ -256,13 +256,6 @@ RUN --mount=from=gdb-layer,source=/install,target=/gdb-staging \
         apt-get clean && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# Configure SSH for MPI multihost jobs readiness
-RUN adduser --uid 1001 --shell /bin/bash user && \
-    usermod -aG sudo user && \
-    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
-    mkdir -p /run/sshd && \
-    echo "StrictModes no" >> /etc/ssh/sshd_config
-
 # Install dev deps
 # libgl1-mesa-glx is needed for Yolo models https://github.com/tenstorrent/tt-metal/pull/19899
 # libgl1-mesa-glx does not exist in ubuntu 24.04 which is right around the corner
@@ -279,6 +272,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+
+# Configure SSH for MPI multihost jobs readiness
+# To be safe, keep this **after** the apt install to avoid openssh-server mangling configs
+RUN adduser --uid 1001 --shell /bin/bash --disabled-password --gecos "" user && \
+    usermod -aG sudo user && \
+    echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/user && chmod 0440 /etc/sudoers.d/user && \
+    mkdir -p /run/sshd && \
+    echo "StrictModes no" >> /etc/ssh/sshd_config
 
 # IWYU (Include What You Use) could be useful to developers.
 # Not currently included; install script ready at dockerfile/scripts/install-iwyu.sh

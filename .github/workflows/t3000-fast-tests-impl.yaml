@@ -91,7 +91,7 @@ jobs:
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
           enable-kernel-ccache: true
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
       - name: Run t3k fabric tests
         id: t3k-fabric-tests
         timeout-minutes: ${{ inputs.timeout }}
