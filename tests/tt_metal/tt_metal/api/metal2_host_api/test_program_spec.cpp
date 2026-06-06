@@ -33,6 +33,9 @@
 #include <optional>
 #include <type_traits>
 
+#include <tt_stl/concepts.hpp>
+#include <tt_stl/reflection.hpp>
+
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
@@ -2356,6 +2359,37 @@ static_assert(
 static_assert(
     std::is_aggregate_v<RemoteDataflowBufferSpec>,
     "RemoteDataflowBufferSpec must remain an aggregate to support designated initializers");
+
+// ----------------------------------------------------------------------------
+// Reflection-based hashability — required by TTNN's Option 2 program-cache
+// path (which hashes the immutable ProgramSpec to key the program cache).
+//
+// The ttsl::concepts::Reflectable concept = aggregate + reflect-cpp can walk
+// the type's fields.  For aggregates this is essentially a free check; we
+// state it explicitly so any future addition that defeats reflection (e.g.
+// growing past reflect-cpp's field-count ceiling, or introducing an opaque
+// nested type that can't be reflected through) trips at compile time at the
+// specific type that broke it.
+//
+// The inline function below additionally forces compilation of
+// hash_objects_with_default_seed(ProgramSpec{}), which transitively requires
+// every nested type (KernelSpec, DataflowBufferSpec, SemaphoreSpec,
+// TensorParameter, WorkUnitSpec, Nodes, and everything inside them) to be
+// hashable — either by std::hash, by being a recognized standard container,
+// or by being a Reflectable aggregate of hashable things.  If any nested
+// leaf breaks hashability, the compile error points at it directly.
+static_assert(ttsl::concepts::Reflectable<ProgramSpec>, "ProgramSpec must remain reflection-hashable");
+static_assert(ttsl::concepts::Reflectable<WorkUnitSpec>, "WorkUnitSpec must remain reflection-hashable");
+static_assert(ttsl::concepts::Reflectable<KernelSpec>, "KernelSpec must remain reflection-hashable");
+static_assert(ttsl::concepts::Reflectable<DataflowBufferSpec>, "DataflowBufferSpec must remain reflection-hashable");
+static_assert(
+    ttsl::concepts::Reflectable<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must remain reflection-hashable");
+static_assert(ttsl::concepts::Reflectable<SemaphoreSpec>, "SemaphoreSpec must remain reflection-hashable");
+
+[[maybe_unused]] inline ttsl::hash::hash_t _program_spec_must_stay_hashable() {
+    ProgramSpec spec{};
+    return ttsl::hash::hash_objects_with_default_seed(spec);
+}
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.

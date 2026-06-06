@@ -105,6 +105,104 @@ struct NewInfraWorkloadFactory {
 static_assert(ttnn::device_operation::MeshWorkloadFactoryConcept<NewInfraWorkloadFactory>);
 static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFactory>);
 
+// -----------------------------------------------------------------------------
+// Metal 2.0 trifecta — concept-level tests
+//
+// Confirm that ProgramSpecFactoryConcept (umbrella) admits the three intended
+// sub-shapes, the type-level fast-path opt-in marker is detected correctly,
+// and a factory that accidentally exposes two shapes is rejected.
+// -----------------------------------------------------------------------------
+namespace trifecta_test_factories {
+
+struct TestAttrs {};
+struct TestArgs {};
+struct TestReturn {};
+
+// Default — no marker → routed to Option 2 (safe-by-construction full RunArgs re-apply).
+struct Option2Factory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&);
+};
+
+// Opt-in via the type marker → routed to Option 1 (UpdateTensorArgs fast path).
+struct Option1Factory {
+    using fast_cache_hit_path = std::true_type;
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&);
+};
+
+// Explicit opt-out via false_type — should match Option 2 (the default).
+struct Option2ExplicitFactory {
+    using fast_cache_hit_path = std::false_type;
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&);
+};
+
+// Workload-style — single declarative call returning all per-coord programs
+// and workload-scoped resources.
+struct WorkloadFactory {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_workload_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&, const ttnn::MeshCoordinateRangeSet&);
+};
+
+// Advanced (Option 3) — three-method shape; adapter support deferred.
+struct AdvancedFactory {
+    static int extract_immutable_info();
+    static int create_program_spec();
+    static int create_program_run_args();
+};
+
+// Accidentally exposes two shapes — rejected by the sum-equals-1 disambiguation
+// in ProgramSpecFactoryConcept.
+struct DoubleShapeFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&);
+    static ttnn::device_operation::MeshWorkloadArtifacts create_workload_artifacts(
+        const TestAttrs&, const TestArgs&, TestReturn&, const ttnn::MeshCoordinateRangeSet&);
+};
+
+}  // namespace trifecta_test_factories
+
+// HasFastCacheHitPathOptIn detects the marker — absent / false / true.
+static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option2Factory>);
+static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option2ExplicitFactory>);
+static_assert(ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option1Factory>);
+static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::WorkloadFactory>);
+
+// WorkloadArtifactConcept matches exactly the create_workload_artifacts shape.
+static_assert(ttnn::device_operation::WorkloadArtifactConcept<trifecta_test_factories::WorkloadFactory>);
+static_assert(!ttnn::device_operation::WorkloadArtifactConcept<trifecta_test_factories::Option2Factory>);
+static_assert(!ttnn::device_operation::WorkloadArtifactConcept<trifecta_test_factories::Option1Factory>);
+static_assert(!ttnn::device_operation::WorkloadArtifactConcept<trifecta_test_factories::AdvancedFactory>);
+
+// AdvancedProgramSpecFactoryConcept matches exactly the three-method shape.
+static_assert(ttnn::device_operation::AdvancedProgramSpecFactoryConcept<trifecta_test_factories::AdvancedFactory>);
+static_assert(!ttnn::device_operation::AdvancedProgramSpecFactoryConcept<trifecta_test_factories::Option2Factory>);
+static_assert(!ttnn::device_operation::AdvancedProgramSpecFactoryConcept<trifecta_test_factories::WorkloadFactory>);
+
+// Umbrella concept admits all three sub-shapes — and rejects the double-shape factory.
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::Option2Factory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::Option2ExplicitFactory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::Option1Factory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::WorkloadFactory>);
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::AdvancedFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<trifecta_test_factories::DoubleShapeFactory>);
+
+// Guard: ProgramSpec must remain reflection-hashable (Metal 2.0 Option 2 spec-hash
+// path depends on this). If a future change to ProgramSpec or any nested type
+// breaks reflection-hashability, the next assertion or the inline call below
+// trips at compile time, pointing at exactly the offending type.
+static_assert(
+    std::is_aggregate_v<tt::tt_metal::experimental::ProgramSpec>,
+    "ProgramSpec must be an aggregate for reflection-based hashing");
+static_assert(
+    ttsl::concepts::Reflectable<tt::tt_metal::experimental::ProgramSpec>,
+    "ProgramSpec must satisfy ttsl Reflectable concept");
+[[maybe_unused]] inline ttsl::hash::hash_t _program_spec_must_stay_hashable() {
+    tt::tt_metal::experimental::ProgramSpec spec{};
+    return ttsl::hash::hash_objects_with_default_seed(spec);
+}
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(
