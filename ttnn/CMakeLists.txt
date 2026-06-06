@@ -62,10 +62,6 @@ endif()
 # Set options
 ##################################################
 
-message(STATUS "TTNN debug: CMAKE_INSTALL_LIBDIR='${CMAKE_INSTALL_LIBDIR}'")
-message(STATUS "TTNN debug: CMAKE_INSTALL_FULL_LIBDIR='${CMAKE_INSTALL_FULL_LIBDIR}'")
-message(STATUS "TTNN debug: PROJECT_BINARY_DIR='${PROJECT_BINARY_DIR}'")
-
 set(LIB_TYPE OBJECT)
 if(ENABLE_TTNN_SHARED_SUBLIBS)
     # Building various components as .so reduces the final link of ttnn.so (and will make loading a bit slower).
