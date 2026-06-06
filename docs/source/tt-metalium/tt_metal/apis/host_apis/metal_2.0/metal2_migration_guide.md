@@ -867,7 +867,27 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
 
 > **`OpParams` and `OpInputs` are placeholders.** Each real device-op anchors to its own `operation_attributes_t` and `tensor_args_t` aliases — use those.
 >
-> **Extract `MeshTensor` from each input `ttnn::Tensor` at the start of host code.** In a Metal 2.0 factory body, the `MeshTensor` (not the `ttnn::Tensor`) is the object that gets passed around. The first step inside `create_program_spec` is to extract the `MeshTensor` from each incoming tensor and work with those for the remainder. A fuller mini-recipe for MeshTensor migration is forthcoming and will be slotted into the workflow; for now, treat this extraction as a fixed prelude.
+> **Tensor types in a ProgramFactory.** A factory sits between two tensor-type universes; you'll see three names but only two real types:
+> - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_spec`.
+> - **`tt::tt_metal::MeshTensor`** — Metalium's native device-tensor type. RAII handle with unique ownership over a (mesh) device allocation. Metal 2.0's `TensorArgument` (the entries you populate in `ProgramRunArgs::tensor_args`) takes a `const MeshTensor&` — this is the type the rest of the Metal 2.0 API speaks.
+> - **`tt::tt_metal::Tensor`** — a deprecated alias for `ttnn::Tensor`, not a third type. The class is declared in the `tt::tt_metal` namespace despite its header living under `ttnn/` — a refactoring artifact. If you encounter `tt_metal::Tensor` in legacy code, mentally substitute `ttnn::Tensor`.
+>
+> **Extract `MeshTensor` from each input at the top of the factory.** `ttnn::Tensor::mesh_tensor()` returns `const MeshTensor&` (the rvalue overload is `= delete`'d to prevent dangling references on temporaries). Recommended style — extract once at factory entry, work with `MeshTensor` references throughout:
+>
+> ```cpp
+> ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
+>     const OpParams& attributes,
+>     const OpInputs& tensor_args,
+>     Tensor& tensor_return_value) {
+>
+>     const auto& input  = tensor_args.input.mesh_tensor();
+>     const auto& output = tensor_return_value.mesh_tensor();
+>     // Use `input` / `output` (MeshTensor&) for the rest of the factory body —
+>     // pass to helpers, build TensorParameter specs, populate TensorArguments.
+> }
+> ```
+>
+> Pass `MeshTensor` directly to helper functions as `const MeshTensor&`; do **not** wrap in `std::cref` / `std::reference_wrapper<const MeshTensor>`. Reaching back to `.mesh_tensor()` at each call site compiles and runs correctly but is not the recommended style — extract once and pass the reference.
 
 A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `SetProgramRunParameters` directly. Those are the framework adapter's responsibilities.
 
