@@ -1490,6 +1490,7 @@ def build_kv_pad_rotation_mla_inputs(
     cache_seq_per_dev = num_cache_slabs * chunk_size_local
 
     kv_per_dev = torch.zeros(sp_size, nhk, cache_seq_per_dev, d_k, dtype=torch.bfloat16)
+    kv_valid_per_dev = torch.zeros(sp_size, cache_seq_per_dev, dtype=torch.bool)
     for global_pos in range(kv_actual_isl):
         group = global_pos // chunk_size_global
         within_group = global_pos % chunk_size_global
@@ -1497,6 +1498,7 @@ def build_kv_pad_rotation_mla_inputs(
         cell = within_group % chunk_size_local
         cache_row = group * chunk_size_local + cell
         kv_per_dev[dev, :, cache_row, :] = old_cache_kv[0, :, global_pos, :]
+        kv_valid_per_dev[dev, cache_row] = True
 
     q_per_dev = torch.zeros(sp_size, nhq, chunk_size_local, d_q, dtype=torch.bfloat16)
     q_global_pos_per_dev = [[None] * chunk_size_local for _ in range(sp_size)]
@@ -1504,6 +1506,7 @@ def build_kv_pad_rotation_mla_inputs(
     assert len(destinations) == new_actual_isl
     for token_idx, dev, cache_row, q_row, global_pos in destinations:
         kv_per_dev[dev, :, cache_row, :] = new_tokens_kv[0, :, token_idx, :]
+        kv_valid_per_dev[dev, cache_row] = True
         q_per_dev[dev, :, q_row, :] = new_tokens_q[0, :, token_idx, :]
         q_global_pos_per_dev[dev][q_row] = global_pos
 
@@ -1520,7 +1523,7 @@ def build_kv_pad_rotation_mla_inputs(
             valid_rows[q_pos - kv_actual_isl] = row
     assert all(row is not None for row in valid_rows)
 
-    return q_host, kv_host, valid_rows, num_cache_slabs
+    return q_host, kv_host, valid_rows, kv_valid_per_dev, num_cache_slabs
 
 
 def run_ring_joint_sdpa_kv_pad_rotation_case(
@@ -1757,6 +1760,10 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     max_cache_slabs = max(2, math.ceil(total_seq / chunk_size_global) + 1)
     max_cache_seq_per_dev = max_cache_slabs * chunk_size_local
     persistent_seq_len = sp_size * max_cache_seq_per_dev
+    max_input_cache_slabs = max(
+        max(2, math.ceil(((i + 1) * new_actual_isl) / chunk_size_global)) for i in range(num_chunks)
+    )
+    stable_kv_input_seq_len = sp_size * max_input_cache_slabs * chunk_size_local
 
     torch.manual_seed(CHUNKED_PREFILL_SEED)
     q_full = fa_rand(b, nhq, total_seq, d_q)
@@ -1824,6 +1831,8 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_kv_shard_dims
             ),
         )
+        mesh_device.enable_program_cache()
+        mesh_device.clear_program_cache()
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=sdpa_compute_grid,
@@ -1843,11 +1852,13 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
             f"ring_mla chunked kv_actual_isl reuse-max: sp_size={sp_size}, "
             f"chunk_size_global={chunk_size_global}, new_actual_isl={new_actual_isl}, "
             f"num_chunks={num_chunks}, num_iterations={num_iterations}, "
-            f"kv_cache_batch_idx={kv_cache_batch_idx}, cache_batch={cache_batch}, persistent_seq_len={persistent_seq_len}"
+            f"kv_cache_batch_idx={kv_cache_batch_idx}, cache_batch={cache_batch}, "
+            f"stable_kv_input_seq_len={stable_kv_input_seq_len}, persistent_seq_len={persistent_seq_len}"
         )
 
         reference_outputs = None
         per_chunk_results = []
+        cache_entries_after_first_call = None
         for it in range(num_iterations):
             iter_outputs = []
             for i in range(num_chunks):
@@ -1856,7 +1867,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                 new_tokens_q = q_full[:, :, kv_actual_isl:logical_n, :].contiguous()
                 new_tokens_kv = kv_full[:, :, kv_actual_isl:logical_n, :].contiguous()
 
-                q_host, kv_host, valid_rows, num_cache_slabs = build_kv_pad_rotation_mla_inputs(
+                q_host, kv_host, valid_rows, kv_valid_per_dev, num_cache_slabs = build_kv_pad_rotation_mla_inputs(
                     kv_full[:, :, :kv_actual_isl, :],
                     new_tokens_q,
                     new_tokens_kv,
@@ -1868,8 +1879,28 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                     f"test requires oversized persistent buffer, got persistent_seq_len={persistent_seq_len}, "
                     f"input KV seq={kv_host.shape[2]}"
                 )
-                kv_input = torch.randn(cache_batch, nhk, kv_host.shape[2], d_k, dtype=kv_host.dtype) * 100
-                kv_input[kv_cache_batch_idx : kv_cache_batch_idx + 1] = kv_host
+                assert stable_kv_input_seq_len >= kv_host.shape[2], (
+                    f"stable physical KV input is too small, got stable_kv_input_seq_len={stable_kv_input_seq_len}, "
+                    f"input KV seq={kv_host.shape[2]}"
+                )
+                cache_seq_per_dev = kv_host.shape[2] // sp_size
+                stable_cache_seq_per_dev = stable_kv_input_seq_len // sp_size
+                assert kv_host.shape[2] % sp_size == 0
+                assert stable_kv_input_seq_len % sp_size == 0
+                kv_input_per_dev = (
+                    torch.randn(cache_batch, nhk, sp_size, stable_cache_seq_per_dev, d_k, dtype=kv_host.dtype) * 100
+                )
+                active_kv_input = kv_input_per_dev[
+                    kv_cache_batch_idx : kv_cache_batch_idx + 1, :, :, :cache_seq_per_dev, :
+                ]
+                active_kv_input.copy_(
+                    torch.where(
+                        kv_valid_per_dev.reshape(1, 1, sp_size, cache_seq_per_dev, 1),
+                        kv_host.reshape(1, nhk, sp_size, cache_seq_per_dev, d_k),
+                        active_kv_input,
+                    )
+                )
+                kv_input = kv_input_per_dev.reshape(cache_batch, nhk, stable_kv_input_seq_len, d_k)
 
                 tt_q = upload(q_host, q_dtype, sdpa_input_shard_dims)
                 tt_kv = upload(kv_input, kv_dtype, sdpa_kv_shard_dims)
@@ -1903,6 +1934,18 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
                         f"input_kv_seq={kv_host.shape[2]}, kv_cache_batch_idx={kv_cache_batch_idx}, "
                         f"persistent_seq={persistent_seq_len}): "
                         f"{type(exc).__name__}: {exc}"
+                    )
+
+                cache_entries = mesh_device.num_program_cache_entries()
+                if cache_entries_after_first_call is None:
+                    assert cache_entries > 0, "ring_mla kv_actual_isl test expected at least one program-cache entry"
+                    cache_entries_after_first_call = cache_entries
+                else:
+                    assert cache_entries == cache_entries_after_first_call, (
+                        f"ring_mla kv_actual_isl should reuse program cache for stable physical KV shape; "
+                        f"got {cache_entries} entries after iter {it}, chunk {i}, "
+                        f"expected {cache_entries_after_first_call} "
+                        f"(kv_actual_isl={kv_actual_isl}, logical_n={logical_n})"
                     )
 
                 out_host = ttnn.to_torch(
@@ -1964,6 +2007,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         )
 
     finally:
+        mesh_device.disable_and_clear_program_cache()
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
