@@ -939,10 +939,11 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # Seeded from scheduled run 27016350392 (ci eval-32).
+            # Re-seeded from run 27036772693 (ci eval-32); the earlier 7.63/189
+            # were the token-matching teacher-forcing artifacts, not eval perf.
             perf:
-              decode_t/s/u: 7.63
-              prefill_time_to_first_token: 189
+              decode_t/s/u: 22.1
+              prefill_time_to_first_token: 82
             accuracy: {}
   qwen2.5-72b:
     aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
@@ -1026,9 +1027,11 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # decode_t/s/u corrected 14.2 -> 18.3 (measured in run 27016350392).
+            # decode_t/s/u is run-to-run unstable (observed 14.4–18.3 across runs);
+            # target the midpoint with a wide tolerance. See issue #46214.
             perf:
-              decode_t/s/u: 18.3
+              decode_t/s/u: 16.0
+              decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
             accuracy: {}
   qwen2.5-vl-32b:
