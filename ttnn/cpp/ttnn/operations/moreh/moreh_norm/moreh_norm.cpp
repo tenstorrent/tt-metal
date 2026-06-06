@@ -19,7 +19,7 @@ Tensor moreh_norm(
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = operations::get_dim(dim, input.logical_shape().rank());
+    auto dims = operations::get_dim(dim, input.logical_shape().rank());
     auto INF = std::numeric_limits<float>::infinity();
     if (auto* single_dim = std::get_if<int64_t>(&dim.value())) {
         if (p == 0.0 || p == INF || p == -INF) {
