@@ -45,6 +45,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):

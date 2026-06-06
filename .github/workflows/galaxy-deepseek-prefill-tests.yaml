@@ -15,6 +15,9 @@ on:
           - kv_cache_table
           - prefill_block
           - prefill_transformer
+          - kimi_mla
+          - kimi_moe
+          - kimi_prefill_block
         default: 'all'
       platform:
         required: false

@@ -201,7 +201,7 @@ jobs:
             matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
+            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100a")
             matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
           fi
           echo "matrix-l2-tests=$matrix_l2" >> $GITHUB_OUTPUT
@@ -225,8 +225,8 @@ jobs:
             matrix_sd_fd=$(add_entry "$matrix_sd_fd" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P150")
-            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P100")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P150b")
+            matrix_sd_fd=$(add_entry "$matrix_sd_fd" "blackhole" "P100a")
           fi
           echo "matrix-sd-fd-tests=$matrix_sd_fd" >> $GITHUB_OUTPUT
 
@@ -237,7 +237,7 @@ jobs:
           fi
           if [[ "$run_blackhole" == "true" ]]; then
             matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P150b")
-            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100")
+            matrix_tutorials=$(add_entry "$matrix_tutorials" "blackhole" "P100a")
           fi
           echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
 
@@ -289,6 +289,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      non-harbor-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # Test group selection - default to all enabled for scheduled runs
@@ -353,7 +354,7 @@ jobs:
   # llk-fd-unit-tests-* and a Quasar+SD-only slice via llk-sd-unit-tests-*); this job is the
   # superset that re-validates everything in SD on every supported runner class.
   llk-sd-unit-tests:
-    needs: [build-artifact, generate-arch-matrix, check-harbor]
+    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
@@ -366,8 +367,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -430,7 +430,7 @@ jobs:
       gtest_filter: "*"
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-models:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_model_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
@@ -443,8 +443,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       timeout: 240
