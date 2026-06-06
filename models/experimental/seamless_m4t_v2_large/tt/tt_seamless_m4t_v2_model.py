@@ -2113,14 +2113,29 @@ class TTSeamlessM4Tv2Model:
         import torch as _torch
 
         batch = int(logits.shape[0])
-        idx = dec_len - 1
         vocab_w = int(logits.shape[2])
-        last = ttnn.slice(logits, [0, idx, 0], [batch, idx + 1, vocab_w], (1, 1, 1))
+        dec_seq = int(logits.shape[1])
+        if dec_seq == 1:
+            last = logits
+            own_last = False
+        else:
+            # Prefill lm_head returns ``[B, seed_len, V]``. Device ``slice`` JIT clashes with the
+            # decode-trace L1 reservation; gather the row on host and re-upload for device argmax.
+            host_row = self._logits_row_to_host(logits, dec_len, sharded=False)
+            last = ttnn.from_torch(
+                host_row.to(_torch.bfloat16).reshape(batch, 1, vocab_w),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            own_last = True
 
         apply_penalty = repetition_penalty > 1.0 and prev_token_ids
         if apply_penalty:
             host = to_torch_replicated_first_shard(last).to(_torch.float32).reshape(batch, vocab_w)
-            ttnn.deallocate(last)
+            if own_last:
+                ttnn.deallocate(last)
             # HF RepetitionPenaltyLogitsProcessor: ``score < 0 -> *penalty, else /penalty``.
             ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
             ids = ids[(ids >= 0) & (ids < vocab_w)]
@@ -2141,7 +2156,8 @@ class TTSeamlessM4Tv2Model:
             return next_uint, next_id_int
 
         argmax = ttnn.argmax(last, dim=-1)  # [B, 1] int32
-        ttnn.deallocate(last)
+        if own_last:
+            ttnn.deallocate(last)
         # Reshape if argmax dropped a dim
         if len(tuple(argmax.shape)) == 1:
             argmax = ttnn.reshape(argmax, [batch, 1])
@@ -2173,11 +2189,8 @@ class TTSeamlessM4Tv2Model:
         import torch as _torch
 
         batch = int(logits.shape[0])
-        idx = dec_len - 1
         vocab_w = int(logits.shape[2])
-        last = ttnn.slice(logits, [0, idx, 0], [batch, idx + 1, vocab_w], (1, 1, 1))
-        host = to_torch_replicated_first_shard(last).to(_torch.float32).reshape(batch, vocab_w)
-        ttnn.deallocate(last)
+        host = self._logits_row_to_host(logits, dec_len, sharded=False)
 
         logits_h = host[0]  # [V] for batch=1
         temp = max(float(temperature), 1e-8)
@@ -2295,7 +2308,13 @@ class TTSeamlessM4Tv2Model:
         # ---- First encode ----
         if input_features is not None:
             # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
+            # Back-to-back ``generate()`` (demo warmups) may leave decode-trace / T2U / vocoder state
+            # that collides with speech-encoder JIT on the timed run.
+            self.t2u.release_forward_trace()
+            self.vocoder.release_forward_trace()
+            self.release_generation_runtime()
             self.clear_runtime_program_cache()
+            ttnn.synchronize_device(self.device)
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
             if return_timings and attn_tt_text is not None:
                 phase_timer.mel_frames = int(
@@ -2609,6 +2628,7 @@ class TTSeamlessM4Tv2Model:
 
         # ---- Text-only generation: return tokens ----
         if not generate_speech:
+            self.release_text_decoder_decode_trace()
             ttnn.deallocate(enc_tt)
             if enc_attn_owned:
                 ttnn.deallocate(enc_attn_tt)
@@ -2624,9 +2644,10 @@ class TTSeamlessM4Tv2Model:
             )
             return TTSeamlessM4Tv2GreedySearchOutput(sequences=sequences_tt, timings=timings)
 
-        # Text decode may leave a captured Metal trace active; T2U / full-decoder forwards must
-        # not allocate while it is live (corrupt buffers → "Tensor is not allocated").
-        self.release_text_decoder_decode_trace()
+        # Text decode may leave a captured Metal trace active; T2U / vocoder must not JIT new
+        # programs while it is live (L1 CB clash with trace region, corrupt trace buffers).
+        self.clear_runtime_program_cache()
+        ttnn.synchronize_device(self.device)
 
         # ---- Speech generation: re-encode for speech modality (HF parity), then T2U + vocoder ----
         gc = self.generation_config
@@ -2698,6 +2719,11 @@ class TTSeamlessM4Tv2Model:
             )
             ttnn.deallocate(dec_hidden_padded)
             dec_hidden_padded = dec_hidden_bucketed
+
+        # ``_decoder_hidden`` compiles long text-decoder programs; drop them before T2U so
+        # chunked lm_head matmuls do not clash with the decode-trace L1 reservation.
+        self.clear_runtime_program_cache()
+        ttnn.synchronize_device(self.device)
 
         t2u_logits_tt, padding_tt = self.t2u.forward(
             dec_hidden_padded,
@@ -2852,6 +2878,11 @@ class TTSeamlessM4Tv2Model:
             else None
         )
 
+        self.t2u.release_forward_trace()
+        self.vocoder.release_forward_trace()
+        self.release_generation_runtime()
+        self.clear_runtime_program_cache()
+        ttnn.synchronize_device(self.device)
         if return_intermediate_token_ids:
             return TTSeamlessM4Tv2GenerationOutput(
                 waveform=wav_tt,
