@@ -163,6 +163,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
+    inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
