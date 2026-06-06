@@ -110,6 +110,18 @@ class StimuliConfig:
 
         self._calculate_tile_sizes()
 
+    def set_buffers(self, buffer_A, buffer_B, buffer_C=None):
+        """Attach actual tensor data after deferred construction.
+
+        StimuliConfig can be created with buffer_A=None / buffer_B=None to
+        establish the struct layout for compilation.  Call this before
+        execution to provide the real stimuli tensors.
+        """
+        self.buffer_A = buffer_A
+        self.buffer_B = buffer_B
+        if buffer_C is not None:
+            self.buffer_C = buffer_C
+
     def _calculate_tile_sizes(self):
         """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
@@ -133,7 +145,7 @@ class StimuliConfig:
 
         self.buf_b_addr = self.buf_a_addr + self.tile_size_A_bytes * self.tile_count_A
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             self.tile_size_C_bytes = calculate_tile_size_bytes(
                 self.stimuli_C_format,
                 self.tile_dimensions,
@@ -201,9 +213,13 @@ class StimuliConfig:
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
             f"  buf_res_addr: 0x{self.buf_res_addr:08X}"
         )
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines += f"  buf_c_addr: 0x{self.buf_c_addr:08X}"
         return lines
+
+    @property
+    def _has_operand_c(self):
+        return self.tile_count_C is not None
 
     def generate_runtime_operands_values(self) -> list:
         values = [
@@ -215,7 +231,7 @@ class StimuliConfig:
             self.buf_res_tile_size,
         ]
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             values.extend([self.buf_c_addr, self.tile_size_C_bytes])
 
         return values
@@ -228,7 +244,7 @@ class StimuliConfig:
         ]
         pack_formats = "IIIIII"
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines.append("Operand buffer_C;")
             pack_formats += "II"
 
@@ -241,7 +257,7 @@ class StimuliConfig:
             f"constexpr Operand buffer_Res({hex(self.buf_res_addr)}, {self.buf_res_tile_size});",
         ]
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines.append(
                 f"constexpr Operand buffer_C({hex(self.buf_c_addr)}, {self.tile_size_C_bytes});"
             )
@@ -289,7 +305,6 @@ class StimuliConfig:
         - Always strides through buffer at MAX_TILE_ELEMENTS (1024) intervals
         - Packs either full tiles (1024 elements) or partial tiles (num_faces * face_r_dim * 16)
         """
-        addresses = []
         packed_data_list = []
 
         # Elements to pack per tile:
@@ -321,11 +336,14 @@ class StimuliConfig:
             start_idx = MAX_TILE_ELEMENTS * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
+            if isinstance(packed_data, list):
+                packed_data = bytes(packed_data)
+            pad_len = tile_size - len(packed_data)
+            if pad_len > 0:
+                packed_data += b"\x00" * pad_len
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        write_to_device(location, base_address, b"".join(packed_data_list))
 
     @staticmethod
     def write_matrix_w_tile_dimensions(
@@ -346,7 +364,6 @@ class StimuliConfig:
         - Strides through buffer based on actual tile_dimensions (tile_r * tile_c)
         - Always writes all elements for the given tile dimensions
         """
-        addresses = []
         packed_data_list = []
 
         tile_r, tile_c = tile_dimensions
@@ -372,11 +389,14 @@ class StimuliConfig:
             start_idx = tile_elements * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
+            if isinstance(packed_data, list):
+                packed_data = bytes(packed_data)
+            pad_len = tile_size - len(packed_data)
+            if pad_len > 0:
+                packed_data += b"\x00" * pad_len
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        write_to_device(location, base_address, b"".join(packed_data_list))
 
     def write(self, location: str = "0,0"):
         """

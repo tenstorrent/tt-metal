@@ -3,14 +3,14 @@
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
@@ -53,10 +53,17 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     return dimensions
 
 
-@skip_for_blackhole
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+    formats=(
+        [
+            fmt
+            for fmt in input_output_formats(
+                [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+            )
+            if fmt.input_format != DataFormat.Bfp8_b
+        ]
+        if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
+        else []
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
@@ -66,23 +73,23 @@ def test_fast_tilize(
     dest_acc,
     dimensions,
 ):
-
     input_height, input_width = dimensions
-
-    if formats.input == DataFormat.Bfp8_b:
-        pytest.skip("Bfp8_b input format is not supported for fast tilize")
 
     input_dimensions = [input_height * 32, input_width * 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
+    tile_cnt_A = input_height * input_width
+    tile_cnt_B = tile_cnt_A
 
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
 
     configuration = TestConfig(
         "sources/fast_tilize_test.cpp",
@@ -94,19 +101,26 @@ def test_fast_tilize(
             LOOP_FACTOR(1),
             NUM_FACES(4),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    generate_golden = get_golden_generator(TilizeGolden)
+    golden_tensor = generate_golden(src_A, input_dimensions, formats.output)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

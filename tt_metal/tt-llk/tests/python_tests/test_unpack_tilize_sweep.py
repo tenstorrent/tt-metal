@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -16,7 +16,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     NARROW_TILE,
     NUM_FACES,
@@ -29,25 +29,45 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-@parametrize(
-    formats=input_output_formats(
+def _tilize_sweep_formats():
+    fmts = input_output_formats(
         [
             DataFormat.Float32,
             DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
-    ),
-    stoch_rnd_type=[
+    )
+    return [f for f in fmts if f.input_format != DataFormat.Bfp8_b]
+
+
+def _tilize_sweep_num_faces(formats):
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.output_format == DataFormat.Bfp8_b
+    ):
+        return [4]
+    return [4, 2, 1]
+
+
+def _tilize_sweep_stoch_rnd(formats):
+    if formats.output_format == DataFormat.Bfp8_b:
+        return [StochasticRounding.No, StochasticRounding.Fpu]
+    return [
         StochasticRounding.No,
         StochasticRounding.Fpu,
         StochasticRounding.Pack,
         StochasticRounding.All,
-    ],
+    ]
+
+
+@parametrize(
+    formats=_tilize_sweep_formats(),
+    stoch_rnd_type=lambda formats: _tilize_sweep_stoch_rnd(formats),
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_faces=[4, 2, 1],
+    num_faces=lambda formats: _tilize_sweep_num_faces(formats),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]],
 )
 def test_unpack_tilize_comprehensive(
@@ -61,41 +81,46 @@ def test_unpack_tilize_comprehensive(
 ):
     """Comprehensive parameter sweep test for unpack_tilize operation."""
 
-    # Get architecture for architecture-specific skips
-    arch = get_chip_architecture()
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
 
-    # BFP8_b input format not supported by tilize unpacker
-    # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents
-    # Note: BFP8_b input works in regular unpack mode (test_eltwise_unary_datacopy with tilize_en=false)
-    if formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip(
-            "BFP8_b input format not supported by tilize unpacker: "
-            "cannot read row-major BFP8_b shared exponent data"
-        )
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        write_full_tiles=True,  # Tilize tests need full tiles in L1
+    )
 
-    # Blackhole BFP8_b output fails for num_faces=1,2 due to hardcoded tilize packer values
-    # Root cause: llk_pack.h has hardcoded MOP_OUTER_LOOP=2, PACK_INTF_SEL for 4-face tiles
-    # The packer tries to process 2+ faces even when only 1-2 faces exist, corrupting BFP8_b output
-    if (
-        arch == ChipArchitecture.BLACKHOLE
-        and formats.output_format == DataFormat.Bfp8_b
-        and num_faces in [1, 2]
-    ):
-        pytest.skip(
-            "Blackhole BFP8_b output fails for num_faces=1,2: tilize packer has hardcoded "
-            "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
-        )
+    configuration = TestConfig(
+        "sources/unpack_tilize_sweep_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(stoch_rnd_type),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
+            NARROW_TILE(narrow_tile),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
+        dest_acc=dest_acc,
+    )
 
-    # Bfp8_b output + Stochastic Rounding Pack/All causes output corruption (value -508 becomes 0)
-    if formats.output_format == DataFormat.Bfp8_b and stoch_rnd_type in [
-        StochasticRounding.Pack,
-        StochasticRounding.All,
-    ]:
-        pytest.skip(
-            "Bfp8_b output with StochasticRounding.Pack/All causes the resulting value to be 0 when input is -508"
-        )
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -114,35 +139,7 @@ def test_unpack_tilize_comprehensive(
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    configuration = TestConfig(
-        "sources/unpack_tilize_sweep_test.cpp",
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(stoch_rnd_type),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
-            NARROW_TILE(narrow_tile),
-            NUM_FACES(num_faces),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            write_full_tiles=True,  # Tilize tests need full tiles in L1
-        ),
-        unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
-        dest_acc=dest_acc,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

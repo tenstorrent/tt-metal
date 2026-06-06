@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
@@ -11,7 +12,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_TILE_DIMS,
@@ -69,9 +70,12 @@ def print_stimuli_and_golden(src_A, golden, input_dimensions, r_dim):
         print(f"R{row}S{segment}\t", golden[i : i + 16])
 
 
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float16_b])
+        if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
     input_dimensions=[[32, 32], [32, 64], [32, 128], [32, 256]],
     r_dim=[1, 2, 4, 8, 16],
@@ -85,8 +89,43 @@ def test_pack_untilize(
     dest_sync,
 ):
 
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        sfpu=False,
+    )
+
+    configuration = TestConfig(
+        "sources/dense_pack_untilize_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+            ),
+            DEST_SYNC(dest_sync),
+        ],
+        runtimes=[NUM_FACES(4), IN_TILE_DIMS(r_dim, 32, 32, 32)],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -101,31 +140,7 @@ def test_pack_untilize(
     )
     # print_stimuli_and_golden(src_A, golden_tensor, input_dimensions, r_dim)
 
-    configuration = TestConfig(
-        "sources/dense_pack_untilize_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(
-                input_dimensions,
-                input_dimensions,
-            ),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[NUM_FACES(4), IN_TILE_DIMS(r_dim, 32, 32, 32)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            sfpu=False,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
     # Since input and output shapes are identical we always specify r_dim of 16 for stimulus

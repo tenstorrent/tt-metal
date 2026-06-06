@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_FACE,
@@ -19,7 +19,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
@@ -30,35 +30,31 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
+def _unpack_tilize_float_formats():
+    base_formats = [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Bfp8_b,
+    ]
+    if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+        base_formats.append(DataFormat.Fp8_e4m3)
+    fmts = input_output_formats(base_formats)
+    return [f for f in fmts if f.input_format != DataFormat.Bfp8_b]
+
+
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,  # Unpack Tilize doesn't work for block float formats (Bfp8_b) due to shared exponent at start of input tensor
-            DataFormat.Fp8_e4m3,
-        ]
+    formats=_unpack_tilize_float_formats(),
+    num_faces=lambda formats: (
+        [FACES_PER_TILE]
+        if formats.output_format == DataFormat.Bfp8_b
+        else [2, FACES_PER_TILE]
     ),
-    num_faces=[2, 4],
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
 ):
-    if (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "Unpack Tilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
-        )
-
-    if formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip("Unpack Tilize does not support Bfp8_b input format")
-
-    if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
-        pytest.skip("Bfp8_b output format only works with num_faces=4")
 
     unpack_tilize(formats, num_faces=num_faces)
 
@@ -117,16 +113,11 @@ def unpack_tilize(
     num_faces=4,
 ):
     input_dimensions = [64, 64]
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
+
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
     )
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(
-        src_A, input_dimensions, formats.output_format, num_faces=num_faces
-    )
+    tile_cnt_B = tile_cnt_A
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -134,6 +125,17 @@ def unpack_tilize(
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
     )
 
     configuration = TestConfig(
@@ -147,19 +149,28 @@ def unpack_tilize(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+        variant_stimuli=stimuli,
         unpack_to_dest=unpack_to_dest,
         **({"dest_acc": dest_acc} if dest_acc is not None else {}),
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    generate_golden = get_golden_generator(TilizeGolden)
+    golden_tensor = generate_golden(
+        src_A, input_dimensions, formats.output_format, num_faces=num_faces
+    )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

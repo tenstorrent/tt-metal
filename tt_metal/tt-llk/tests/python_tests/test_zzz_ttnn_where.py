@@ -10,7 +10,7 @@ from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     MATH_OP,
@@ -22,6 +22,14 @@ def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
 
+def _valid_where_dest_acc(formats):
+    if formats.input_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    if formats.input_format == DataFormat.Float16_b:
+        return [DestAccumulation.No]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -31,7 +39,7 @@ def torch_equal_nan(a, b):
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: _valid_where_dest_acc(formats),
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
@@ -42,19 +50,43 @@ def test_ttnn_where(
     test_case,
 ):
 
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
-
     input_dimensions = [32, 32]  # Single tile dimensions
+
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+    tile_cnt_C = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        buffer_C=None,
+        stimuli_C_format=formats.input_format,
+        tile_count_C=tile_cnt_C,
+    )
+
+    configuration = TestConfig(
+        "sources/ttnn_where_test.cpp",
+        formats,
+        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
+        runtimes=[],
+        variant_stimuli=stimuli,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -63,7 +95,7 @@ def test_ttnn_where(
         spec_B=sfpu_false_spec,
     )
 
-    src_C, tile_cnt_C, _, _ = generate_stimuli(
+    src_C, _, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -82,28 +114,7 @@ def test_ttnn_where(
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(src_A, src_B, src_C)
 
-    configuration = TestConfig(
-        "sources/ttnn_where_test.cpp",
-        formats,
-        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            src_A.flatten(),
-            formats.input_format,
-            src_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            buffer_C=src_C.flatten(),
-            stimuli_C_format=formats.input_format,
-            tile_count_C=tile_cnt_C,
-        ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
-    )
+    stimuli.set_buffers(src_A.flatten(), src_B.flatten(), buffer_C=src_C.flatten())
 
     res_from_L1 = configuration.run().result
 
@@ -143,7 +154,7 @@ def test_ttnn_where(
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: _valid_where_dest_acc(formats),
     mathop=MathOperation.TTNNWhere,
     height=[32],
     width=[32],
@@ -155,17 +166,35 @@ def test_ttnn_where_mcw(
     height,
     width,
 ):
-    # Generate dtype dynamically based on current input format
 
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=1,
+        tile_count_B=1,
+        tile_count_res=1,
+        buffer_C=None,
+        stimuli_C_format=formats.input_format,
+        tile_count_C=1,
+    )
 
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+    configuration = TestConfig(
+        "sources/ttnn_where_test.cpp",
+        formats,
+        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
+        runtimes=[],
+        variant_stimuli=stimuli,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
     # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2
@@ -178,28 +207,7 @@ def test_ttnn_where_mcw(
     golden_generator = get_golden_generator(WhereGolden)
     golden = golden_generator(C, T, F)
 
-    configuration = TestConfig(
-        "sources/ttnn_where_test.cpp",
-        formats,
-        templates=[MATH_OP(mathop), DISABLE_SRC_ZERO_FLAG(True)],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            C.flatten(),
-            formats.input_format,
-            T.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
-            buffer_C=F.flatten(),
-            stimuli_C_format=formats.input_format,
-            tile_count_C=1,
-        ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
-    )
+    stimuli.set_buffers(C.flatten(), T.flatten(), buffer_C=F.flatten())
 
     res_from_L1 = configuration.run().result
 

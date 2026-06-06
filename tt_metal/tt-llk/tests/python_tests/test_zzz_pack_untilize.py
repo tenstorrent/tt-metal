@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
@@ -25,7 +25,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     NUM_FACES,
@@ -36,23 +36,70 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
+def _pack_untilize_formats():
+    base = [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Bfp8_b,
+    ]
+    if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
+        base.append(DataFormat.Fp8_e4m3)
+    fmts = input_output_formats(base)
+    return [
+        f
+        for f in fmts
+        if f.output_format != DataFormat.Bfp8_b
+        and not (
+            (f.input_format == DataFormat.Int32) ^ (f.output_format == DataFormat.Int32)
+        )
+    ]
+
+
+def _pack_untilize_dest_acc(formats):
+    modes = get_valid_dest_accumulation_modes(formats)
+    filtered = []
+    for da in modes:
+        try:
+            df = infer_data_formats(
+                formats.input_format, formats.output_format, da, False
+            )
+        except ValueError:
+            continue
+        if (
+            formats.input_format == DataFormat.Float16
+            and df.pack_src.is_32_bit()
+            and da == DestAccumulation.No
+        ):
+            continue
+        filtered.append(da)
+    return filtered
+
+
+def _pack_untilize_input_dimensions(formats, dest_acc):
+    dims = [[64, 64], [32, 128], [128, 128], [32, 64]]
+    if TestConfig.WITH_COVERAGE:
+        dims = [d for d in dims if d != [64, 512]]
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+        and formats.input_format
+        in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b)
+        and formats.output_format == DataFormat.Float32
+        and dest_acc == DestAccumulation.No
+    ):
+        dims = [d for d in dims if d != [64, 512]]
+    return dims
+
+
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,  # Test Float32 with both 32bit mode dest (full precision) and 16bit mode dest (precision loss)
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
+    formats=_pack_untilize_formats(),
+    dest_acc=lambda formats: _pack_untilize_dest_acc(formats),
+    input_dimensions=lambda formats, dest_acc: _pack_untilize_input_dimensions(
+        formats, dest_acc
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    input_dimensions=[[64, 64], [32, 128], [128, 128], [32, 64]],
-    #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
-    #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
     dest_sync=[DestSync.Half],
-    tile_dst_ct_offset=[0],  # Non-zero offsets are tracked in #1449
+    tile_dst_ct_offset=[0],
 )
 def test_pack_untilize(
     formats,
@@ -61,68 +108,11 @@ def test_pack_untilize(
     dest_sync,
     tile_dst_ct_offset,
 ):
-    if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
-        pytest.skip(
-            "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
-        )
 
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
-
-    if formats.output_format == DataFormat.Bfp8_b:
-        pytest.skip("Pack Untilize does not support Bfp8_b format")
-
-    if (formats.input_format == DataFormat.Int32) ^ (
-        formats.output_format == DataFormat.Int32
-    ):
-        pytest.skip("Pack Untilize does not support mixing Int32 with other formats")
-
-    data_formats = infer_data_formats(
-        formats.input_format,
-        formats.output_format,
-        dest_acc,
-        False,
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
     )
-
-    # Handling a hardware limitation: cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register.
-    # For wormhole architecture, gasket cannot perform this conversion and packer takes input Float32 (from dest register) converting to Float16_A.
-    # For blackhole architecture, gasket is able to convert Float32 to Float16_A before packing (reduces work on packer).`
-    if (
-        formats.input_format == DataFormat.Float16
-        and data_formats.pack_src.is_32_bit()
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Due to hardware limitation, cannot convert 8-bit exponent datums to Float16 without storing them as intermediate Float32 in dest register. Therefore using dest_acc=No is not supported in this case."
-        )
-
-    # TODO: Checkout issue #1405 on tt-llk.
-    if (
-        get_chip_architecture() == ChipArchitecture.WORMHOLE
-        and formats.input_format
-        in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b)
-        and formats.output_format == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-        and input_dimensions == [64, 512]
-    ):
-        pytest.skip("Wormhole pack_untilize does not support this format combination.")
-
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
-    )
-
-    generate_golden = get_golden_generator(UntilizeGolden)
-
-    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    tile_cnt_B = tile_cnt_A
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -139,6 +129,18 @@ def test_pack_untilize(
         BlocksCalculationAlgorithm.Untilize,
     )
 
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        sfpu=False,
+    )
+
     configuration = TestConfig(
         "sources/pack_untilize_test.cpp",
         formats,
@@ -152,20 +154,29 @@ def test_pack_untilize(
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            sfpu=False,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
+    )
+
+    generate_golden = get_golden_generator(UntilizeGolden)
+    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

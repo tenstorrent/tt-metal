@@ -59,7 +59,6 @@ from .format_config import (
 from .golden_generators import (
     GeneratorProxy,
     ProxyMode,
-    dummy_golden_generator,
     get_golden_proxied,
 )
 from .llk_params import (
@@ -502,7 +501,6 @@ class TestConfig:
 
         if compile_producer:
             TestConfig.BUILD_MODE = BuildMode.PRODUCE
-            golden_generators_module.get_golden_generator = dummy_golden_generator
 
         if compile_consumer:
             TestConfig.BUILD_MODE = BuildMode.CONSUME

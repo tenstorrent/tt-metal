@@ -18,7 +18,7 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
@@ -35,16 +35,22 @@ from helpers.utils import passed_test
 TILE_R = 32
 TILE_C = 32
 
+_IS_BH = get_chip_architecture() == ChipArchitecture.BLACKHOLE
+
 
 @parametrize(
-    formats=[
-        *input_output_formats([DataFormat.Float16_b], same=True),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
-    ],
+    formats=(
+        [
+            *input_output_formats([DataFormat.Float16_b], same=True),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
+        ]
+        if _IS_BH
+        else []
+    ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dimensions=[
         (1, 1),
@@ -59,25 +65,22 @@ TILE_C = 32
     ],
 )
 def test_fast_tilize_full(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     assert input_width_tiles >= 1, "ct_dim must be >= 1"
 
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_count,
+        tile_count_B=tile_count,
+        tile_count_res=tile_count,
     )
-
-    # Standard tilize golden: row-major → tile format
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
@@ -90,19 +93,27 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
             NUM_FACES(4),
             NUM_GUARD_TILES(0),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_count,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    # Standard tilize golden: row-major → tile format
+    generate_golden = get_golden_generator(TilizeGolden)
+    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -156,7 +167,9 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 # or configuration bugs that only manifest with many tiles.
 # ============================================================
 @parametrize(
-    formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
+    formats=(
+        [*input_output_formats([DataFormat.Float16_b], same=True)] if _IS_BH else []
+    ),
     dest_acc=[DestAccumulation.No],
     dimensions=[
         (1, 1),
@@ -171,22 +184,20 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_large(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_count,
+        tile_count_B=tile_count,
+        tile_count_res=tile_count,
     )
-
-    generate_golden = get_golden_generator(TilizeGolden)
-    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
     configuration = TestConfig(
         "sources/fast_tilize_bh_test.cpp",
@@ -199,19 +210,26 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
             NUM_FACES(4),
             NUM_GUARD_TILES(0),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_count,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    generate_golden = get_golden_generator(TilizeGolden)
+    golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == len(
@@ -230,12 +248,16 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
 # Catches PACR_FLUSH overflow that writes beyond the last tile.
 # ============================================================
 @parametrize(
-    formats=[
-        *input_output_formats([DataFormat.Float16_b], same=True),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-    ],
+    formats=(
+        [
+            *input_output_formats([DataFormat.Float16_b], same=True),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+        ]
+        if _IS_BH
+        else []
+    ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dimensions=[
         (1, 1),
@@ -246,9 +268,6 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
@@ -256,15 +275,15 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
         5  # enough to capture full ct_dim overflow + 1 sentinel validation tile
     )
 
-    # Use constant input (0.5) so corrupted values are identifiable:
-    # if guard has 0.5 → tilize output data leaked; if 0.0 → ZeroWrite from PACR_FLUSH
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=StimuliSpec.constant(0.5),
-        spec_B=StimuliSpec.constant(1),
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_count,
+        tile_count_B=tile_count,
+        tile_count_res=tile_count + guard_tiles,  # extra guard tile
     )
 
     configuration = TestConfig(
@@ -278,19 +297,27 @@ def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
             NUM_FACES(4),
             NUM_GUARD_TILES(guard_tiles),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_count + guard_tiles,  # extra guard tile
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    # Use constant input (0.5) so corrupted values are identifiable:
+    # if guard has 0.5 → tilize output data leaked; if 0.0 → ZeroWrite from PACR_FLUSH
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=StimuliSpec.constant(0.5),
+        spec_B=StimuliSpec.constant(1),
+    )
+
+    stimuli.set_buffers(src_A, src_B)
 
     configuration.run().result
 

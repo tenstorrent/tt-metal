@@ -52,6 +52,7 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+      exclude: \.test_durations$
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api --check-ttnn-forwards

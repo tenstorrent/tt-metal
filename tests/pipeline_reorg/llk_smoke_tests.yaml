@@ -12,11 +12,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 --timeout=60 \
+      --splits 4 --group 1 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-wormhole-1-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 \
+      --splits 4 --group 1 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-1-run.xml .
     junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
@@ -36,11 +37,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 --timeout=60 \
+      --splits 4 --group 2 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-wormhole-2-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 \
+      --splits 4 --group 2 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-2-run.xml .
     junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
@@ -60,11 +62,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 --timeout=60 \
+      --splits 4 --group 3 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-wormhole-3-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 \
+      --splits 4 --group 3 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-3-run.xml .
     junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
@@ -84,11 +87,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 --timeout=60 \
+      --splits 4 --group 4 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-wormhole-4-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 \
+      --splits 4 --group 4 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-wormhole-4-run.xml .
     junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
@@ -108,11 +112,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 --timeout=60 \
+      --splits 4 --group 1 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-blackhole-1-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 \
+      --splits 4 --group 1 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-1-run.xml .
     junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
@@ -132,11 +137,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 --timeout=60 \
+      --splits 4 --group 2 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-blackhole-2-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 \
+      --splits 4 --group 2 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-2-run.xml .
     junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
@@ -156,11 +162,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 --timeout=60 \
+      --splits 4 --group 3 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-blackhole-3-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 \
+      --splits 4 --group 3 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-3-run.xml .
     junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
@@ -180,11 +187,12 @@
     PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 --timeout=60 \
+      --splits 4 --group 4 --splitting-algorithm least_duration \
+      --timeout=60 \
       --junitxml=pytest-report-blackhole-4-compile.xml .
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 \
+      --splits 4 --group 4 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-4-run.xml .
     junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml

@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, L1Accumulation, PerfRunType, Tilize
 from helpers.param_config import (
@@ -12,6 +12,7 @@ from helpers.param_config import (
 )
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     L1_ACC,
@@ -36,7 +37,7 @@ def get_valid_tilize_datacopy(formats):
     Therefore we only test tilization on Blackhole
     """
 
-    chip_arch = get_chip_architecture()
+    chip_arch = TestConfig.CHIP_ARCH
 
     if chip_arch == ChipArchitecture.WORMHOLE:
         return [Tilize.No]

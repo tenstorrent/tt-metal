@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from itertools import chain, product
+from dataclasses import dataclass
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -29,7 +28,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -75,7 +74,7 @@ ALL_MATHOPS = [
     MathOperation.Hardsigmoid,
     MathOperation.Threshold,
     MathOperation.ReluMax,
-    MathOperation.ReluMin,
+    # MathOperation.ReluMin permanently broken: https://github.com/tenstorrent/tt-llk/issues/1120
 ]
 
 FORMATS = input_output_formats(
@@ -87,14 +86,18 @@ FORMATS = input_output_formats(
     ]
 )
 
-FORMATS_INCLUDE_BFP4_B = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Bfp8_b,
-        DataFormat.Float16,
-        DataFormat.Bfp4_b,
-    ]
-)
+FORMATS_INCLUDE_BFP4_B = [
+    fmt
+    for fmt in input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+            DataFormat.Float16,
+            DataFormat.Bfp4_b,
+        ]
+    )
+    if fmt.input_format == DataFormat.Bfp4_b
+]
 
 MATHOPS_INCLUDE_BFP4_B = [
     MathOperation.Abs,
@@ -121,109 +124,135 @@ MATHOPS_INCLUDE_BFP4_B = [
     # MathOperation.Hardsigmoid,
     MathOperation.Threshold,
     MathOperation.ReluMax,
-    MathOperation.ReluMin,
+    # MathOperation.ReluMin permanently broken: https://github.com/tenstorrent/tt-llk/issues/1120
 ]
 
-FLOAT_TEST_PARAMS = list(
-    chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                SUPPORTED_FAST_MODE_OPS,
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
+# SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
+# When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked
+# loops get compiled to invalid assembly.
+_COVERAGE_SKIPPED_OPS = frozenset(
+    [
+        MathOperation.Acosh,
+        MathOperation.Log,
+        MathOperation.Log1p,
+        MathOperation.Reciprocal,
+        MathOperation.Sin,
+        MathOperation.Sqrt,
+        MathOperation.Rsqrt,
+        MathOperation.Square,
+        MathOperation.Celu,
+        MathOperation.Silu,
+        MathOperation.Neg,
+        MathOperation.Exp2,
+        MathOperation.Hardsigmoid,
+        MathOperation.Threshold,
+        MathOperation.ReluMax,
+        MathOperation.Tanh,
+        # Gelu: https://github.com/tenstorrent/tt-llk/issues/883
+        MathOperation.Gelu,
+    ]
 )
 
 
+def _is_valid_sfpu_float_combo(
+    fmt: InputOutputFormat,
+    approx: ApproximationMode,
+    mathop: MathOperation,
+    fast: FastMode,
+    dest: DestAccumulation,
+) -> bool:
+    """Return False for parameter combos that should never run."""
+    # Coverage: certain ops produce invalid assembly under coverage builds.
+    if TestConfig.WITH_COVERAGE and mathop in _COVERAGE_SKIPPED_OPS:
+        return False
+
+    # Metal tanh does not support approximation mode.
+    if mathop == MathOperation.Tanh and approx == ApproximationMode.Yes:
+        return False
+
+    # BH arch limitation: Float16 input without dest accumulation is unsupported.
+    if (
+        dest == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and (
+            fmt.input_format == DataFormat.Float16
+            or fmt == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
+        )
+    ):
+        return False
+
+    # Exp-related operations are not supported for Bfp8_b format in approximation mode.
+    if (
+        approx == ApproximationMode.Yes
+        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
+        and (
+            fmt.input_format == DataFormat.Bfp8_b
+            or fmt.output_format == DataFormat.Bfp8_b
+        )
+    ):
+        return False
+
+    return True
+
+
+@dataclass(frozen=True, repr=False)
+class SfpuConfig:
+    formats: InputOutputFormat
+    approx_mode: ApproximationMode
+    mathop: MathOperation
+    fast_mode: FastMode
+    dest_acc: DestAccumulation
+
+    def __repr__(self):
+        f = self.formats
+        return (
+            f"{self.mathop.name}-approx_{self.approx_mode.name}"
+            f"-fast_{self.fast_mode.name}-{self.dest_acc.name}"
+            f"-{f.input_format.name}->{f.output_format.name}"
+        )
+
+
+def _build_sfpu_configs(formats_list, mathops_list):
+    """Build SfpuConfig list with template params (mathop, approx, fast, dest_acc)
+    in outer loops and formats (runtime, doesn't affect compile hash) innermost."""
+    configs = []
+    for mathop in mathops_list:
+        fast_modes = (
+            [FastMode.No, FastMode.Yes]
+            if mathop in SUPPORTED_FAST_MODE_OPS
+            else [FastMode.No]
+        )
+        for approx in [ApproximationMode.No, ApproximationMode.Yes]:
+            for fast in fast_modes:
+                for dest in [DestAccumulation.No, DestAccumulation.Yes]:
+                    for fmt in formats_list:
+                        if _is_valid_sfpu_float_combo(fmt, approx, mathop, fast, dest):
+                            configs.append(SfpuConfig(fmt, approx, mathop, fast, dest))
+    return configs
+
+
+FLOAT_CONFIGS = _build_sfpu_configs(FORMATS, ALL_MATHOPS)
+
+
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
-@skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS,
+    "config",
+    FLOAT_CONFIGS if not TestConfig.WITH_COVERAGE else [],
 )
 @pytest.mark.parametrize(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
 def test_eltwise_unary_sfpu_float(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    config: SfpuConfig,
     input_dimensions: list[int],
 ):
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.Acosh,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Neg,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-        MathOperation.Tanh,
-    ]:
-        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
-        pytest.skip(
-            reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
-        )
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
-        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
-        pytest.skip(
-            reason="Compilation error when this mathop gets compiled with coverage"
-        )
-
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
-            pytest.skip(reason="This combination is not supported on BH architecture")
-
-    if (
-        approx_mode == ApproximationMode.Yes
-        and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
-        and (
-            formats.input_format == DataFormat.Bfp8_b
-            or formats.output_format == DataFormat.Bfp8_b
-        )
-    ):
-        pytest.skip(
-            reason="Exp-related operations are not supported for bf8_b format in approximation mode."
-        )
+    formats = config.formats
+    approx_mode = config.approx_mode
+    mathop = config.mathop
+    fast_mode = config.fast_mode
+    dest_acc = config.dest_acc
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -236,104 +265,30 @@ def test_eltwise_unary_sfpu_float(
     )
 
 
-FLOAT_TEST_PARAMS_BFP4_B = list(
-    chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [
-                    op
-                    for op in MATHOPS_INCLUDE_BFP4_B
-                    if op not in SUPPORTED_FAST_MODE_OPS
-                ],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
+FLOAT_CONFIGS_BFP4_B = _build_sfpu_configs(
+    FORMATS_INCLUDE_BFP4_B, MATHOPS_INCLUDE_BFP4_B
 )
 
 
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
-@skip_for_coverage
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS_BFP4_B,
+    "config",
+    FLOAT_CONFIGS_BFP4_B if not TestConfig.WITH_COVERAGE else [],
 )
 @pytest.mark.parametrize(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
 def test_eltwise_unary_sfpu_float_bfp4_b(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    config: SfpuConfig,
     input_dimensions: list[int],
 ):
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.Acosh,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Neg,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-        MathOperation.Tanh,
-    ]:
-        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
-        pytest.skip(
-            reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
-        )
-
-    if (
-        formats.input_format != DataFormat.Bfp4_b
-        and formats.input_format_B != DataFormat.Bfp4_b
-    ):
-        pytest.skip(reason="Not a Bfp4_b test")
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
-        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
-        pytest.skip(
-            reason="Compilation error when this mathop gets compiled with coverage"
-        )
-
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    formats = config.formats
+    approx_mode = config.approx_mode
+    mathop = config.mathop
+    fast_mode = config.fast_mode
+    dest_acc = config.dest_acc
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -346,6 +301,7 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     )
 
 
+@pytest.mark.skip(reason="Int32 tests break fast tilize, tracked in #495")
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
@@ -365,9 +321,6 @@ def test_eltwise_unary_sfpu_int(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if formats.input_format == DataFormat.Int32:
-        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
-
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_int.cpp",
         formats,
@@ -391,7 +344,59 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
+    )
+    tile_cnt_B = tile_cnt_A
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        test_name,
+        formats,
+        templates=[
+            APPROX_MODE(approx_mode),
+            FAST_MODE(fast_mode),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+        unpack_to_dest=(
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        ),
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -408,46 +413,7 @@ def eltwise_unary_sfpu(
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        test_name,
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(fast_mode),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -473,6 +439,53 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
 
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            APPROX_MODE(ApproximationMode.Yes),
+            FAST_MODE(FastMode.Yes),
+            CLAMP_NEGATIVE(clamp_negative),
+            MATH_OP(mathop=MathOperation.Exp),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=False,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
     # Generate custom stimuli with range [-5, 0.7]
     num_elements = input_dimensions[0] * input_dimensions[1]
     src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
@@ -484,8 +497,6 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     src_A[4] = -88.5
 
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
-    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
-    tile_cnt_B = tile_cnt_A
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
@@ -497,43 +508,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.Yes),
-            FAST_MODE(FastMode.Yes),
-            CLAMP_NEGATIVE(clamp_negative),
-            MATH_OP(mathop=MathOperation.Exp),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

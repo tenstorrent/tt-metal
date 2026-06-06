@@ -3,14 +3,14 @@
 
 import pytest
 from conftest import skip_for_coverage
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.perf import PerfConfig
 from helpers.profiler import Profiler
 from helpers.test_config import BuildMode, TestConfig
 
 
 def get_expected_overhead():
-    match get_chip_architecture():
+    match TestConfig.CHIP_ARCH:
         case ChipArchitecture.WORMHOLE:
             return 29
         case ChipArchitecture.BLACKHOLE:

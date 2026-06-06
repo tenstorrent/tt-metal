@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import (
     get_valid_dest_accumulation_modes,
 )
@@ -28,7 +28,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     NUM_BLOCKS,
@@ -40,9 +40,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# Sub-byte block-float formats need extra handling: tilize is unsupported and
-# the golden must round-trip the input through the format's quantization to
-# match what the hardware actually sees after unpack from L1.
 SUB_BYTE_BFP_FORMATS = (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
 
@@ -58,7 +55,7 @@ def get_valid_tilize_datacopy(formats):
     Therefore we only test tilization on Blackhole
     """
 
-    chip_arch = get_chip_architecture()
+    chip_arch = TestConfig.CHIP_ARCH
 
     if chip_arch == ChipArchitecture.WORMHOLE:
         return [Tilize.No]
@@ -86,6 +83,18 @@ def get_valid_num_faces_datacopy(tilize):
     return [1, 2, 4]
 
 
+def _datacopy_formats():
+    base = [
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+    ]
+    if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
+        base.append(DataFormat.Fp8_e4m3)
+    return input_output_formats(base)
+
+
 def _run_unary_datacopy_test(
     formats,
     dest_acc,
@@ -103,13 +112,65 @@ def _run_unary_datacopy_test(
     values differ from the raw stimuli).
     """
 
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    unpack_to_dest = (
+        False
+        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
+        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    blocks_calculation_algorithm = (
+        BlocksCalculationAlgorithm.Standard
+        if tilize == Tilize.No
+        else BlocksCalculationAlgorithm.Tilize
+    )
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        blocks_calculation_algorithm,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+    )
+
+    configuration = TestConfig(
+        "sources/eltwise_unary_datacopy_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILIZE(tilize),
+        ],
+        runtimes=[
+            DEST_INDEX(0),
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -132,54 +193,7 @@ def _run_unary_datacopy_test(
         generate_golden = get_golden_generator(TilizeGolden)
         golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
 
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    blocks_calculation_algorithm = (
-        BlocksCalculationAlgorithm.Standard
-        if tilize == Tilize.No
-        else BlocksCalculationAlgorithm.Tilize
-    )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        blocks_calculation_algorithm,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_datacopy_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILIZE(tilize),
-        ],
-        runtimes=[
-            DEST_INDEX(0),
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -192,26 +206,18 @@ def _run_unary_datacopy_test(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]
-    ),
-    dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
-    tilize=get_valid_tilize_datacopy,
+    formats=_datacopy_formats(),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    tilize=lambda formats: get_valid_tilize_datacopy(formats),
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
+    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
 )
 def test_unary_datacopy(
     formats,
     dest_acc,
-    num_faces,
     tilize,
     input_dimensions,
+    num_faces,
 ):
     _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
 
@@ -231,16 +237,16 @@ def test_unary_datacopy(
         or fmt.output_format in SUB_BYTE_BFP_FORMATS
     ],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
     tilize=Tilize.No,
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
+    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
 )
 def test_unary_datacopy_sub_byte_bfp(
     formats,
     dest_acc,
-    num_faces,
     tilize,
     input_dimensions,
+    num_faces,
 ):
     _run_unary_datacopy_test(
         formats,

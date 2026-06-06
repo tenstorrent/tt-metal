@@ -3,6 +3,7 @@
 
 from itertools import product
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
@@ -133,41 +134,19 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
     input_dimensions = [64, 64]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
     )
-
-    # Generate custom test input stimuli to check if zeroflag fix works
-    if formats.input_format == DataFormat.Int32:
-        src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
-        src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
-
-    generate_datacopy_golden = get_golden_generator(DataCopyGolden)
-    datacopy_tensor = generate_datacopy_golden(
-        src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
-    )
-
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
-        t_matrix = get_golden_generator(TransposeGolden)
-        golden_tensor = t_matrix.transpose_faces_multi_tile(
-            datacopy_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            tilize=False,
-            input_dimensions=input_dimensions,
-        )
-        golden_tensor = t_matrix.transpose_within_faces_multi_tile(
-            golden_tensor,
-            formats.output_format,
-            num_tiles=tile_cnt_A,
-            untilize=False,
-            input_dimensions=input_dimensions,
-        )
-    else:
-        golden_tensor = []
 
     configuration = TestConfig(
         "sources/transpose_dest_test.cpp",
@@ -187,19 +166,49 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    # Generate custom test input stimuli to check if zeroflag fix works
+    if formats.input_format == DataFormat.Int32:
+        src_A = (torch.arange(0, src_A.numel()) * 10000).reshape_as(src_A)
+        src_B = (torch.arange(0, src_B.numel()) * 10000).reshape_as(src_B)
+
+    generate_datacopy_golden = get_golden_generator(DataCopyGolden)
+    datacopy_tensor = generate_datacopy_golden(
+        src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
+    )
+
+    t_matrix = get_golden_generator(TransposeGolden)
+    golden_tensor = t_matrix.transpose_faces_multi_tile(
+        datacopy_tensor,
+        formats.output_format,
+        num_tiles=tile_cnt_A,
+        tilize=False,
+        input_dimensions=input_dimensions,
+    )
+    golden_tensor = t_matrix.transpose_within_faces_multi_tile(
+        golden_tensor,
+        formats.output_format,
+        num_tiles=tile_cnt_A,
+        untilize=False,
+        input_dimensions=input_dimensions,
+    )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

@@ -19,7 +19,7 @@ from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     BROADCAST_TYPE,
@@ -32,6 +32,34 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
+def _valid_sfpu_binary_bcast_dims(formats, dest_acc):
+    """Return broadcast dimensions valid for this (formats, dest_acc) combo.
+
+    Filters out:
+    - All broadcast != None_ on Blackhole (SFPU binary broadcast unsupported)
+    - Row broadcast on Wormhole when dest_acc=Yes or format-combination outlier
+      (B2D datacopy uses MOVB2D which cannot handle FP32 dest format conversion)
+    """
+    arch = TestConfig.CHIP_ARCH
+    all_dims = [
+        LlkBroadcastType.None_,
+        LlkBroadcastType.Row,
+        LlkBroadcastType.Column,
+        LlkBroadcastType.Scalar,
+    ]
+
+    if arch == ChipArchitecture.BLACKHOLE:
+        return [LlkBroadcastType.None_]
+
+    if arch == ChipArchitecture.WORMHOLE:
+        if dest_acc == DestAccumulation.Yes or is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        ):
+            return [d for d in all_dims if d != LlkBroadcastType.Row]
+
+    return all_dims
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -41,12 +69,6 @@ from helpers.utils import passed_test
             DataFormat.Bfp8_b,
         ]
     ),
-    bcast_dim=[
-        LlkBroadcastType.None_,
-        LlkBroadcastType.Row,
-        LlkBroadcastType.Column,
-        LlkBroadcastType.Scalar,
-    ],
     mathop=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
@@ -59,7 +81,18 @@ from helpers.utils import passed_test
         # MathOperation.SfpuElwEq,
         # MathOperation.SfpuElwNe,
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        or (
+            TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+            and formats.input_format == DataFormat.Float16
+        )
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
+    bcast_dim=lambda formats, dest_acc: _valid_sfpu_binary_bcast_dims(
+        formats, dest_acc
+    ),
 )
 def test_sfpu_binary_float(
     formats,
@@ -67,38 +100,6 @@ def test_sfpu_binary_float(
     mathop,
     bcast_dim,
 ):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and bcast_dim != LlkBroadcastType.None_
-    ):
-        pytest.skip("Broadcast not supported for SFPU binary on Blackhole")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and bcast_dim == LlkBroadcastType.Row
-        and (
-            dest_acc == DestAccumulation.Yes
-            or is_format_combination_outlier(
-                formats.input_format, formats.output_format, dest_acc
-            )
-        )
-    ):
-        pytest.skip(
-            "Row broadcast with FP32 dest broken on Wormhole: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
-        )
-
     sfpu_binary(
         formats,
         dest_acc,
@@ -146,16 +147,53 @@ def test_sfpu_binary_int(
         same=True,
     ),
     mathop=[MathOperation.SfpuAddTopRow],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
 )
 def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
-
     input_dimensions = [64, 32]
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_binary_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(),
+            BROADCAST_TYPE(LlkBroadcastType.None_),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        disable_format_inference=True,
+        compile_time_formats=True,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -180,31 +218,8 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         else golden_tensor.view(input_dimensions)
     )
 
-    configuration = TestConfig(
-        "sources/sfpu_binary_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(),
-            BROADCAST_TYPE(LlkBroadcastType.None_),
-        ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        disable_format_inference=True,
-        compile_time_formats=True,
-    )
+    stimuli.set_buffers(src_A, src_B)
+
     res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
@@ -228,7 +243,52 @@ def sfpu_binary(
 
     input_dimensions = [64, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    # ONLY Blackhole needs this for some reason
+    if (
+        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        dest_acc = DestAccumulation.Yes
+
+    bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_binary_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(),
+            BROADCAST_TYPE(bcast),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        compile_time_formats=True,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -265,39 +325,8 @@ def sfpu_binary(
         ),
     ).flatten()
 
-    # ONLY Blackhole needs this for some reason
-    if (
-        formats.input_format in [DataFormat.Float16, DataFormat.Float32]
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        dest_acc = DestAccumulation.Yes
+    stimuli.set_buffers(src_A, src_B)
 
-    bcast = broadcast_type if broadcast_type else LlkBroadcastType.None_
-
-    configuration = TestConfig(
-        "sources/sfpu_binary_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(),
-            BROADCAST_TYPE(bcast),
-        ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        compile_time_formats=True,
-    )
     res_from_L1 = configuration.run().result
 
     torch_format = format_dict[formats.output_format]
@@ -403,7 +432,15 @@ def _golden_sfpu_binary_bcast(
         MathOperation.SfpuElwsub,
         MathOperation.SfpuElwmul,
     ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format.is_32_bit()
+        or (
+            TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+            and formats.input_format == DataFormat.Float16
+        )
+        else [DestAccumulation.No, DestAccumulation.Yes]
+    ),
 )
 def test_sfpu_binary_bcast(
     formats,
@@ -411,18 +448,6 @@ def test_sfpu_binary_bcast(
     mathop,
     dest_acc,
 ):
-    if dest_acc == DestAccumulation.No and formats.input_format == DataFormat.Float32:
-        pytest.skip(reason="Float32 inputs with dest_acc=No are not supported")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and formats.input_format == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        pytest.skip(
-            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
-        )
-
     # Mirror sfpu_binary(): on Blackhole, Float16/Float32 inputs require
     # dest_acc=Yes (32-bit dest), so silently upgrade the parametrized value.
     if (
@@ -433,7 +458,45 @@ def test_sfpu_binary_bcast(
 
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
+    # other float formats go through srcA + MATH datacopy into dest.
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=1,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_binary_bcast_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop),
+            SFPU_BCAST_DIM(bcast_dim),
+            INPUT_TILE_A(tile_index=0),
+        ],
+        runtimes=[],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -451,33 +514,9 @@ def test_sfpu_binary_bcast(
         src_A, src_B, bcast_dim, _BCAST_BINARY_OPS[mathop], golden_format
     )
 
-    # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
-    # other float formats go through srcA + MATH datacopy into dest.
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
-    configuration = TestConfig(
-        "sources/sfpu_binary_bcast_test.cpp",
-        formats,
-        templates=[
-            MATH_OP(mathop=mathop),
-            SFPU_BCAST_DIM(bcast_dim),
-            INPUT_TILE_A(tile_index=0),
-        ],
-        runtimes=[],
-        variant_stimuli=StimuliConfig(
-            tilize(src_A, stimuli_format=formats.input_format),
-            formats.input_format,
-            tilize(src_B, stimuli_format=formats.input_format),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=1,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+    stimuli.set_buffers(
+        tilize(src_A, stimuli_format=formats.input_format),
+        tilize(src_B, stimuli_format=formats.input_format),
     )
 
     res_from_L1 = configuration.run().result
