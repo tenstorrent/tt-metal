@@ -43,6 +43,10 @@ vLLM owns KV-cache allocation in serving mode. Preserve the generator's two cach
 
 Make prompt lengths, page tables, decode positions, batch dimensions, trace-side state, and on-device sampling explicit. The serving decode pass must drive the generator's traced decode path, not an eager-only fallback. When adding or debugging trace capture/replay, trace-safe inputs, or replay correctness for this adapter, use `$tt-enable-tracing`. The adapter should not duplicate model logic that already lives in `tt/model.py` or `tt/generator.py`.
 
+For decode performance, implement the vLLM async split before advertising it: `decode_forward(..., read_from_device=False)` should return device tensors, `read_decode_output(..., async_read=True)` should perform the minimal deferred read, and `process_decode_output_host(...)` should do host formatting. Only set `supports_async_decode=True` after this path passes the vLLM plugin's expectations with decode trace enabled. Leave prefix caching `False` unless it is implemented and tested.
+
+The traced serving decode path should reuse persistent trace inputs and replay via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, keep sampling on device using the common sampling trace support; if the model trace returns sampler-ready logits, pass them as already prepared rather than rebuilding or reading full logits on the host. Remove host greedy/top-1 argmax fast paths, or prove they are not used by the measured benchmark. Avoid copying a full page table every token when it is unchanged, but add a stale-input test before reducing any token/position/page-table refresh.
+
 ## Plugin Registration
 
 Register the model with the TT vLLM plugin. vLLM discovers TT models from the hardcoded list in:
@@ -97,6 +101,8 @@ Check stages:
 - `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift.
 - `benchmark`: runs the configured synthetic workload and records TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u.
 
+When optimizing decode serving overhead, benchmark with the exact same runner, prompt/output lengths, `max_num_seqs`, model length, mesh, TT config, and sampling mode as the canonical or previous comparison. Report TTFT, ITL, output throughput, and mean per-user decode t/s/u before/after; compare directly to the canonical same-machine implementation when it is available.
+
 `--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`).
 
 For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` for faster inner-loop iteration. For batch-1 MoE bring-up loops, `--sampling-profile smoke` is acceptable as the final sampling gate and `full` may be skipped entirely because it is very slow in that regime.
@@ -117,6 +123,7 @@ Final vLLM integration evidence should show:
 - Adapter class, low-level generator methods it delegates to, and KV-cache ownership contract.
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
+- Capability flags with evidence: no unproven `supports_async_decode=True`, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Sampling test results, with any reproducibility-only failures separated from real failures.
 - Qualitative greedy and sampled serving-output verdict.
 - Serving benchmark workload config.

@@ -84,6 +84,8 @@ Do not trace the high-level generator method unless it is already proven trace-s
 
 For autoregressive decode, page table and position tensors are trace inputs. If they can change between requests or steps, refresh their stable device buffers before replay. If sampling writes the next token back into the input token buffer, design that as a traced sampling path or a second trace rather than doing host readback inside the model trace.
 
+For vLLM decode serving, mirror the production split: bind persistent token/current-position/RoPE/page-table/KV-cache tensors before capture, warm the same mode, capture a device-only decode, and replay with `ttnn.execute_trace(..., blocking=False)` only when the caller implements the async read/host-processing split. If the sampler consumes transformed logits, capture the model trace output in that sampler-ready form so replay returns the same device tensor identity. Prefer `models.common.sampling` internal trace for on-device sampling, and do not use host argmax or full-logits readback in a `sample_on_device_mode=all` path.
+
 ## What To Keep Outside Capture
 
 Move these out of the captured region:
@@ -134,6 +136,8 @@ If the fatal is a write, first check for host input creation, lazy weights, cach
 
 If replay uses stale inputs, compare the tensors captured by the model to the tensors refreshed before `execute_trace`. `tt_transformers` solves this by binding model-side trace inputs before capture and only refreshing those exact buffers before replay.
 
+Before accepting any reduced input-refresh scheme, add a focused replay test that runs two decode steps with different token and current-position values, inspects the exact persistent trace input tensors, and asserts the output/logits changed. If page-table refresh is skipped, cover both unchanged and changed page tables.
+
 If you are still stuck after isolating the failing block, use `$autofix`. It should run diagnosis, then verify or refute each proposed root cause with focused experiments before keeping a fix.
 
 ## Evidence To Leave
@@ -143,6 +147,7 @@ Leave compact evidence that the traced path is real:
 - Correctness before and after tracing against the same reference.
 - Repeated replay determinism across several executions.
 - Updated-input replay test proving outputs change when trace inputs are refreshed.
+- For vLLM decode: stale-input validation for token/current-position/page-table refresh, on-device sampling trace evidence, and a passing server smoke run with decode trace enabled.
 - No host fallback in the captured path.
 - Warmed trace replay timing, with prefill and decode measured separately where applicable.
 - `tt-perf-report` or Tracy evidence for the traced region.
