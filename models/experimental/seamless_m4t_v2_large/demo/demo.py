@@ -76,6 +76,7 @@ PREAMBLE_WAV = OUTPUT_DIR / "preamble10.wav"
 _DEMO_WARMUP_ITERS = 1
 _DEMO_SPEECH_WARMUP_ITERS = 2
 _DEMO_MEASURE_ITERS = 1
+_DEMO_SPEECH_MEASURE_ITERS = 2
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -297,21 +298,34 @@ def _warmup_and_time(
     *,
     warmup_iters: int = _DEMO_WARMUP_ITERS,
     measure_iters: int = _DEMO_MEASURE_ITERS,
+    post_warmup_fn=None,
 ):
-    """Optional untimed warmups, then timed runs; return last output and min elapsed seconds."""
+    """Optional untimed warmups, then timed runs; return last output and min elapsed seconds.
+
+    ``post_warmup_fn(tt_model)`` runs after warmups (e.g. vocoder shape prewarm from cached scalars).
+    """
     for _ in range(warmup_iters):
         warm_out = generate_fn()
         ttnn.synchronize_device(device)
         release_fn(warm_out)
 
+    if post_warmup_fn is not None:
+        post_warmup_fn()
+
     times = []
-    out = None
+    best_out = None
+    best_elapsed = float("inf")
     for _ in range(measure_iters):
-        if out is not None:
-            release_fn(out)
         out, elapsed = _time_generate(device, generate_fn)
         times.append(elapsed)
-    return out, min(times) if times else 0.0
+        if elapsed < best_elapsed:
+            if best_out is not None:
+                release_fn(best_out)
+            best_out = out
+            best_elapsed = elapsed
+        else:
+            release_fn(out)
+    return best_out, min(times) if times else 0.0
 
 
 def _record_tt_perf(perf_tt: list, task: str, timings: SeamlessGenerateTimings) -> None:
@@ -410,6 +424,19 @@ def _prewarm_speech_encoder(tt_model: TTSeamlessM4Tv2Model, mel_seq_len: int) ->
     ttnn.synchronize_device(tt_model.device)
 
 
+def _prewarm_vocoder_from_last_generate(tt_model: TTSeamlessM4Tv2Model) -> None:
+    """Prep vocoder conv weights for the last ``generate()`` speech path (cached scalars)."""
+    voc = tt_model.vocoder
+    t_audio = getattr(voc, "_last_t_audio", None)
+    unit_seq = getattr(voc, "_last_unit_seq", None)
+    if t_audio is None or int(t_audio) < 1:
+        return
+    if unit_seq is None or int(unit_seq) < 1:
+        return
+    tt_model.prewarm_vocoder_conv1d_weights(unit_seq=int(unit_seq), t_audio=int(t_audio))
+    ttnn.synchronize_device(tt_model.device)
+
+
 def _process_jit_preflight(
     *,
     session_kw: dict,
@@ -485,7 +512,8 @@ def main() -> None:
     print(f"  Demo mode: one mesh device open/close per task — decode: {trace_info}")
     print(
         f"  Warmup: text={_DEMO_WARMUP_ITERS}, speech={_DEMO_SPEECH_WARMUP_ITERS} untimed iter(s), "
-        f"then {_DEMO_MEASURE_ITERS} timed (report min elapsed)"
+        f"then {_DEMO_MEASURE_ITERS} timed text / {_DEMO_SPEECH_MEASURE_ITERS} timed speech "
+        f"(report min elapsed + phase timings from fastest timed iter)"
     )
     print(
         f"  HF-aligned greedy: max_new_tokens={gen_common['max_new_tokens']} "
@@ -570,6 +598,8 @@ def main() -> None:
             ),
             release_fn=_release_speech_out,
             warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
+            measure_iters=_DEMO_SPEECH_MEASURE_ITERS,
+            post_warmup_fn=lambda: _prewarm_vocoder_from_last_generate(tt_model),
         )
         if not isinstance(t2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(t2st_out)}")
@@ -641,6 +671,8 @@ def main() -> None:
             ),
             release_fn=_release_speech_out,
             warmup_iters=_DEMO_SPEECH_WARMUP_ITERS,
+            measure_iters=_DEMO_SPEECH_MEASURE_ITERS,
+            post_warmup_fn=lambda: _prewarm_vocoder_from_last_generate(tt_model),
         )
         if not isinstance(s2st_out, TTSeamlessM4Tv2GenerationOutput):
             raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(s2st_out)}")

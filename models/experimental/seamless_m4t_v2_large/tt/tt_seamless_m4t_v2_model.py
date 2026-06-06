@@ -696,6 +696,30 @@ class TTSeamlessM4Tv2Model:
         self.text_decoder._matmul_pc_cache.clear()
         self.text_encoder._dram_matmul_pc_cache.clear()
 
+    def _clear_decode_and_t2u_programs(self, *, preserve_vocoder: bool = True) -> None:
+        """Evict decode/T2U/speech-encoder programs for L1 headroom; keep vocoder prep when requested.
+
+        Warm repeated ``generate(generate_speech=True)`` calls reuse vocoder conv1d programs when
+        ``preserve_vocoder=True`` — avoids ~8–25 s vocoder cold-compile on every warmup/timed iter.
+        """
+        self.release_text_decoder_decode_trace()
+        self.device.clear_program_cache()
+        self.t2u._conv1d_prepared_cache.clear()
+        self.t2u._matmul_pc_cache.clear()
+        self.text_decoder._matmul_pc_cache.clear()
+        self.text_encoder._dram_matmul_pc_cache.clear()
+        self.speech_encoder._conv1d_prepared_cache.clear()
+        self.speech_encoder._matmul_pc_cache.clear()
+        if not preserve_vocoder:
+            self.vocoder._conv1d_prepared_cache.clear()
+            self.vocoder._matmul_pc_cache.clear()
+
+    def _release_speech_generate_runtime(self) -> None:
+        """Release traces/KV after speech ``generate()`` without flushing vocoder program cache."""
+        self.t2u.release_forward_trace()
+        self.vocoder.release_forward_trace()
+        self.release_generation_runtime()
+
     # ------------------------------------------------------------------
     # Internal pieces
     # ------------------------------------------------------------------
@@ -2646,7 +2670,7 @@ class TTSeamlessM4Tv2Model:
 
         # Text decode may leave a captured Metal trace active; T2U / vocoder must not JIT new
         # programs while it is live (L1 CB clash with trace region, corrupt trace buffers).
-        self.clear_runtime_program_cache()
+        self._clear_decode_and_t2u_programs(preserve_vocoder=True)
         ttnn.synchronize_device(self.device)
 
         # ---- Speech generation: re-encode for speech modality (HF parity), then T2U + vocoder ----
@@ -2722,7 +2746,7 @@ class TTSeamlessM4Tv2Model:
 
         # ``_decoder_hidden`` compiles long text-decoder programs; drop them before T2U so
         # chunked lm_head matmuls do not clash with the decode-trace L1 reservation.
-        self.clear_runtime_program_cache()
+        self._clear_decode_and_t2u_programs(preserve_vocoder=True)
         ttnn.synchronize_device(self.device)
 
         t2u_logits_tt, padding_tt = self.t2u.forward(
@@ -2849,7 +2873,7 @@ class TTSeamlessM4Tv2Model:
         )
         # Drop cached conv1d/L1 programs from text decode + T2U before vocoder (long unit_seq
         # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
-        self.clear_runtime_program_cache()
+        self._clear_decode_and_t2u_programs(preserve_vocoder=True)
         ttnn.synchronize_device(self.device)
         t_voc = phase_timer.sync_now()
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
@@ -2878,10 +2902,7 @@ class TTSeamlessM4Tv2Model:
             else None
         )
 
-        self.t2u.release_forward_trace()
-        self.vocoder.release_forward_trace()
-        self.release_generation_runtime()
-        self.clear_runtime_program_cache()
+        self._release_speech_generate_runtime()
         ttnn.synchronize_device(self.device)
         if return_intermediate_token_ids:
             return TTSeamlessM4Tv2GenerationOutput(

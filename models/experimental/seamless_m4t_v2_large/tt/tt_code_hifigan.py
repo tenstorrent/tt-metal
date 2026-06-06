@@ -346,6 +346,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._forward_trace_rt: Optional[VocoderForwardTraceRuntime] = None
         self._last_t_audio: Optional[int] = None
+        self._last_unit_seq: Optional[int] = None
 
     def _expand_unit_embeddings_matmul(
         self,
@@ -1467,6 +1468,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         """Single-sample forward (``B == 1``); fully on device modulo one shape int."""
         batch = int(input_ids.shape[0])
         seq = int(input_ids.shape[1])
+        self._last_unit_seq = seq
         assert batch == 1, "_forward_one expects B == 1; use forward() for B > 1."
 
         # ---------- embeddings (all on device) ----------

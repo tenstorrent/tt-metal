@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Optional, Tuple
 
 import ttnn
@@ -915,6 +916,15 @@ def build_ln_sharded_config(
     return cached
 
 
+def _all_gather_num_links() -> int:
+    """Ethernet links for TP ``all_gather`` (``SEAMLESS_ALL_GATHER_NUM_LINKS``, default 2)."""
+    try:
+        n = int(os.environ.get("SEAMLESS_ALL_GATHER_NUM_LINKS", "2"))
+    except ValueError:
+        return 1
+    return n if n >= 1 else 1
+
+
 def all_reduce_sum_replicate(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -922,32 +932,34 @@ def all_reduce_sum_replicate(
     cluster_axis: int = 1,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """Sum-reduce row-parallel partials across the TP=4 mesh; result replicated on every device.
+    """Sum-reduce TP=4 partials via ``all_gather`` + ``sum`` (decoder / speech / T2U).
 
-    BH QB always runs TP=4 (``MeshShape(1, 4)``). Uses ``ttnn.all_reduce`` with linear topology
-    for deterministic cross-device sums so greedy decode logits are stable run-to-run.
+    Keeps activations in L1 on BH; ``ttnn.all_reduce`` is reserved for the text encoder
+    (see ``encoder_all_reduce_sum_replicate``) where gather+sum was less stable at long seq.
+    Does **not** deallocate ``x`` — callers often still hold aliases for residual adds.
     """
-    del mesh_device  # mesh is inferred from ``x``; kept for call-site compatibility.
     assert int(x.shape[0]) == 1, f"all_reduce_sum_replicate expects a unit leading dim, got shape {x.shape}"
-
-    mc = memory_config
-    x_shape = list(x.shape)
-    token_rows = 1
-    for d in x_shape[:-1]:
-        token_rows *= int(d)
-    if mc.buffer_type == ttnn.BufferType.L1 and token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
-        mc = ttnn.DRAM_MEMORY_CONFIG
-
-    result = ttnn.all_reduce(
-        x,
-        cluster_axis=cluster_axis,
-        memory_config=mc,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
-    )
-    if result is not x:
-        ttnn.deallocate(x)
-    return result
+    num_links = _all_gather_num_links()
+    try:
+        gathered = ttnn.all_gather(
+            x,
+            dim=0,
+            num_links=num_links,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
+            memory_config=memory_config,
+        )
+    except TypeError:
+        gathered = ttnn.all_gather(
+            x,
+            dim=0,
+            num_links=num_links,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+        )
+    acc = ttnn.sum(gathered, dim=0, keepdim=True, memory_config=memory_config)
+    ttnn.deallocate(gathered)
+    return acc
 
 
 # TP encoder: large prefill activations in DRAM avoid L1 clashes with block-sharded matmul CBs.
@@ -968,13 +980,25 @@ def encoder_all_reduce_sum_replicate(
     cluster_axis: int = 1,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """Alias for :func:`all_reduce_sum_replicate` (text encoder import path)."""
-    return all_reduce_sum_replicate(
+    """Text encoder: sum row-parallel partials via ``ttnn.all_reduce`` (linear topology)."""
+    mc = memory_config
+    x_shape = list(x.shape)
+    token_rows = 1
+    for d in x_shape[:-1]:
+        token_rows *= int(d)
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+
+    result = ttnn.all_reduce(
         x,
-        mesh_device,
         cluster_axis=cluster_axis,
-        memory_config=memory_config,
+        memory_config=mc,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
     )
+    if result is not x:
+        ttnn.deallocate(x)
+    return result
 
 
 def sdpa_program_config(
