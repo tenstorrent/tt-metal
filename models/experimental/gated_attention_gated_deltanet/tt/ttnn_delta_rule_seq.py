@@ -161,12 +161,18 @@ def create_chunk_masks_seq(chunk_size, device):
     Pre-allocate once at model init (constant across layers) for trace safety.
     """
 
+    # Replicate across a multi-device mesh (TP). Single device leaves the mapper unset
+    # (the validated single-device behavior). Mirrors the kernel's uncached fallback, which
+    # builds these same masks with ReplicateTensorToMesh on a mesh, so the cached masks match.
+    _mesh_mapper = ttnn.ReplicateTensorToMesh(device) if device.get_num_devices() > 1 else None
+
     def _from(m):
         return ttnn.from_torch(
             m.to(torch.float32).reshape(1, m.shape[-2], m.shape[-1]),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            mesh_mapper=_mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
