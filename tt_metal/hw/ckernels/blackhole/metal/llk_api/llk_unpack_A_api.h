@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_unpack_cb_tile_access.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
 
@@ -51,11 +52,9 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-    std::uint32_t address = base_address + offset_address;
+    std::uint32_t address = llk_unpack_tile_address(operand_id, tile_index);
 
-    LLK_ASSERT(cb_access_within_bounds(operand_id, tile_index, 1), "Indexed tile read exceeds CB boundary");
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operand_id, tile_index, 1));
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
@@ -79,11 +78,10 @@ template <
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size;
-    std::uint32_t address = base_address + start_tile_index * offset_address;
+    std::uint32_t offset_address = llk_unpack_tile_stride(operand_id);
+    std::uint32_t address = llk_unpack_tile_address(operand_id, start_tile_index);
 
-    LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
+    LLK_ASSERT_BLOCK(validate_unpack_tile_access(operand_id, start_tile_index, ntiles));
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");

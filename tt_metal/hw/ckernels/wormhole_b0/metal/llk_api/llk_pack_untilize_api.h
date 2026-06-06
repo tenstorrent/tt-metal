@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "llk_pack_cb_tile_access.h"
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
 #include "llk_param_structs.h"
@@ -289,11 +290,12 @@ llk_pack_untilize(
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim));
+    LLK_ASSERT_BLOCK(ckernel::validate_pack_tile_layout(output_id));
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, block_rt * block_ct_dim + tile_dst_rt_offset);
 
-        pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
+        pack_tile_addr += full_ct_dim * ckernel::llk_pack_tile_stride(output_id);
     }
 }

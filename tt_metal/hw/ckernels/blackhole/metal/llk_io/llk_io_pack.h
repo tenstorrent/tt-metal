@@ -11,6 +11,7 @@
 #include "stream_interface.h"
 #include "stream_io_map.h"
 #include "llk_assert.h"
+#include "llk_pack_cb_tile_access.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace ckernel;
@@ -74,13 +75,10 @@ inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_ti
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);
-    std::uint32_t num_words = num_tiles * cb.fifo_page_size;
+    // GH #26202: advancing the write pointer uses the per-tile size as the stride.
+    std::uint32_t num_words = num_tiles * ckernel::llk_pack_tile_stride(output);
 
-    LLK_ASSERT(cb.fifo_wr_ptr < cb.fifo_limit, "CB push_back: fifo_wr_ptr already at or past fifo_limit");
-
-    std::uint32_t remaining = cb.fifo_limit - cb.fifo_wr_ptr;
-
-    LLK_ASSERT(remaining >= num_words, "CB push_back: fifo_wr_ptr would exceed fifo_limit");
+    LLK_ASSERT_BLOCK(ckernel::validate_pack_tile_push(output, num_tiles));
 
     cb.fifo_wr_ptr += num_words;
     cb.fifo_wr_tile_ptr = 0;
