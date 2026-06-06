@@ -691,12 +691,21 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     del mesh_device
 
 
+def _bh_2d_device_count():
+    import ttnn
+
+    if ttnn.using_distributed_env():
+        return ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    return ttnn.get_num_devices()
+
+
 @contextlib.contextmanager
 def bh_2d_mesh_device_context(device_params):
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
-        raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % ttnn.get_num_devices())
+    num_devices = _bh_2d_device_count()
+    if num_devices not in [1, 2, 4, 8, 32]:
+        raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % num_devices)
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -704,19 +713,19 @@ def bh_2d_mesh_device_context(device_params):
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    if ttnn.get_num_devices() == 8:
+    if num_devices == 8:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,
         )
-    elif ttnn.get_num_devices() == 32:
+    elif num_devices == 32:
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(4, 8),
             **updated_device_params,
         )
     else:
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+            mesh_shape=ttnn.MeshShape(num_devices, 1),
             **updated_device_params,
         )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -734,7 +743,7 @@ def bh_2d_mesh_device_context(device_params):
 def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     import ttnn
 
-    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+    if _bh_2d_device_count() not in [1, 2, 4, 8, 32]:
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
