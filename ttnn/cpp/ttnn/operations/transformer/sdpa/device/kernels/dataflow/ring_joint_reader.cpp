@@ -159,7 +159,8 @@ void kernel_main() {
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
     constexpr uint32_t logical_n [[maybe_unused]] = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    // Slot 11 is retained for compile-time arg index stability; live logical_nt is a runtime arg below.
+    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -178,7 +179,8 @@ void kernel_main() {
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
-    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(29);
+    // Slot 29 is retained for compile-time arg index stability; live active-ring mask is a runtime arg below.
+    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(29);
     constexpr uint32_t NHV = get_compile_time_arg_val(30);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
@@ -229,11 +231,11 @@ void kernel_main() {
         max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
-
-    // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs()
     // Head chain semaphores (head-level chain, always built)
