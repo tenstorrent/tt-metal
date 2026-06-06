@@ -123,6 +123,8 @@ Do not collect Tracy, `tt-perf-report`, or `TT_METAL_DEVICE_PROFILER` metrics fr
 
 Keep async readback separate from scheduler overlap. A traced decode path can be safe to submit/read asynchronously while still unsafe for vLLM to build the next step before the previous sampled token has updated scheduler state. If the caller builds token IDs, current positions, or request lengths from host scheduler tables, the trace input refresh for step N+1 must wait for sampled token N to be applied, unless there is a separate test proving the next token/position path is entirely device-owned and cannot be overwritten by stale host state.
 
+For vLLM decode serving, mirror the production split: bind persistent token/current-position/RoPE/page-table/KV-cache tensors before capture, warm the same mode, capture a device-only decode, and replay with `ttnn.execute_trace(..., blocking=False)` only when the caller implements the async read/host-processing split. If the sampler consumes transformed logits, capture the model trace output in that sampler-ready form so replay returns the same device tensor identity. Prefer `models.common.sampling` internal trace for on-device sampling, and do not use host argmax or full-logits readback in a `sample_on_device_mode=all` path.
+
 ## What To Keep Outside Capture
 
 Move these out of the captured region:
