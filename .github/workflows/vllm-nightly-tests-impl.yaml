@@ -239,7 +239,7 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-LB] Llama-3.1-8B-Instruct",
+              "name": "[BH-LB] Llama-3.1-8B-Instruct with sampling-tests",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -249,6 +249,7 @@ jobs:
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 8 --async-scheduling",
               "structured-output": true,
+              "sampling-tests": true,
               "multimodal": false,
               "owner_id": "U08GELBB1AP"
             },
