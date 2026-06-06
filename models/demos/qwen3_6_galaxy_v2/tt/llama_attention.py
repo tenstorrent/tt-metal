@@ -1290,6 +1290,9 @@ class TtLlamaAttention(LightweightModule):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -1670,6 +1673,9 @@ class TtLlamaAttention(LightweightModule):
         page_table=None,
         kv_cache=None,
         batch_size: int = 1,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
     ):
         """qwen3.6 prefill forward — 2D-TP variant.
 
@@ -1790,44 +1796,70 @@ class TtLlamaAttention(LightweightModule):
         # paged_fill_cache / fill_cache kernels accept bf16 producers into a
         # bf8 cache (the kernel quantizes on write — see fill_cache device op
         # dtype assert: input fp32/bf16 OR cache bf8/bf4), so no producer cast.
+        # Long-context: chunk this full-attn layer over T. Chunk 0 (chunk_start_idx in
+        # {None,0}) is single-pass over its own ≤4096 window (causal). Chunks >0 attend to
+        # ALL prior KV via the paged cache (chunked SDPA) — this is what bounds the per-chunk
+        # transient and removes the full-T QKVG/WO all-gather that OOMs at 256k.
+        _use_chunked = chunk_start_idx is not None and int(chunk_start_idx) > 0
+        # Fill this chunk's KV into the cache. Chunked: use chunk_page_table (covers only this
+        # chunk's blocks) so paged_fill_cache writes at the chunk's offset; first chunk uses
+        # the base page_table (blocks [0:T]). Each chunk processes in order, so by chunk i the
+        # cache holds [0:chunk_end].
+        _fill_pt = chunk_page_table if (_use_chunked and chunk_page_table is not None) else page_table
         if page_table is not None:
             # user_id is an int on the demo/eager path (batch_idx=) but a
             # ttnn.Tensor on the vLLM Generator path; the device-tensor form
             # must go through batch_idx_tensor=.
             if isinstance(user_id, ttnn.Tensor):
-                ttnn.experimental.paged_fill_cache(
-                    keys_cache, k_rot, page_table, batch_idx_tensor=user_id
-                )
-                ttnn.experimental.paged_fill_cache(
-                    values_cache, v_t, page_table, batch_idx_tensor=user_id
-                )
+                ttnn.experimental.paged_fill_cache(keys_cache, k_rot, _fill_pt, batch_idx_tensor=user_id)
+                ttnn.experimental.paged_fill_cache(values_cache, v_t, _fill_pt, batch_idx_tensor=user_id)
             else:
-                ttnn.experimental.paged_fill_cache(keys_cache, k_rot, page_table, batch_idx=user_id)
-                ttnn.experimental.paged_fill_cache(values_cache, v_t, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(keys_cache, k_rot, _fill_pt, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(values_cache, v_t, _fill_pt, batch_idx=user_id)
         else:
             ttnn.fill_cache(keys_cache, k_rot, user_id % max(self.max_batch_size, 1))
             ttnn.fill_cache(values_cache, v_t, user_id % max(self.max_batch_size, 1))
 
-        # 7. GQA expand K, V (per chip): n_kv_pc=1 → n_q_pc=3.
-        gqa_pc = n_q_pc // n_kv_pc
-        k_exp = ttnn.repeat_interleave(k_rot, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_exp = ttnn.repeat_interleave(v_t, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        k_rot.deallocate(True)
-        v_t.deallocate(True)
+        if _use_chunked:
+            # 7+8. Chunked SDPA: Q-chunk vs paged cache [0:chunk_end]. GQA (1 KV head -> 3 Q
+            # heads) is handled inside the op (validated on BH at nh=3/nkv=1/d=256, PCC>0.99).
+            assert page_table is not None and chunk_start_idx_tensor is not None
+            k_rot.deallocate(True)
+            v_t.deallocate(True)
+            # page_size must equal the cache's block_size (demo=32, server=64); derive from
+            # the cache tensor to avoid a config mismatch. keys_cache: [num_blocks, 1, block_size, hd].
+            _page_size = int(keys_cache.shape[-2])
+            attn_out = ttnn.transformer.chunked_scaled_dot_product_attention(
+                input_tensor_q=q_rot,
+                input_tensor_k=keys_cache,
+                input_tensor_v=values_cache,
+                page_table_tensor=page_table,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=self.model_config["SDPA_PROGCFG_FLEXIBLE_CHUNK"](T, _page_size),
+            )
+            q_rot.deallocate(True)
+        else:
+            # 7. GQA expand K, V (per chip): n_kv_pc=1 → n_q_pc=3.
+            gqa_pc = n_q_pc // n_kv_pc
+            k_exp = ttnn.repeat_interleave(k_rot, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            v_exp = ttnn.repeat_interleave(v_t, gqa_pc, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_rot.deallocate(True)
+            v_t.deallocate(True)
 
-        # 8. SDPA with causal mask (per chip — each chip attends to its row's KV head).
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_rot,
-            k_exp,
-            v_exp,
-            is_causal=True,
-            scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        k_exp.deallocate(True)
-        v_exp.deallocate(True)
-        q_rot.deallocate(True)
+            # 8. SDPA with causal mask (per chip — each chip attends to its row's KV head).
+            attn_out = ttnn.transformer.scaled_dot_product_attention(
+                q_rot,
+                k_exp,
+                v_exp,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            k_exp.deallocate(True)
+            v_exp.deallocate(True)
+            q_rot.deallocate(True)
 
         # 9. Output gate: sigmoid(Gate) * attn_out (per chip, pre-WO).
         attn_flat = _qwen36_heads_to_flat(attn_out, B, n_q_pc, T, hd)

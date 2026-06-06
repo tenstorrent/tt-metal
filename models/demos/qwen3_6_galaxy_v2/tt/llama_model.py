@@ -1527,31 +1527,77 @@ class TtTransformer(LightweightModule):
         chunk_start_idx_tensor=None,
         batch_size=1,
     ):
-        """Long-context prefill driver (GDN-only chunking).
+        """Long-context prefill driver (GDN chunking + optional full-attn chunking).
 
-        GDN/linear-attention layers are processed in sequence-chunks of
+        GDN/linear-attention layers are always processed in sequence-chunks of
         ``gdn_chunk_size``, carrying conv + recurrent state across chunks via the
         persistent dn_state_buffer / conv_state_buffer (the DeltaNet block seeds
-        from them when ``attention._pf_chunk_idx > 0``). Full-attention layers run
-        single-pass over the whole sequence (paged-KV write + flash SDPA — no
-        chunked-SDPA needed). Returns the post-layer-loop hidden (col-sharded,
-        pre-final-norm), identical to ``forward(mode='prefill')`` so the caller's
-        norm + lm_head path is unchanged.
+        from them when ``attention._pf_chunk_idx > 0``).
+
+        Full-attention layers: single-pass over the whole sequence when it fits
+        (``seq_len <= max_seq_len``, i.e. <=128k — proven, byte-identical), OR chunked
+        over ``gdn_chunk_size`` for **longer** context. Chunked full-attn fills each
+        chunk's KV into the paged cache (per-chunk ``chunk_page_table``) and attends to
+        ALL prior KV via ``chunked_scaled_dot_product_attention`` (``chunk_start_idx>0``).
+        This bounds the per-chunk transient (no full-T QKVG/WO all-gather) so 256k fits.
+
+        Returns the post-layer-loop hidden (col-sharded, pre-final-norm), identical to
+        ``forward(mode='prefill')`` so the caller's norm + lm_head path is unchanged.
         """
+        import torch as _torch
+
         seq_len = x.shape[2]
         cos_full, sin_full = (rot_mats[0], rot_mats[1]) if rot_mats is not None else (None, None)
+
+        # Gate: chunk full-attention only for context longer than the cached/single-pass
+        # regime (>128k). <=128k keeps the proven single-pass full-attn path unchanged.
+        _fa_chunk = (
+            page_table is not None
+            and kv_cache is not None
+            and (
+                seq_len > int(self.args.max_seq_len)
+                # test override: force full-attn chunking at small ISL to verify the chunked path
+                # end-to-end vs the single-pass baseline without a 256k run.
+                or os.environ.get("QWEN36_FA_CHUNK_FORCE", "0") == "1"
+            )
+        )
+        # Precompute per-chunk (chunk_start_idx_tensor, chunk_page_table) ONCE (independent of
+        # layer); reused across all full-attn layers. Chunk 0 uses the base page_table + single-pass
+        # SDPA (chunk_start_idx==0); chunks >0 use the chunked-SDPA paged-read path.
+        _fa_chunks = []
+        if _fa_chunk:
+            _bs = int(kv_cache[0][0].shape[-2])  # paged KV block_size
+            for _cs in range(0, seq_len, gdn_chunk_size):
+                _ce = min(_cs + gdn_chunk_size, seq_len)
+                if _cs == 0:
+                    _fa_chunks.append((0, _ce, None, None))
+                else:
+                    _csi_t = ttnn.from_torch(
+                        _torch.tensor([_cs], dtype=_torch.int32),
+                        device=self.mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    )
+                    _cpt = ttnn.slice(page_table, [0, _cs // _bs], [page_table.shape[0], (_ce + _bs - 1) // _bs])
+                    _fa_chunks.append((_cs, _ce, _csi_t, _cpt))
+
         for i, layer in enumerate(self.layers):
             is_gdn = getattr(layer, "is_linear_attention_layer", False)
-            layer_chunk = gdn_chunk_size if is_gdn else seq_len
+            layer_chunk = gdn_chunk_size if (is_gdn or _fa_chunk) else seq_len
             outs = []
             for ci, cs in enumerate(range(0, seq_len, layer_chunk)):
                 ce = min(cs + layer_chunk, seq_len)
                 x_chunk = x if (cs == 0 and ce == seq_len) else ttnn.slice(x, (0, 0, cs, 0), (1, 1, ce, x.shape[-1]))
+                _cpt, _csidx, _csi_t = None, 0, chunk_start_idx_tensor
                 if is_gdn:
                     layer.attention._pf_chunk_idx = ci  # 0 => fresh state, >0 => carry from buffers
                     rm = None
                 else:
                     rm = [cos_full[:, :, cs:ce, :], sin_full[:, :, cs:ce, :]] if cos_full is not None else None
+                    if _fa_chunk:
+                        # chunked full-attn: pass this chunk's start idx + page tables
+                        _cs2, _ce2, _csi_t, _cpt = _fa_chunks[ci]
+                        _csidx = cs
                 xo, _ = layer(
                     x_chunk,
                     None,
@@ -1560,9 +1606,9 @@ class TtTransformer(LightweightModule):
                     user_id,
                     "prefill",
                     page_table,
-                    chunk_page_table=None,
-                    chunk_start_idx=0,
-                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    chunk_page_table=_cpt,
+                    chunk_start_idx=_csidx,
+                    chunk_start_idx_tensor=_csi_t,
                     kv_cache=kv_cache[i] if kv_cache is not None else None,
                     batch_size=batch_size,
                 )
