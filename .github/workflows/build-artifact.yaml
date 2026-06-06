@@ -393,6 +393,9 @@ jobs:
         CCACHE_TEMPDIR: /tmp/ccache
         CCACHE_COMPRESS: "true"
         CCACHE_COMPRESSLEVEL: "3"
+        # Log ccache operations to a file so remote storage errors are visible in CI.
+        # Errors (storage helper failures, Redis timeouts) would otherwise be silent.
+        CCACHE_LOGFILE: /tmp/ccache.log
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -590,6 +593,18 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Surface any remote storage errors from the log so they are visible
+          # in the job summary without having to download a full log artifact.
+          if [ -f /tmp/ccache.log ]; then
+            ERRORS=$(grep -i 'error\|failed\|timeout' /tmp/ccache.log || true)
+            if [ -n "$ERRORS" ]; then
+              echo '## CCache Errors' >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$ERRORS" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
