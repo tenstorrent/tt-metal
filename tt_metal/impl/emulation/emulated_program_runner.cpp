@@ -1307,23 +1307,7 @@ static void collect_kernels(
             // bodies and the downstream `where_tile` reads stale data. Define
             // all three so the kernel's `#ifdef TRISC_*` blocks execute exactly
             // once on the unified thread.
-            //
-            // EXCEPT for tilize kernels: emule's host-side
-            // `tilize_with_val_padding` already produces tiled data, so an
-            // additional kernel-side tilize would re-tilize and corrupt the
-            // layout. Skip TRISC defines when the kernel source mentions
-            // `llk_unpack_tilize` (the tilize compute path).
-            bool is_tilize_kernel = false;
             if (is_tensix && !is_quasar_compute) {
-                std::ifstream kscan(src_path);
-                if (!kscan) {
-                    throw std::runtime_error(
-                        "collect_kernels: cannot read kernel source for TRISC-define gating: " + src_path);
-                }
-                std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
-                is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
-            }
-            if (is_tensix && !is_quasar_compute && !is_tilize_kernel) {
                 defines["TRISC_UNPACK"] = "1";
                 defines["TRISC_MATH"] = "1";
                 defines["TRISC_PACK"] = "1";
