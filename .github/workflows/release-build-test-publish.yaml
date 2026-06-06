@@ -76,6 +76,7 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      bypass-cache: true
 
   build-artifact-tracy:
     name: "Build artifact with tracy (for testing)"
@@ -93,6 +94,7 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      bypass-cache: true
 
   build-artifact-release:
     name: "Build artifact for release (without tracy)"
@@ -110,6 +112,7 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      bypass-cache: true
 
   determine-test-skus:
     runs-on: ubuntu-latest
