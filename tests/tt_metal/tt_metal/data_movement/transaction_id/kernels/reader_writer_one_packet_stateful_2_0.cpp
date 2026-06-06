@@ -3,18 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"
 
-// L1 to L1 send
+// L1 to L1 send (one packet, stateful + transaction-ID).
+//
+// NOTE: This kernel intentionally stays on the legacy NOC free functions
+// because the new Noc/UnicastEndpoint API does not yet expose a combined
+// "with_state + with_trid" form. The new API provides:
+//   - stateful only:        set_async_read_state + async_read_with_state
+//   - transaction-id only:  async_read<TxnIdMode::ENABLED>
+// but not the union of the two that this test exercises. Once the new API
+// surface adds a stateful+trid combined call, migrate this kernel to it.
 void kernel_main() {
-    constexpr uint32_t l1_local_addr = get_named_compile_time_arg_val("l1_addr");
-    constexpr uint32_t num_of_transactions = get_named_compile_time_arg_val("num_transactions") < 16
-                                                 ? get_named_compile_time_arg_val("num_transactions")
-                                                 : 15;
-    constexpr uint32_t bytes_per_transaction = get_named_compile_time_arg_val("bytes_per_tx");
-    constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
-    constexpr uint32_t packed_sub0_core_coordinates = get_named_compile_time_arg_val("sub0_coords");
-    constexpr uint32_t packed_sub1_core_coordinates = get_named_compile_time_arg_val("sub1_coords");
+    constexpr uint32_t l1_local_addr = get_arg(args::l1_addr);
+    constexpr uint32_t test_id = get_arg(args::test_id);
+    constexpr uint32_t packed_sub0_core_coordinates = get_arg(args::sub0_coords);
+    constexpr uint32_t packed_sub1_core_coordinates = get_arg(args::sub1_coords);
+
+    const uint32_t num_transactions_raw = get_arg(args::num_transactions);
+    const uint32_t num_of_transactions = num_transactions_raw < 16 ? num_transactions_raw : 15;
+    const uint32_t bytes_per_transaction = get_arg(args::bytes_per_transaction);
 
     // Runtime arguments
     uint32_t sub0_receiver_x_coord = packed_sub0_core_coordinates >> 16;
