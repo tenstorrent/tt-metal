@@ -67,8 +67,8 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
                 # failure must never mask the real test result.
                 try:
                     parent_device.quiesce_devices()
-                except Exception as e:
-                    logger.warning(f"quiesce_devices during teardown failed: {e}")
+                except Exception:
+                    logger.opt(exception=True).warning("quiesce_devices during teardown failed")
                 ttnn.close_mesh_device(parent_device)
             elif mesh_device:
                 ttnn.close_mesh_device(mesh_device)
