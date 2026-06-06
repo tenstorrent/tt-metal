@@ -767,7 +767,10 @@ class Generator(WarmupForwardMixin):
         )
         # Store column_mask on CCL reference(s) used by attention.
         self._set_prefill_column_mask(tt_column_mask)
-        full_rot_mats = self.model.get_or_create_prefill_rot_mats()
+        # Pass the PADDED prefill length (tokens are padded to get_padded_prefill_len) so the RoPE
+        # table covers >128k contexts without bumping max_seq_len (which would OOM the full-attn
+        # QK-norm transient). qwen3.6 config context is 256k.
+        full_rot_mats = self.model.get_or_create_prefill_rot_mats(seq_len=tokens.shape[-1])
         tt_toks = self.model.ttnn_prefill_forward(
             x=tt_prefill_input,
             user_id=tt_user_id,
@@ -923,7 +926,8 @@ class Generator(WarmupForwardMixin):
         ) = transformed_inputs
         # Store column_mask on CCL reference(s) used by attention.
         self._set_prefill_column_mask(tt_column_mask)
-        full_rot_mats = self.model.get_or_create_prefill_rot_mats()
+        # Padded prefill length -> RoPE covers >128k without bumping max_seq_len (see above).
+        full_rot_mats = self.model.get_or_create_prefill_rot_mats(seq_len=tt_tokens.shape[-1])
 
         # Ensure CCL indices are zero before compile run (e.g. if this model was reused from
         # a previous test). Other demos reset before trace capture; we also reset before

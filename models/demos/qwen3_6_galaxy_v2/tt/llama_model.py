@@ -257,9 +257,16 @@ class TtTransformer(LightweightModule):
                 continue
             layer.attention.rope_setup = self.rope_setup
 
-    def get_or_create_prefill_rot_mats(self):
+    def get_or_create_prefill_rot_mats(self, seq_len=None):
         """
         Return device-side rot mats for prefill, cached once for max_seq_len.
+
+        ``seq_len`` (optional): the PADDED prefill length (get_padded_prefill_len). qwen3.6's config
+        context is 256k but max_seq_len is kept at 128k so the position-scaled persistent buffers
+        (decode masks etc.) stay small (bumping max_seq_len to 256k OOMs the full-attn QK-norm
+        transient). When a prefill is longer than the cached 128k table, build the partial-RoPE for
+        the actual padded length on the fly (the table is tiny — positions x rope_dim=64 — so this
+        costs almost nothing) instead of running off the end of the cached table.
 
         qwen3.6 uses PARTIAL RoPE (rope_dim = head_dim*0.25 = 64); the attention
         prefill (``_forward_prefill_qwen36``) expects rot_mats as a
@@ -269,6 +276,9 @@ class TtTransformer(LightweightModule):
         ``get_prefill_rot_mat`` builds FULL head_dim tables and breaks the
         partial-RoPE eltwise broadcast, so qwen3.6 takes its own branch.
         """
+        if self.is_qwen36 and seq_len is not None and int(seq_len) > int(self.args.max_seq_len):
+            # Long-context: build (uncached) a partial-RoPE for the actual padded prefill length.
+            return self._build_qwen36_prefill_partial_rope(seq_len=int(seq_len))
         if self.tt_rot_mats_prefill is None:
             if self.is_qwen36:
                 self.tt_rot_mats_prefill = self._build_qwen36_prefill_partial_rope()
@@ -283,13 +293,14 @@ class TtTransformer(LightweightModule):
                 )
         return self.tt_rot_mats_prefill
 
-    def _build_qwen36_prefill_partial_rope(self):
-        """Partial-RoPE (cos, sin) tables for the full [0, max_seq_len) range,
-        rope_dim=64. Cached once; ``_forward_prefill_qwen36`` slices to the
-        prefill window's seq length. Mirrors the demo's working construction."""
+    def _build_qwen36_prefill_partial_rope(self, seq_len=None):
+        """Partial-RoPE (cos, sin) tables for the [0, seq_len) range (default max_seq_len),
+        rope_dim=64. Cached once for max_seq_len; ``_forward_prefill_qwen36`` slices to the
+        prefill window's seq length. ``seq_len`` overrides the length for long-context prefill
+        (built fresh, uncached). Mirrors the demo's working construction."""
         from models.demos.qwen3_6_galaxy.reference.qwen36 import build_mrope_cos_sin
 
-        max_seq = int(self.args.max_seq_len)
+        max_seq = int(seq_len) if seq_len is not None else int(self.args.max_seq_len)
         positions = torch.arange(max_seq, dtype=torch.long)
         positions_3d = torch.stack([positions, positions, positions], dim=0)
         cos_ref, sin_ref = build_mrope_cos_sin(
