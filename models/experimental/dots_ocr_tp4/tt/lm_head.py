@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""TP4 model head for dots.ocr prefill: final RMSNorm -> LM head -> argmax.
+
+This is the tail that runs after the decoder body at the end of prefill to
+produce the next-token logits/id (greedy). The LM head is the big
+``H -> vocab`` matmul; in TP4 it is column-parallel — each chip computes
+``vocab/ndev`` logits, then the shards are all-gathered for a global argmax.
+
+By default only the LAST token's logits are produced (the prefill -> first
+decode-token hand-off), matching the M=1 (32-padded) head matmul seen in the
+profiler.
+"""
+
+import ttnn
+
+from models.experimental.dots_ocr_tp4.tt.common import (
+    all_gather_last_dim,
+    from_replicated_to_torch,
+    mesh_num_devices,
+    shard_to_mesh,
+)
+from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
+
+
+class DotsOCRLMHeadTP4:
+    def __init__(self, mesh_device, config, weight_dtype=ttnn.bfloat16):
+        self.mesh_device = mesh_device
+        self.config = config
+        self.weight_dtype = weight_dtype
+        self.num_devices = max(1, mesh_num_devices(mesh_device))
+        self.norm = None
+        self.lm_head_w = None
+        self.vocab_size = None
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    @classmethod
+    def from_torch(cls, mesh_device, config, torch_norm, torch_lm_head, weight_dtype=ttnn.bfloat16):
+        m = cls(mesh_device, config, weight_dtype=weight_dtype)
+        m.norm = DotsOCRRMSNormTP4.from_torch(mesh_device, torch_norm, eps=config.rms_norm_eps)
+
+        w = torch_lm_head.weight.data  # [vocab, H]
+        m.vocab_size = int(w.shape[0])
+        nd = m.num_devices
+        assert m.vocab_size % nd == 0, f"vocab {m.vocab_size} not divisible by {nd}"
+        # Column-parallel: ttnn.linear wants [K=H, N=vocab]; shard N across chips.
+        m.lm_head_w = shard_to_mesh(w.t().contiguous(), mesh_device, dim=-1, dtype=weight_dtype)
+        return m
+
+    def forward(self, hidden: ttnn.Tensor, last_token_only: bool = True, return_token: bool = True):
+        """hidden: replicated [B, S, H]. Returns (logits, token_ids_torch_or_None).
+
+        logits: replicated [B, T, vocab]; T = 1 if last_token_only else S.
+        """
+        x = hidden
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(x.shape) == 3:
+            x = ttnn.unsqueeze(x, 1)  # [B, 1, S, H]
+
+        if last_token_only:
+            B, _, S, H = (int(d) for d in x.shape)
+            x = ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, H])  # [B, 1, 1, H]
+
+        x = self.norm.forward(x)
+
+        # Per-chip logits over its vocab shard, then gather to full vocab.
+        local_logits = ttnn.linear(
+            x,
+            self.lm_head_w,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        logits = all_gather_last_dim(local_logits, self.mesh_device)
+        ttnn.deallocate(local_logits)
+
+        token_ids = None
+        if return_token:
+            tok = ttnn.argmax(logits, dim=-1, keepdim=False)  # uint32 over vocab
+            token_ids = from_replicated_to_torch(tok, self.mesh_device)
+            ttnn.deallocate(tok)
+
+        return logits, token_ids
