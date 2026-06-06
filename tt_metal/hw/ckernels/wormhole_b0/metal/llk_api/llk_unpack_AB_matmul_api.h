@@ -25,7 +25,6 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    const bool reuse_a = ct_dim >= rt_dim;
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
