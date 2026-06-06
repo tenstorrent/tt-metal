@@ -296,8 +296,18 @@ class LTXPipeline:
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
             self._prime_caches()
-            if run_warmup and num_frames > 0 and height > 0 and width > 0:
+            # Tracing (prep_run=False) requires precompiled kernels + pre-allocated trace I/O,
+            # so warmup is mandatory when traced.
+            valid_shape = num_frames > 0 and height > 0 and width > 0
+            if (run_warmup or traced) and valid_shape:
+                if traced and not run_warmup:
+                    logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
+            elif traced:
+                logger.warning(
+                    f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
+                    "skipping forced warmup — trace capture will likely fail"
+                )
 
     def _traced_step(self, trace_key: str, fn: Callable, *, capture_inputs: dict, replay_inputs: dict):
         """Capture ``fn`` as a ttnn trace on the first call for ``trace_key``; replay after.
