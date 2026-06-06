@@ -266,9 +266,7 @@ WorkUnitSpec wu_g2{.unique_id = "wu_g2", .kernels = {READER, WRITER, "compute_g2
                    .target_nodes = core_group_2};
 ```
 
-The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved.
-
-**Prerequisite**: multi-PRODUCER and multi-CONSUMER DFB binding relaxation, commit `542287f4ccb` on `akertesz/misc-op-port-fixes`. Before that relaxation, the validator rejected "DFB has multiple producers/consumers"; on older snapshots, the demote-to-RTA fallback may be unavoidable.
+The framework validates that the two compute `KernelSpec`s have non-overlapping WU coverage and that their CONSUMER bindings of INPUT (and PRODUCER bindings of OUTPUT) match — the local hardware invariant that exactly one reader, one writer, and one compute run together at each node is preserved. (See [`dataflow_buffer_spec.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp) for the full canonical statement of the DFB endpoint invariant — including the third condition, "same kernel kind," that's implicit in this all-compute example.)
 
 ---
 
