@@ -103,12 +103,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 
     using namespace tt::tt_metal::experimental;
 
-    KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args.begin(), reader_compile_args.end());
+    KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args);
 
     std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
 
     KernelSpec reader_spec{
-        .unique_id = "reader",
+        .unique_id = KernelSpecName{"reader"},
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -137,10 +137,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs reader_run_params{.kernel_spec_name = reader_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs reader_run_params{.kernel = reader_spec.unique_id};
     for (auto& core : corerange_to_cores(test_config.cores)) {
         std::unordered_map<std::string, uint32_t> rtas = {{"src_addr", input_buffer_address}, {"l1_addr", l1_addr}};
-        reader_run_params.runtime_arg_values.push_back({.node = core, .args = rtas});
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues args_table(rtas);
+        reader_run_params.runtime_arg_values.push_back({.node = core, .args = std::move(args_table)});
     }
     run_params.kernel_run_args.push_back(reader_run_params);
     SetProgramRunArgs(program, run_params);

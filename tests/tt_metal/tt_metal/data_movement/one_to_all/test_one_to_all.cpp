@@ -237,12 +237,12 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         std::unordered_map<std::string, uint32_t> cta_named_args = sender_named_args;
         cta_named_args.erase("num_transactions");
         cta_named_args.erase("pages_per_tx");
-        KernelSpec::CompileTimeArgs cta_bindings(cta_named_args.begin(), cta_named_args.end());
+        KernelSpec::CompileTimeArgs cta_bindings(cta_named_args);
 
         const uint32_t num_coord_varargs = test_config.is_multicast ? 0u : (uint32_t)sub_worker_coordinates.size();
 
         KernelSpec sender_spec{
-            .unique_id = "sender",
+            .unique_id = KernelSpecName{"sender"},
             .source = sender_kernel_path,
             .num_threads = 1,
             .compile_time_args = cta_bindings,
@@ -272,7 +272,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         program = MakeProgramFromSpec(*mesh_device, spec);
 
         ProgramRunArgs run_params;
-        ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+        ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
         for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
             sender_run_params.runtime_arg_values.push_back(
                 {.node = mst_logical_core,
@@ -280,8 +280,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
                      {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
                      {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
             if (!test_config.is_multicast) {
-                sender_run_params.advanced_options.runtime_varargs.push_back(
-                    {mst_logical_core, sub_worker_coordinates});
+                sender_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
             }
         }
         run_params.kernel_run_args.push_back(sender_run_params);

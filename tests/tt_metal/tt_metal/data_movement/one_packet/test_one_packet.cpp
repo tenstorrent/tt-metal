@@ -80,7 +80,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     const NOC noc = test_config.read ? NOC::RISCV_1_default : NOC::RISCV_0_default;
 
     KernelSpec kspec{
-        .unique_id = "one_packet_kernel",
+        .unique_id = KernelSpecName{"one_packet_kernel"},
         .source = std::filesystem::path{kernel_path},
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -118,7 +118,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs krp{.kernel_spec_name = kspec.unique_id};
+    ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
     krp.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {

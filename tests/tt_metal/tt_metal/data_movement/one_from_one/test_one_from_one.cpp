@@ -82,7 +82,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
         {"num_vc", (uint32_t)test_config.num_virtual_channels}};
 
     KernelSpec requestor_spec{
-        .unique_id = "requestor",
+        .unique_id = KernelSpecName{"requestor"},
         .source = requestor_kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -114,7 +114,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel_spec_name = requestor_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
     requestor_run_params.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {

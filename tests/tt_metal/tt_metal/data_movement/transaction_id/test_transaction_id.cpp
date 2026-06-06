@@ -111,7 +111,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
         {"sub1_coords", packed_sub1_core_coordinates}};
 
     KernelSpec sender_spec{
-        .unique_id = "trid_sender",
+        .unique_id = KernelSpecName{"trid_sender"},
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -143,7 +143,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     sender_run_params.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {

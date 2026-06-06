@@ -98,10 +98,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     using namespace tt::tt_metal::experimental;
 
-    KernelSpec::CompileTimeArgs cta_bindings(cta_bindings_map.begin(), cta_bindings_map.end());
+    KernelSpec::CompileTimeArgs cta_bindings(cta_bindings_map);
 
     KernelSpec sender_spec{
-        .unique_id = "sender",
+        .unique_id = KernelSpecName{"sender"},
         .source = sender_kernel_path,
         .num_threads = 1,
         .compile_time_args = cta_bindings,
@@ -130,7 +130,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
     ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel_spec_name = sender_spec.unique_id};
+    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     sender_run_params.runtime_arg_values.push_back(
         {.node = test_config.master_core_coord,
          .args = {
