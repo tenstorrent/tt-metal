@@ -316,6 +316,10 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+# Keep the Intel repository scoped to the oneAPI TBB packages tt-metal needs.
+# Without this, DNF may satisfy unrelated dependencies (for example OpenMPI)
+# from oneAPI, pulling older Intel packages signed by keys not listed above.
+includepkgs=intel-oneapi-tbb* intel-oneapi-common-* intel-oneapi-tcm-*
 REPO_EOF
 }
 
