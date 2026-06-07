@@ -5,9 +5,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def _verbose() -> bool:
+    """Screen-verbosity gate (matches the cli.py TT_HW_PLANNER_VERBOSE convention).
+    Off by default: keep the terminal clean; the full agent stream always lands
+    in the per-phase log file regardless."""
+    return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
 
 
 def cmd_emit_e2e(args) -> int:
@@ -33,6 +41,7 @@ def cmd_emit_e2e(args) -> int:
         agent_bin=agent_bin,
         agent_model=agent_model,
         timeout_s=timeout_s,
+        log_path=demo_dir / "_handoff" / "emit_e2e_builder.log",
     )
     if rc_build != 0:
         print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
@@ -50,6 +59,7 @@ def cmd_emit_e2e(args) -> int:
             agent_bin=agent_bin,
             agent_model=agent_model,
             timeout_s=timeout_s,
+            log_path=demo_dir / "_handoff" / f"emit_e2e_grader_round{rnd}.log",
         )
         if rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or ""):
             print("\n" + sep)
@@ -65,7 +75,13 @@ def cmd_emit_e2e(args) -> int:
             pcc=pcc,
             grader_findings=grade_final or "",
         )
-        _run_agent(prompt=fix_prompt, agent_bin=agent_bin, agent_model=agent_model, timeout_s=timeout_s)
+        _run_agent(
+            prompt=fix_prompt,
+            agent_bin=agent_bin,
+            agent_model=agent_model,
+            timeout_s=timeout_s,
+            log_path=demo_dir / "_handoff" / f"emit_e2e_fix_round{rnd}.log",
+        )
 
     print("\n" + sep)
     print(f"  ✗ INDEPENDENT GRADER: did NOT pass within {max_grade_rounds} round(s) — see grader report")
@@ -73,7 +89,7 @@ def cmd_emit_e2e(args) -> int:
     return 1
 
 
-def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int):
+def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, log_path: Path = None):
     cmd = [
         agent_bin,
         "-p",
@@ -87,6 +103,14 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
         "stream-json",
         "--verbose",
     ]
+    log_fh = None
+    if log_path is not None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = open(log_path, "w", buffering=1)
+            print(f"  (full agent stream → {log_path})")
+        except Exception:
+            log_fh = None
     try:
         proc = subprocess.Popen(
             cmd,
@@ -99,6 +123,8 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
         )
     except FileNotFoundError:
         print(f"  ✗ agent binary not found: {agent_bin!r}")
+        if log_fh:
+            log_fh.close()
         return 2, ""
 
     final_text = ""
@@ -106,6 +132,11 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
+            if log_fh:
+                try:
+                    log_fh.write(line)
+                except Exception:
+                    pass
             rendered, final, atext = _render_stream_event(line)
             if final:
                 final_text = final
@@ -118,7 +149,15 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
     except subprocess.TimeoutExpired:
         proc.kill()
         print(f"\n  ✗ agent exceeded {timeout_s}s; killed")
+        if log_fh:
+            log_fh.close()
         return 1, final_text
+    finally:
+        if log_fh:
+            try:
+                log_fh.close()
+            except Exception:
+                pass
 
     # The agent's last assistant message is almost always identical to the
     # `result` event; only print the summary block when it adds something new.
@@ -142,7 +181,9 @@ def _render_stream_event(line: str):
     try:
         ev = json.loads(line)
     except Exception:
-        return ("  · " + line) if line.strip() else None, None, None
+        # Non-JSON lines (framework log spill) are noise on screen; the full
+        # raw stream is in the log file. Show only under verbose.
+        return (("  · " + line) if (_verbose() and line.strip()) else None), None, None
 
     etype = ev.get("type")
     if etype == "system":
@@ -169,6 +210,13 @@ def _render_stream_event(line: str):
         )
 
     if etype == "user":
+        # Tool-result previews (`↳`) are the bulk of the on-screen clutter: file
+        # headers, ttnn DEBUG dumps leaking through Read/Bash output, and the
+        # agent's own `<tool_use_error>` retries. The preceding `→` action line
+        # already says what the agent did, and the full result is in the log.
+        # Keep these only under verbose.
+        if not _verbose():
+            return None, None, None
         for c in (ev.get("message", {}) or {}).get("content", []) or []:
             if c.get("type") == "tool_result":
                 content = c.get("content")
