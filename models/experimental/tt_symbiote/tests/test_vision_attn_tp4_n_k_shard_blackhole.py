@@ -283,24 +283,18 @@ def _best_dst_subblock(ob_h: int, per_core_n: int, *, dst_budget: int = 8) -> tu
 
 
 def _bh_tp4_qkv_pc(device):
-    """Hardware-swept QKV matmul config for 11264×1536×1152 on BH P150 11×10 (~216 μs).
+    """Hardware-swept QKV matmul for 11264×1536×1152 on BH P150 11×10 (~148 μs).
 
-      Swept on silicon 2026-06-06; ~2.7× faster than auto-config (~4.2 ms) and ~2.7×
-      faster than the L1-budget heuristic that picked tm=True / out_block_h=16 (~608 μs).
-
-      Winner: transpose_mcast=False, 9×8 grid, per_core_M=44, per_core_N=4,
-      in0_block_w=8, out_block_h=4, subblock (4,2), dst_area=8.
-      With in0 already in L1, M→rows (tm=False) + moderate out_block_h beats
-    fewer outer-M iters via huge out_block_h on a transposed grid.
+    Silicon sweep 2026-06-07: grid=(9,8) tm=False M=44 N=4 obh=22 ibw=8 sub=(2,4).
     """
     grid = device.compute_with_storage_grid_size()
     if int(grid.x) == 11 and int(grid.y) == 10:
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(9, 8),
             in0_block_w=8,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=4,
+            out_subblock_h=2,
+            out_subblock_w=4,
+            out_block_h=22,
             out_block_w=4,
             per_core_M=44,
             per_core_N=4,
@@ -318,26 +312,21 @@ def _bh_tp4_qkv_pc(device):
 
 
 def _bh_tp4_o_proj_pc(device):
-    """Hardware-swept o_proj matmul for 11264×384×1536 on BH P150 11×10 (~76 μs).
+    """Hardware-swept o_proj for 11264×384×1536, BFP8×BFP8→BFP8 L1 (~80 μs).
 
-    Swept on silicon 2026-06-06; ~4.6× faster than the generic heuristic (~349 μs)
-    which picked per_core_N=8 / out_block_h=1 on a 6×8 grid (48 cores).
-
-    Winner: transpose_mcast=False, 10×8 grid, per_core_M=44, per_core_N=5,
-    in0_block_w=6, out_block_h=11, subblock (1,5).  BFP8 L1 in0 (ctx after
-    concat_heads) × BFP8 DRAM weight → BF16 L1 out.
+    Silicon sweep 2026-06-07: grid=(8,8) tm=False M=44 N=6 obh=22 ibw=6 sub=(2,3).
     """
     grid = device.compute_with_storage_grid_size()
     if int(grid.x) == 11 and int(grid.y) == 10:
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(10, 8),
+            compute_with_storage_grid_size=(8, 8),
             in0_block_w=6,
-            out_subblock_h=1,
-            out_subblock_w=5,
-            out_block_h=11,
-            out_block_w=5,
+            out_subblock_h=2,
+            out_subblock_w=3,
+            out_block_h=22,
+            out_block_w=6,
             per_core_M=44,
-            per_core_N=5,
+            per_core_N=6,
             transpose_mcast=False,
             fused_activation=None,
             fuse_batch=False,
@@ -634,7 +623,7 @@ def _attn_tp4_l1_forward(
         ctx,
         o_w_tt,
         bias=None,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=l1,
         compute_kernel_config=compute_cfg,
         program_config=o_pc,

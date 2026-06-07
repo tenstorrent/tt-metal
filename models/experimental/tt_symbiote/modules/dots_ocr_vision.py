@@ -895,6 +895,16 @@ class TTNNDotsVisionRMSNorm(TTNNModule):
         return out
 
 
+class TTNNDotsVisionRMSNormTP4BH(TTNNDotsVisionRMSNorm):
+    """RMSNorm/LayerNorm with L1 interleaved input and output (BH TP4 vision block)."""
+
+    def forward(self, x: ttnn.Tensor, *, output_l1: bool = False) -> ttnn.Tensor:
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import ensure_l1_tensor
+
+        x = ensure_l1_tensor(x)
+        return super().forward(x, output_l1=True)
+
+
 # ---------------------------------------------------------------------------
 # Vision SwiGLU MLP
 # ---------------------------------------------------------------------------
@@ -1958,6 +1968,192 @@ class TTNNDotsVisionBlock(TTNNModule):
         ttnn.deallocate(residual)
 
         return hidden_states
+
+
+class TTNNDotsVisionAttentionTP4BH(TTNNDotsVisionAttention):
+    """Blackhole TP4 vision attention: L1 activations + hardware-swept program configs."""
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        if int(getattr(self, "_tp_ndev", 1)) <= 1:
+            return
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_attn_tp4_bh_configs
+
+        init_attn_tp4_bh_configs(self)
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        cu_seqlens=None,
+        attention_mask: ttnn.Tensor | None = None,
+        attention_logical_seq_len: int | None = None,
+    ) -> ttnn.Tensor:
+        if int(getattr(self, "_tp_ndev", 1)) <= 1:
+            return super().forward(
+                hidden_states,
+                rot_mats=rot_mats,
+                cu_seqlens=cu_seqlens,
+                attention_mask=attention_mask,
+                attention_logical_seq_len=attention_logical_seq_len,
+            )
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_attn_tp4_bh_forward
+
+        return vision_attn_tp4_bh_forward(
+            self,
+            hidden_states,
+            rot_mats=rot_mats,
+            cu_seqlens=cu_seqlens,
+            attention_mask=attention_mask,
+            attention_logical_seq_len=attention_logical_seq_len,
+        )
+
+
+class TTNNDotsVisionMLPTP4BH(TTNNDotsVisionMLP):
+    """Blackhole TP4 vision SwiGLU: N-shard fc1/fc3, K-shard fc2 + all_reduce."""
+
+    def _mlp_tp_ndev(self) -> int:
+        dev = getattr(self, "device", None)
+        n = _linear_mesh_num_devices(dev)
+        is_tp_mesh = hasattr(dev, "shape") and len(list(dev.shape)) >= 1 and int(list(dev.shape)[-1]) > 1
+        if n > 1 and is_tp_mesh:
+            return n
+        return 1
+
+    def preprocess_weights_impl(self):
+        ndev = self._mlp_tp_ndev()
+        if ndev <= 1:
+            return super().preprocess_weights_impl()
+
+        self._intermediate_size = int(self._fc1_weight.shape[0])
+        self._fc1_weight_t = self._fc1_weight.t().contiguous()
+        self._fc3_weight_t = self._fc3_weight.t().contiguous()
+        self._fc2_weight_t = self._fc2_weight.t().contiguous()
+        self._fc1_bias_tp = self._fc1_bias.reshape(1, -1).contiguous() if self._fc1_bias is not None else None
+        self._fc3_bias_tp = self._fc3_bias.reshape(1, -1).contiguous() if self._fc3_bias is not None else None
+        self.tt_fused_gate_up_weight = None
+        self.tt_fused_gate_up_bias = None
+        self.tt_fc1_weight = None
+        self.tt_fc1_bias = None
+        self.tt_fc2_weight = None
+        self.tt_fc2_bias = None
+        self.tt_fc3_weight = None
+        self.tt_fc3_bias = None
+
+    def move_weights_to_device_impl(self):
+        ndev = self._mlp_tp_ndev()
+        if ndev <= 1:
+            return super().move_weights_to_device_impl()
+
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        self._tp_ndev = ndev
+        self.compute_kernel_config = _vision_matmul_compute_config(self.device, math_fidelity=ttnn.MathFidelity.LoFi)
+
+        self.tt_fc1_weight = ttnn.as_tensor(
+            self._fc1_weight_t,
+            device=self.device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+            memory_config=mem,
+        )
+        self.tt_fc3_weight = ttnn.as_tensor(
+            self._fc3_weight_t,
+            device=self.device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+            memory_config=mem,
+        )
+        self.tt_fc2_weight = ttnn.as_tensor(
+            self._fc2_weight_t,
+            device=self.device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-2),
+            memory_config=mem,
+        )
+        self.tt_fc1_bias = (
+            ttnn.as_tensor(
+                self._fc1_bias_tp,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                memory_config=mem,
+            )
+            if self._fc1_bias_tp is not None
+            else None
+        )
+        self.tt_fc3_bias = (
+            ttnn.as_tensor(
+                self._fc3_bias_tp,
+                device=self.device,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=-1),
+                memory_config=mem,
+            )
+            if self._fc3_bias_tp is not None
+            else None
+        )
+        self.tt_fc2_bias = None
+
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_mlp_tp4_bh_configs
+
+        init_mlp_tp4_bh_configs(self)
+
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        if int(getattr(self, "_tp_ndev", 1)) <= 1:
+            return super().forward(hidden_states)
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_mlp_tp4_bh_forward
+
+        return vision_mlp_tp4_bh_forward(self, hidden_states)
+
+
+class TTNNDotsVisionBlockTP4BH(TTNNDotsVisionBlock):
+    """Vision block using Blackhole TP4 L1 paths for attention and MLP."""
+
+    @classmethod
+    def from_torch(cls, hf_block, hidden_size=1536, num_heads=12):
+        new_block = cls()
+        new_block._fallback_torch_layer = hf_block
+
+        new_block.norm1 = TTNNDotsVisionRMSNormTP4BH.from_torch(hf_block.norm1)
+        new_block.norm2 = TTNNDotsVisionRMSNormTP4BH.from_torch(hf_block.norm2)
+
+        attn_module = getattr(hf_block, "attn", getattr(hf_block, "attention", getattr(hf_block, "self_attn", None)))
+        if attn_module is None:
+            raise ValueError("Could not find attention sub-module in HF block")
+        new_block.attn = TTNNDotsVisionAttentionTP4BH.from_torch(
+            attn_module, hidden_size=hidden_size, num_heads=num_heads
+        )
+
+        mlp_module = getattr(hf_block, "mlp", getattr(hf_block, "feed_forward", None))
+        if mlp_module is None:
+            raise ValueError("Could not find MLP sub-module in HF block")
+        new_block.mlp = TTNNDotsVisionMLPTP4BH.from_torch(mlp_module)
+
+        return new_block
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        rot_mats: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        cu_seqlens=None,
+        attention_mask: ttnn.Tensor | None = None,
+        attention_logical_seq_len: int | None = None,
+    ) -> ttnn.Tensor:
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_block_tp4_bh_forward
+
+        return vision_block_tp4_bh_forward(
+            self,
+            hidden_states,
+            rot_mats=rot_mats,
+            cu_seqlens=cu_seqlens,
+            attention_mask=attention_mask,
+            attention_logical_seq_len=attention_logical_seq_len,
+        )
 
 
 # ---------------------------------------------------------------------------
