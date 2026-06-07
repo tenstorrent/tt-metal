@@ -7902,10 +7902,18 @@ def _pytest_line_interesting(s: str) -> bool:
     s = s.strip()
     if not s:
         return False
-    if "[bringup] stage=" in s or "FINAL_PCC" in s or "Waiting for lock" in s:
+    # Match the real progress marker (a line that STARTS with the marker), not
+    # pytest's failure-traceback echo of the test source, where lines like
+    # `print("[bringup] stage=...", flush=True)` merely CONTAIN the literal.
+    if s.startswith("[bringup] stage=") or "FINAL_PCC" in s or "Waiting for lock" in s:
         return True
     if s.startswith("models/") and "::" in s:
         return True
+    # A pytest source-echo line for one of our markers is just the print()
+    # statement; never show those (they pass the PASSED/FAILED check below via
+    # neither — but guard explicitly in case a marker name contains a keyword).
+    if s.startswith("print(") and "[bringup] stage=" in s:
+        return False
     if re.search(r"\b(PASSED|FAILED|ERROR)\b", s):
         return True
     if re.match(r"=+.*(passed|failed|error|skipped).*=+", s):
