@@ -266,7 +266,7 @@ public:
     // adapter) so it can be used by code paths that don't share the inner
     // adapter's template parameters or constraints — in particular by
     // dispatch_option2_spec_hash, which handles factories that don't satisfy
-    // the Option 1 adapter's `HasFastCacheHitPathOptIn` requirement.
+    // the Option 1 adapter's `HasMinimizeCacheHitCostOptIn` requirement.
     static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_io_mesh_tensors(
         const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
         std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
@@ -583,7 +583,7 @@ public:
     //
     // Adapts a ProgramSpecFactoryConcept factory that exposes
     // create_program_artifacts AND opts into Option 1 via
-    // `using fast_cache_hit_path = std::true_type;` (HasFastCacheHitPathOptIn).
+    // `caching_strategy = ProgramCachingStrategy::MinimizeCacheHitCost` (HasMinimizeCacheHitCostOptIn).
     // The factory returns a single ProgramArtifacts (one ProgramSpec +
     // ProgramRunArgs); the adapter stamps a Program from that spec onto each
     // mesh coordinate range covered by the workload.
@@ -640,7 +640,7 @@ public:
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
         requires requires { &ProgramSpecFactory::create_program_artifacts; } &&
-                 HasFastCacheHitPathOptIn<ProgramSpecFactory>
+                 HasMinimizeCacheHitCostOptIn<ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
         // ProgramSpecFactoryConcept closes the immutable-side cache-key bug generator by
         // construction: the framework's automatic hash of (op type + attrs + tensor args
@@ -697,11 +697,11 @@ public:
             TT_FATAL(
                 run_args.dfb_run_overrides.empty(),
                 "ProgramRunArgs returned by create_program_artifacts contains DFB size "
-                "overrides. The Option 1 fast cache-hit path of ProgramSpecFactoryConcept "
-                "(opted into via `using fast_cache_hit_path = std::true_type;`) restricts "
-                "factories to tensor-only per-dispatch mutation. Either use fixed DFB "
-                "sizes, or drop the `fast_cache_hit_path` opt-in to use the default "
-                "Option 2 path (full ProgramRunArgs re-apply on cache hit).");
+                "overrides. The MinimizeCacheHitCost cache-hit path of ProgramSpecFactoryConcept "
+                "(opted into via `caching_strategy = ProgramCachingStrategy::MinimizeCacheHitCost`) "
+                "restricts factories to tensor-only per-dispatch mutation. Either use fixed DFB "
+                "sizes, or drop the opt-in to use the default MaximizeCacheReuse path "
+                "(full ProgramRunArgs re-apply on cache hit).");
         }
 
         // Disallow common (broadcast-to-every-node) runtime args on the Option 1 path.
@@ -721,10 +721,11 @@ public:
         //     bake it into the compiled kernel binary.
         //
         //   - The CRTA value varies between dispatches that share a cache entry. Then
-        //     Option 1 will silently use the stale value set at miss-time — exactly the
-        //     mutable-side bug class the trifecta design is built to avoid. Drop the
-        //     `fast_cache_hit_path` opt-in to use Option 2 (full ProgramRunArgs re-apply
-        //     on every cache hit handles varying CRTAs correctly).
+        //     the MinimizeCacheHitCost path will silently use the stale value set at
+        //     miss-time — exactly the mutable-side bug class the trifecta design is
+        //     built to avoid. Drop the opt-in to use the default MaximizeCacheReuse
+        //     path (full ProgramRunArgs re-apply on every cache hit handles varying
+        //     CRTAs correctly).
         //
         // Note: this check applies only to user-channel CRTAs (KernelRunArgs::
         // common_runtime_arg_values and AdvancedKernelRunArgs::common_runtime_varargs).
@@ -736,14 +737,14 @@ public:
                 TT_FATAL(
                     kernel.common_runtime_arg_values.empty() && kernel.advanced_options.common_runtime_varargs.empty(),
                     "ProgramRunArgs returned by create_program_artifacts sets common runtime "
-                    "args (kernel '{}'). The Option 1 fast cache-hit path of "
-                    "ProgramSpecFactoryConcept (opted into via `using fast_cache_hit_path = "
-                    "std::true_type;`) restricts factories to tensor-only per-dispatch "
-                    "mutation, and per-node distribution is the only sanctioned use of "
-                    "runtime args on this path. If the CRTA value is constant for this "
-                    "Program, declare it as a CTA on the ProgramSpec instead. If it varies "
-                    "between dispatches, drop the `fast_cache_hit_path` opt-in to use the "
-                    "default Option 2 path (full ProgramRunArgs re-apply on cache hit).",
+                    "args (kernel '{}'). The MinimizeCacheHitCost cache-hit path of "
+                    "ProgramSpecFactoryConcept (opted into via `caching_strategy = "
+                    "ProgramCachingStrategy::MinimizeCacheHitCost`) restricts factories to "
+                    "tensor-only per-dispatch mutation, and per-node distribution is the only "
+                    "sanctioned use of runtime args on this path. If the CRTA value is constant "
+                    "for this Program, declare it as a CTA on the ProgramSpec instead. If it "
+                    "varies between dispatches, drop the opt-in to use the default "
+                    "MaximizeCacheReuse path (full ProgramRunArgs re-apply on cache hit).",
                     kernel.kernel_spec_name);
             }
         }

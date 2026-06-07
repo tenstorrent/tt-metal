@@ -100,7 +100,7 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // but ALL of them close both bug generators by construction.
 //
 // ----------------------------------------------------------------------------
-// "Option 1" (via create_program_artifacts, with `using fast_cache_hit_path = std::true_type;`):
+// "Option 1" (via create_program_artifacts, with `caching_strategy = ProgramCachingStrategy::MinimizeCacheHitCost`):
 //
 // On cache miss:    factory called, full ProgramRunArgs set on every Program.
 // On cache hit:     ONLY tensor args refreshed via UpdateTensorArgs; factory NOT called.
@@ -181,44 +181,63 @@ concept AdvancedProgramSpecFactoryConcept = requires {
     &T::extract_immutable_info;
 };
 
-// Option 1 vs Option 2 selector.
+// Program caching strategy — the op-author-facing choice between two
+// behaviorally-distinct dispatch paths through the framework, both correct by
+// construction.
 //
-// Both options expose the same factory signature (create_program_artifacts) and
-// both close both bug generators (see comment block above). The difference is
-// how restrictive the factory contract is:
+//   - MaximizeCacheReuse (default) — no constraints on the ProgramRunArgs
+//     returned by the factory. Anything mutable per dispatch is fine: per-node
+//     RTAs, CRTAs, DFB size overrides. The framework hashes the immutable
+//     ProgramSpec (broader cache equivalence — different op-args that produce
+//     the same spec share a cache entry). Factory runs on every dispatch; the
+//     full ProgramRunArgs is re-applied on cache hit via SetProgramRunArgs.
 //
-//   - Option 2 (default) — no constraints on the ProgramRunArgs returned by the
-//     factory. Anything mutable per dispatch is fine: per-node RTAs, CRTAs, DFB
-//     size overrides. Cost: factory re-runs on every cache hit.
+//   - MinimizeCacheHitCost (opt-in) — restricts the factory to per-node RTAs
+//     and tensor args only (no CRTAs, no DFB size overrides). The framework
+//     hashes op-args (narrower cache equivalence). The cache-hit path skips
+//     the factory entirely and refreshes only tensor args via UpdateTensorArgs
+//     against stored index bindings. Cheap per-hit, but the author has to
+//     live within the restrictions.
 //
-//   - Option 1 (opt-in) — restricts the factory to per-node RTAs and tensor
-//     args only (no CRTAs, no DFB size overrides). The cache-hit path skips the
-//     factory and refreshes only tensor args. Cheap, but the author has to live
-//     within the restrictions.
-//
-// Opt-in to Option 1 via a type-level marker:
+// Verbal symmetry of the min/max naming is deliberate — it signals that these
+// are paired choices on a trade-off curve, with each name unambiguously
+// identifying the objective (cost per cache hit vs. breadth of cache
+// equivalence).
+enum class ProgramCachingStrategy {
+    MaximizeCacheReuse,
+    MinimizeCacheHitCost,
+};
+
+// Opt into MinimizeCacheHitCost via a static constexpr declaration on the factory:
 //
 //   struct MyFactory {
-//       using fast_cache_hit_path = std::true_type;  // opt into Option 1
+//       static constexpr auto caching_strategy =
+//           ProgramCachingStrategy::MinimizeCacheHitCost;
 //       static ttnn::device_operation::ProgramArtifacts create_program_artifacts(...);
 //   };
 //
-// The default-to-Option-2 choice matches the path of least surprise: an op
-// author who writes the factory without knowing about the distinction lands
-// on the less-restrictive contract and their code compiles. Opting into
-// Option 1 is the explicit "I've checked that my factory only varies tensor
-// args between dispatches, please give me the fast path."
+// The default-to-MaximizeCacheReuse choice matches the path of least surprise:
+// an op author who writes the factory without knowing about the distinction
+// lands on the less-restrictive contract and their code compiles. Opting in
+// to MinimizeCacheHitCost is the explicit "I've checked that my factory only
+// varies tensor args between dispatches, please give me the fast cache-hit
+// path."
 //
-// Note that because both options expose the same factory signature, the
-// marker is a cheap perf experiment: an op author can prototype with the
-// default (Option 2) and flip `fast_cache_hit_path` on once the factory is
-// otherwise stable to A/B-test whether the fast cache-hit path actually
-// matters for this op's workload — the factory body stays the same, only
-// the marker (and the framework's dispatch path) changes.
+// Because both strategies expose the same factory signature, the opt-in is
+// a cheap perf experiment: an op author can prototype with the default
+// (MaximizeCacheReuse) and flip the declaration to MinimizeCacheHitCost once
+// the factory is otherwise stable to A/B-test whether the fast cache-hit
+// path actually matters for this op's workload — the factory body stays the
+// same, only the declaration (and the framework's dispatch path) changes.
+//
+// (The longer-term API direction is to make this a runtime choice — the
+// optimal strategy is more a property of the workload than of the op — but
+// the compile-time form is the right starting point and doesn't paint into
+// a corner that would prevent the runtime version later.)
 template <typename T>
-concept HasFastCacheHitPathOptIn = requires {
-    typename T::fast_cache_hit_path;
-    requires T::fast_cache_hit_path::value;
+concept HasMinimizeCacheHitCostOptIn = requires {
+    { T::caching_strategy } -> std::convertible_to<ProgramCachingStrategy>;
+    requires T::caching_strategy == ProgramCachingStrategy::MinimizeCacheHitCost;
 };
 
 // "Exactly one of the three forms is satisfied" is enforced by sum-equals-1

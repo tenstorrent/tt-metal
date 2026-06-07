@@ -263,13 +263,13 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                         "AdvancedProgramSpecFactoryConcept (Option 3) is not yet supported by "
                         "the mesh dispatch adapter. Use create_program_artifacts "
                         "(Options 1 or 2) or create_workload_artifacts in the meantime.");
-                } else if constexpr (HasFastCacheHitPathOptIn<T>) {
-                    // Option 1: create_program_artifacts + fast_cache_hit_path opt-in.
+                } else if constexpr (HasMinimizeCacheHitCostOptIn<T>) {
+                    // Option 1: create_program_artifacts + MinimizeCacheHitCost opt-in.
                     using AdaptedMeshWorkloadFactory =
                         mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                     fn.template operator()<AdaptedMeshWorkloadFactory>();
                 } else {
-                    // Option 2 — create_program_artifacts without the fast_cache_hit_path
+                    // Option 2 — create_program_artifacts without the MinimizeCacheHitCost
                     // opt-in. Option 2 is routed by launch_operation_with_adapter through
                     // dispatch_option2_spec_hash BEFORE the cache-hit / cache-miss handlers
                     // that call this function are reached; arriving here means the routing
@@ -277,7 +277,7 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                     static_assert(
                         ttsl::concepts::always_false_v<T>,
                         "Option 2 (ProgramSpecFactoryConcept create_program_artifacts without "
-                        "fast_cache_hit_path) is dispatched via dispatch_option2_spec_hash. "
+                        "MinimizeCacheHitCost) is dispatched via dispatch_option2_spec_hash. "
                         "Reaching this branch means launch_operation_with_adapter's Option 2 "
                         "routing was bypassed.");
                 }
@@ -399,7 +399,7 @@ void create_and_cache_mesh_workload(
 }
 
 // Option 2 (ProgramSpecFactoryConcept create_program_artifacts shape, no
-// fast_cache_hit_path opt-in): the factory runs on every dispatch and the cache
+// MinimizeCacheHitCost opt-in): the factory runs on every dispatch and the cache
 // key is the immutable ProgramSpec — not the op-args. The Option 2 path is
 // structurally different from handle_mesh_adapter_cache_hit /
 // create_and_cache_mesh_workload because it must call the factory BEFORE the
@@ -427,7 +427,7 @@ void dispatch_option2_spec_hash(
     // is just an empty marker satisfying the AdaptedCachedMeshWorkload type
     // slot. (Defining it locally rather than reusing the Option 1 adapter's
     // shared_variables_t keeps this function independent of the Option 1
-    // adapter's `HasFastCacheHitPathOptIn` requires-clause — Option 2
+    // adapter's `HasMinimizeCacheHitCostOptIn` requires-clause — Option 2
     // factories don't satisfy that requirement, so going through the adapter
     // would be a substitution failure here.)
     struct shared_variables_t {};
@@ -541,7 +541,7 @@ void dispatch_option2_spec_hash(
 }
 
 // Detect whether the active factory variant arm is Option 2 (ProgramSpecFactoryConcept
-// create_program_artifacts shape, no fast_cache_hit_path marker, neither Workload nor
+// create_program_artifacts shape, no MinimizeCacheHitCost marker, neither Workload nor
 // the deferred Advanced shape). Returns true and dispatches to dispatch_option2_spec_hash
 // if so; returns false to indicate the caller should use the existing args-hash flow.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
@@ -559,7 +559,7 @@ bool try_dispatch_option2_spec_hash(
         [&](const auto& factory) {
             using F = std::decay_t<decltype(factory)>;
             if constexpr (
-                ProgramSpecFactoryConcept<F> && !HasFastCacheHitPathOptIn<F> && !WorkloadArtifactConcept<F> &&
+                ProgramSpecFactoryConcept<F> && !HasMinimizeCacheHitCostOptIn<F> && !WorkloadArtifactConcept<F> &&
                 !AdvancedProgramSpecFactoryConcept<F>) {
                 dispatch_option2_spec_hash<mesh_device_operation_t, F>(
                     operation_attributes,

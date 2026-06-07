@@ -124,16 +124,16 @@ struct Option2Factory {
         const TestAttrs&, const TestArgs&, TestReturn&);
 };
 
-// Opt-in via the type marker → routed to Option 1 (UpdateTensorArgs fast path).
+// Opt-in via the strategy declaration → routed to Option 1 (UpdateTensorArgs fast path).
 struct Option1Factory {
-    using fast_cache_hit_path = std::true_type;
+    static constexpr auto caching_strategy = ttnn::device_operation::ProgramCachingStrategy::MinimizeCacheHitCost;
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TestAttrs&, const TestArgs&, TestReturn&);
 };
 
-// Explicit opt-out via false_type — should match Option 2 (the default).
+// Explicit opt-out (declares MaximizeCacheReuse, the default) — should match Option 2.
 struct Option2ExplicitFactory {
-    using fast_cache_hit_path = std::false_type;
+    static constexpr auto caching_strategy = ttnn::device_operation::ProgramCachingStrategy::MaximizeCacheReuse;
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const TestAttrs&, const TestArgs&, TestReturn&);
 };
@@ -163,11 +163,11 @@ struct DoubleShapeFactory {
 
 }  // namespace trifecta_test_factories
 
-// HasFastCacheHitPathOptIn detects the marker — absent / false / true.
-static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option2Factory>);
-static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option2ExplicitFactory>);
-static_assert(ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::Option1Factory>);
-static_assert(!ttnn::device_operation::HasFastCacheHitPathOptIn<trifecta_test_factories::WorkloadFactory>);
+// HasMinimizeCacheHitCostOptIn detects the strategy — absent / MaximizeCacheReuse / MinimizeCacheHitCost.
+static_assert(!ttnn::device_operation::HasMinimizeCacheHitCostOptIn<trifecta_test_factories::Option2Factory>);
+static_assert(!ttnn::device_operation::HasMinimizeCacheHitCostOptIn<trifecta_test_factories::Option2ExplicitFactory>);
+static_assert(ttnn::device_operation::HasMinimizeCacheHitCostOptIn<trifecta_test_factories::Option1Factory>);
+static_assert(!ttnn::device_operation::HasMinimizeCacheHitCostOptIn<trifecta_test_factories::WorkloadFactory>);
 
 // WorkloadArtifactConcept matches exactly the create_workload_artifacts shape.
 static_assert(ttnn::device_operation::WorkloadArtifactConcept<trifecta_test_factories::WorkloadFactory>);
@@ -206,7 +206,7 @@ static_assert(
 // Regression guard: dispatch_option2_spec_hash must remain instantiable for an
 // Option 2 factory. The Option 2 path used to reference the Option 1 adapter's
 // nested types (shared_variables_t, cached_mesh_workload_t) for its cache wrapper,
-// but the Option 1 adapter has `requires HasFastCacheHitPathOptIn` — which is
+// but the Option 1 adapter has `requires HasMinimizeCacheHitCostOptIn` — which is
 // false for Option 2 factories by definition. The substitution failure only
 // surfaced when an Option 2 factory was actually wired up. This block forces
 // instantiation now so the regression is caught at compile time.
