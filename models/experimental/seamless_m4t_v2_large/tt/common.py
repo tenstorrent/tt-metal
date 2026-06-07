@@ -925,6 +925,30 @@ def _all_gather_num_links() -> int:
     return n if n >= 1 else 1
 
 
+def _all_reduce_linear_no_dealloc(
+    x: ttnn.Tensor,
+    mesh_device: ttnn.Device,
+    *,
+    cluster_axis: int = 1,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """``ttnn.all_reduce`` sum without deallocating the input — safe for residual alias paths."""
+    mc = memory_config
+    x_shape = list(x.shape)
+    token_rows = 1
+    for d in x_shape[:-1]:
+        token_rows *= int(d)
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.all_reduce(
+        x,
+        cluster_axis=cluster_axis,
+        memory_config=mc,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+
+
 def all_reduce_sum_replicate(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -973,6 +997,17 @@ def encoder_tp_activation_memory_config(token_rows: int) -> ttnn.MemoryConfig:
     return ttnn.L1_MEMORY_CONFIG
 
 
+def decoder_all_reduce_sum_replicate(
+    x: ttnn.Tensor,
+    mesh_device: ttnn.Device,
+    *,
+    cluster_axis: int = 1,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Text decoder: deterministic ``ttnn.all_reduce`` (linear); does not deallocate ``x``."""
+    return _all_reduce_linear_no_dealloc(x, mesh_device, cluster_axis=cluster_axis, memory_config=memory_config)
+
+
 def encoder_all_reduce_sum_replicate(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -996,8 +1031,6 @@ def encoder_all_reduce_sum_replicate(
         num_links=1,
         topology=ttnn.Topology.Linear,
     )
-    if result is not x:
-        ttnn.deallocate(x)
     return result
 
 
