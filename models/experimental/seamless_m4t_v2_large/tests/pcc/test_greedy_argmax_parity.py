@@ -69,3 +69,39 @@ def test_ondevice_global_argmax_matches_host_torch(mesh_device, device_params, r
             ttnn.deallocate(logits_tt)
             logger.info(f"argmax seed {seed}: host={host_id} device={device_id}")
             assert device_id == host_id, f"seed {seed}: device {device_id} != host {host_id}"
+
+
+@pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
+def test_host_chunk_combine_matches_device_global(mesh_device, device_params, reset_seeds):
+    """Trace-style chunk tensors: host D2H combine must match device global argmax."""
+    weights_dir = _weights_dir_or_skip()
+    hf_model, _, _ = load_hf_model_and_processor(weights_dir)
+    cfg = hf_model.config
+    t2u_cfg = hf_model.t2u_model.config
+
+    with mesh_default_device(mesh_device):
+        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        if tt_model._argmax_tok_mesh_composer is None:
+            tt_model._argmax_tok_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+        for seed in range(4):
+            logits_tt = _random_sharded_decode_logits(mesh_device, tt_model, seed=seed)
+            v_loc = int(logits_tt.shape[-1])
+            li, cm = tt_model._decode_argmax_token(logits_tt)
+            token_tt = tt_model._ondevice_global_argmax_from_chunks(li, cm, v_loc, dealloc_inputs=True)
+            device_id = _read_int_scalar(token_tt)
+            ttnn.deallocate(token_tt)
+            nch = tt_model._ARGMAX_CHUNKS
+            nd = tt_model._lm_num_devices
+            li2, cm2 = tt_model._decode_argmax_token(logits_tt)
+            local_idx = (
+                ttnn.to_torch(li2, mesh_composer=tt_model._argmax_tok_mesh_composer).reshape(nd, nch).to(torch.int64)
+            )
+            chunk_max = (
+                ttnn.to_torch(cm2, mesh_composer=tt_model._argmax_tok_mesh_composer).reshape(nd, nch).to(torch.float32)
+            )
+            host_id = tt_model._global_greedy_token_from_chunk_tensors(chunk_max, local_idx, v_loc=v_loc, nch=nch)
+            ttnn.deallocate(li2)
+            ttnn.deallocate(cm2)
+            ttnn.deallocate(logits_tt)
+            assert host_id == device_id, f"seed {seed}: host {host_id} != device {device_id}"

@@ -934,12 +934,21 @@ class TTSeamlessM4Tv2Model:
         *,
         v_loc: int,
         nch: int = 32,
+        eps: float = _ARGMAX_TIE_BREAK_EPS,
     ) -> int:
-        """Host combine for width-sharded decode argmax — ``torch.argmax`` over flat chunk maxes."""
-        flat = int(chunk_max.reshape(-1).argmax())
-        d, c = divmod(flat, nch)
+        """Host combine matching ``_ondevice_global_argmax_from_chunks`` (gather + HF tie-break)."""
+        nd, nch_act = int(chunk_max.shape[0]), int(chunk_max.shape[1])
+        assert nch_act == nch
         chunk_w = (((v_loc + nch - 1) // nch) + 31) // 32 * 32
-        return d * v_loc + c * chunk_w + int(local_idx[d, c])
+        d = torch.arange(nd, dtype=torch.int64).reshape(nd, 1)
+        c = torch.arange(nch, dtype=torch.int64).reshape(1, nch)
+        off = d * v_loc + c * chunk_w
+        cand = local_idx.to(torch.int64) + off
+        n_flat = nd * nch
+        cm_flat = chunk_max.reshape(n_flat).to(torch.float32)
+        cm_flat = cm_flat - torch.arange(n_flat, dtype=torch.float32) * eps
+        flat = int(cm_flat.argmax())
+        return int(cand.reshape(n_flat)[flat].item())
 
     @staticmethod
     def _free_kv_host_readback_buffers(rt: TextDecoderKvDecodeRuntime) -> None:
@@ -2891,7 +2900,7 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(unit_ids_argmax)
             unit_ids_argmax = unit_rm
 
-        # Unit id remap (EOS/pad mask + vocoder offset) on host — device ``where`` on uint32 still diverges.
+        # Unit id remap (EOS/pad mask + vocoder offset) on host — int32 TILE ``where`` still diverges.
         if padding_tt.dtype != ttnn.bfloat16:
             pad_bf = ttnn.typecast(padding_tt, ttnn.bfloat16)
             ttnn.deallocate(padding_tt)
