@@ -4561,20 +4561,6 @@ def _run_focused_pytest(
     except Exception:
         _pytest_log_fh = None
 
-    def _pytest_line_interesting(s: str) -> bool:
-        s = s.strip()
-        if not s:
-            return False
-        if "[bringup] stage=" in s or "FINAL_PCC" in s or "Waiting for lock" in s:
-            return True
-        if s.startswith("models/") and "::" in s:
-            return True
-        if re.search(r"\b(PASSED|FAILED|ERROR)\b", s):
-            return True
-        if re.match(r"=+.*(passed|failed|error|skipped).*=+", s):
-            return True
-        return False
-
     def _pump():
         nonlocal current_test
         assert proc.stdout is not None
@@ -7906,6 +7892,25 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
     except Exception as exc:
         print(f"  [isolation] capture failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return captured, False
+
+
+def _pytest_line_interesting(s: str) -> bool:
+    """True if a pytest stream line is worth showing on a non-verbose screen
+    (stage markers, PCC, node ids, pass/fail summaries). Everything else is
+    framework noise that still goes to the capture/stream log. Shared by the
+    cli.py focused-pytest pump and the prepare.py capture pump."""
+    s = s.strip()
+    if not s:
+        return False
+    if "[bringup] stage=" in s or "FINAL_PCC" in s or "Waiting for lock" in s:
+        return True
+    if s.startswith("models/") and "::" in s:
+        return True
+    if re.search(r"\b(PASSED|FAILED|ERROR)\b", s):
+        return True
+    if re.match(r"=+.*(passed|failed|error|skipped).*=+", s):
+        return True
+    return False
 
 
 def _quiet_framework_logging() -> None:

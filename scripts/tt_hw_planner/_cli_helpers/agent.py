@@ -143,15 +143,6 @@ def _invoke_agent(
     import subprocess
     import threading
 
-    # Every `[auto:<provider>] ...` line below is tool-progress narration about
-    # the agent subprocess — NOT the agent's own output (that streams to the
-    # _handoff/<provider>_*.log file). Keep the terminal clean by shadowing
-    # print() here so this status goes to screen only under
-    # TT_HW_PLANNER_VERBOSE=1. Genuine errors (file=sys.stderr) always show.
-    def print(*a, **k):  # noqa: A001 - intentional local shadow to gate status output
-        if _verbose() or k.get("file") is sys.stderr:
-            _bi.print(*a, **k)
-
     effective_timeout_s = _agent_complexity_timeout(timeout_s, complexity_bonus)
 
     prompt_via_stdin = False
@@ -192,8 +183,21 @@ def _invoke_agent(
         prompt_via_stdin = True
         cli_supports_stream_json = True
     else:
-        print(f"  unknown agent provider {provider!r}", file=sys.stderr)
+        _bi.print(f"  unknown agent provider {provider!r}", file=sys.stderr)
         return 2
+
+    # Every `[auto:<provider>] ...` line below is tool-progress narration about
+    # the agent subprocess — NOT the agent's own output (that streams to the
+    # _handoff/<provider>_*.log file). Keep the terminal clean by shadowing
+    # print() so this status goes to screen only under TT_HW_PLANNER_VERBOSE=1.
+    # Genuine errors (file=sys.stderr) always show. Placed AFTER the provider
+    # block on purpose: `def print` makes the name function-local, so any
+    # print() call above it would UnboundLocalError (the unknown-provider error
+    # uses _bi.print for that reason), and it keeps the claude branch inside the
+    # span that test_invoke_agent_uses_stream_json_for_claude delimits by "next def".
+    def print(*a, **k):  # noqa: A001 - intentional local shadow to gate status output
+        if _verbose() or k.get("file") is sys.stderr:
+            _bi.print(*a, **k)
 
     if effective_timeout_s != timeout_s:
         budget_str = (

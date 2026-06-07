@@ -126,13 +126,21 @@ def cmd_prepare(args) -> int:
                 text=True,
             )
 
+            from ..cli import _pytest_line_interesting as _interesting
+
+            _pump_verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+
             def _pump():
+                # Always record the full stream to the capture file; only surface
+                # stage/PCC/pass-fail lines on screen (framework noise stays in
+                # the capture file). Matches cli.py's focused-pytest pump.
                 try:
                     assert proc.stdout is not None
                     for _line in proc.stdout:
-                        sys.stdout.write(_line)
-                        sys.stdout.flush()
                         _cap_fh.write(_line)
+                        if _pump_verbose or _interesting(_line):
+                            sys.stdout.write(_line)
+                            sys.stdout.flush()
                 except Exception:
                     pass
 

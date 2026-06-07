@@ -19,6 +19,12 @@ def _verbose() -> bool:
 
 
 def cmd_emit_e2e(args) -> int:
+    try:
+        from ..cli import _quiet_framework_logging
+
+        _quiet_framework_logging()
+    except Exception:
+        pass
     model_id = args.model_id
     demo_dir = _resolve_demo_dir(args)
     pcc = float(getattr(args, "pcc_target", 0.9) or 0.9)

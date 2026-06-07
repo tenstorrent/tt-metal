@@ -129,7 +129,12 @@ def _runtime_repair_loop(
             attempts_so_far=iter_idx - 1,
             force_heavy=consecutive_no_edit_iters >= 1,
         )
-        if (model_light or model_heavy or model_super_heavy) and _iter_model_reason != "default":
+        if (
+            (model_light or model_heavy or model_super_heavy)
+            and _iter_model_reason != "default"
+            and os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+        ):
+            # [auto:<provider>] status — screen only under TT_HW_PLANNER_VERBOSE.
             print(f"  [auto:runtime-repair] tiered model pick: " f"{_iter_model} ({_iter_model_reason})")
         forced_edit_mode = consecutive_no_edit_iters >= 1
 
