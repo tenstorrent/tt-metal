@@ -1224,8 +1224,13 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
             self.device, math_fidelity=VISION_NORM_MATH_FIDELITY
         )
 
-    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
-        mem = ttnn.DRAM_MEMORY_CONFIG
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        grid_thw: torch.Tensor = None,
+        activation_memory_config: ttnn.MemoryConfig | None = None,
+    ) -> ttnn.Tensor:
+        mem = activation_memory_config or ttnn.DRAM_MEMORY_CONFIG
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
         if pixel_values.dim() == 2:
@@ -1267,6 +1272,7 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                     out,
                     weight=self.tt_norm_weight,
                     epsilon=1e-5,
+                    memory_config=mem,
                     compute_kernel_config=self.vision_norm_compute_kernel_config,
                 )
 
@@ -1325,10 +1331,26 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
                 weight=self.tt_norm_weight,
                 epsilon=1e-5,
                 dtype=ttnn.bfloat8_b,
+                memory_config=mem,
                 compute_kernel_config=self.vision_norm_compute_kernel_config,
             )
 
         return out
+
+
+class TTNNDotsVisionPatchEmbedTP4BH(TTNNDotsVisionPatchEmbed):
+    """Patch embed with BFP8 L1 activations and swept projection matmul PC."""
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_patch_embed_tp4_bh_configs
+
+        init_patch_embed_tp4_bh_configs(self)
+
+    def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor = None) -> ttnn.Tensor:
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_patch_embed_tp4_bh_forward
+
+        return vision_patch_embed_tp4_bh_forward(self, pixel_values, grid_thw)
 
 
 # ---------------------------------------------------------------------------
@@ -2427,6 +2449,21 @@ class TTNNDotsPatchMerger(TTNNModule):
         return hidden_states
 
 
+class TTNNDotsPatchMergerTP4BH(TTNNDotsPatchMerger):
+    """Patch merger with L1 interleaved activations (BH 11×10 DRAM-matmul fallback)."""
+
+    def move_weights_to_device_impl(self):
+        super().move_weights_to_device_impl()
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import init_merger_tp4_bh_configs
+
+        init_merger_tp4_bh_configs(self)
+
+    def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_patch_merger_tp4_bh_forward
+
+        return vision_patch_merger_tp4_bh_forward(self, hidden_states)
+
+
 class TTNNDotsVisionBlockStack(TTNNLayerStack):
     """Trace-enabled stack of vision blocks + post-norm + merger.
 
@@ -2540,6 +2577,11 @@ class TTNNDotsOCRVisionTower(TTNNModule):
     Full pipeline: PatchEmbed -> 42 VisionBlocks -> post-trunk RMSNorm -> PatchMerger.
     """
 
+    _patch_embed_cls = TTNNDotsVisionPatchEmbed
+    _block_cls = TTNNDotsVisionBlock
+    _norm_cls = TTNNDotsVisionRMSNorm
+    _merger_cls = TTNNDotsPatchMerger
+
     def __init__(self):
         super().__init__()
         self._hf_config = None
@@ -2579,7 +2621,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         if patch_embed_module is not None:
             patch_size = getattr(vc, "patch_size", 14) if vc else 14
             in_channels = getattr(vc, "num_channels", 3) if vc else 3
-            new_tower.patch_embed = TTNNDotsVisionPatchEmbed.from_torch(
+            new_tower.patch_embed = cls._patch_embed_cls.from_torch(
                 patch_embed_module,
                 patch_size=patch_size,
                 in_channels=in_channels,
@@ -2590,7 +2632,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         if blocks_attr is not None:
             new_tower.blocks = []
             for hf_block in blocks_attr:
-                block = TTNNDotsVisionBlock.from_torch(
+                block = cls._block_cls.from_torch(
                     hf_block,
                     hidden_size=new_tower.hidden_size,
                     num_heads=new_tower.num_heads,
@@ -2604,7 +2646,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
             getattr(hf_vision_tower, "norm", None),
         )
         if post_trunk is not None:
-            new_tower.post_trunk_norm = TTNNDotsVisionRMSNorm.from_torch(post_trunk)
+            new_tower.post_trunk_norm = cls._norm_cls.from_torch(post_trunk)
 
         merger = getattr(
             hf_vision_tower,
@@ -2613,7 +2655,7 @@ class TTNNDotsOCRVisionTower(TTNNModule):
         )
         if merger is not None:
             out_hidden = new_tower.hidden_size
-            new_tower.patch_merger = TTNNDotsPatchMerger.from_torch(
+            new_tower.patch_merger = cls._merger_cls.from_torch(
                 merger,
                 hidden_size=new_tower.hidden_size,
                 out_hidden_size=out_hidden,
@@ -2813,3 +2855,31 @@ class TTNNDotsOCRVisionTower(TTNNModule):
 
         x = self.patch_embed(pixel_values, grid_thw)
         return self.forward_post_patch_embed(x, grid_thw)
+
+
+class TTNNDotsOCRVisionTowerTP4BH(TTNNDotsOCRVisionTower):
+    """Full dots.ocr vision tower on Blackhole TP4 with L1 activation paths.
+
+    Same pipeline as ``TTNNDotsOCRVisionTower`` (patch_embed → N vision blocks →
+    post_trunk_norm → patch_merger) but every block uses ``TTNNDotsVisionBlockTP4BH``
+    and ``from_torch`` builds all ``num_hidden_layers`` blocks (42 for dots.ocr).
+    """
+
+    _patch_embed_cls = TTNNDotsVisionPatchEmbedTP4BH
+    _block_cls = TTNNDotsVisionBlockTP4BH
+    _norm_cls = TTNNDotsVisionRMSNormTP4BH
+    _merger_cls = TTNNDotsPatchMergerTP4BH
+
+    def __init__(self):
+        super().__init__()
+        self._trace_enabled = False
+
+    def forward_post_patch_embed(
+        self,
+        x: ttnn.Tensor,
+        grid_thw: torch.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        from models.experimental.tt_symbiote.modules.vision_tp4_bh import vision_tower_post_patch_embed_tp4_bh
+
+        return vision_tower_post_patch_embed_tp4_bh(self, x, grid_thw)
