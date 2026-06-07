@@ -149,15 +149,25 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      - name: 🔎 [precompile-prototype] runner specs
+      - name: 🔎 [precompile-prototype] runner specs + storage probe
         run: |
+          echo "=== CPU/mem ==="
           echo "nproc=$(nproc)  online_cpus=$(getconf _NPROCESSORS_ONLN)"
-          lscpu | grep -E '^(CPU\(s\)|Model name|Thread|Socket|Core)' || true
+          lscpu | grep -E '^(CPU\(s\)|Model name|Thread|Socket|Core|BogoMIPS)' || true
           free -h || true
-          echo "TT_METAL_CACHE=$TT_METAL_CACHE"
-      - name: 🔥 [precompile-prototype] warm JIT cache (hardware-free, parallel)
-        timeout-minutes: 60
-        run: bash scripts/precompile_warm.sh tests/ttnn/nightly/unit_tests/operations/conv -m "not disable_fast_runtime_mode"
+          echo "TT_METAL_CACHE=$TT_METAL_CACHE  TT_METAL_HOME=$TT_METAL_HOME"
+          echo "=== storage (where the JIT cache lives matters for warm reads) ==="
+          df -hT /work /tmp 2>/dev/null || df -h /work /tmp || true
+          echo "--- mount types ---"
+          mount | grep -E ' /work | /tmp ' || cat /proc/mounts | grep -E ' /work | /tmp ' || true
+          echo "--- /work seq write+read MB/s ---"
+          dd if=/dev/zero of=/work/.ddtest bs=1M count=512 conv=fsync 2>&1 | tail -1 || true
+          dd if=/work/.ddtest of=/dev/null bs=1M 2>&1 | tail -1 || true; rm -f /work/.ddtest
+          echo "--- /work many-small-file probe (cache is ~12k small files) ---"
+          mkdir -p /work/.smtest && time (for i in $(seq 1 2000); do echo x > /work/.smtest/f$i; done) 2>&1 | tail -3
+          sync; time (cat /work/.smtest/* > /dev/null) 2>&1 | tail -3; rm -rf /work/.smtest
+          echo "--- /tmp seq write MB/s (for comparison) ---"
+          dd if=/dev/zero of=/tmp/.ddtest bs=1M count=512 conv=fsync 2>&1 | tail -1 || true; rm -f /tmp/.ddtest
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
