@@ -379,8 +379,11 @@ def _record_tt_perf(perf_tt: list, task: str, timings: SeamlessGenerateTimings) 
     )
     if timings.t2u_ms > 0 or timings.vocoder_ms > 0:
         rtf_str = f", RTF {timings.rtf:.2f}x" if timings.output_samples > 0 else ""
+        char_prep = f", char prep {timings.t2u_char_prep_ms:.2f} ms" if timings.t2u_char_prep_ms > 0 else ""
         print(
-            f"  {task} speech synth: T2U {timings.t2u_ms:.1f} ms, "
+            f"  {task} speech synth: T2U {timings.t2u_ms:.1f} ms "
+            f"(dec hidden {timings.t2u_decoder_hidden_ms:.0f} ms, "
+            f"forward {timings.t2u_forward_ms:.0f} ms{char_prep}), "
             f"vocoder {timings.vocoder_ms:.1f} ms, "
             f"TTFT audio {timings.ttft_audio_ms:.1f} ms{rtf_str}"
         )
@@ -407,8 +410,13 @@ def _print_tt_perf_summary(perf_tt: list) -> None:
             f"{timings.steady_decode_ms_per_tok:>7.1f}ms {timings.e2e_ms:>8.1f}ms {out:>8}"
         )
         if timings.output_samples > 0:
+            char_prep = f" + char prep {timings.t2u_char_prep_ms:.1f} ms" if timings.t2u_char_prep_ms > 0 else ""
             print(
-                f"         T2U {timings.t2u_ms:.0f} ms  vocoder {timings.vocoder_ms:.0f} ms  " f"RTF {timings.rtf:.2f}x"
+                f"         T2U {timings.t2u_ms:.0f} ms "
+                f"(hidden {timings.t2u_decoder_hidden_ms:.0f} + "
+                f"fwd {timings.t2u_forward_ms:.0f}{char_prep})  "
+                f"vocoder {timings.vocoder_ms:.0f} ms  "
+                f"RTF {timings.rtf:.2f}x"
             )
     print("-" * 78)
     print(

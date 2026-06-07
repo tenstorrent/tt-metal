@@ -24,6 +24,10 @@ import torch
 import ttnn
 from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import format_speech_generation_kwargs
 
+from models.experimental.seamless_m4t_v2_large.tt.t2u_char_lookup import (
+    T2UCharLookupTables,
+    build_t2u_char_lookup_tables,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
@@ -77,6 +81,9 @@ class SeamlessGenerateTimings:
     ttft_audio_ms: float = 0.0
     decode_step_ms: List[float] = field(default_factory=list)
     t2u_ms: float = 0.0
+    t2u_decoder_hidden_ms: float = 0.0
+    t2u_char_prep_ms: float = 0.0
+    t2u_forward_ms: float = 0.0
     vocoder_ms: float = 0.0
     output_tokens: int = 0
     output_samples: int = 0
@@ -120,6 +127,9 @@ class SeamlessGenerateTimings:
             "steady_decode_ms_per_tok": self.steady_decode_ms_per_tok,
             "decode_tok_s_u": self.decode_tok_s_u,
             "t2u_ms": self.t2u_ms,
+            "t2u_decoder_hidden_ms": self.t2u_decoder_hidden_ms,
+            "t2u_char_prep_ms": self.t2u_char_prep_ms,
+            "t2u_forward_ms": self.t2u_forward_ms,
             "vocoder_ms": self.vocoder_ms,
             "output_tokens": self.output_tokens,
             "output_samples": self.output_samples,
@@ -162,6 +172,9 @@ class _GeneratePhaseTimer:
         self.ttft_audio_ms = 0.0
         self.decode_step_ms: List[float] = []
         self.t2u_ms = 0.0
+        self.t2u_decoder_hidden_ms = 0.0
+        self.t2u_char_prep_ms = 0.0
+        self.t2u_forward_ms = 0.0
         self.vocoder_ms = 0.0
         self.per_step_tracking = True
         self._t0: Optional[float] = None
@@ -212,6 +225,9 @@ class _GeneratePhaseTimer:
             ttft_audio_ms=self.ttft_audio_ms if generate_speech else 0.0,
             decode_step_ms=list(self.decode_step_ms),
             t2u_ms=self.t2u_ms,
+            t2u_decoder_hidden_ms=self.t2u_decoder_hidden_ms,
+            t2u_char_prep_ms=self.t2u_char_prep_ms,
+            t2u_forward_ms=self.t2u_forward_ms,
             vocoder_ms=self.vocoder_ms,
             output_tokens=max(0, len(seq_host) - seed_len),
             output_samples=output_samples,
@@ -493,7 +509,7 @@ class TTSeamlessM4Tv2Model:
 
     ``forward`` and ``generate`` accept ``ttnn.Tensor`` inputs and return ``ttnn.Tensor`` outputs.
     All tensor math is on device; only Python control-flow + ``generation_config`` dictionary
-    lookups (subword/char tables, lang codes) run on host.
+    lookups (lang codes) run on host. T2U subword→char tables are precomputed once at init.
     """
 
     def __init__(
@@ -552,7 +568,14 @@ class TTSeamlessM4Tv2Model:
         self.t2u_pad_token_id = t2u_pad_token_id
         self.vocoder_offset = vocoder_offset
         self.generation_config = generation_config
-
+        self._t2u_char_tables: Optional[T2UCharLookupTables] = None
+        if generation_config is not None:
+            self._t2u_char_tables = build_t2u_char_lookup_tables(
+                generation_config,
+                vocab_size=int(vocab_size),
+                pad_token_id=int(pad_token_id),
+            )
+            self._t2u_char_tables.bind_device(device)
         self.text_encoder = TTSeamlessM4Tv2Encoder(
             device,
             parameters.text_encoder,
@@ -2807,24 +2830,34 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(enc_attn_tt2)
 
         # T2U prep: characters & char counts come from the generated text-token sequence.
-        seq_full_ints = list(seq_host)
-        dec_in_ints = seq_full_ints[:-1]
-        real_dec_len = sum(1 for x in dec_in_ints if x != pad_token_id)
-        # ``t2u_input_ids = sequences[:, 2:-1]`` with the lang/EOS positions stripped + EOS→pad replaced.
-        t2u_ids = [pad_token_id if t == eos_id else int(t) for t in seq_full_ints[2:-1]]
-        subwords = _indices_to_subwords(gc, t2u_ids)
-        cc_inner = _char_count_per_subword(t2u_ids, subwords, pad_token_id=pad_token_id)
+        real_dec_len = sum(1 for x in seq_host[:-1] if x != pad_token_id)
+        t_char_prep = phase_timer.sync_now()
+        phase_timer.t2u_decoder_hidden_ms = phase_timer.elapsed_ms(t_t2u)
+        if self._t2u_char_tables is None:
+            seq_full_ints = list(seq_host)
+            t2u_ids = [pad_token_id if t == eos_id else int(t) for t in seq_full_ints[2:-1]]
+            subwords = _indices_to_subwords(gc, t2u_ids)
+            cc_inner = _char_count_per_subword(t2u_ids, subwords, pad_token_id=pad_token_id)
+            char_ids = _get_char_ids(gc, t2u_ids, subwords, cc_inner, pad_token_id=pad_token_id)
+            char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
+        else:
+            char_ids_tt, cc_inner_t = self._t2u_char_tables.prepare_speech_from_seq(
+                seq_host,
+                eos_id=eos_id,
+                device=self.device,
+            )
+            cc_inner = cc_inner_t.tolist()
+        t_t2u_fwd = phase_timer.sync_now()
+        phase_timer.t2u_char_prep_ms = phase_timer.elapsed_ms(t_char_prep)
         # Bucket the T2U encoder sequence length so its programs don't recompile on S2ST text jitter.
         t2u_enc_seq = _t2u_padded_enc_seq(padded_dec_seq)
         # Pad with one zero each side (for the stripped lang + EOS columns) then pad to the bucket.
         cc_list = [0] + cc_inner + [0]
         if len(cc_list) < t2u_enc_seq:
             cc_list = cc_list + [0] * (t2u_enc_seq - len(cc_list))
-        char_ids = _get_char_ids(gc, t2u_ids, subwords, cc_inner, pad_token_id=pad_token_id)
 
         # On-device tensors for T2U: char_input_ids and the T2U attention mask (built at the bucket;
         # positions >= real_dec_len are masked, covering both the real padding and the bucket padding).
-        char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
         t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, t2u_enc_seq)
         t2u_mask_4d = build_encoder_self_mask_4d(t2u_mask_2d, device=self.device)
         # ``t2u_mask_2d`` is owned by ``_t2u_attn_mask_cache``; do not deallocate here.
@@ -2851,7 +2884,10 @@ class TTSeamlessM4Tv2Model:
             cc_list,
             reference_discrete_durations=None,
         )
-        phase_timer.t2u_ms = phase_timer.elapsed_ms(t_t2u)
+        phase_timer.t2u_forward_ms = phase_timer.elapsed_ms(t_t2u_fwd)
+        phase_timer.t2u_ms = (
+            phase_timer.t2u_decoder_hidden_ms + phase_timer.t2u_char_prep_ms + phase_timer.t2u_forward_ms
+        )
         ttnn.deallocate(dec_hidden_padded)
         ttnn.deallocate(t2u_mask_4d)
         ttnn.deallocate(char_ids_tt)

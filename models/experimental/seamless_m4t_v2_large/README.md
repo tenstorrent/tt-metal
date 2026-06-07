@@ -544,14 +544,12 @@ The TT model runs encoders, decoder, T2U, and vocoder on device, but `**TTSeamle
 
 **Speech generation path (T2ST / S2ST only, after text decode)**
 
-
-| Step                              | Where                           | Notes                                                                                                                                                                |
-| --------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Trailing pad / EOS trim           | Host (Python)                   | `_trim_seq_host_for_speech` before T2U                                                                                                                               |
-| Subword → character tables        | Host (Python)                   | `generation_config.id_to_text`, `char_to_id`, and HF-style `**_char_count_per_subword`** string analysis                                                             |
-| T2U char ids / duration counts    | Host (Python + torch transport) | Character id lists and `char_count_per_id` built on host, uploaded with `from_torch`                                                                                 |
-| T2U unit id → vocoder vocab remap | Host (PyTorch)                  | T2U `**argmax**` on device, then unit ids + padding mask read back; EOS/pad masking and `**vocoder_offset**` applied with `torch.where`, re-uploaded for the vocoder |
-
+| Step | Where | Notes |
+|------|--------|-------|
+| Trailing pad / EOS trim | Host (Python) | `_trim_seq_host_for_speech` before T2U |
+| Subword → character tables | Host (torch, init-time) | Precomputed **`T2UCharLookupTables`** built once from `generation_config`; ~8 MB CPU torch tensors |
+| T2U char ids / duration counts | Host (torch) | ``prepare_speech_from_seq``: dense char gather + reusable row buffer + ``from_torch_uint32_rm`` (~1 ms; see ``t2u_char_prep_ms`` in demo) |
+| T2U unit id → vocoder vocab remap | Host (PyTorch) | T2U **`argmax`** on device, then unit ids + padding mask read back; EOS/pad masking and **`vocoder_offset`** applied with `torch.where`, re-uploaded for the vocoder |
 
 **Other host touches**
 
