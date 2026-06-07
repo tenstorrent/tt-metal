@@ -318,7 +318,7 @@ Recommended order: gtests first (faster, exercises the C++ op directly), then py
 
 All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `MakeProgramFromSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
 
-If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_params.cpp`, the [patterns catalog](metal2_port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-params entries, etc.). Cross-reference the error message against the catalog.
+If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_args.cpp`, the [patterns catalog](metal2_port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-params entries, etc.). Cross-reference the error message against the catalog.
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 

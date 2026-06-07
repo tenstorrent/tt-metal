@@ -89,7 +89,7 @@ Many additional improvements are planned, but are not yet available in the exper
 ```cpp
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 ```
 
 Sub-headers are pulled in transitively:
@@ -107,6 +107,23 @@ All Metal 2.0 host API symbols currently live in the `tt::tt_metal::experimental
 ---
 
 ## Host API Migration
+
+> **Type system heads-up (before the per-spec sections below).** Two API-wide conventions to keep in mind as you read the examples:
+>
+> - **Spec names are `ttsl::StrongType`-wrapped, not bare strings.** Each spec category has its own name type — `KernelSpecName`, `DFBSpecName`, `SemaphoreSpecName`, `TensorParamName` (all wrapping `std::string`). Strong types forbid implicit conversion from `std::string` or `const char*`, so `.unique_id = "reader"` does not compile; the literal must be explicitly wrapped: `.unique_id = KernelSpecName{"reader"}`. The doc examples use a typed-constants pattern — declare each name once as a typed `const`, then reference the constant at each use site:
+>     ```cpp
+>     const KernelSpecName  READER{"reader"};
+>     const DFBSpecName     MY_DFB{"my_dfb"};
+>     const SemaphoreSpecName DONE{"done"};
+>     const TensorParamName INPUT{"input"};
+>     ```
+>   (`ProgramSpec::name` and `WorkUnitSpec::name` are *not* strong-typed — they're plain `std::string` debug/messaging labels with no uniqueness invariant. Don't wrap those.)
+>
+> - **Collection types: `Group<T>` and `Table<K, V>`.** Metal 2.0's API uses two utility types to disambiguate intent:
+>   - **`Group<T>`** — an unordered collection of `T` ("a bunch of these," order not semantic). Currently a thin alias for `std::vector<T>`; you can construct with brace-init `{a, b, c}` exactly like a vector.
+>   - **`Table<K, V>`** — a key-value map with the syntax of `std::unordered_map` and hash-friendly storage. Brace-init with `{{key, value}, {key, value}, ...}` works as expected.
+>
+>   These appear pervasively in the spec headers (`ProgramSpec::kernels` is `Group<KernelSpec>`, `ProgramRunArgs::tensor_args` is `Table<TensorParamName, TensorArgument>`, etc.). For initializer-list construction you rarely need to type them; for explicit-type sites (e.g., a conditional ternary that needs a common type), use the `Group<T>` / `Table<K, V>` name directly rather than `std::vector` / `std::unordered_map`.
 
 ### ProgramSpec
 
@@ -129,7 +146,7 @@ Program program = Program(desc);
 
 ```cpp
 ProgramSpec spec{
-    .program_id = "my_program",
+    .name = "my_program",
     .kernels = {kernel_1, kernel_2},
     .dataflow_buffers = {dfb_1, dfb_2},
     .semaphores = {sem_1},
@@ -141,7 +158,7 @@ Program program = MakeProgramFromSpec(spec);  // temporary free function
 
 Two structural additions vs. `ProgramDescriptor`:
 
-- `program_id` — a string identifier for the `ProgramSpec` within a `MeshWorkload`.
+- `name` — a human-readable label for debug and messaging (plain `std::string`; no uniqueness invariant).
 - `work_units` — the new top-level concept that declares where kernels run. (See [WorkUnitSpec](#workunitspec).)
 
 ---
@@ -175,7 +192,7 @@ KernelDescriptor reader = {
 
 ```cpp
 // ----- KernelSpec: kernel declaration -----
-constexpr const char* READER = "reader";
+const KernelSpecName READER{"reader"};
 
 KernelSpec reader{
     .unique_id = READER,
@@ -200,14 +217,14 @@ KernelSpec reader{
 
 // ----- WorkUnitSpec: kernel placement and worker assignments -----
 WorkUnitSpec main_work_unit{
-    .unique_id = "main",
+    .name = "main",
     .kernels = {READER},
     .target_nodes = NodeCoord{0, 0},
 };
 
 // ----- ProgramSpec: assemble into the program description -----
 ProgramSpec spec{
-    .program_id = "my_program",
+    .name = "my_program",
     .kernels = {reader},
     .work_units = {main_work_unit},
 };
@@ -215,12 +232,12 @@ Program program = MakeProgramFromSpec(spec);
 
 // ----- ProgramRunArgs: argument values, set per execution -----
 ProgramRunArgs params;
-params.kernel_run_params = {{
-    .kernel_spec_name = READER,
+params.kernel_run_args = {{
+    .kernel = READER,
     .runtime_arg_values = {{NodeCoord{0, 0},
         {{"start_page", start_page}, {"num_pages", num_pages}}}},
 }};
-SetProgramRunParameters(program, params);
+SetProgramRunArgs(program, params);
 ```
 
 
@@ -254,7 +271,7 @@ CBDescriptor cb_desc = {
 **Metal 2.0** (`DataflowBufferSpec`):
 
 ```cpp
-constexpr const char* MY_DFB = "my_dfb";
+const DFBSpecName MY_DFB{"my_dfb"};
 
 DataflowBufferSpec dfb{
     .unique_id = MY_DFB,
@@ -321,7 +338,7 @@ SemaphoreDescriptor sem_desc{
 **Metal 2.0** (`SemaphoreSpec`):
 
 ```cpp
-constexpr const char* DONE = "done";
+const SemaphoreSpecName DONE{"done"};
 
 SemaphoreSpec done_sem{
     .unique_id = DONE,
@@ -378,7 +395,7 @@ auto input = TensorAccessor(input_args, input_addr);
 #### Metal 2.0
 
 ```cpp
-constexpr const char* INPUT = "input";
+const TensorParamName INPUT{"input"};
 
 // In ProgramSpec — declare the tensor as a Program-scope parameter.
 // Use the tensor's own TensorSpec; the binding's spec must equal the runtime tensor's spec.
@@ -401,9 +418,9 @@ Program program = MakeProgramFromSpec(*mesh_device, spec);
 // In ProgramRunArgs — supply the actual MeshTensor per execution.
 ProgramRunArgs params;
 params.tensor_args = {
-    {.tensor_parameter_name = INPUT, .tensor = input_tensor},
+    {INPUT, TensorArgument{input_tensor}},
 };
-SetProgramRunParameters(program, params);
+SetProgramRunArgs(program, params);
 ```
 
 ```cpp
@@ -419,7 +436,7 @@ For each op:
 
 1. **Pre-flight.** Grep the op's kernel sources for `ArgConfig::Runtime`. If `RuntimeTensorShape` (or `RuntimeShardShape` / `RuntimeBankCoords`) appears anywhere, the migration is possible but the `TensorParameter`s for the affected tensors need `advanced_options.dynamic_tensor_shape = true` (or the weaker `match_padded_shape_only = true`) — see callout above for the safety and structural caveats before adopting either.
 2. **Find each `TensorAccessor`.** In each kernel, locate every `TensorAccessor(args, addr)` construction. For each, trace `addr` back through the host code to the originating `Tensor`.
-3. **Declare `TensorParameter`s.** Add one entry per tensor to `ProgramSpec::tensor_parameters`, using `tensor.tensor_spec()`. Pick a stable `unique_id`; reuse a `constexpr const char*` constant per the convention.
+3. **Declare `TensorParameter`s.** Add one entry per tensor to `ProgramSpec::tensor_parameters`, using `tensor.tensor_spec()`. Pick a stable `unique_id`; declare it as a typed constant (`const TensorParamName INPUT{"input"};`) and reuse the constant at each use site.
 4. **Add `TensorBinding`s.** On each `KernelSpec` whose kernel accesses the tensor, add an entry to `tensor_bindings` referencing the parameter by name. The `accessor_name` is the kernel-side identifier — it will appear as `ta::<accessor_name>`.
 5. **Update kernel code.**
    - Replace `TensorAccessor(args, addr)` with `TensorAccessor(ta::<accessor_name>)`.
@@ -450,7 +467,7 @@ The common case (matmul reader + compute reading the same input; reshard reader/
 
 ```cpp
 WorkUnitSpec wu{
-    .unique_id = "main",
+    .name = "main",
     .kernels = {READER, WRITER},
     .target_nodes = NodeCoord{0, 0},
 };
@@ -460,7 +477,7 @@ WorkUnitSpec wu{
 
 ```cpp
 WorkUnitSpec wu{
-    .unique_id = "main",
+    .name = "main",
     .kernels = {READER, COMPUTE, WRITER},
     .target_nodes = NodeRange{{0, 0}, {3, 3}},  // 4×4 grid
 };
@@ -470,12 +487,12 @@ WorkUnitSpec wu{
 
 ```cpp
 WorkUnitSpec wu_inner{
-    .unique_id = "inner",
+    .name = "inner",
     .kernels = {COMPUTE, INNER_READER},
     .target_nodes = inner_node_range_set
 };
 WorkUnitSpec wu_halo{
-    .unique_id = "halo",
+    .name = "halo",
     .kernels = {COMPUTE, HALO_READER},
     .target_nodes = halo_node_range_set
 };
@@ -518,13 +535,13 @@ KernelSpec reader{
 
 // Values supplied per execution:
 ProgramRunArgs params;
-params.kernel_run_params = {{
-    .kernel_spec_name = READER,
+params.kernel_run_args = {{
+    .kernel = READER,
     .runtime_arg_values = {{NodeCoord{0, 0},
         {{"start_page", start_page}, {"num_tiles", num_tiles}}}},
     .common_runtime_arg_values = {{"bank_id", bank_id}},
 }};
-SetProgramRunParameters(program, params); // temporary free function
+SetProgramRunArgs(program, params); // temporary free function
 ```
 
 Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape:
@@ -723,7 +740,7 @@ The separation enables two performance optimizations the legacy API couldn't exp
 1. **Caching**: a `Program` built once from a `ProgramSpec` can be executed many times with fresh `ProgramRunArgs` — the compile/build cost is paid once.
 2. **Partial updates**: for ops whose mutable surface is small (typically just the tensor identities), the framework can apply a partial update on cache hit instead of re-issuing the full `ProgramRunArgs`.
 
-For the op author, the practical implication is that **the schema and the values are conceptually paired** even though they live in different structures. When you add a named RTA to a `KernelSpec`'s schema, you simultaneously add its per-node value to `ProgramRunArgs::kernel_run_params`. When you declare a `TensorParameter`, you simultaneously add its `TensorArgument`. The spec/run-params separation is most visible to the framework and tooling; during construction, the two are built together.
+For the op author, the practical implication is that **the schema and the values are conceptually paired** even though they live in different structures. When you add a named RTA to a `KernelSpec`'s schema, you simultaneously add its per-node value to `ProgramRunArgs::kernel_run_args`. When you declare a `TensorParameter`, you simultaneously add its `TensorArgument`. The spec/run-params separation is most visible to the framework and tooling; during construction, the two are built together.
 
 ### Principle 2: First-class named resource bindings
 
@@ -786,8 +803,8 @@ The semaphore-ID RTA is gone.
 KernelSpec compute{
     .compile_time_args = {{"do_scale", do_scale ? 1u : 0u}, /* ... */},
     .dfb_bindings = do_scale
-        ? std::vector<DFBBinding>{INPUT, OUTPUT, SCALED}
-        : std::vector<DFBBinding>{INPUT, OUTPUT},
+        ? Group<DFBBinding>{INPUT, OUTPUT, SCALED}
+        : Group<DFBBinding>{INPUT, OUTPUT},
 };
 
 // Kernel side:
@@ -852,7 +869,7 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
     // ... build the spec and run-params ...
 
     metal2_host_api::ProgramSpec spec{
-        .program_id = "my_program",
+        .name = "my_program",
         // ...
     };
     metal2_host_api::ProgramRunArgs run_params;
@@ -889,14 +906,14 @@ ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
 >
 > Pass `MeshTensor` directly to helper functions as `const MeshTensor&`; do **not** wrap in `std::cref` / `std::reference_wrapper<const MeshTensor>`. Reaching back to `.mesh_tensor()` at each call site compiles and runs correctly but is not the recommended style — extract once and pass the reference.
 
-A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `SetProgramRunParameters` directly. Those are the framework adapter's responsibilities.
+A Metal 2.0 factory **does not** construct the `Program` itself, nor does it call `SetProgramRunArgs` directly. Those are the framework adapter's responsibilities.
 
 ### Cache-miss vs cache-hit lifecycle
 
 The framework manages two distinct execution paths:
 
-- **Cache miss** (first execution, or stale cache): the framework calls `create_program_spec`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunParameters(program, run_params)` to apply the per-execution values. The full spec is realized exactly once.
-- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework calls `create_program_spec` again to get the fresh `ProgramArtifacts`, then internally calls `UpdateTensorArgs(program, run_params)` (or, where unavailable, a full re-call of `SetProgramRunParameters`) to apply just the changed pieces. The build cost is skipped.
+- **Cache miss** (first execution, or stale cache): the framework calls `create_program_spec`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunArgs(program, run_params)` to apply the per-execution values. The full spec is realized exactly once.
+- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework calls `create_program_spec` again to get the fresh `ProgramArtifacts`, then internally calls `UpdateTensorArgs(program, run_params)` (or, where unavailable, a full re-call of `SetProgramRunArgs`) to apply just the changed pieces. The build cost is skipped.
 
 The framework dispatches based on which concept the factory satisfies — there is no per-op opt-in. A factory satisfying `ProgramSpecFactoryConcept` is routed through `ProgramSpecMeshWorkloadFactoryAdapter`, which handles both paths.
 
@@ -966,11 +983,11 @@ ProgramDescriptor program_desc = {
 **Metal 2.0:**
 
 ```cpp
-constexpr const char* READER = "reader";
-constexpr const char* WRITER = "writer";
-constexpr const char* DFB    = "loopback_dfb";
-constexpr const char* INPUT  = "input";
-constexpr const char* OUTPUT = "output";
+const KernelSpecName  READER{"reader"};
+const KernelSpecName  WRITER{"writer"};
+const DFBSpecName     DFB{"loopback_dfb"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
 
 constexpr uint32_t page_size = 1024;
 constexpr uint32_t num_pages = 8;
@@ -1022,7 +1039,7 @@ DataflowBufferSpec dfb{
 };
 
 ProgramSpec spec{
-    .program_id = "loopback",
+    .name = "loopback",
     .kernels = {reader, writer},
     .dataflow_buffers = {dfb},
     .tensor_parameters = {
@@ -1030,7 +1047,7 @@ ProgramSpec spec{
         {.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
     },
     .work_units = {{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER},
         .target_nodes = node,
     }},
@@ -1038,17 +1055,17 @@ ProgramSpec spec{
 Program program = MakeProgramFromSpec(*mesh_device, spec);
 
 ProgramRunArgs params;
-params.kernel_run_params = {
-    {.kernel_spec_name = READER,
+params.kernel_run_args = {
+    {.kernel = READER,
      .runtime_arg_values = {{node, {{"num_pages", num_pages}}}}},
-    {.kernel_spec_name = WRITER,
+    {.kernel = WRITER,
      .runtime_arg_values = {{node, {{"num_pages", num_pages}}}}},
 };
 params.tensor_args = {
-    {.tensor_parameter_name = INPUT,  .tensor = input_tensor},
-    {.tensor_parameter_name = OUTPUT, .tensor = output_tensor},
+    {INPUT,  TensorArgument{input_tensor}},
+    {OUTPUT, TensorArgument{output_tensor}},
 };
-SetProgramRunParameters(program, params);
+SetProgramRunArgs(program, params);
 ```
 
 `ProgramDescriptor` collapses all of placement, schema, and values into one nested struct, while Metal 2.0 keeps each concern visible as its own field. This example demonstrated named CTAs, DFB binding-by-name, derived DFB placement, TensorAccessor binding (replacing the manual `TensorAccessorArgs` plumbing chain on the host and the `TensorAccessorArgs<N>()` offset bookkeeping in the kernel), and mutable / immutable separation.
@@ -1094,7 +1111,7 @@ ProgramDescriptor program_desc = {
 **Metal 2.0:**
 
 ```cpp
-constexpr const char* DONE = "done";
+const SemaphoreSpecName DONE{"done"};
 const NodeRange cores{{0, 0}, {1, 1}};
 const uint32_t pages_per_node = num_pages / 4;  // 8 / 4 = 2 pages per node
 
@@ -1118,7 +1135,7 @@ KernelSpec reader{
 };
 
 ProgramSpec spec{
-    .program_id = "loopback_2x2",
+    .name = "loopback_2x2",
     .kernels = {reader, writer},
     .dataflow_buffers = {dfb},
     .semaphores = {done_sem},
@@ -1127,7 +1144,7 @@ ProgramSpec spec{
         {.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
     },
     .work_units = {{
-        .unique_id = "main",
+        .name = "main",
         .kernels = {READER, WRITER},
         .target_nodes = cores,  // 2×2 grid
     }},
@@ -1139,8 +1156,8 @@ ProgramRunArgs params;
 // Tensor identity is singular: one TensorParameter for the input tensor,
 // regardless of how many nodes access it. Per-node access varies via slice
 // indices, not addresses.
-params.kernel_run_params = {{
-    .kernel_spec_name = READER,
+params.kernel_run_args = {{
+    .kernel = READER,
     .runtime_arg_values = {
         {{0,0}, {{"start_page", 0u},                  {"num_pages", pages_per_node}}},
         {{1,0}, {{"start_page", 1u*pages_per_node},   {"num_pages", pages_per_node}}},
@@ -1149,10 +1166,10 @@ params.kernel_run_params = {{
     },
 }, /* writer entry similarly */ };
 params.tensor_args = {
-    {.tensor_parameter_name = INPUT,  .tensor = input_tensor},
-    {.tensor_parameter_name = OUTPUT, .tensor = output_tensor},
+    {INPUT,  TensorArgument{input_tensor}},
+    {OUTPUT, TensorArgument{output_tensor}},
 };
-SetProgramRunParameters(program, params);
+SetProgramRunArgs(program, params);
 ```
 
 Key differences vs. the legacy pattern:
@@ -1174,7 +1191,7 @@ Common pitfalls when migrating from `ProgramDescriptor`:
 - **Local DFB invariant.** A local DFB's producer and consumer kernels must share *identical* `WorkUnitSpec` membership.
 - **Compile-time arguments are named only.** Positional CTAs are not part of the Metal 2.0 API; use named CTAs throughout.
 - **Runtime varargs are intended for dynamic-count tails.** `num_runtime_varargs` (and `num_common_runtime_varargs`) is the right fit for kernels that consume a variable number of arguments in a loop — e.g., an N-dimensional shape gated on a CTA-known `rank`. For kernels with a fixed set of individually-known arguments, named RTAs are the recommended form, even when porting from a positional legacy interface.
-- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunParameters` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunArgsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
+- **`ProgramRunArgs` requires that every named RTA must be set on every node.** Missing an entry for a node where the kernel runs causes `SetProgramRunArgs` to error. The same applies to varargs. (Note: There is also a power-user `ProgramRunArgsView` API that provides a stateful view into the dispatch buffers; it is not yet supported.)
 
 ### Cryptic error → likely cause
 

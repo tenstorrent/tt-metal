@@ -79,12 +79,12 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 const bool fuse_pre_add = ...;
 KernelSpec compute{
     .compile_time_args = { /* ... */ },
-    .defines = fuse_pre_add
-        ? std::map<std::string, std::string>{{"FUSE_PRE_ADD", "1"}}
-        : std::map<std::string, std::string>{},
+    .compiler_options = {.defines = fuse_pre_add
+        ? Table<std::string, std::string>{{"FUSE_PRE_ADD", "1"}}
+        : Table<std::string, std::string>{}},
     .dfb_bindings = fuse_pre_add
-        ? std::vector<DFBBinding>{INPUT, OUTPUT, FUSION}
-        : std::vector<DFBBinding>{INPUT, OUTPUT},
+        ? Group<DFBBinding>{INPUT, OUTPUT, FUSION}
+        : Group<DFBBinding>{INPUT, OUTPUT},
 };
 
 // Kernel:
@@ -211,16 +211,16 @@ Each variant's helper builds its own `ProgramSpec` and `ProgramRunArgs`. Where v
 ```cpp
 // In a shared header (e.g., reduce_metal2_factory_helpers.hpp):
 namespace {
-inline constexpr const char* INPUT_DFB = "input";
-inline constexpr const char* OUTPUT_DFB = "output";
+inline const DFBSpecName INPUT_DFB{"input"};
+inline const DFBSpecName OUTPUT_DFB{"output"};
 inline DataflowBufferSpec MakeDFB(/* ... */) { /* ... */ }
 inline void BindDFB(KernelSpec& k, /* ... */) { /* ... */ }
 }
 
 // In per-factory .cpp files:
 namespace {
-constexpr const char* W_READER_KERNEL = "reader_w";
-constexpr const char* H_READER_KERNEL = "reader_h";
+const KernelSpecName W_READER_KERNEL{"reader_w"};
+const KernelSpecName H_READER_KERNEL{"reader_h"};
 struct WWorkDistribution { /* ... */ };
 struct HWorkDistribution { /* ... */ };
 }
@@ -244,25 +244,27 @@ The demotion sacrifices compile-time loop unrolling on the demoted dimension —
 
 ```cpp
 // Two compute KernelSpecs of the same source, differing only on the per-group CTA:
-auto make_compute = [&](const char* unique_id, uint32_t Ht) {
+const KernelSpecName COMPUTE_G1{"compute_g1"};
+const KernelSpecName COMPUTE_G2{"compute_g2"};
+auto make_compute = [&](KernelSpecName unique_id, uint32_t Ht) {
     return KernelSpec{
-        .unique_id = unique_id,
+        .unique_id = std::move(unique_id),
         .source = "reduce.cpp",
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}},
         .dfb_bindings = { /* INPUT consumer, OUTPUT producer */ },
         // ...
     };
 };
-std::vector<KernelSpec> kernels = {reader, writer,
-    make_compute("compute_g1", num_rows_per_core_group_1)};
+Group<KernelSpec> kernels = {reader, writer,
+    make_compute(COMPUTE_G1, num_rows_per_core_group_1)};
 if (group_2_present) {
-    kernels.push_back(make_compute("compute_g2", num_rows_per_core_group_2));
+    kernels.push_back(make_compute(COMPUTE_G2, num_rows_per_core_group_2));
 }
 
 // Two WorkUnitSpecs, one per core group:
-WorkUnitSpec wu_g1{.unique_id = "wu_g1", .kernels = {READER, WRITER, "compute_g1"},
+WorkUnitSpec wu_g1{.name = "wu_g1", .kernels = {READER, WRITER, COMPUTE_G1},
                    .target_nodes = core_group_1};
-WorkUnitSpec wu_g2{.unique_id = "wu_g2", .kernels = {READER, WRITER, "compute_g2"},
+WorkUnitSpec wu_g2{.name = "wu_g2", .kernels = {READER, WRITER, COMPUTE_G2},
                    .target_nodes = core_group_2};
 ```
 
