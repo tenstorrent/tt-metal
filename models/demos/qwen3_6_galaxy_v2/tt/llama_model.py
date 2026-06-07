@@ -1551,11 +1551,16 @@ class TtTransformer(LightweightModule):
 
         # Gate: chunk full-attention only for context longer than the cached/single-pass
         # regime (>128k). <=128k keeps the proven single-pass full-attn path unchanged.
+        # Use a FIXED 128k threshold, NOT self.args.max_seq_len: max_seq_len varies by harness
+        # (demo builds with 128k, the vLLM server builds with 262144), so gating on it would skip
+        # chunking on the server at 256k (262144 > 262144 is False) and OOM the 4 GB QKVG all-gather.
+        # Single-pass full-attn fits to ~128k (2 GB transient); chunk above it.
+        _FA_CHUNK_THRESHOLD = int(os.environ.get("QWEN36_FA_CHUNK_THRESHOLD", str(128 * 1024)))
         _fa_chunk = (
             page_table is not None
             and kv_cache is not None
             and (
-                seq_len > int(self.args.max_seq_len)
+                seq_len > _FA_CHUNK_THRESHOLD
                 # test override: force full-attn chunking at small ISL to verify the chunked path
                 # end-to-end vs the single-pass baseline without a 256k run.
                 or os.environ.get("QWEN36_FA_CHUNK_FORCE", "0") == "1"
