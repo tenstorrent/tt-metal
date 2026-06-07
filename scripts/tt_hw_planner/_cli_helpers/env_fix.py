@@ -242,6 +242,49 @@ def python_version_str() -> str:
 # ─── Pip executor ──────────────────────────────────────────────────
 
 
+def ensure_pip_available(*, timeout_s: int = 120) -> "tuple[bool, str]":
+    """Ensure ``sys.executable -m pip`` works, bootstrapping via ensurepip if absent."""
+    import subprocess
+    import sys as _sys
+
+    probe = subprocess.run(
+        [_sys.executable, "-m", "pip", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return True, ""
+
+    print("  pip not found in this interpreter — bootstrapping via ensurepip...")
+    try:
+        boot = subprocess.run(
+            [_sys.executable, "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"ensurepip timed out after {timeout_s}s"
+    except Exception as exc:
+        return False, f"ensurepip invocation raised {type(exc).__name__}: {exc}"
+    if boot.returncode != 0:
+        tail = (boot.stdout + boot.stderr).strip().splitlines()[-20:]
+        return False, "ensurepip failed:\n" + "\n".join(tail)
+
+    reprobe = subprocess.run(
+        [_sys.executable, "-m", "pip", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if reprobe.returncode != 0:
+        return False, "pip still unavailable after ensurepip bootstrap"
+    print(f"  pip bootstrapped: {reprobe.stdout.strip()}")
+    return True, ""
+
+
 def run_pip_install(pip_args: List[str], *, timeout_s: int = 300) -> "tuple[bool, str]":
     """Execute ``pip install <pip_args>`` and return ``(ok, log_tail)``.
 
@@ -251,6 +294,10 @@ def run_pip_install(pip_args: List[str], *, timeout_s: int = 300) -> "tuple[bool
     """
     import subprocess
     import sys as _sys
+
+    pip_ok, pip_detail = ensure_pip_available()
+    if not pip_ok:
+        return False, f"pip unavailable and bootstrap failed: {pip_detail}"
 
     cmd = [_sys.executable, "-m", "pip", "install", *pip_args]
     print(f"  Running: {' '.join(cmd)}")

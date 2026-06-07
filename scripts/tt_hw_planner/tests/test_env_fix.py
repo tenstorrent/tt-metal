@@ -10,8 +10,10 @@ import pytest
 from scripts.tt_hw_planner._cli_helpers.env_fix import (
     EnvFixProposal,
     build_env_fix_prompt,
+    ensure_pip_available,
     parse_env_fix_verdict,
     run_llm_env_fix,
+    run_pip_install,
 )
 
 
@@ -270,3 +272,65 @@ def test_proposal_default_reasoning_empty() -> None:
     p = EnvFixProposal(pip_args=["x"])
     assert p.reasoning == ""
     assert p.raw_text == ""
+
+
+def test_ensure_pip_noop_when_present(monkeypatch) -> None:
+    import subprocess
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="pip 23.0.1", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ok, detail = ensure_pip_available()
+    assert ok and detail == ""
+    assert all("ensurepip" not in arg for c in calls for arg in c)
+
+
+def test_ensure_pip_bootstraps_when_missing(monkeypatch) -> None:
+    import subprocess
+
+    seq = iter(
+        [
+            subprocess.CompletedProcess([], 1, stdout="", stderr="No module named pip"),
+            subprocess.CompletedProcess([], 0, stdout="Successfully installed pip", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="pip 23.0.1", stderr=""),
+        ]
+    )
+    saw_ensurepip = []
+
+    def fake_run(cmd, **kwargs):
+        if any("ensurepip" in a for a in cmd):
+            saw_ensurepip.append(cmd)
+        return next(seq)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    ok, detail = ensure_pip_available()
+    assert ok and detail == ""
+    assert saw_ensurepip
+
+
+def test_ensure_pip_reports_bootstrap_failure(monkeypatch) -> None:
+    import subprocess
+
+    seq = iter(
+        [
+            subprocess.CompletedProcess([], 1, stdout="", stderr="No module named pip"),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="ensurepip: boom"),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: next(seq))
+    ok, detail = ensure_pip_available()
+    assert not ok
+    assert "ensurepip failed" in detail
+
+
+def test_run_pip_install_aborts_when_bootstrap_fails(monkeypatch) -> None:
+    import scripts.tt_hw_planner._cli_helpers.env_fix as ef
+
+    monkeypatch.setattr(ef, "ensure_pip_available", lambda **kw: (False, "no pip here"))
+    ok, detail = run_pip_install(["transformers<5.0"])
+    assert not ok
+    assert "bootstrap failed" in detail and "no pip here" in detail
