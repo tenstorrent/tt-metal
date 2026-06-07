@@ -630,7 +630,7 @@ public:
     //     and are destroyed at return, leaving the cached Program holding
     //     addresses freed before the asynchronous device dispatch completes.
     //     Ops that need op-owned mesh resources should use
-    //     create_workload_artifacts (WorkloadArtifactConcept) instead.
+    //     create_workload_artifacts (WorkloadSpecFactoryConcept) instead.
     //
     // Runtime arguments:
     //   Per-node RTAs are supported. They are the standard mechanism for
@@ -639,8 +639,7 @@ public:
     //   deterministic from cache-miss-time inputs (see above).
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
-        requires requires { &ProgramSpecFactory::create_program_artifacts; } &&
-                 HasMinimizeCacheHitCostOptIn<ProgramSpecFactory>
+        requires HasMinimizeCacheHitCostOptIn<ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
         // ProgramSpecFactoryConcept closes the immutable-side cache-key bug generator by
         // construction: the framework's automatic hash of (op type + attrs + tensor args
@@ -857,7 +856,7 @@ public:
     // -----------------------------------------------------------------------
     // WorkloadArtifactMeshWorkloadAdapter
     //
-    // Adapts a ProgramSpecFactoryConcept factory that exposes
+    // Adapts a WorkloadSpecFactoryConcept factory that exposes
     // create_workload_artifacts for mesh dispatch.  The op author returns a
     // MeshWorkloadArtifacts in one call: workload-scoped resources
     // (GlobalSemaphores, op-owned MeshTensors) and a sequence of per-coord
@@ -901,8 +900,7 @@ public:
     //  - DFB size overrides are forbidden (same UpdateTensorArgs cache-hit
     //    constraint as Option 1 of the create_program_artifacts adapter).
     // -----------------------------------------------------------------------
-    template <ProgramSpecFactoryConcept ProgramSpecFactory>
-        requires WorkloadArtifactConcept<ProgramSpecFactory>
+    template <WorkloadSpecFactoryConcept WorkloadSpecFactory>
     struct WorkloadArtifactMeshWorkloadAdapter {
         // Same immutable-side bug-generator closure as ProgramSpecMeshWorkloadFactoryAdapter:
         // the framework's auto-hash is the only sanctioned cache key.
@@ -910,7 +908,7 @@ public:
             !requires(const operation_attributes_t& a, const tensor_args_t& t) {
                 DeviceOperation::compute_program_hash(a, t);
             },
-            "DeviceOperations using a WorkloadArtifactConcept factory (create_workload_artifacts) "
+            "DeviceOperations using a WorkloadSpecFactoryConcept factory (create_workload_artifacts) "
             "cannot also define a custom compute_program_hash. The framework's automatic hash is "
             "the only sanctioned cache key for these factories; it closes the immutable-side bug "
             "generator (over-permissive hash → cache hit resurrects an incorrect Program) by "
@@ -929,7 +927,7 @@ public:
             const tensor_args_t& t,
             tensor_return_value_t& r,
             const ttnn::MeshCoordinateRangeSet& tc) {
-            { ProgramSpecFactory::create_workload_artifacts(a, t, r, tc) } -> std::same_as<MeshWorkloadArtifacts>;
+            { WorkloadSpecFactory::create_workload_artifacts(a, t, r, tc) } -> std::same_as<MeshWorkloadArtifacts>;
         };
         static_assert(
             has_create_workload_artifacts,
@@ -982,7 +980,7 @@ public:
             TT_FATAL(
                 run_args.dfb_run_overrides.empty(),
                 "ProgramRunArgs returned by create_workload_artifacts contains DFB size overrides. "
-                "The WorkloadArtifactConcept cache-hit path runs only UpdateTensorArgs, which does "
+                "The WorkloadSpecFactoryConcept cache-hit path runs only UpdateTensorArgs, which does "
                 "not touch DFB sizes; set DFB sizes directly in the ProgramSpec instead.");
         }
 
@@ -1023,7 +1021,7 @@ public:
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
             auto artifacts =
-                ProgramSpecFactory::create_workload_artifacts(attrs, tensor_args, tensor_return_value, tensor_coords);
+                WorkloadSpecFactory::create_workload_artifacts(attrs, tensor_args, tensor_return_value, tensor_coords);
 
             // Move resources into shared_variables FIRST, then collect references off the
             // post-move storage; otherwise the references would dangle when the local

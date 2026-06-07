@@ -231,7 +231,7 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `Metal2FactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -245,15 +245,24 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
-                // ProgramSpecFactoryConcept is an umbrella over three sub-shapes; dispatch
+            [&]<Metal2FactoryConcept T>(const T&) {
+                // Metal2FactoryConcept is an umbrella over four sub-shapes; dispatch
                 // each to its own adapter.  The sub-concepts are mutually exclusive by
                 // construction (sum-equals-1 in the umbrella concept), so the branches
                 // here are exhaustive.
-                if constexpr (WorkloadArtifactConcept<T>) {
+                if constexpr (WorkloadSpecFactoryConcept<T>) {
                     using AdaptedMeshWorkloadFactory =
                         mesh_device_operation_t::template WorkloadArtifactMeshWorkloadAdapter<T>;
                     fn.template operator()<AdaptedMeshWorkloadFactory>();
+                } else if constexpr (AdvancedWorkloadSpecFactoryConcept<T>) {
+                    // Advanced multi-program — stub only. The umbrella concept admits it
+                    // so factories can be written ahead of adapter support, but the
+                    // adapter is not yet implemented.
+                    static_assert(
+                        ttsl::concepts::always_false_v<T>,
+                        "AdvancedWorkloadSpecFactoryConcept is not yet supported by the mesh "
+                        "dispatch adapter. Use create_workload_artifacts or "
+                        "create_program_artifacts in the meantime.");
                 } else if constexpr (AdvancedProgramSpecFactoryConcept<T>) {
                     // Option 3 — deferred to a future stage. The umbrella concept admits
                     // it so factories can be written ahead of adapter support, but the
@@ -459,7 +468,7 @@ void dispatch_option2_spec_hash(
             "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
             "tensor_return_value. Option 2 (create_program_artifacts) does not support "
             "op-owned resource tensors; route through create_workload_artifacts "
-            "(WorkloadArtifactConcept) if you need them.",
+            "(WorkloadSpecFactoryConcept) if you need them.",
             tensor_arg.tensor_parameter_name);
     }
 
@@ -540,10 +549,10 @@ void dispatch_option2_spec_hash(
     }
 }
 
-// Detect whether the active factory variant arm is Option 2 (ProgramSpecFactoryConcept
-// create_program_artifacts shape, no MinimizeCacheHitCost marker, neither Workload nor
-// the deferred Advanced shape). Returns true and dispatches to dispatch_option2_spec_hash
-// if so; returns false to indicate the caller should use the existing args-hash flow.
+// Detect whether the active factory variant arm is Option 2 (basic single-program
+// ProgramSpecFactoryConcept create_program_artifacts shape, no MinimizeCacheHitCost
+// marker). Returns true and dispatches to dispatch_option2_spec_hash if so; returns
+// false to indicate the caller should use the existing args-hash flow.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 bool try_dispatch_option2_spec_hash(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -558,9 +567,10 @@ bool try_dispatch_option2_spec_hash(
     std::visit(
         [&](const auto& factory) {
             using F = std::decay_t<decltype(factory)>;
-            if constexpr (
-                ProgramSpecFactoryConcept<F> && !HasMinimizeCacheHitCostOptIn<F> && !WorkloadArtifactConcept<F> &&
-                !AdvancedProgramSpecFactoryConcept<F>) {
+            // The basic single-program leaf (ProgramSpecFactoryConcept) already
+            // excludes the workload and advanced shapes by construction, so the
+            // marker check is all that distinguishes Option 2 from Option 1.
+            if constexpr (ProgramSpecFactoryConcept<F> && !HasMinimizeCacheHitCostOptIn<F>) {
                 dispatch_option2_spec_hash<mesh_device_operation_t, F>(
                     operation_attributes,
                     tensor_args,

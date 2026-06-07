@@ -171,14 +171,40 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // authoring complexity: the split forces the factory to be explicit about which
 // inputs affect the spec.
 //
-template <typename T>
-concept WorkloadArtifactConcept = requires { &T::create_workload_artifacts; };
+// The four Metal 2.0 factory leaf concepts — the cells of the
+// {Basic, Advanced} x {single-program, multi-program} matrix. Each is a plain
+// shape check on the factory's method surface; the leaves are mutually
+// exclusive by construction (disjoint method sets), and Metal2FactoryConcept
+// (below) is the umbrella that admits exactly one of them.
 
+// Basic, single-program: one combined call returning spec + run args bundled.
+template <typename T>
+concept ProgramSpecFactoryConcept = requires { &T::create_program_artifacts; };
+
+// Advanced, single-program: the immutable-extraction / spec / run-args split.
 template <typename T>
 concept AdvancedProgramSpecFactoryConcept = requires {
     &T::create_program_spec;
     &T::create_program_run_args;
     &T::extract_immutable_info;
+};
+
+// Basic, multi-program: one combined call returning all per-coord programs and
+// workload-scoped resources.
+template <typename T>
+concept WorkloadSpecFactoryConcept = requires { &T::create_workload_artifacts; };
+
+// Advanced, multi-program: the workload analog of the three-method split.
+// NOTE: stub only — no adapter support yet, and the method names below are
+// deliberately workload-distinct placeholders (the final names are an open
+// design question, see ttnn-factory-design-space). Keeping them disjoint from
+// the single-program advanced names means the eventual rename is a clean
+// find-replace that won't sweep up AdvancedProgramSpecFactoryConcept.
+template <typename T>
+concept AdvancedWorkloadSpecFactoryConcept = requires {
+    &T::create_workload_spec;
+    &T::create_workload_run_args;
+    &T::extract_workload_immutable_info;
 };
 
 // Program caching strategy — the op-author-facing choice between two
@@ -240,15 +266,15 @@ concept HasMinimizeCacheHitCostOptIn = requires {
     requires T::caching_strategy == ProgramCachingStrategy::MinimizeCacheHitCost;
 };
 
-// "Exactly one of the three forms is satisfied" is enforced by sum-equals-1
-// (the same pattern Diego uses for outer-factory disambiguation in
-// AllFactoriesValid below). A factory that accidentally exposes two shapes
-// is rejected at the concept level rather than silently picked apart by
-// adapter precedent order.
+// Umbrella over the four Metal 2.0 factory leaves. "Exactly one of the four
+// forms is satisfied" is enforced by sum-equals-1 (the same pattern Diego uses
+// for outer-factory disambiguation in AllFactoriesValid below). A factory that
+// accidentally exposes two shapes is rejected at the concept level rather than
+// silently picked apart by adapter precedent order.
 template <typename T>
-concept ProgramSpecFactoryConcept =
-    ((requires { &T::create_program_artifacts; } + AdvancedProgramSpecFactoryConcept<T> + WorkloadArtifactConcept<T>) ==
-     1) &&
+concept Metal2FactoryConcept =
+    ((ProgramSpecFactoryConcept<T> + AdvancedProgramSpecFactoryConcept<T> + WorkloadSpecFactoryConcept<T> +
+      AdvancedWorkloadSpecFactoryConcept<T>) == 1) &&
     !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
@@ -288,7 +314,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// or ProgramSpecFactoryConcept.
+// or Metal2FactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -296,7 +322,7 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
         ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          Metal2FactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail
