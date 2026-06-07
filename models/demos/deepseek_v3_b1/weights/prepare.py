@@ -517,6 +517,33 @@ def _moe_routed_expert_tensor_target(name: str, K: int, N: int, device) -> Tenso
     )
 
 
+def _dense_routed_stacked_tensor_target(name: str, K: int, N: int, device) -> TensorTarget:
+    """TensorTarget for dense MLP routed projection (all experts stacked on mesh)."""
+    tile_w = 32
+    num_banks = device.dram_grid_size().x
+    N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+    per_core_N = N_padded // num_banks
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        }
+    )
+    shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    return TensorTarget(
+        name=name,
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=mem_config,
+        tile_shape=(32, 32),
+        mesh_mapper_config=Shard2dMeshMapper(dims=(0, 1)),
+        transform_version=1,
+    )
+
+
 def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
     """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
 
@@ -609,9 +636,7 @@ _MOE_TP1_SHARED_GATE_UP_N = 256
 _MOE_TP1_SHARED_DOWN_K = 256
 
 
-def get_layer_raw_tensors(
-    state_dict: dict[str, torch.Tensor], layer_idx: int
-) -> tuple[
+def get_layer_raw_tensors(state_dict: dict[str, torch.Tensor], layer_idx: int) -> tuple[
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
@@ -1447,9 +1472,11 @@ def prepare_moe_routed_experts_bspm(
                 device,
                 raw_tensors=lambda _k=key: {_k: state_dict[_k]},
                 preprocess=lambda tensors, _k=key, _a=assignment_logical, _N=N, _N_padded=N_padded: CompressedTensorBuildInputs(
-                    w=torch.nn.functional.pad(tensors[_k].T.contiguous().float(), (0, _N_padded - _N)).numpy()
-                    if _N_padded != _N
-                    else tensors[_k].T.contiguous().float().numpy(),
+                    w=(
+                        torch.nn.functional.pad(tensors[_k].T.contiguous().float(), (0, _N_padded - _N)).numpy()
+                        if _N_padded != _N
+                        else tensors[_k].T.contiguous().float().numpy()
+                    ),
                     assignment=_a,
                 ),
                 move_to_device=move_to_device,
