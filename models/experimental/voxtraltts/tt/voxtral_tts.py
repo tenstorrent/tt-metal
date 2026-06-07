@@ -37,6 +37,7 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import (
 )
 from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 ACOUSTIC_CFG_ALPHA_DEFAULT = 1.2
 
@@ -67,6 +68,7 @@ class VoxtralTTSPipeline:
     mm_embedding_weight: torch.Tensor
     audio_token_id: int
     end_audio_id: int
+    paged_attention_config: Any  # PagedAttentionConfig | None
 
     @property
     def _downsample_factor(self) -> int:
@@ -84,8 +86,17 @@ class VoxtralTTSPipeline:
         text_optimizations=voxtral_text_default_optimizations,
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
+        use_paged_kv_cache: bool = False,
+        paged_block_size: int = 32,
     ) -> "VoxtralTTSPipeline":
-        """Build TT TTS pipeline using the production default text optimization profile."""
+        """Build TT TTS pipeline using the production default text optimization profile.
+
+        ``use_paged_kv_cache=True`` enables paged KV attention, which breaks the attention
+        CB page from ``seq_len × head_dim`` down to ``block_size × head_dim``.  This removes
+        the L1 SRAM CB size constraint that limits ``text_max_seq_len`` to 4096 on Blackhole.
+        With paged KV you can safely use ``text_max_seq_len=10000`` for ≤1500-word texts.
+        ``paged_block_size`` must be a multiple of 32 (TILE row size); 32 is the safest choice.
+        """
         full = _load_safetensors_state_dict(model_name_or_path)
         cfg = load_voxtral_config(model_name_or_path)
         sd_at = extract_audio_tokenizer_state_dict(full)
@@ -97,6 +108,13 @@ class VoxtralTTSPipeline:
         if mm_emb_w is None:
             raise RuntimeError("Missing 'mm_audio_embeddings.audio_codebook_embeddings.embeddings.weight'.")
 
+        paged_cfg = None
+        if use_paged_kv_cache:
+            import math
+
+            max_num_blocks = math.ceil(text_max_seq_len / paged_block_size)
+            paged_cfg = PagedAttentionConfig(block_size=paged_block_size, max_num_blocks=max_num_blocks)
+
         text = VoxtralTTTextModel.create_from_model_name(
             mesh_device=mesh_device,
             model_name_or_path=model_name_or_path,
@@ -105,6 +123,10 @@ class VoxtralTTSPipeline:
             max_seq_len=text_max_seq_len,
             preloaded_state_dict=full,
             optimizations=text_optimizations,
+            paged_attention_config=paged_cfg,
+            use_paged_kv_cache=False,  # False = model manages its own paged KV blocks internally.
+            # True is only for vLLM where KV cache is provided externally — skips init_kv_cache
+            # and layer_past is never set, causing AttributeError on the first decode step.
         )
         patch_text_model_fp32_rms_norms(
             text,
@@ -117,6 +139,7 @@ class VoxtralTTSPipeline:
             mesh_device,
             model_name_or_path=model_name_or_path,
             dtype=acoustic_dtype,
+            preloaded_state_dict=full,
         )
         audio_tokenizer = VoxtralTTAudioTokenizer(
             mesh_device,
@@ -137,6 +160,28 @@ class VoxtralTTSPipeline:
             mm_embedding_weight=mm_emb_w.to(dtype=torch.bfloat16),
             audio_token_id=int(cfg.audio_model_args.audio_token_id),
             end_audio_id=int(AudioSpecialTokens.id(AudioSpecialTokens.end_audio)),
+            paged_attention_config=paged_cfg,
+        )
+
+    def _build_page_table(self, max_seq_len: int) -> "ttnn.Tensor | None":
+        """Build a sequential page_table ``[1, max_num_blocks]`` for paged KV attention.
+
+        Returns ``None`` when paged KV is disabled (``paged_attention_config is None``).
+        The page_table MUST be sized to ``max_num_blocks`` (the full KV block pool),
+        NOT just the number of blocks needed for this sequence.  The paged SDPA op
+        indexes into the KV block pool using page_table entries — a truncated
+        page_table causes a shape mismatch / out-of-bounds access → crash.
+        """
+        if self.paged_attention_config is None:
+            return None
+        max_num_blocks = self.paged_attention_config.max_num_blocks
+        page_table_host = torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0)  # [1, max_num_blocks]
+        return ttnn.from_torch(
+            page_table_host,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _resolve_model_file(self, filename: str) -> Path:
@@ -290,7 +335,8 @@ class VoxtralTTSPipeline:
         # (that path reads every layer to host and can change the last-token hidden).
         # hidden stays on device (ttnn.Tensor) throughout the AR loop; acoustic model reads it via
         # forward_from_tt. Convert to torch only for debug trace (hidden_tt_to_torch).
-        last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds_tt, start_pos=0)
+        page_table = self._build_page_table(S_prompt + max_tokens)
+        last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds_tt, start_pos=0, page_table=page_table)
         if inputs_embeds_tt.is_allocated():
             ttnn.deallocate(inputs_embeds_tt)
         del inputs_embeds_cpu  # allow CPU memory to be reclaimed
@@ -331,7 +377,7 @@ class VoxtralTTSPipeline:
 
             # MM embed: use on-device embedding table (saves 6 KB upload + CPU F.embedding per step).
             mm_embed_tt = self._audio_codes_to_mm_embed_device(audio_codes)
-            next_hidden_tt = self.text._decode_single_token_to_tt(mm_embed_tt, current_pos)
+            next_hidden_tt = self.text._decode_single_token_to_tt(mm_embed_tt, current_pos, page_table=page_table)
             if mm_embed_tt.is_allocated():
                 ttnn.deallocate(mm_embed_tt)
             if last_hidden_tt.is_allocated():
@@ -345,6 +391,8 @@ class VoxtralTTSPipeline:
         ttnn.synchronize_device(self.mesh_device)
         if last_hidden_tt is not None and last_hidden_tt.is_allocated():
             ttnn.deallocate(last_hidden_tt)
+        if page_table is not None and page_table.is_allocated():
+            ttnn.deallocate(page_table)
 
         if not generated_codes:
             empty_wav = torch.tensor([], dtype=torch.float32)
