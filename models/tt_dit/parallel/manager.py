@@ -40,7 +40,6 @@ class CCLManager:
         self.rs_ping_pong_idx = [0, 0]
         self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
-        self.fsdp_ping_pong_idx = [0, 0]
         self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
@@ -78,14 +77,6 @@ class CCLManager:
         self.ag_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
-        }
-
-        # Semaphores for the FSDP weight gather fused inside all_gather_minimal_matmul_async.
-        # Each axis gets a ping-pong pair (mirrors ag_ping_pong_semaphores shape).
-        fsdp_n_sems = 2 * 2  # 2 sems per ping-pong cycle, 2 cycles
-        self.fsdp_ping_pong_semaphores = {
-            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(fsdp_n_sems)],
-            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(fsdp_n_sems)],
         }
 
         # Initialize exp ring joint SDPA semaphores (num_links per set, 2 sets for ping pong)
@@ -246,53 +237,6 @@ class CCLManager:
         n_sems = 2
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
-
-    def get_fsdp_ping_pong_semaphore(self, mesh_axis):
-        """
-        Get semaphores for the fused FSDP weight gather inside all_gather_minimal_matmul_async.
-
-        Args:
-            mesh_axis: The FSDP mesh axis (0 or 1) to get semaphores for
-
-        Returns:
-            List of 2 semaphores (sem_backward, sem_forward) for the current ping pong cycle
-        """
-        cur_idx = self.fsdp_ping_pong_idx[mesh_axis]
-        n_sems = 2
-        self.fsdp_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
-        return self.fsdp_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
-
-    def get_fsdp_weight_buffer(self, shape, mesh_axis, dtype=ttnn.bfloat16):
-        """
-        Get or create a persistent buffer for the gathered FSDP weight.
-
-        Unlike the activation ping-pong buffers, the weight gather destination doesn't
-        need ping-pong: the weight is consumed entirely inside one fused op call. We
-        still cache by (shape, mesh_axis, dtype) so repeated calls in the same layer
-        return the same buffer.
-
-        Args:
-            shape: Full gathered weight shape (4D, with K_full in dim 2 and N_local in dim 3)
-            mesh_axis: The FSDP mesh axis (used as part of cache key)
-            dtype: Element dtype
-
-        Returns:
-            A ttnn.Tensor of `shape` on device, ready to be populated by the FSDP gather.
-        """
-        cache_key = ("fsdp_weight", tuple(shape), mesh_axis, dtype)
-        if cache_key not in self._ping_pong_buffer_cache:
-            ttnn.synchronize_device(self.mesh_device)
-            buf = ttnn.from_torch(
-                torch.empty(list(shape)),
-                layout=ttnn.TILE_LAYOUT,
-                dtype=dtype,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                device=self.mesh_device,
-            )
-            self._ping_pong_buffer_cache[cache_key] = [buf]
-            self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
-        return self._ping_pong_buffer_cache[cache_key][0]
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """
