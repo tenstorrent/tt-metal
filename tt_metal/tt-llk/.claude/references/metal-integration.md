@@ -90,8 +90,8 @@ Grep for "{function_name}" in tests/tt_metal/tt_metal/test_kernels/compute/ (*.c
 **Update these files:**
 
 ```
-# Include the new wrapper in the SFPU API aggregator
-Read tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_math_unary_sfpu_api.h
+# Include the SFPU macro/op header where the compute API needs it
+Read tt_metal/hw/inc/api/compute/eltwise_unary/new_op.h
 
 # Include the new compute API header in the unary aggregator
 Read tt_metal/hw/inc/api/compute/eltwise_unary/eltwise_unary.h

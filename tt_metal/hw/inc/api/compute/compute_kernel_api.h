@@ -23,15 +23,17 @@
 #endif
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
-#include "llk_math_unary_sfpu_api.h"
-#include "llk_math_binary_sfpu_api.h"
 #ifndef ARCH_QUASAR
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_max_pool_indices.h"
 #include "llk_math_binary_api.h"
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
-// themselves come from llk_math_eltwise_unary_sfpu_macros.h (pulled in by
-// llk_math_unary_sfpu_api.h above). Quasar is out of scope for the unary macro
-// refactor and keeps using its per-op wrappers, so these are BH/WH only.
+// themselves come from llk_math_eltwise_unary_sfpu_macros.h. These BH/WH-only
+// kernels (log, tanh, abs, ...) have no Quasar implementation; sigmoid/silu are
+// shared and included for Quasar in the #else branch below.
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_log.h"
@@ -49,6 +51,14 @@
 #include "ckernel_sfpu_unary_max_min.h"
 #include "ckernel_sfpu_reduce.h"
 #include "ckernel_sfpu_alt_complex_rotate90.h"
+#else
+#include "ckernel_sfpu_sigmoid.h"
+#include "ckernel_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "llk_math_eltwise_binary_sfpu_add_int.h"
+#include "llk_math_eltwise_binary_sfpu_mul_int.h"
+#include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -96,7 +106,7 @@ namespace ckernel {
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
+    MATH(SFPU_INIT(sigmoid));
 #else
     MATH(SFPU_INIT_CB(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
 #endif
@@ -119,7 +129,7 @@ ALWI void sigmoid_tile_init() {
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
+    MATH(SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, idst, vec_mode, 8 /* ITERATIONS */));
 #else
     MATH(SFPU_CALL(
         DST_SYNC_MODE,
@@ -148,7 +158,8 @@ ALWI void sigmoid_tile(uint32_t idst) {
 // clang-format on
 ALWI void silu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst)));
+    MATH(SFPU_CALL_FN(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, idst, ::ckernel::VectorMode::RC, 8 /* ITERATIONS */));
 #else
     MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
 #endif
@@ -156,7 +167,7 @@ ALWI void silu_tile(uint32_t idst) {
 
 ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>()));
+    MATH(SFPU_INIT(silu));
 #else
     MATH(SFPU_INIT_CB(silu, sfpu::silu_init, (APPROX)));
 #endif
@@ -566,7 +577,7 @@ ALWI void exp2_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (true /* APPROXIMATE */))); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -896,7 +907,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_INIT_CB_ARGS(reduce, sfpu::init_reduce, (pool_type, format), 1 /* block_ct_dim */));
+    MATH(SFPU_INIT_CB(reduce, sfpu::init_reduce, (pool_type, format)));
 }
 
 // clang-format off

@@ -49,8 +49,8 @@ namespace detail {
 // in the (now-deleted) BH wrapper.
 //
 // Guarded by TRISC_MATH because the template signature references SfpuType, which is only
-// brought into scope on the math thread (via llk_math_binary_sfpu_api.h). All callers wrap the
-// invocation in MATH((...)) so the function is never reached on unpack/pack threads.
+// brought into scope on the math thread. All callers wrap the invocation in MATH((...)) so the
+// function is never reached on unpack/pack threads.
 template <SfpuType OP, DataFormat data_format>
 ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
