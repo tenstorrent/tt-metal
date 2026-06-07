@@ -47,9 +47,8 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
 )
 
 PCC_THRESHOLD = 0.99
-# Longest tokenized source length (text-encoder output) validated with production seed on BH 1×4.
-# Next power-of-two (1024) overflows L1 on cross-attention prefill at tile-padded encoder length.
-MAX_ENC_SEQ = 512
+# Longest encoder timeline validated with production seed on BH 1×4 (tile-padded cross-attn prefill).
+MAX_ENC_SEQ = 1024
 # Number of greedy decode steps to validate after the prefill cache-fill. Each step is one KV-cache
 # decoder forward (``seq_len=1``); a single step already exercises the decode self/cross-attn,
 # paged-cache-write, and position-stepping paths. Bump for deeper cache-drift / decode profiling.
