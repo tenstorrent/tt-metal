@@ -156,6 +156,7 @@ class VoxtralTTTextModel:
         pos_idx: int,
         *,
         collect_layer_hiddens: bool = False,
+        page_table: "ttnn.Tensor | None" = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, dict[str, torch.Tensor]]":
         """Core TT decode step: embed → device x_norm (post-norm, no host readback).
 
@@ -212,7 +213,7 @@ class VoxtralTTTextModel:
                 rot_mats_local=rot_mats_local,
                 user_id=0,
                 mode=Mode.DECODE,
-                page_table=None,
+                page_table=page_table,
                 kv_cache=None,
             )
             if collect_layer_hiddens:
@@ -221,6 +222,19 @@ class VoxtralTTTextModel:
 
         x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=self._lm_norm_cfg)
         ttnn.deallocate(x_tt)
+
+        # Free per-step rope/position tensors explicitly. These are function-locals that
+        # GC would eventually reclaim, but during multi-thousand-frame generation runs
+        # delayed GC can let device memory creep; deallocate deterministically instead.
+        for rm in (rot_mats_global, rot_mats_local):
+            if rm is None:
+                continue
+            for t in rm:
+                if isinstance(t, ttnn.Tensor) and t.is_allocated():
+                    ttnn.deallocate(t)
+        if current_pos_tt.is_allocated():
+            ttnn.deallocate(current_pos_tt)
+
         if collect_layer_hiddens:
             return x_norm, layer_hiddens
         return x_norm
@@ -244,6 +258,7 @@ class VoxtralTTTextModel:
         start_pos: int = 0,
         *,
         collect_layer_hiddens: bool = False,
+        page_table: "ttnn.Tensor | None" = None,
     ) -> "ttnn.Tensor | tuple[ttnn.Tensor, dict[str, torch.Tensor]]":
         """Prefill via per-token decode (KV-safe). Returns device ``x_norm`` as ``ttnn.Tensor``.
 
@@ -335,7 +350,7 @@ class VoxtralTTTextModel:
                     rot_mats_local=rot_mats_local,
                     user_id=0,
                     mode=Mode.DECODE,
-                    page_table=None,
+                    page_table=page_table,
                     kv_cache=None,
                 )
                 if collect_this:
@@ -352,6 +367,17 @@ class VoxtralTTTextModel:
             if last_hidden_tt is not None and last_hidden_tt.is_allocated():
                 ttnn.deallocate(last_hidden_tt)
             last_hidden_tt = x_norm_tt
+
+            # Free per-token rope/position tensors so they do not accumulate across
+            # the (potentially thousands of) prefill steps for a long prompt.
+            for rm in (rot_mats_global, rot_mats_local):
+                if rm is None:
+                    continue
+                for t in rm:
+                    if isinstance(t, ttnn.Tensor) and t.is_allocated():
+                        ttnn.deallocate(t)
+            if current_pos_tt.is_allocated():
+                ttnn.deallocate(current_pos_tt)
 
         if owns_embeds_tt and embeds_tt.is_allocated():
             ttnn.deallocate(embeds_tt)
