@@ -37,6 +37,13 @@
 #   1 - Test failure (normal pytest failure, no hang)
 #   2 - Hang detected (dispatch timeout fired)
 #   3 - Setup error (missing args, etc.)
+#
+# Total runtime:
+#   Always prints SAFE_PYTEST_TOTAL_RUNTIME as the very last line (on every exit path).
+#   It is the wall-clock time from "device lock acquired" (idle lock-wait queueing is
+#   deliberately excluded) to script exit, so it covers the whole run — device reset,
+#   precompile warm phase, and the pytest run itself — not just pytest. Under simulator
+#   there is no lock, so the clock starts at the equivalent point.
 
 set -o pipefail
 
@@ -211,6 +218,22 @@ precompile_warm() {
     echo "PRECOMPILE: ✓ warm pass complete in $((t1-t0))s (build_key ${realkey}) — the real run below reuses it. Log: $clog" >&2
 }
 
+# --- Total-run timer ---
+# Reports wall-clock time from "device lock acquired" to script exit. Registered as an
+# EXIT trap so it ALWAYS prints last, on every exit path (pass, fail, hang, error). The
+# RUN_START guard means nothing is printed for exits that happen before testing begins
+# (e.g. missing args), since no run took place.
+_print_total_runtime() {
+    [[ -z "${RUN_START:-}" ]] && return 0
+    local run_end elapsed
+    run_end=$(date +%s)
+    elapsed=$((run_end - RUN_START))
+    echo "========================================" >&2
+    printf 'SAFE_PYTEST_TOTAL_RUNTIME: %dm%02ds (%ds total, device-lock-acquired -> exit)\n' \
+        $((elapsed / 60)) $((elapsed % 60)) "$elapsed" >&2
+}
+trap _print_total_runtime EXIT
+
 # --- Acquire flock (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
     exec 9>"$LOCK_FILE"
@@ -218,6 +241,10 @@ if [[ "$SIM_MODE" == false ]]; then
     echo "SAFE_PYTEST: Waiting for device lock..." >&2
     flock 9
     echo "SAFE_PYTEST: Device lock acquired" >&2
+
+    # Start the total-run clock the moment we own the device. The lock-wait above is
+    # idle queueing behind other runners and is deliberately excluded.
+    RUN_START=$(date +%s)
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
@@ -229,6 +256,10 @@ if [[ "$SIM_MODE" == false ]]; then
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete" >&2
     fi
+else
+    # Simulator: no device lock to acquire, so start the total-run clock here (the
+    # equivalent "start of testing" point).
+    RUN_START=$(date +%s)
 fi
 
 # --- Setup environment ---
