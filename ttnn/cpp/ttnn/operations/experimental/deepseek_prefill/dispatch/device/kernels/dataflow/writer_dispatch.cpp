@@ -264,6 +264,8 @@ void kernel_main() {
 #ifdef DEST_CHIP_ID
                     fabric_set_unicast_route<false>(
                         (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+
+                    // Send payload
                     fabric_send_noc_unicast<fabric_max_packet_size>(
                         output_addr_gen,
                         fabric_connections[route_info[0]],
@@ -272,6 +274,8 @@ void kernel_main() {
                         page_idx,
                         (int)aligned_output_page_size,
                         l1_alignment);
+
+                    // Send metadata
                     fabric_send_noc_unicast<fabric_max_packet_size>(
                         metadata_addr_gen,
                         fabric_connections[route_info[0]],
@@ -280,7 +284,7 @@ void kernel_main() {
                         page_idx,
                         (int)aligned_metadata_page_size,
                         l1_alignment);
-                    noc_async_writes_flushed();
+                    noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
                     noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
                     consumed[s]++;
@@ -359,7 +363,7 @@ void kernel_main() {
             (int)aligned_metadata_page_size,
             l1_alignment);
 
-        noc_async_writes_flushed();
+        noc_async_writes_flushed();  // Ensure payload+metadata departed L1 before freeing CB slots
 #endif
 
         cb_pop_front(cb_payload_for_writer_id, 1);
@@ -372,6 +376,14 @@ void kernel_main() {
         // so the exit-sem signal cannot reach peers ahead of the last metadata/payload writes.
         noc_async_write_barrier();
 
+        // Exit semaphore exchange - uses a dedicated semaphore (exit_semaphore_address) and
+        // the dedicated sem_packet_header. flush=true (vs the init handshake which uses the
+        // default flush=false): the EDM on the receiver holds this atomic-inc until our prior
+        // fabric writes (payload + metadata) to that chip have committed there. Without it the
+        // small atomic-inc packet can overtake the larger data writes on B's local NOC and the
+        // peer would observe sem-reached-threshold before the data has landed in DRAM. At init
+        // there are no prior writes to order against, so flush=false saves one EDM round-trip
+        // check.
         {
             const uint64_t exit_noc_semaphore_addr = get_noc_addr(exit_semaphore_address);
             send_init_semaphore_to_configured_targets<
@@ -407,6 +419,6 @@ void kernel_main() {
     // (and atomics, defensively) have completed before we close.
     noc_async_full_barrier();
 
-    close_direction_connections(directions, fabric_connections);
+        close_direction_connections(directions, fabric_connections);
 #endif
 }

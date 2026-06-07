@@ -64,11 +64,6 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be DRAM interleaved, not sharded");
-
-    TT_FATAL(
-        operation_attributes.num_untilizers_per_sender >= 1,
-        "num_untilizers_per_sender must be >= 1; got {}.",
-        operation_attributes.num_untilizers_per_sender);
 }
 
 void DispatchDeviceOperation::validate_on_program_cache_hit(

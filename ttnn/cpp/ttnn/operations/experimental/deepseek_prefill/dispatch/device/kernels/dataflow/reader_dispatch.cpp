@@ -3,12 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Sender RISCV_1 kernel — row-major path only.
+// Reader kernel for the row-major dispatch path — runs on the sender core's
+// RISCV_1, paired with writer_dispatch.cpp on RISCV_0.  (The tile-layout path
+// uses untilize cores instead and has no sender-side reader kernel.)
 //
-// This kernel is created only on the row-major dispatch path; the tile-layout path
-// runs without a reader kernel
+// Streams row-major input/indices/weights from DRAM and, per routed token, either
+// writes it straight to local DRAM or hands (route_info, payload, metadata) to the
+// writer for a fabric send to the destination device.
 //
-// Reads input/indices/weights and builds (route_info, payload, metadata)
+// Tokens [token_start_idx, token_end_idx) are processed in batches of
+// read_batch_size.  Reads are pipelined: the next batch's DRAM reads are issued
+// before the current batch's write barrier so the read and write NOC channels
+// overlap.  (The input/indices/weights scratch is a single region reused per
+// batch, not a FIFO — see the reservation note below.)
+//
+// Startup: load offsets[] (per-expert DRAM page allocators) and the read-only
+// dispatch_table[] (expert → destination chip, or -1) into local L1 scratch.
+//
+// For each batch, for each (token, top-k expert) routed to this dispatch core:
+//   - Allocate a destination DRAM page from offsets[expert]; if the dispatch
+//     buffer is full, bump the counter and drop the token (prevents OOB writes).
+//   - Local (expert maps to this device): write payload + metadata directly to
+//     local DRAM.
+//   - Cross-device: push route_info (route/distance/page), payload, and metadata
+//     to the writer CBs; the writer forwards them over the fabric.
+//
+// After the last batch: push ROUTE_INFO_SENTINEL to the writer so it stops.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -216,6 +236,8 @@ void kernel_main() {
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                 uint32_t routed_expert = (uint32_t)indices[k];
 
+                // Skip experts not owned by this dispatch core (low bits of the expert id
+                // select the dispatch core) and experts the table maps nowhere (-1).
                 if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
                     continue;
                 }
@@ -225,6 +247,7 @@ void kernel_main() {
                     continue;
                 }
                 auto expert_chip = device_begin_idx + expert_chip_og * device_stride;
+                // Allocate this token's destination DRAM page from the expert's counter.
                 auto& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
                     // Token would overflow the dispatch buffer - skip to prevent
@@ -234,8 +257,12 @@ void kernel_main() {
                 }
                 auto page_idx = offset;
 
+                // Local: expert lives on this device — write payload + metadata straight to DRAM.
                 if (expert_chip == linearized_mesh_coord) {
                     {
+                        // Metadata layout (5 × int32): [src chip, global token idx, top-k slot,
+                        // routed expert, routing weight].  Staged in scratch, then written to the
+                        // same DRAM page index as the payload.
                         volatile tt_l1_ptr int32_t* metadata =
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
                         metadata[0] = linearized_mesh_coord;
@@ -250,6 +277,9 @@ void kernel_main() {
                         batch_did_local_write = true;
                     }
                 } else {
+                    // Cross-device: stage route_info, payload and metadata into the writer's CBs;
+                    // the writer (RISCV_0) forwards them over the fabric.  route/distance tell the
+                    // fabric writer where to send.
                     if constexpr (is_1d_topology<topology>()) {
                         uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
                         uint32_t distance =
@@ -316,7 +346,8 @@ void kernel_main() {
         }
     }
 
-    // Sentinel: row-major sender reader still drives the local writer through c_4 sentinel.
+    // Teardown: all batches done — push a ROUTE_INFO_SENTINEL route_info entry so the writer
+    // (RISCV_0) knows no more tokens are coming and stops forwarding / exits.
     cb_reserve_back(cb_route_info_id, 1);
     volatile tt_l1_ptr uint32_t* sentinel_route_info =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));

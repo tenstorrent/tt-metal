@@ -111,6 +111,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
     uint32_t num_untilizers = operation_attributes.num_untilizers_per_sender;
+    TT_FATAL(num_untilizers >= 1, "num_untilizers_per_sender must be >= 1; got {}.", num_untilizers);
     log_debug(
         tt::LogOp,
         "Creating prefill dispatch program (tile layout) for mesh coordinate: ({}, {}) with topology: {} num_links: {}",
@@ -339,7 +340,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         });
     }
     // c_14: per-batch route plan (reader RISC → writer RISC, on same untilize core).
-    // Layout: [entry_count u32][padding to 32B][entries × 8 u32 each]
+    // Layout (PlanHeader + PlanEntry[]) is defined in kernels/dataflow/dispatch_plan.hpp:
+    // [PlanHeader: 32B][PlanEntry × 8 u32 (32B) each].
     {
         constexpr uint32_t plan_entry_u32s = 8;
         uint32_t max_plan_entries = read_batch_size * operation_attributes.num_experts_per_tok;
@@ -762,7 +764,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         std::vector<uint32_t> writer_runtime_args = base_runtime_args;
         writer_runtime_args[11] = core_idx;  // dispatch_core_idx
 
-        // Writer-only: exit semaphore address (avoids init/exit reuse race).
+        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
+        // init/exit reuse race where a fast peer's exit-inc lands during the post-init
+        // set(0) window).
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
         // ===== Sender writer (tile-layout): handshake + per-entry fabric send + credit =====

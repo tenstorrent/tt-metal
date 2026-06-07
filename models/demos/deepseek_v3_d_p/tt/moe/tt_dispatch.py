@@ -107,8 +107,8 @@ class TtDispatchModule(LightweightModule):
         self.topology = topology
         self.fp8_output = fp8_output
         self.subdevice_id = subdevice_id
-        if num_untilizers_per_sender < 1:
-            raise ValueError(f"num_untilizers_per_sender must be >= 1; got {num_untilizers_per_sender}")
+        # num_untilizers_per_sender >= 1 is validated on the device op side
+        # (DispatchDeviceOperation::validate_on_program_cache_miss).
         self.num_untilizers_per_sender = num_untilizers_per_sender
 
     @staticmethod

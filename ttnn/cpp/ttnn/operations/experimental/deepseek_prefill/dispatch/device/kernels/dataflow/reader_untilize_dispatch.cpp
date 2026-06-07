@@ -3,17 +3,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //
-// Reader kernel for untilizer cores.
-// Reads input, indices, weights and builds a per-batch routing plan.
-// Building the routing plan requires for the untilizer cores turn
-// to modify the offsets[] tensor.
-// Repeats this process until all batches are processed.
+// Reader kernel for the untilize cores in the tile-layout dispatch path.
+// Runs on the reader RISC of each untilize core, paired with
+// writer_untilize_dispatch.cpp on the other data-movement RISC: this kernel
+// streams tiled input for compute to untilize and builds the per-batch route
+// plan, while the writer drains the previous batch's plan and issues the NOC
+// writes.
+//
+// Token batches are distributed round-robin across total_workers untilize cores:
+// core i processes batches i, i+total_workers, …
+//
+// Shared state — offsets[] (per-expert DRAM page allocators) is a single counter
+// array owned by core 0 of each sender group.  Cores take turns mutating it under
+// a baton ring (turn semaphore) that circulates in global batch order: a core
+// pulls the owner's offsets[], appends its batch's allocations, writes them back,
+// then hands the baton to the next core.  dispatch_table[] is read-only, so every
+// core keeps its own copy.
+//
+// For each assigned batch:
+//   1. Signal compute to start untilizing this batch (cb_signal_id).
+//   2. Stream the tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles
+//      at a time, for compute to untilize.
+//   3. Read this batch's indices and weights pages from DRAM.
+//   4. Take the baton, then build the route plan into cb_plan_id: for each
+//      (token, top-k) routed to this dispatch core, allocate a DRAM page from
+//      offsets[expert] (drop if the dispatch buffer is full), classify it local
+//      vs cross-device (computing route/distance for the latter), and append a
+//      PlanEntry.  Write offsets[] back and release the baton.
+//
+// After the last batch: push an end-of-plan sentinel — ROUTE_INFO_SENTINEL to
+// compute (cb_signal_id) and a zero-entry sentinel plan page to the writer.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
 #if ENABLE_DISPATCH_DEBUG
@@ -23,21 +49,9 @@
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
-constexpr uint32_t PLAN_FLAG_LOCAL = 0x1u;
-constexpr uint32_t PLAN_FLAG_END = 0x80000000u;
-constexpr uint32_t PLAN_ENTRY_U32S = 8;
 
-// Plan entry layout (8 u32 = 32 bytes):
-//   [0] flags (bit 0: is_local, bit 31: end-of-plan sentinel)
-//   [1] token_t           (offset in c_11 batch — 0..read_batch_size-1)
-//   [2] routed_expert
-//   [3] page_idx          (DRAM page for local + remote)
-//   [4] token_idx         (global token index, for metadata)
-//   [5] (k << 16) | (weight & 0xFFFF)
-//   [6] route             (cross-device only)
-//   [7] distance          (cross-device only)
-//
-// Page layout: [entry_count u32][padding][entries...]
+// Plan page layout (PlanHeader + PlanEntry[]) is defined in dispatch_plan.hpp and shared
+// with the writer kernel.
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -219,9 +233,10 @@ void kernel_main() {
             batch_idx);
         cb_reserve_back(cb_plan_id, 1);
         uint32_t plan_addr = get_write_ptr(cb_plan_id);
-        volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_addr);
+        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
+        volatile tt_l1_ptr PlanEntry* entries =
+            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
         uint32_t entry_count = 0;
-        uint32_t entry_off = 8;  // entries start at u32 offset 8 (32B header)
 
         DPRINT_DISPATCH(
             "[R s={} c={}] b={} WAIT baton (turn_sem>={}, have={})\n",
@@ -245,8 +260,12 @@ void kernel_main() {
                 reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
             uint32_t token_idx = batch_start + t;
 
+            // Walk this token's top-k experts; emit a plan entry for each one routed to this
+            // dispatch core (after the ownership / mapping / capacity filters below).
             for (uint32_t k = 0; k < num_experts_per_tok; k++) {
                 int32_t routed_expert = indices_t[k];
+                // Skip experts not owned by this dispatch core (low bits of the expert id
+                // select the dispatch core), and experts the table maps nowhere (-1).
                 if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
                     continue;
                 }
@@ -255,7 +274,10 @@ void kernel_main() {
                     continue;
                 }
 
-                // Single shared counter, all cores grow left-to-right from offsets[e].
+                // Allocate this token's destination DRAM page from the expert's counter.
+                // Single shared counter; all cores grow it left-to-right from offsets[e].
+                // If the dispatch buffer for this expert is full, still bump the counter
+                // (so capacity accounting stays consistent) but drop the token — no entry.
                 uint32_t& offset = offsets[routed_expert];
                 if (offset >= max_dispatch_buffer_token_size) {
                     offset++;
@@ -267,32 +289,30 @@ void kernel_main() {
                 bool is_local = (expert_chip == linearized_mesh_coord);
                 int16_t weight = (int16_t)weights_t[k];
 
-                uint32_t base = entry_off;
-                plan[base + 0] = is_local ? PLAN_FLAG_LOCAL : 0;
-                plan[base + 1] = t;
-                plan[base + 2] = (uint32_t)routed_expert;
-                plan[base + 3] = page_idx;
-                plan[base + 4] = token_idx;
-                plan[base + 5] = (k << 16) | ((uint32_t)(uint16_t)weight);
+                volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
+                entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
+                entry->token_t = t;
+                entry->routed_expert = (uint32_t)routed_expert;
+                entry->page_idx = page_idx;
+                entry->token_idx = token_idx;
+                entry->weight = weight;
+                entry->k = (uint16_t)k;
 
                 if (!is_local) {
                     if constexpr (is_1d_topology<topology>()) {
-                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                        uint32_t distance =
+                        entry->route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        entry->distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                        plan[base + 6] = route;
-                        plan[base + 7] = distance;
                     } else {
-                        plan[base + 6] = 0;
-                        plan[base + 7] = 0;
+                        entry->route = 0;
+                        entry->distance = 0;
                     }
                 } else {
-                    plan[base + 6] = 0;
-                    plan[base + 7] = 0;
+                    entry->route = 0;
+                    entry->distance = 0;
                 }
 
                 entry_count++;
-                entry_off += PLAN_ENTRY_U32S;
             }
         }
 
@@ -317,23 +337,28 @@ void kernel_main() {
                 entry_count);
         }
 
-        plan[0] = entry_count;
+        plan->entry_count = entry_count;
         cb_push_back(cb_plan_id, 1);
     }
 
+    // Teardown: all batches done — push the two end-of-stream sentinels this core's
+    // consumers wait on.
     DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id);
-    // Send sentinel to compute so it breaks out of its loop
+    // (1) Sentinel value to compute so it breaks out of its untilize loop.
     cb_reserve_back(cb_signal_id, 1);
     volatile tt_l1_ptr uint32_t* signal_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_signal_id));
     signal_ptr[0] = ROUTE_INFO_SENTINEL;
     cb_push_back(cb_signal_id, 1);
 
-    // Push end-of-plan sentinel for the writer so it forwards ROUTE_INFO_SENTINEL to sender.
+    // (2) Zero-entry end-of-plan page to the writer (entry_count == 0, entries[0].flags ==
+    //     PLAN_FLAG_END) so it stops draining and forwards ROUTE_INFO_SENTINEL to the sender.
     cb_reserve_back(cb_plan_id, 1);
     uint32_t sentinel_addr = get_write_ptr(cb_plan_id);
-    volatile tt_l1_ptr uint32_t* sentinel_plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sentinel_addr);
-    sentinel_plan[0] = 0;  // entry_count
-    sentinel_plan[8] = PLAN_FLAG_END;
+    volatile tt_l1_ptr PlanHeader* sentinel_plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(sentinel_addr);
+    volatile tt_l1_ptr PlanEntry* sentinel_entries =
+        reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(sentinel_addr + sizeof(PlanHeader));
+    sentinel_plan->entry_count = 0;
+    sentinel_entries[0].flags = PLAN_FLAG_END;
     cb_push_back(cb_plan_id, 1);
 }
