@@ -654,6 +654,10 @@ class TTSeamlessM4Tv2Model:
         self._speech_hidden_parts: list[ttnn.Tensor] = []
         self._speech_hidden_cache_active = False
         self._t2u_trace_key: Optional[tuple[Any, ...]] = None
+        self._vocoder_prewarm_keys: set[tuple[int, int]] = set()
+        self._vocoder_prewarm_input: Optional[ttnn.Tensor] = None
+        self._vocoder_prewarm_spk: Optional[ttnn.Tensor] = None
+        self._vocoder_prewarm_lang: Optional[ttnn.Tensor] = None
 
     def _reset_speech_hidden_cache(self) -> None:
         for t in self._speech_hidden_parts:
@@ -704,6 +708,57 @@ class TTSeamlessM4Tv2Model:
         u_bucket = _vocoder_timeline_bucket(max(1, int(unit_seq)))
         t_bucket = _vocoder_timeline_bucket(max(1, int(t_audio)))
         self.prewarm_vocoder_conv1d_weights(unit_seq=u_bucket, t_audio=t_bucket, batch=batch)
+        ttnn.synchronize_device(self.device)
+
+    def _release_vocoder_prewarm_stash(self) -> None:
+        for attr in ("_vocoder_prewarm_input", "_vocoder_prewarm_spk", "_vocoder_prewarm_lang"):
+            t = getattr(self, attr, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, attr, None)
+
+    def _stash_vocoder_prewarm_inputs(
+        self,
+        vocoder_input: ttnn.Tensor,
+        speaker_tt: ttnn.Tensor,
+        lang_tt: ttnn.Tensor,
+    ) -> None:
+        """Keep cloned vocoder inputs from the last speech path for program prewarm replay."""
+        self._release_vocoder_prewarm_stash()
+        self._vocoder_prewarm_input = ttnn.clone(vocoder_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self._vocoder_prewarm_spk = ttnn.clone(speaker_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self._vocoder_prewarm_lang = ttnn.clone(lang_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def prewarm_vocoder_programs(self) -> None:
+        """Warm vocoder conv weights and JIT-compile programs for the last speech ``generate()`` shapes."""
+        voc = self.vocoder
+        unit_seq = getattr(voc, "_last_unit_seq", None)
+        t_audio = getattr(voc, "_last_t_audio", None)
+        if unit_seq is None or t_audio is None or int(t_audio) < 1:
+            return
+        u_bucket = _vocoder_timeline_bucket(max(1, int(unit_seq)))
+        t_bucket = _vocoder_timeline_bucket(max(1, int(t_audio)))
+        key = (u_bucket, t_bucket)
+        if key in self._vocoder_prewarm_keys:
+            return
+        self.prewarm_vocoder_conv1d_weights(unit_seq=u_bucket, t_audio=t_bucket)
+        if (
+            self._vocoder_prewarm_input is None
+            or self._vocoder_prewarm_spk is None
+            or self._vocoder_prewarm_lang is None
+        ):
+            self._vocoder_prewarm_keys.add(key)
+            return
+        inp = ttnn.clone(self._vocoder_prewarm_input, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        spk = ttnn.clone(self._vocoder_prewarm_spk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        lang = ttnn.clone(self._vocoder_prewarm_lang, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wav, lens = self.vocoder.forward(inp, spk, lang, trace_no_profiler=True)
+        ttnn.deallocate(wav)
+        ttnn.deallocate(lens)
+        ttnn.deallocate(inp)
+        ttnn.deallocate(spk)
+        ttnn.deallocate(lang)
+        self._vocoder_prewarm_keys.add(key)
         ttnn.synchronize_device(self.device)
 
     def _t2u_trace_signature(
@@ -837,6 +892,8 @@ class TTSeamlessM4Tv2Model:
         Call before ``close_mesh_device`` (e.g. demo shutdown) so ``allocate_tensor_on_host``
         mirrors do not trip ``PinnedMemoryCache::release_for_device`` on mesh teardown.
         """
+        self._release_vocoder_prewarm_stash()
+        self._vocoder_prewarm_keys.clear()
         self._release_kv_decode_runtime()
         ttnn.synchronize_device(self.device)
 
@@ -856,6 +913,11 @@ class TTSeamlessM4Tv2Model:
         self.text_decoder._matmul_pc_cache.clear()
         self.text_encoder._dram_matmul_pc_cache.clear()
 
+    def _evict_t2u_prep_for_vocoder(self) -> None:
+        """Drop T2U prep caches before vocoder without flushing the global Metal program cache."""
+        self.t2u._conv1d_prepared_cache.clear()
+        self.t2u._matmul_pc_cache.clear()
+
     def _clear_decode_and_t2u_programs(self, *, preserve_vocoder: bool = True) -> None:
         """Evict decode/T2U/speech-encoder programs for L1 headroom; keep vocoder prep when requested.
 
@@ -863,7 +925,8 @@ class TTSeamlessM4Tv2Model:
         ``preserve_vocoder=True`` — avoids ~8–25 s vocoder cold-compile on every warmup/timed iter.
         """
         self.release_text_decoder_decode_trace()
-        self.device.clear_program_cache()
+        if not preserve_vocoder:
+            self.device.clear_program_cache()
         self.t2u._conv1d_prepared_cache.clear()
         self.t2u._matmul_pc_cache.clear()
         self.text_decoder._matmul_pc_cache.clear()
@@ -873,6 +936,7 @@ class TTSeamlessM4Tv2Model:
         if not preserve_vocoder:
             self.vocoder._conv1d_prepared_cache.clear()
             self.vocoder._matmul_pc_cache.clear()
+            self._vocoder_prewarm_keys.clear()
 
     def _release_speech_generate_runtime(self) -> None:
         """Release traces/KV after speech ``generate()`` without flushing vocoder program cache."""
@@ -3201,10 +3265,11 @@ class TTSeamlessM4Tv2Model:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        # Drop cached conv1d/L1 programs from text decode + T2U before vocoder (long unit_seq
-        # otherwise exceeds per-core L1 when programs accumulate in the demo's T2TT→T2ST flow).
-        self._clear_decode_and_t2u_programs(preserve_vocoder=True)
+        # Drop T2U prep before vocoder for L1 headroom; keep global program cache so vocoder
+        # Metal programs compiled on prior warmups/timed iters stay resident.
+        self._evict_t2u_prep_for_vocoder()
         ttnn.synchronize_device(self.device)
+        self._stash_vocoder_prewarm_inputs(vocoder_input, spk_tt, voc_tt)
         t_voc = phase_timer.sync_now()
         wav_tt, lengths_tt = self.vocoder.forward(vocoder_input, spk_tt, voc_tt)
         phase_timer.vocoder_ms = phase_timer.elapsed_ms(t_voc)

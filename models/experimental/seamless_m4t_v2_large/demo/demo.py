@@ -471,16 +471,8 @@ def _prewarm_speech_encoder(tt_model: TTSeamlessM4Tv2Model, mel_seq_len: int) ->
 
 
 def _prewarm_vocoder_from_last_generate(tt_model: TTSeamlessM4Tv2Model) -> None:
-    """Prep vocoder conv weights for the last ``generate()`` speech path (cached scalars)."""
-    voc = tt_model.vocoder
-    t_audio = getattr(voc, "_last_t_audio", None)
-    unit_seq = getattr(voc, "_last_unit_seq", None)
-    if t_audio is None or int(t_audio) < 1:
-        return
-    if unit_seq is None or int(unit_seq) < 1:
-        return
-    tt_model.prewarm_vocoder_shape_buckets(unit_seq=int(unit_seq), t_audio=int(t_audio))
-    ttnn.synchronize_device(tt_model.device)
+    """JIT-warm vocoder conv weights and Metal programs for the last ``generate()`` speech path."""
+    tt_model.prewarm_vocoder_programs()
 
 
 def _process_jit_preflight(

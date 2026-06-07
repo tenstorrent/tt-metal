@@ -580,7 +580,7 @@ Phrase **repetition on very long inputs** (text or audio) is expected **HF model
 
 ### Vocoder throughput (mitigated)
 
-Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/upsampled paths via `_vocoder_timeline_bucket` / `_slice_nlc_time` in `[tt/tt_code_hifigan.py](tt/tt_code_hifigan.py)`; override with `SEAMLESS_VOCODER_CONV1D_BUCKET`). Speech `generate()` **preserves vocoder prep/program cache** across decode/T2U program evictions (`_clear_decode_and_t2u_programs(preserve_vocoder=True)`). Together with demo warmups this removes the prior ~8–25 s vocoder recompile on every in-process speech iter; see **Performance → Cold start** for the remaining one-time JIT outlier on a cold process.
+Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/upsampled paths via `_vocoder_timeline_bucket` / `_slice_nlc_time` in [`tt/tt_code_hifigan.py`](tt/tt_code_hifigan.py); override with `SEAMLESS_VOCODER_CONV1D_BUCKET`). Speech `generate()` **preserves vocoder prep/program cache** across decode/T2U program evictions (`_clear_decode_and_t2u_programs(preserve_vocoder=True)` skips global ``clear_program_cache``; demo and ``demo_perf_sweep`` call ``prewarm_vocoder_programs()`` after warmups). Together this removes vocoder recompile on every speech iter (~10 s spikes → ~0.4–1.5 s steady on BH QB); see **Performance → Cold start** for the remaining one-time JIT outlier on a cold process.
 
 ---
 

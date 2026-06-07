@@ -459,6 +459,8 @@ def _run_five_tasks_at_seq_len(
                 ),
                 release_fn=demo_mod._release_speech_out,
                 warmup_iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+                measure_iters=demo_mod._DEMO_SPEECH_MEASURE_ITERS,
+                post_warmup_fn=lambda: demo_mod._prewarm_vocoder_from_last_generate(tt_model),
             )
             if not isinstance(out, TTSeamlessM4Tv2GenerationOutput):
                 raise TypeError(f"T2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(out)}")
@@ -555,6 +557,8 @@ def _run_five_tasks_at_seq_len(
                 ),
                 release_fn=demo_mod._release_speech_out,
                 warmup_iters=s2st_measure_warmups,
+                measure_iters=demo_mod._DEMO_SPEECH_MEASURE_ITERS,
+                post_warmup_fn=lambda: demo_mod._prewarm_vocoder_from_last_generate(tt_model),
             )
             if not isinstance(out, TTSeamlessM4Tv2GenerationOutput):
                 raise TypeError(f"S2ST expected TTSeamlessM4Tv2GenerationOutput, got {type(out)}")
