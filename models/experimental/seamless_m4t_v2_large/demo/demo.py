@@ -282,7 +282,7 @@ def ensure_demo_audio(
     return dest
 
 
-_TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq", "return_timings"})
+_TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq", "use_t2u_trace", "return_timings"})
 
 
 def _hf_gen_kwargs(gen_common: dict) -> dict:
@@ -479,7 +479,7 @@ def _prewarm_vocoder_from_last_generate(tt_model: TTSeamlessM4Tv2Model) -> None:
         return
     if unit_seq is None or int(unit_seq) < 1:
         return
-    tt_model.prewarm_vocoder_conv1d_weights(unit_seq=int(unit_seq), t_audio=int(t_audio))
+    tt_model.prewarm_vocoder_shape_buckets(unit_seq=int(unit_seq), t_audio=int(t_audio))
     ttnn.synchronize_device(tt_model.device)
 
 
@@ -547,6 +547,7 @@ def main() -> None:
         use_kv_cache=True,
         use_decode_trace=use_decode_trace,
         use_2cq=use_2cq,
+        use_t2u_trace=False,
         return_timings=True,
     )
 

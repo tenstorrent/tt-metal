@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import torch
 import ttnn
@@ -28,7 +28,10 @@ from models.experimental.seamless_m4t_v2_large.tt.t2u_char_lookup import (
     T2UCharLookupTables,
     build_t2u_char_lookup_tables,
 )
-from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import TTSeamlessM4Tv2CodeHifiGan
+from models.experimental.seamless_m4t_v2_large.tt.tt_code_hifigan import (
+    TTSeamlessM4Tv2CodeHifiGan,
+    _vocoder_timeline_bucket,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_speech_encoder import TTSeamlessM4Tv2SpeechEncoder
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     TTSeamlessM4Tv2Decoder,
@@ -52,6 +55,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 )
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     TTSeamlessM4Tv2TextToUnitForConditionalGeneration,
+    make_t2u_trace_prealloc_tensors,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
@@ -645,6 +649,123 @@ class TTSeamlessM4Tv2Model:
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
+        self._speech_hidden_parts: list[ttnn.Tensor] = []
+        self._speech_hidden_cache_active = False
+        self._t2u_trace_key: Optional[tuple[Any, ...]] = None
+
+    def _reset_speech_hidden_cache(self) -> None:
+        for t in self._speech_hidden_parts:
+            ttnn.deallocate(t)
+        self._speech_hidden_parts = []
+        self._speech_hidden_cache_active = False
+
+    def _stash_speech_hidden_block(self, hidden: ttnn.Tensor, *, start: int, end: int) -> None:
+        """Append decoder hidden rows ``[start:end)`` from a prefill ``[B,S,H]`` tensor."""
+        if not self._speech_hidden_cache_active or end <= start:
+            return
+        h = int(self.hidden_size)
+        block = ttnn.slice(hidden, [0, start, 0], [1, end, h], (1, 1, 1))
+        self._speech_hidden_parts.append(block)
+
+    def _stash_speech_hidden_step(self, dec_out: ttnn.Tensor) -> None:
+        """Append one decode-step hidden ``[B,1,H]`` (cloned before ``dec_out`` deallocate)."""
+        if not self._speech_hidden_cache_active:
+            return
+        self._speech_hidden_parts.append(ttnn.clone(dec_out, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
+    def _speech_hidden_for_t2u(self, logical_rows: int) -> Optional[Tuple[ttnn.Tensor, int]]:
+        """Concat cached decode hiddens to ``[1, padded_dec_seq, H]`` when row count matches."""
+        if not self._speech_hidden_cache_active or not self._speech_hidden_parts:
+            return None
+        if logical_rows <= 0:
+            return None
+        hidden = (
+            self._speech_hidden_parts[0]
+            if len(self._speech_hidden_parts) == 1
+            else ttnn.concat(self._speech_hidden_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        got = int(hidden.shape[1])
+        if got != logical_rows:
+            ttnn.deallocate(hidden)
+            return None
+        padded_dec_seq = tile_align(logical_rows)
+        if padded_dec_seq != logical_rows:
+            hidden = ttnn.pad(
+                hidden,
+                [(0, 0), (0, padded_dec_seq - logical_rows), (0, 0)],
+                value=0.0,
+            )
+        return hidden, padded_dec_seq
+
+    def prewarm_vocoder_shape_buckets(self, *, unit_seq: int, t_audio: int, batch: int = 1) -> None:
+        """Warm vocoder conv programs for bucketed ``(unit_seq, t_audio)``."""
+        u_bucket = _vocoder_timeline_bucket(max(1, int(unit_seq)))
+        t_bucket = _vocoder_timeline_bucket(max(1, int(t_audio)))
+        self.prewarm_vocoder_conv1d_weights(unit_seq=u_bucket, t_audio=t_bucket, batch=batch)
+        ttnn.synchronize_device(self.device)
+
+    def _t2u_trace_signature(
+        self,
+        dec_hidden: ttnn.Tensor,
+        char_ids: ttnn.Tensor,
+        cc_list: Sequence[int],
+    ) -> tuple[Any, ...]:
+        return (
+            tuple(int(x) for x in dec_hidden.shape),
+            tuple(int(x) for x in char_ids.shape),
+            tuple(int(x) for x in cc_list),
+        )
+
+    def _run_t2u_speech_forward(
+        self,
+        dec_hidden: ttnn.Tensor,
+        t2u_mask_4d: ttnn.Tensor,
+        char_ids_tt: ttnn.Tensor,
+        cc_list: Sequence[int],
+        *,
+        use_t2u_trace: bool,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        sig = self._t2u_trace_signature(dec_hidden, char_ids_tt, cc_list)
+        if use_t2u_trace and self._t2u_trace_key is not None and self._t2u_trace_key != sig:
+            self.t2u.release_forward_trace()
+            self._t2u_trace_key = None
+
+        if use_t2u_trace and self._t2u_trace_key == sig and self.t2u._forward_trace_rt is not None:
+            return self.t2u.execute_forward_trace()
+
+        t2u_logits_tt, padding_tt = self.t2u.forward(
+            dec_hidden,
+            t2u_mask_4d,
+            char_ids_tt,
+            cc_list,
+            reference_discrete_durations=None,
+        )
+        durs = self.t2u._last_dur_list
+        if use_t2u_trace and durs is not None and self.t2u._forward_trace_rt is None:
+            char_inc, char_prev = self.t2u._cached_repeat_cumsums(list(cc_list))
+            unit_inc, unit_prev = self.t2u._cached_repeat_cumsums(durs)
+            hard = make_t2u_trace_prealloc_tensors(
+                self.device,
+                pad_token_id=self.t2u_pad_token_id,
+                hidden_size=self.hidden_size,
+                char_w=int(char_ids_tt.shape[1]),
+                cc_list=cc_list,
+                ref_durs=durs,
+                char_inc=char_inc,
+                char_prev=char_prev,
+                unit_inc=unit_inc,
+                unit_prev=unit_prev,
+            )
+            self.t2u.capture_forward_trace(
+                dec_hidden,
+                t2u_mask_4d,
+                char_ids_tt,
+                cc_list,
+                reference_discrete_durations=durs,
+                hard_upsample_cums=hard,
+            )
+            self._t2u_trace_key = sig
+        return t2u_logits_tt, padding_tt
 
     # ------------------------------------------------------------------
     # Speech-path conv prewarm (T2U + vocoder)
@@ -753,6 +874,8 @@ class TTSeamlessM4Tv2Model:
 
     def _release_speech_generate_runtime(self) -> None:
         """Release traces/KV after speech ``generate()`` without flushing vocoder program cache."""
+        self._reset_speech_hidden_cache()
+        self._t2u_trace_key = None
         self.t2u.release_forward_trace()
         self.vocoder.release_forward_trace()
         self.release_generation_runtime()
@@ -1926,12 +2049,13 @@ class TTSeamlessM4Tv2Model:
             cache_seq_len=position + 1,
             trace_no_profiler=True,
         )
+        self._stash_speech_hidden_step(dec_out)
+        logits = self._lm_head(dec_out)
+        ttnn.deallocate(dec_out)
         ttnn.deallocate(pos_tt)
         ttnn.deallocate(token_ids)
         if owns_cross_4d:
             ttnn.deallocate(cross_4d)
-        logits = self._lm_head(dec_out)
-        ttnn.deallocate(dec_out)
         return logits
 
     def _decoder_hidden(
@@ -2410,6 +2534,7 @@ class TTSeamlessM4Tv2Model:
         top_p = float(kwargs_text.get("top_p", 1.0) or 1.0)
         top_k = int(kwargs_text.get("top_k", 0) or 0)
         use_2cq = bool(kwargs_text.get("use_2cq", False))
+        use_t2u_trace = bool(kwargs_text.pop("use_t2u_trace", False))
         if do_sample and num_beams > 1:
             raise ValueError("do_sample=True is not compatible with num_beams > 1.")
         length_penalty = float(kwargs_text.get("length_penalty", 1.0) or 1.0)
@@ -2429,6 +2554,7 @@ class TTSeamlessM4Tv2Model:
         phase_timer = _GeneratePhaseTimer(self.device, return_timings, input_is_speech=input_is_speech)
         phase_timer.start()
         t_phase = phase_timer.sync_now()
+        self._reset_speech_hidden_cache()
 
         batch_size = int((input_features if input_features is not None else input_ids).shape[0])
         if batch_size != 1:
@@ -2467,6 +2593,15 @@ class TTSeamlessM4Tv2Model:
         phase_timer.encoder_ms = phase_timer.elapsed_ms(t_phase)
 
         reuse_text_sequences = text_sequences is not None
+        use_decode_trace_flag = bool(kwargs_text.get("use_decode_trace", False))
+        if (
+            generate_speech
+            and not reuse_text_sequences
+            and num_beams == 1
+            and not do_sample
+            and not use_decode_trace_flag
+        ):
+            self._speech_hidden_cache_active = True
 
         # ---- Seed decoder sequence (skipped when reusing T2TT ``text_sequences``) ----
         seed_tt: Optional[ttnn.Tensor] = None
@@ -2565,6 +2700,7 @@ class TTSeamlessM4Tv2Model:
                     kv_cache,
                     cross_attn_cache,
                 )
+                self._stash_speech_hidden_block(warm_out, start=0, end=seed_len)
                 phase_timer.prefill_ms = phase_timer.elapsed_ms(t_prefill)
                 ttnn.deallocate(warm_tt)
                 cross_valid = True
@@ -2822,9 +2958,15 @@ class TTSeamlessM4Tv2Model:
         # trims the final EOS). Use logical ``seq_host`` length (not tile-padded tensor width).
         t_t2u = phase_timer.sync_now()
         logical_seq_len = len(seq_host)
-        dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_seq_len - 1], (1, 1))
-        dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
-        ttnn.deallocate(dec_in_tt)
+        logical_hidden_rows = logical_seq_len - 1
+        cached_hidden = self._speech_hidden_for_t2u(logical_hidden_rows)
+        if cached_hidden is not None:
+            dec_hidden_padded, padded_dec_seq = cached_hidden
+            self._reset_speech_hidden_cache()
+        else:
+            dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_hidden_rows], (1, 1))
+            dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
+            ttnn.deallocate(dec_in_tt)
         ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
@@ -2877,12 +3019,12 @@ class TTSeamlessM4Tv2Model:
         self._clear_decode_and_t2u_programs(preserve_vocoder=True)
         ttnn.synchronize_device(self.device)
 
-        t2u_logits_tt, padding_tt = self.t2u.forward(
+        t2u_logits_tt, padding_tt = self._run_t2u_speech_forward(
             dec_hidden_padded,
             t2u_mask_4d,
             char_ids_tt,
             cc_list,
-            reference_discrete_durations=None,
+            use_t2u_trace=use_t2u_trace,
         )
         phase_timer.t2u_forward_ms = phase_timer.elapsed_ms(t_t2u_fwd)
         phase_timer.t2u_ms = (

@@ -2054,6 +2054,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             )
         self._num_local_dec_heads = decoder_attention_heads // self._tp
         self._forward_trace_rt: Optional[T2UForwardTraceRuntime] = None
+        self._last_dur_list: Optional[list[int]] = None
+        self._last_char_len: int = 0
+        self._last_unit_seq: int = 0
 
         self.encoder = TTSeamlessM4Tv2TextToUnitEncoder(
             device,
@@ -2871,6 +2874,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
 
         # Return a copy so callers may ``deallocate`` without invalidating ``_decoder_mask_cache``.
         pad_out = ttnn.clone(pad_unit, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self._last_dur_list = list(dur_list)
+        self._last_char_len = int(char_len)
+        self._last_unit_seq = int(unit_seq)
         return logits, pad_out
 
     def release_forward_trace(self) -> None:
