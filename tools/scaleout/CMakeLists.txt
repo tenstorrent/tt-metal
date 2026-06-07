@@ -14,6 +14,8 @@ add_executable(
     fabric_manager/utils/fabric_manager_utils.cpp
 )
 
+add_executable(dump_fabric_telemetry telemetry/dump_fabric_telemetry.cpp)
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
@@ -71,6 +73,8 @@ target_include_directories(run_fabric_manager PRIVATE "$<TARGET_PROPERTY:TT::Met
 target_include_directories(run_fabric_manager PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(run_fabric_manager SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+target_include_directories(dump_fabric_telemetry PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+
 target_link_libraries(
     scaleout_tools
     PUBLIC
@@ -108,6 +112,12 @@ target_link_libraries(
         TT::ScaleoutTools
         enchantum::enchantum
         protobuf::libprotobuf
+        tt_metal
+)
+
+target_link_libraries(
+    dump_fabric_telemetry
+    PRIVATE
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
