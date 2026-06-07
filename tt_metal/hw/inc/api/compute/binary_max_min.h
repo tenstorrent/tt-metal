@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_max_min.h"
+#include "ckernel_sfpu_binary_max_min.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -31,13 +32,24 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min_int32,
+        (true /* IS_MAX */, false /* IS_UNSIGNED */),
+        RC,
+        idst0,
+        idst1,
+        odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_int32_init())); }
+ALWI void binary_max_int32_tile_init() {
+    MATH((
+        SFPU_BINARY_INIT_CB(max_int32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UNSIGNED */))));
+}
 
 // clang-format off
 /**
@@ -59,13 +71,24 @@ ALWI void binary_max_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bina
  */
 // clang-format on
 ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max_uint32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min_int32,
+        (true /* IS_MAX */, true /* IS_UNSIGNED */),
+        RC,
+        idst0,
+        idst1,
+        odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_uint32_init())); }
+ALWI void binary_max_uint32_tile_init() {
+    MATH((
+        SFPU_BINARY_INIT_CB(max_uint32, sfpu::binary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UNSIGNED */))));
+}
 
 // clang-format off
 /**
@@ -87,13 +110,21 @@ ALWI void binary_max_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bin
  */
 // clang-format on
 ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (true /* IS_MAX */),
+        idst0,
+        idst1,
+        odst,
+        vector_mode)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max_init())); }
+ALWI void binary_max_tile_init() { MATH((SFPU_BINARY_INIT_CB(max, sfpu::binary_max_min_init, (true /* IS_MAX */)))); }
 
 // clang-format off
 /**
@@ -115,13 +146,24 @@ ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max
  */
 // clang-format on
 ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min_int32,
+        (false /* IS_MAX */, false /* IS_UNSIGNED */),
+        RC,
+        idst0,
+        idst1,
+        odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_int32_init())); }
+ALWI void binary_min_int32_tile_init() {
+    MATH((SFPU_BINARY_INIT_CB(
+        min_int32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UNSIGNED */))));
+}
 
 // clang-format off
 /**
@@ -143,13 +185,24 @@ ALWI void binary_min_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bina
  */
 // clang-format on
 ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min_uint32<APPROX>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min_int32,
+        (false /* IS_MAX */, true /* IS_UNSIGNED */),
+        RC,
+        idst0,
+        idst1,
+        odst)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_uint32_init())); }
+ALWI void binary_min_uint32_tile_init() {
+    MATH((SFPU_BINARY_INIT_CB(
+        min_uint32, sfpu::binary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UNSIGNED */))));
+}
 
 // clang-format off
 /**
@@ -171,12 +224,20 @@ ALWI void binary_min_uint32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_bin
  */
 // clang-format on
 ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_max_min,
+        (false /* IS_MAX */),
+        idst0,
+        idst1,
+        odst,
+        vector_mode)));
 }
 
 /**
  * Please refer to documentation.
  */
-ALWI void binary_min_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_min_init())); }
+ALWI void binary_min_tile_init() { MATH((SFPU_BINARY_INIT_CB(min, sfpu::binary_max_min_init, (false /* IS_MAX */)))); }
 
 }  // namespace ckernel
