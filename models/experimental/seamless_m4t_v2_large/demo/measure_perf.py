@@ -74,10 +74,10 @@ TGT_ASR = "eng"
 SEQ_LEN_MIN = 32
 SEQ_LEN_MAX = 4096
 
-# At 4096 mel, multiple S2ST ``generate()`` calls in one device session (warmup + timed)
-# leave decode-trace / T2U L1 state that breaks the next speech-encoder JIT. Warm on a
+# Multiple speech ``generate()`` calls in one device session (warmup + timed) leave decode-trace
+# state that collapses S2TT/S2ST/ASR on the timed run (notably at 2048 mel). Warm on a
 # throwaway device, then time on a fresh session (same pattern as cold-start preflight).
-_S2ST_SPLIT_WARMUP_MEL = 4096
+_SPEECH_SPLIT_WARMUP_MEL = 1792
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +328,7 @@ def _seq_len_header(seq_len: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _s2st_throwaway_warmups(
+def _speech_throwaway_warmups(
     *,
     session_kw: dict[str, Any],
     speech_feats: torch.Tensor,
@@ -336,24 +336,38 @@ def _s2st_throwaway_warmups(
     mel_frames: int,
     gen_common: dict[str, Any],
     iters: int,
+    task: str,
 ) -> None:
-    """Untimed S2ST runs on a throwaway mesh so the timed session stays L1-clean."""
+    """Untimed speech runs on a throwaway mesh so the timed session stays decode-trace clean."""
+    if iters <= 0:
+        return
     with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
         demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
         feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
         attn_tt = demo_mod.torch_ids_to_ttnn(device, speech_attn)
         for _ in range(iters):
-            out = tt_model.generate(
-                input_features=feats_tt,
-                attention_mask=attn_tt,
-                generate_speech=True,
-                return_intermediate_token_ids=True,
-                tgt_lang=TGT_S2ST,
-                speaker_id=0,
-                **gen_common,
-            )
+            if task == "S2ST":
+                out = tt_model.generate(
+                    input_features=feats_tt,
+                    attention_mask=attn_tt,
+                    generate_speech=True,
+                    return_intermediate_token_ids=True,
+                    tgt_lang=TGT_S2ST,
+                    speaker_id=0,
+                    **gen_common,
+                )
+                demo_mod._release_speech_out(out)
+            else:
+                tgt_lang = TGT_S2TT if task == "S2TT" else TGT_ASR
+                out = tt_model.generate(
+                    input_features=feats_tt,
+                    attention_mask=attn_tt,
+                    generate_speech=False,
+                    tgt_lang=tgt_lang,
+                    **gen_common,
+                )
+                ttnn.deallocate(out.sequences)
             ttnn.synchronize_device(device)
-            demo_mod._release_speech_out(out)
         ttnn.deallocate(feats_tt)
         ttnn.deallocate(attn_tt)
 
@@ -455,6 +469,19 @@ def _run_five_tasks_at_seq_len(
     except Exception as exc:
         _task_failed("T2ST", exc)
 
+    speech_split_warmup = mel_frames >= _SPEECH_SPLIT_WARMUP_MEL
+    speech_measure_warmups = 0 if speech_split_warmup else demo_mod._DEMO_SPEECH_WARMUP_ITERS
+    if speech_split_warmup:
+        _speech_throwaway_warmups(
+            session_kw=session_kw,
+            speech_feats=speech_feats,
+            speech_attn=speech_attn,
+            mel_frames=mel_frames,
+            gen_common=gen_common,
+            iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+            task="S2TT",
+        )
+
     # 3. S2TT
     log.write(f"  [3/5] S2TT @ {seq_len} mel frames")
     try:
@@ -472,7 +499,7 @@ def _run_five_tasks_at_seq_len(
                     **gen_common,
                 ),
                 release_fn=lambda o: ttnn.deallocate(o.sequences),
-                warmup_iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+                warmup_iters=speech_measure_warmups,
             )
             if not isinstance(out, TTSeamlessM4Tv2GreedySearchOutput):
                 raise TypeError(f"S2TT expected TTSeamlessM4Tv2GreedySearchOutput, got {type(out)}")
@@ -487,17 +514,17 @@ def _run_five_tasks_at_seq_len(
     # 4. S2ST
     log.write(f"  [4/5] S2ST @ {seq_len} mel frames")
     try:
-        s2st_measure_warmups = demo_mod._DEMO_SPEECH_WARMUP_ITERS
-        if seq_len >= _S2ST_SPLIT_WARMUP_MEL:
-            _s2st_throwaway_warmups(
+        s2st_measure_warmups = speech_measure_warmups
+        if speech_split_warmup:
+            _speech_throwaway_warmups(
                 session_kw=session_kw,
                 speech_feats=speech_feats,
                 speech_attn=speech_attn,
                 mel_frames=mel_frames,
                 gen_common=gen_common,
                 iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+                task="S2ST",
             )
-            s2st_measure_warmups = 0
         with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
             demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
             feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
@@ -541,6 +568,16 @@ def _run_five_tasks_at_seq_len(
     # 5. ASR
     log.write(f"  [5/5] ASR @ {seq_len} mel frames")
     try:
+        if speech_split_warmup:
+            _speech_throwaway_warmups(
+                session_kw=session_kw,
+                speech_feats=speech_feats,
+                speech_attn=speech_attn,
+                mel_frames=mel_frames,
+                gen_common=gen_common,
+                iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+                task="ASR",
+            )
         with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
             demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
             feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
@@ -555,7 +592,7 @@ def _run_five_tasks_at_seq_len(
                     **gen_common,
                 ),
                 release_fn=lambda o: ttnn.deallocate(o.sequences),
-                warmup_iters=demo_mod._DEMO_SPEECH_WARMUP_ITERS,
+                warmup_iters=speech_measure_warmups,
             )
             if not isinstance(out, TTSeamlessM4Tv2GreedySearchOutput):
                 raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(out)}")
