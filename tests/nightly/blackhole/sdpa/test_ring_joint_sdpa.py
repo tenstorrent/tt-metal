@@ -23,7 +23,7 @@ import math
 from unittest import mock
 
 import torch
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from itertools import product
 from typing import List, Dict
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -1015,7 +1015,10 @@ def get_chunked_only_chunk_id(n_chunks: int):
     raw = os.environ.get(CHUNKED_PREFILL_CHUNK_ID_ENV)
     if raw is None or raw == "":
         return None
-    only_chunk = int(raw)
+    try:
+        only_chunk = int(raw)
+    except ValueError as e:
+        raise AssertionError(f"{CHUNKED_PREFILL_CHUNK_ID_ENV}={raw!r} is not an integer") from e
     assert 0 <= only_chunk < n_chunks, f"{CHUNKED_PREFILL_CHUNK_ID_ENV}={only_chunk} out of range [0, {n_chunks})"
     return only_chunk
 

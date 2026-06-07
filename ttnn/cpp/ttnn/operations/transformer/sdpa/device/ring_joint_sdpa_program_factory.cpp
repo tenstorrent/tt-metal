@@ -910,13 +910,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         qk_out_subblock_h,
         qk_out_subblock_w);
 
-    auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
     // In-place latent-V reads non-contiguous K^T rows as V columns, so the phase-2 matmul must
-    // emit exactly one output column tile per issue.
-    if (kt_inplace_v) {
-        out_out_subblock_w = 1;
-    }
+    // emit exactly one output column tile per issue (max_subblock_w=1).
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
+        Sq_chunk_t,
+        vDHt,
+        dst_size,
+        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
+        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and

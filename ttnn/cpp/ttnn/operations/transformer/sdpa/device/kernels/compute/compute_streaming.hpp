@@ -1289,9 +1289,11 @@ static void sdpa_inner_loop_step(
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above. The
-                    // in-place branch is only exercised at runtime when Sq_chunk_t > 1, which the host
-                    // gates off for this path; folded into the ternary for correctness regardless.
+                    // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
+                    // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
+                    // single row-group — so this outer q_subblock loop is skipped entirely on that
+                    // path and kt_inplace_v is effectively false here. The ternary is kept symmetric
+                    // with the q_subblock-0 site so the addressing forms stay paired.
                     const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
                     blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
                         cb_qkt_im,
