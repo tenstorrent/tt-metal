@@ -112,7 +112,8 @@ Limits below are what the TT port exercises on **BH QB `MeshShape(1, 4)`**. HF c
 Notes:
 
 - **Encoder timeline vs raw input.** For text tasks the encoder timeline equals the tokenized source length (1 token → 1 text-encoder frame). For speech tasks the Conformer stack plus length adaptor (kernel/stride **8**) subsamples mel into a shorter encoder timeline fed to the text decoder (~8× shorter than mel length at the upper bound).
-- **Decoder cross-attention prefill.** Text-decoder prefill is PCC-validated up to **1024** encoder frames on BH 1×4 ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)). End-to-end ``generate()`` at **4096**-token scale is not yet certified.
+- **Decoder cross-attention prefill.** Text-decoder prefill is PCC-validated up to **1024** encoder frames on BH 1×4 ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py); ``MAX_ENC_SEQ=1024``).
+- **End-to-end ``generate()`` at max length.** [`scripts/demo_perf_sweep.py`](scripts/demo_perf_sweep.py) exercises all five tasks at **4096** tokens / mel frames (warm JIT, split speech warmups at mel ≥ 1792). E2E **PCC** against HF at that scale is not yet certified — the sweep is a runtime/throughput harness, not a correctness gate.
 - **Decoder KV budget.** `TTSeamlessM4Tv2Model` allocates text-decoder KV cache for **`max_text_seq_len=4096`** (seed + generated tokens). T2U is separately validated at **4096** encoder frames ([`test_text_to_unit.py`](tests/pcc/test_text_to_unit.py)).
 - **Utterance-level behavior.** SeamlessM4T v2 is trained on short clips; very long text or audio can degrade quality on both HF and TT (see **Known Limitations**). Segment long-form inputs for production use.
 
@@ -185,7 +186,7 @@ python models/experimental/seamless_m4t_v2_large/demo/demo.py
 
 The demo runs on **`MeshShape(1, 4)`** via `open_seamless_mesh_device()` with **2CQ + per-step KV-decode trace**. Each task opens its **own** mesh device. Speech paths (T2ST, S2ST) run **two untimed warmups**, a vocoder conv prewarm from cached shapes, then **two timed** `generate()` calls (phase timings taken from the faster timed iter). Text paths use one warmup and one timed iter.
 
-**Text input (tasks 1–2):** a long English paragraph hardcoded in [`demo/demo.py`](demo/demo.py) — a Joyce-style passage (`src_lang=eng`):
+**Text input (tasks 1–2):** an English sentence is hardcoded in [`demo/demo.py`](demo/demo.py) — a Joyce-style passage (`src_lang=eng`):
 
 > going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards
 
@@ -199,11 +200,27 @@ Task order:
 4. **S2ST** — preamble speech (`eng`) → Spanish speech (saved to `demo/outputs/s2st_spanish_speech.wav`)
 5. **ASR** — preamble speech (`eng`) → English text
 
+### Sequence-length performance sweep
+
+[`scripts/demo_perf_sweep.py`](scripts/demo_perf_sweep.py) runs the same five tasks while doubling input length **32 → 4096** (text = source token count; speech = mel-frame count). Long inputs are prepared once:
+
+- **Text** — *Alice in Wonderland* from Project Gutenberg (cached under `scripts/outputs/alice_in_wonderland.txt`).
+- **Audio** — preamble WAV concatenated until ≥ 4096 mel frames (cached as `scripts/outputs/long_speech_input.wav`).
+
+At mel lengths **≥ 1792**, speech warmups run on a **throwaway** mesh device so the timed session stays decode-trace clean (fixes S2TT/S2ST/ASR collapse that appeared when multiple speech ``generate()`` calls shared one session).
+
+```bash
+python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
+# optional: --min-len 32 --max-len 512 --output scripts/outputs/perf_sweep.txt
+```
+
+Log, per-length WAVs, and summary tables land under `scripts/outputs/` (default log: `perf_sweep.txt`).
+
 ---
 
 ## Performance (Blackhole BH QB, 2CQ + decode trace)
 
-Phase-separated timings from [`demo/demo.py`](demo/demo.py) with ``generate(return_timings=True)`` on a four-chip Blackhole QB host (`MeshShape(1, 4)`, batch-1 replicated TP=4). Uses the **text and speech inputs described above** (Joyce-style English paragraph for T2TT/T2ST; downloaded `preamble10.wav` for S2TT/S2ST/ASR). Host pre/post-processing (token decode, WAV I/O) is excluded. Each task opens its own mesh device with warmup before the timed iteration.
+Phase-separated timings from [`scripts/demo_perf_sweep.py`](scripts/demo_perf_sweep.py) with ``generate(return_timings=True)`` on a four-chip Blackhole QB host (`MeshShape(1, 4)`, batch-1 replicated TP=4). Alice in Wonderland text + concatenated preamble audio; sequence lengths double **32 → 4096** (text = source tokens; speech = mel frames). Host pre/post-processing (token decode, WAV I/O) is excluded. Each task opens its own mesh device; speech paths use split warmups at mel ≥ 1792.
 
 Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 
@@ -216,32 +233,135 @@ Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 | **E2E** | Full synced `generate()` wall time (includes T2U + vocoder on T2ST/S2ST) |
 | **RTF** | Real-time factor on speech tasks: `e2e_s / audio_duration_s` (`<1` = faster than real time) |
 
-**Compare decode t/s/u across tasks** — unlike legacy E2E `tokens/s`, it is not penalized by long input encoders (S2TT/ASR) or variable output length.
+**Compare decode t/s/u across tasks** — unlike legacy E2E `tokens/s`, it is not penalized by long input encoders (S2TT/ASR) or variable output length. At very short lengths (e.g. 32 mel) decode t/s/u is noisy because only a handful of decoder steps run.
 
-Measured **2026-06-06** on BH QB from **one warm demo run** (3rd consecutive `demo/demo.py` invocation that day, JIT cache warm — not a cold-start process). All five tasks are from the **same** printed summary table.
-
-### BH QB — `MeshShape(1, 4)`, replicated batch-1
-
-| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
-|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
-| T2TT | 129.5 ms | 24.7 ms | 50.0 ms | 116.6 | 8.6 | 682.6 ms | 64 tok |
-| T2ST | 205.4 ms | 57.3 ms | 67.5 ms | 107.6 | 9.3 | 4128.6 ms | 232000 smp (RTF **0.28×**) |
-| S2TT | 873.4 ms | 718.0 ms | 97.7 ms | 81.2 | 12.3 | 1186.5 ms | 26 tok (479 mel) |
-| S2ST | 1002.4 ms | 811.5 ms | 102.8 ms | 90.0 | 11.1 | 4040.1 ms | 146880 smp (RTF **0.44×**) |
-| ASR | 1103.1 ms | 872.2 ms | 73.2 ms | 76.1 | 13.1 | 1476.4 ms | 29 tok (479 mel) |
-
-Speech-synthesis breakdown (same run):
-
-| Task | T2U | Vocoder | RTF |
-|------|----:|--------:|----:|
-| T2ST | 1736 ms | 1285 ms | 0.28× |
-| S2ST | 1025 ms | 1560 ms | 0.44× |
+Measured **2026-06-07** on BH QB from [`scripts/outputs/perf_sweep.txt`](scripts/outputs/perf_sweep.txt) (warm JIT, 27.9 min total wall time). Tables below are the per-length summary blocks from that log.
 
 Reproduce:
 
 ```bash
-python models/experimental/seamless_m4t_v2_large/demo/demo.py
+python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
 ```
+
+### Sequence length: 32
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 151.8 ms | 23.6 ms | 48.2 ms | 107.1 | 9.3 | 447.6 ms | 32 tok |
+| T2ST | 215.4 ms | 35.1 ms | 59.5 ms | 100.3 | 10.0 | 2564.0 ms | 100480 smp (RTF **0.41×**) |
+| S2TT | 869.1 ms | 709.7 ms | 89.3 ms | 7.9 | 127.1 | 997.2 ms | 2 tok (32 mel) |
+| S2ST | 976.2 ms | 778.6 ms | 100.5 ms | 36.9 | 27.1 | 3101.0 ms | 11840 smp (RTF **4.19×**) |
+| ASR | 1080.4 ms | 864.5 ms | 69.8 ms | 18.4 | 54.5 | 1245.3 ms | 4 tok (32 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 872 ms | 983 ms | 0.41× |
+| S2ST | 938 ms | 987 ms | 4.19× |
+
+### Sequence length: 64
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 140.3 ms | 25.1 ms | 48.3 ms | 130.8 | 7.6 | 1074.3 ms | 120 tok |
+| T2ST | 232.6 ms | 63.7 ms | 66.4 ms | 125.5 | 8.0 | 5452.0 ms | 315520 smp (RTF **0.28×**) |
+| S2TT | 972.6 ms | 774.9 ms | 95.8 ms | 18.2 | 55.0 | 1083.9 ms | 3 tok (64 mel) |
+| S2ST | 1065.6 ms | 859.6 ms | 68.1 ms | 24.2 | 41.3 | 3355.4 ms | 24960 smp (RTF **2.15×**) |
+| ASR | 1149.8 ms | 918.0 ms | 71.5 ms | 17.3 | 57.7 | 1324.5 ms | 4 tok (64 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1636 ms | 2262 ms | 0.28× |
+| S2ST | 971 ms | 1081 ms | 2.15× |
+
+### Sequence length: 128
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 177.0 ms | 25.9 ms | 48.5 ms | 124.3 | 8.0 | 1084.3 ms | 111 tok |
+| T2ST | 244.1 ms | 69.6 ms | 98.0 ms | 90.8 | 11.0 | 5331.9 ms | 348160 smp (RTF **0.25×**) |
+| S2TT | 1007.0 ms | 796.0 ms | 105.5 ms | 42.1 | 23.8 | 1199.3 ms | 9 tok (128 mel) |
+| S2ST | 1086.7 ms | 866.3 ms | 68.7 ms | 44.5 | 22.5 | 3623.3 ms | 37120 smp (RTF **1.56×**) |
+| ASR | 1189.1 ms | 944.1 ms | 72.1 ms | 41.3 | 24.2 | 1410.0 ms | 10 tok (128 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1683 ms | 1761 ms | 0.25× |
+| S2ST | 1024 ms | 1221 ms | 1.56× |
+
+### Sequence length: 256
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 149.3 ms | 27.6 ms | 48.8 ms | 136.0 | 7.4 | 1823.4 ms | 223 tok |
+| T2ST | 292.3 ms | 75.8 ms | 68.1 ms | 130.5 | 7.7 | 6953.4 ms | 563520 smp (RTF **0.20×**) |
+| S2TT | 1109.9 ms | 888.5 ms | 72.7 ms | 58.7 | 17.0 | 1351.7 ms | 15 tok (256 mel) |
+| S2ST | 1221.9 ms | 992.1 ms | 70.2 ms | 64.5 | 15.5 | 4567.1 ms | 83520 smp (RTF **0.87×**) |
+| ASR | 1357.2 ms | 1085.9 ms | 76.1 ms | 46.2 | 21.7 | 1707.9 ms | 17 tok (256 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1762 ms | 2559 ms | 0.20× |
+| S2ST | 1133 ms | 1777 ms | 0.87× |
+
+### Sequence length: 512
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 151.3 ms | 28.1 ms | 50.1 ms | 132.3 | 7.6 | 2125.5 ms | 256 tok |
+| T2ST | 303.1 ms | 78.0 ms | 107.4 ms | 128.8 | 7.8 | 7208.7 ms | 541120 smp (RTF **0.21×**) |
+| S2TT | 1026.6 ms | 805.8 ms | 73.9 ms | 81.7 | 12.2 | 1363.2 ms | 28 tok (512 mel) |
+| S2ST | 1164.3 ms | 927.8 ms | 70.8 ms | 83.0 | 12.1 | 4667.1 ms | 156160 smp (RTF **0.48×**) |
+| ASR | 1288.5 ms | 933.9 ms | 77.0 ms | 65.5 | 15.3 | 1737.4 ms | 30 tok (512 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1759 ms | 2537 ms | 0.21× |
+| S2ST | 1131 ms | 1819 ms | 0.48× |
+
+### Sequence length: 1024
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 153.7 ms | 27.6 ms | 50.1 ms | 123.6 | 8.1 | 2265.3 ms | 256 tok |
+| T2ST | 342.1 ms | 96.3 ms | 81.2 ms | 121.2 | 8.2 | 9035.7 ms | 799360 smp (RTF **0.18×**) |
+| S2TT | 1165.1 ms | 917.1 ms | 81.5 ms | 95.6 | 10.5 | 1719.8 ms | 53 tok (1024 mel) |
+| S2ST | 1519.5 ms | 1257.7 ms | 78.0 ms | 102.2 | 9.8 | 8403.0 ms | 286400 smp (RTF **0.47×**) |
+| ASR | 1868.7 ms | 1359.5 ms | 171.8 ms | 79.1 | 12.6 | 2626.4 ms | 60 tok (1024 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1811 ms | 3860 ms | 0.18× |
+| S2ST | 2235 ms | 3674 ms | 0.47× |
+
+### Sequence length: 2048
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 179.4 ms | 38.3 ms | 50.6 ms | 111.1 | 9.0 | 2521.8 ms | 256 tok |
+| T2ST | 318.4 ms | 90.8 ms | 71.8 ms | 108.8 | 9.2 | 8106.2 ms | 644800 smp (RTF **0.20×**) |
+| S2TT | 8244.7 ms | 8022.0 ms | 74.4 ms | 106.9 | 9.4 | 8975.2 ms | 77 tok (2048 mel) |
+| S2ST | 8649.5 ms | 8394.1 ms | 73.1 ms | 106.9 | 9.4 | 14272.6 ms | 300480 smp (RTF **0.76×**) |
+| ASR | 8908.3 ms | 8540.1 ms | 151.8 ms | 95.5 | 10.5 | 9773.6 ms | 82 tok (2048 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1781 ms | 2941 ms | 0.20× |
+| S2ST | 1992 ms | 2695 ms | 0.76× |
+
+### Sequence length: 4096
+
+| Task | TTFT | Encoder | Prefill | decode t/s/u | ms/tok (steady) | E2E | Output |
+|------|-----:|--------:|--------:|-------------:|----------------:|----:|--------|
+| T2TT | 315.9 ms | 149.4 ms | 51.0 ms | 91.1 | 11.0 | 3164.1 ms | 256 tok |
+| T2ST | 463.4 ms | 160.9 ms | 111.7 ms | 90.4 | 11.1 | 8761.7 ms | 647040 smp (RTF **0.22×**) |
+| S2TT | 2223.4 ms | 1995.0 ms | 73.7 ms | 115.7 | 8.6 | 3271.3 ms | 119 tok (4096 mel) |
+| S2ST | 2199.5 ms | 1966.2 ms | 71.4 ms | 95.1 | 10.5 | 7158.0 ms | 226240 smp (RTF **0.51×**) |
+| ASR | 2523.2 ms | 2241.1 ms | 75.9 ms | 104.0 | 9.6 | 3514.6 ms | 102 tok (4096 mel) |
+
+| Task | T2U | Vocoder | RTF |
+|------|----:|--------:|----:|
+| T2ST | 1796 ms | 2959 ms | 0.22× |
+| S2ST | 2025 ms | 2183 ms | 0.51× |
 
 Task notes:
 - **T2TT** — text encoder + traced text-decoder loop.
@@ -282,21 +402,8 @@ pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_to_unit.py 
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_code_hifigan.py -v
 ```
 
-All PCC tests pass at `PCC_THRESHOLD = 0.99` ([`tests/pcc/test_seamless_m4t_v2_model.py`](tests/pcc/test_seamless_m4t_v2_model.py)).
+All PCC tests pass at `PCC_THRESHOLD = 0.99` ([`tests/pcc/test_seamless_m4t_v2_model.py`](tests/pcc/test_seamless_m4t_v2_model.py)). E2E generate PCC uses prefix/voicing gates (not bit-identical token match) on demo-length inputs; T2ST asserts HF/TT sample-count ratio within **8%**.
 
-### Repeatability check (optional)
-
-Same-process stability on the demo text input (T2TT + T2ST ×3):
-
-```bash
-python models/experimental/seamless_m4t_v2_large/scripts/check_determinism.py
-```
-
-Full regression bundle (PCC + demo ×4 + determinism):
-
-```bash
-models/experimental/seamless_m4t_v2_large/scripts/multi_run_report.sh
-```
 
 ### Device-level performance (kernel-only)
 
@@ -314,7 +421,8 @@ The outer driver spawns eager forward-only inner tests in [`tests/perf/test_devi
 ```
 models/experimental/seamless_m4t_v2_large/
 ├── demo/
-│   └── demo.py                          # Full five-task TTNN demo (writes WAVs)
+│   ├── demo.py                          # Full five-task TTNN demo (writes WAVs)
+│   └── outputs/                         # Generated: preamble WAV, demo speech outputs
 ├── reference/                           # PyTorch wrappers used by PCC tests
 │   ├── torch_seamless_m4t_v2_model.py
 │   ├── torch_text_encoder.py
@@ -324,8 +432,8 @@ models/experimental/seamless_m4t_v2_large/
 │   └── torch_code_hifigan.py
 ├── scripts/
 │   ├── download_weights.py              # HF snapshot downloader + CLI
-│   ├── check_determinism.py             # Same-process T2TT/T2ST repeatability check
-│   └── multi_run_report.sh              # PCC + demo ×N + determinism runner
+│   ├── demo_perf_sweep.py               # Sequence-length perf sweep (32→4096, all five tasks)
+│   └── outputs/                         # Generated: perf_sweep.txt, sweep WAVs, cached inputs
 ├── tests/
 │   ├── pcc/                             # PCC ≥ 0.99 per-module and per-task
 │   │   ├── test_seamless_m4t_v2_model.py
@@ -339,7 +447,7 @@ models/experimental/seamless_m4t_v2_large/
 │       ├── test_seamless_device_perf.py # Tracy outer driver (kernel-only)
 │       └── test_device_perf_forwards.py # Inner eager forwards for device perf
 ├── tt/                                  # TTNN implementation
-│   ├── common.py
+│   ├── common.py                        # TP reductions, hf_aligned_generation_kwargs
 │   ├── mesh_helpers.py                  # MeshShape (1,4), fabric, pytest params, demo open
 │   ├── model_preprocessing.py           # HF state-dict → TTNN params
 │   ├── tt_seamless_m4t_v2_model.py
@@ -359,7 +467,8 @@ models/experimental/seamless_m4t_v2_large/
 ### Hardware and deployment
 
 - **Blackhole QB only.** PCC and perf tests run on Blackhole (`@run_for_blackhole()`). Supported mesh is **`MeshShape(1, 4)`** with `FABRIC_1D` (see [`tt/mesh_helpers.py`](tt/mesh_helpers.py)). Requires a host with four devices.
-- **L1 budget.** Speech-generation paths (T2U + vocoder) require `l1_small_size=65536` in device params. Long mel inputs use chunked 1D matmul in the speech encoder above `_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024` ([`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)).
+- **L1 budget.** Speech-generation paths (T2U + vocoder) require `l1_small_size=65536` in device params. Long mel inputs switch the speech encoder to chunked 1D matmul and DRAM residuals above `_LONG_AUDIO_RES_DRAM_THRESHOLD = 512` ([`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)). Text-encoder block-sharded TP matmul falls back to interleaved DRAM above **2048** tokens ([`tt/tt_text_encoder.py`](tt/tt_text_encoder.py)).
+- **TP reductions.** On ``MeshShape(1, 4)`` several layers are row-parallel: each chip computes a partial output and a **TP reduction** sums those partials into one full activation before the next layer runs. This port uses ``ttnn.all_reduce`` (linear topology) for the **text encoder** and **text decoder** ([`encoder_all_reduce_sum_replicate`](tt/common.py), [`decoder_all_reduce_sum_replicate`](tt/common.py) — decoder path does not deallocate the input, for residual adds). The **speech encoder** and **T2U** use ``all_gather`` + ``sum`` instead ([`all_reduce_sum_replicate`](tt/common.py)), because switching them to ``ttnn.all_reduce`` previously broke speech-path stability on BH QB (S2TT/ASR token loops, L1 pressure). Do not unify all modules to ``all_reduce`` without re-running PCC, determinism, and long-sequence speech tests.
 
 ### API scope versus Hugging Face
 
@@ -382,7 +491,7 @@ The TT model runs encoders, decoder, T2U, and vocoder on device, but **`TTSeamle
 | Decode loop control | Host (Python) | One iteration per output token; EOS checked against a host-maintained `seq_host` list |
 | Per-step token / position upload | Host → device | Reused `torch.int32` staging buffers + `copy_host_to_device_tensor` (required while decode trace is active — no device writes during trace replay) |
 | Greedy token pick (TP=4, traced path, `repetition_penalty=1.0`) | Device + host | Device fused/chunked argmax in trace; **chunk max + local index read back** and combined on host with PyTorch (64 scalars D2H). Matches HF on demo inputs. |
-| Greedy token pick (TP=4, eager / no trace, `repetition_penalty=1.0`) | Device | ``_ondevice_global_argmax_token``: per-shard chunk argmax + ``all_gather`` + HF tie-break + **single scalar D2H** (see ``tests/pcc/test_greedy_argmax_parity.py``) |
+| Greedy token pick (TP=4, eager / no trace, `repetition_penalty=1.0`) | Device + host | ``_ondevice_global_argmax_token``: per-shard chunk argmax + ``all_gather`` + HF tie-break on host + **single scalar D2H** |
 | Repetition penalty (`repetition_penalty > 1.0`) | Host (PyTorch) | HF **`RepetitionPenaltyLogitsProcessor`**: for each already-emitted token id, logits `< 0` are multiplied by penalty, logits `>= 0` are divided. Applied on a gathered **`[V]`** logits row in torch, then **`argmax`**. **Never runs on device.** With trace+2CQ, chunk-argmax is tried first; if the unpenalized winner is a repeat token, falls back to full-row D2H + penalty + argmax |
 | Greedy token pick (eager / no trace) | Device or host | Device `ttnn.argmax` when `repetition_penalty=1.0`; full logits row readback + host penalty + argmax when `repetition_penalty > 1.0` |
 | Beam search (`num_beams > 1`) | Host (PyTorch) | Per-beam logits read back; **`log_softmax`**, repetition penalty on emitted ids, and **`topk`** beam scoring on host; KV caches reordered with `ttnn.copy` |
@@ -412,9 +521,9 @@ SeamlessM4T v2 is trained on short utterances. Given a **long input** (text *or*
 
 ### Cross-run stability and TT-vs-HF parity
 
-On **`MeshShape(1, 4)`** with the default demo settings (greedy decode, trace + 2CQ, `repetition_penalty=1.0`), **identical inputs produce stable TT outputs across repeated runs** for the demo text and preamble speech inputs (verified with [`scripts/check_determinism.py`](scripts/check_determinism.py) and multi-run demo logs).
+On **`MeshShape(1, 4)`** with the default demo settings (greedy decode, trace + 2CQ, `repetition_penalty=1.0`), **identical inputs produce stable TT outputs across repeated demo runs** for the Joyce paragraph and preamble speech inputs (verified in-process on BH 1×4 alongside the PCC suite).
 
-A prior regression that caused **S2TT (and other speech-path tasks) to emit repetitive token loops** was traced to using `ttnn.all_reduce` for decoder / speech / T2U TP reductions. That path is **fixed**: gather+sum is restored for those modules; `ttnn.all_reduce` is kept only on the text encoder. Do not blanket-switch all TP reductions to `all_reduce` without validating the speech-encoder L1 path and residual adds.
+A prior regression that caused **S2TT (and other speech-path tasks) to emit repetitive token loops** was traced to using `ttnn.all_reduce` for speech / T2U TP reductions. That path is **fixed**: speech encoder and T2U keep ``all_gather`` + ``sum``; the text decoder now uses a separate linear ``all_reduce`` path that does not deallocate residuals ([`decoder_all_reduce_sum_replicate`](tt/common.py)).
 
 TT outputs are **not required to be bit-identical to Hugging Face** on every task (integrated PCC uses chrF / CER / plausible-voiced gates, not exact token or sample match). Residual gaps include:
 
@@ -431,10 +540,10 @@ Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/up
 
 ## To Do
 
-- **Bit-exact deterministic decode.** Text encoder + text decoder use ``ttnn.all_reduce``; speech encoder and T2U still use gather+sum for L1 stability.
-- **End-to-end validation at 4096-token scale.** Text-decoder cross-attention prefill PCC now reaches **1024** encoder frames; full ``generate()`` on max-length text/speech inputs still needs E2E certification.
-- **S2ST waveform length vs HF.** Speech-input S2ST can diverge in intermediate text length vs HF (sample ratio logged in E2E PCC); T2ST text-path sample ratio is gated within 8%.
-- **Utterance segmentation (speech).** Optional VAD / audio chunking for long-form speech inputs (text tasks support ``SEAMLESS_DEMO_MAX_SENTENCES`` in the demo).
+- **Bit-exact deterministic decode.** Text encoder + text decoder use ``ttnn.all_reduce``; speech encoder and T2U still use gather+sum for L1 stability. Traced decode still combines per-shard chunk argmax on host.
+- **E2E PCC at max input length.** Per-module PCC reaches 4096 on encoders and 1024 on decoder cross-attn; ``demo_perf_sweep.py`` exercises ``generate()`` at 4096, but E2E HF-vs-TT certification at that scale is still open.
+- **S2ST waveform length vs HF.** Speech-input S2ST can diverge in intermediate text length vs HF (sample ratio logged in E2E PCC, not gated); T2ST text-path sample ratio is gated within 8%.
+- **Utterance segmentation (speech).** Optional VAD / audio chunking for long-form speech inputs (text tasks: ``SEAMLESS_DEMO_MAX_SENTENCES`` in [`demo/demo.py`](demo/demo.py)).
 
 ---
 
