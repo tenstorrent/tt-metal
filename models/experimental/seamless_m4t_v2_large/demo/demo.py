@@ -26,12 +26,19 @@ Run from repo root:
 
   python models/experimental/seamless_m4t_v2_large/demo/demo.py
 
+Optional: cap T2TT/T2ST source text to the first *N* sentences (utterance-scale inputs):
+
+  SEAMLESS_DEMO_MAX_SENTENCES=2 python models/experimental/seamless_m4t_v2_large/demo/demo.py
+
+  python models/experimental/seamless_m4t_v2_large/demo/demo.py
+
 Optional: ``SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large`` if not using the default tree.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -77,6 +84,37 @@ _DEMO_WARMUP_ITERS = 1
 _DEMO_SPEECH_WARMUP_ITERS = 2
 _DEMO_MEASURE_ITERS = 1
 _DEMO_SPEECH_MEASURE_ITERS = 2
+
+_DEFAULT_SRC_TEXT = (
+    "going along slushy country roads and speaking to damp audiences in draughty schoolrooms "
+    "day after day for a fortnight he'll have to put in an appearance at some place of worship "
+    "on sunday morning and he can come to us immediately afterwards"
+)
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split on sentence boundaries (``. ``, ``? ``, ``! ``); keeps trailing punctuation."""
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _demo_src_text() -> str:
+    """Return demo source text, optionally truncated to the first N sentences.
+
+    Set ``SEAMLESS_DEMO_MAX_SENTENCES=N`` (positive int) to limit utterance length for T2TT/T2ST.
+    """
+    raw = os.environ.get("SEAMLESS_DEMO_MAX_SENTENCES", "").strip()
+    if not raw:
+        return _DEFAULT_SRC_TEXT
+    try:
+        n = int(raw)
+    except ValueError:
+        return _DEFAULT_SRC_TEXT
+    if n < 1:
+        return _DEFAULT_SRC_TEXT
+    sents = _split_sentences(_DEFAULT_SRC_TEXT)
+    return " ".join(sents[:n]) if sents else _DEFAULT_SRC_TEXT
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -479,8 +517,10 @@ def main() -> None:
     t2u_cfg = hf_model.t2u_model.config
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
-    # ---- Single English prompt drives the entire demo chain ----
-    src_text = """going along slushy country roads and speaking to damp audiences in draughty schoolrooms day after day for a fortnight he'll have to put in an appearance at some place of worship on sunday morning and he can come to us immediately afterwards"""
+    # ---- Single English prompt drives T2TT/T2ST (optional sentence cap via env) ----
+    src_text = _demo_src_text()
+    if src_text != _DEFAULT_SRC_TEXT:
+        print(f"  Text input segmented: using first {os.environ.get('SEAMLESS_DEMO_MAX_SENTENCES')} sentence(s)")
     src_lang = "eng"
     tgt_translate = "hin"  # task 1, 2: translate eng → hin
     speech_src_lang = "eng"  # tasks 3–5: preamble WAV is English

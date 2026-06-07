@@ -430,10 +430,10 @@ Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/up
 
 ## To Do
 
-- **Bit-exact deterministic decode.** Optional hardening: deterministic multi-device reductions (TTNN / CCL) on decoder / speech / T2U without breaking the speech-encoder L1 path — cross-run stability on demo inputs is already restored with gather+sum.
+- **Bit-exact deterministic decode.** Text encoder + text decoder use ``ttnn.all_reduce``; speech encoder and T2U still use gather+sum for L1 stability.
 - **End-to-end validation at 4096-token scale.** Text-decoder cross-attention prefill PCC now reaches **1024** encoder frames; full ``generate()`` on max-length text/speech inputs still needs E2E certification.
-- **T2ST / S2ST waveform length vs HF.** Investigate remaining sample-count gap versus the bf16 reference while keeping plausible-voiced PCC gates.
-- **Utterance segmentation in demo.** Optional VAD / sentence splitting for long-form inputs so chained tasks stay in the target language.
+- **S2ST waveform length vs HF.** Speech-input S2ST can diverge in intermediate text length vs HF (sample ratio logged in E2E PCC); T2ST text-path sample ratio is gated within 8%.
+- **Utterance segmentation (speech).** Optional VAD / audio chunking for long-form speech inputs (text tasks support ``SEAMLESS_DEMO_MAX_SENTENCES`` in the demo).
 
 ---
 
