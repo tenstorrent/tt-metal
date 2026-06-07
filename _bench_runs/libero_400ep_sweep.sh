@@ -42,23 +42,11 @@ nl -ba "$TASKS" | xargs -P 32 -L 1 bash -c '
   cd "'"$ROOT"'"
   source python_env/bin/activate
 
+  # All pi0.5 perf flags come from _bench_runs/pi05_production.env (single source of truth).
+  # Source it here so the per-task subshell inherits the exports.
+  source '"$ROOT"'/_bench_runs/pi05_production.env
+
   TT_VISIBLE_DEVICES=$device \
-  PI0_EXPERT_MM_LOFI=1 \
-  PI0_ROPE_TABLES_L1=1 \
-  PI0_MM_SWEEP_V2=1 \
-  PI0_DENOISE_MM_TUNE=1 \
-  PI0_PREFILL_MM_TUNE=1 \
-  PI0_UPSTREAM_MASKS=1 \
-  QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1 \
-  QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1 \
-  PI0_NUM_CAMERAS=3 \
-  PI0_VLM_CHUNK_SIZE=1024 \
-  PI0_VLM_MLP_BF8_OUT=1 \
-  PI0_VLM_MLP_MINIMAL=1 \
-  PI0_VLM_MINIMAL_CFG=4,8,8,1,8 \
-  PI0_SDPA_DENOISE_K_FORCE=96 \
-  PI0_MQA_HEAD_SPLIT=1 \
-  PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream \
   TT_METAL_CACHE='"$ROOT"'/.tt_metal_cache \
   TT_METAL_HOME='"$ROOT"' \
   PYTHONPATH='"$ROOT"':/home/tt-admin/pi05_cache/libero_repo \
