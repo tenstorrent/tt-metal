@@ -691,9 +691,9 @@ class TTNNGeneratorNSF:
         Args:
             z:          [B, 192, T] latent from flow decoder
             har_source: [B, 1, T*480] harmonic source from SineGen
-            g:          [B, 256, 1] speaker embedding (rows usually identical
-                        for the "convert N inputs to 1 target speaker"
-                        pattern; cond cache assumes so and uses g[:1])
+            g:          [B, 256, 1] speaker embedding — per-row conditioning.
+                        Different rows may target different speakers; each
+                        row's cond is computed independently.
 
         Returns:
             audio: [B, 1, T*480] generated waveform in [-1, 1]
@@ -707,19 +707,19 @@ class TTNNGeneratorNSF:
             x_cl, self._conv_pre_w, self._conv_pre_b, 192, 512, 7, seq_len, batch=batch)
         x_cf = x_cl.permute(0, 2, 1)
 
-        # Conditioning projection. cond_cl depends only on g and is
-        # constant across chunks — cache keyed by g[:1] so a batch of
-        # same-target conversions reuses one linear pass.
-        g_for_cond = g[:1] if batch > 1 else g
-        if self._cond_cache_g is None or not torch.equal(g_for_cond, self._cond_cache_g):
-            g_cl = g_for_cond.permute(0, 2, 1)
+        # Conditioning projection — per-row. cond_cl depends only on g and is
+        # constant across chunks for the same speakers, so cache by the full
+        # g tensor; same-target batches reuse one linear pass, mixed-target
+        # batches compute per-row cond correctly.
+        if self._cond_cache_g is None or self._cond_cache_g.shape != g.shape or not torch.equal(g, self._cond_cache_g):
+            g_cl = g.permute(0, 2, 1)
             g_tt = to_device(g_cl, self._device)
             cond_tt = ttnn.linear(g_tt, self._cond_w, bias=self._cond_b,
                                    memory_config=DEFAULT_MEMORY_CONFIG)
-            cond_cl = to_host(cond_tt)[:1, :1, :512]
+            cond_cl = to_host(cond_tt)[:batch, :1, :512]
             ttnn.deallocate(g_tt)
             ttnn.deallocate(cond_tt)
-            self._cond_cache_g = g_for_cond.clone()
+            self._cond_cache_g = g.clone()
             self._cond_cache_cl = cond_cl
         x_cf = x_cf + self._cond_cache_cl.permute(0, 2, 1)
 

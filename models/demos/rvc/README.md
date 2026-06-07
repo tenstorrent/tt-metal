@@ -369,7 +369,7 @@ for the largest shapes). B=1 keeps the existing HEIGHT_SHARDED whitelist
 
 | Bullet | Status |
 |---|---|
-| Support for batch processing (5+ concurrent conversions) | **Done.** Flow native B=8 (5.4× per-sample); Generator native B=6 sweet spot (1.26× per-sample); PCC=0.998 per-sample at B=5. |
+| Support for batch processing (5+ concurrent conversions) | **Done.** Flow native B=8 (5.4× per-sample); Generator native B=6 sweet spot (1.26× per-sample). Per-row speaker conditioning verified at B=2/3/5/8 — each batched row matches its B=1 reference within bf16 noise (PCC>0.995) and no row-permutation, asserted by `test_generator_batched_matches_individual_b1_calls` in `tests/test_production_shapes.py`. |
 | Full-pipeline RTF < 0.2 | **Not met.** Best achieved is 0.258 at B=6. The CPU preprocess (HuBERT + RMVPE serial) is ~0.37 s per sample and does not respond to N300 work. Achieving full-pipeline < 0.2 requires a TTNN HuBERT port (Stage 4+). |
 | Trace + 2CQ | **Verified path, not shipped.** Stage 2 documented `ttnn.conv1d` is trace-capturable with `prepare_conv_weights` + `prepare_conv_bias` (PCC=1.0, 2.63× on flow conv1d in isolation). Full pipeline integration deferred — the win amortizes dispatch on small ops only, and Generator's compute already dominates dispatch. |
 
