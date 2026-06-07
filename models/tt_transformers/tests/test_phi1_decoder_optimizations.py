@@ -111,8 +111,13 @@ def test_non_phi_models_keep_default_paged_attention():
 
 
 def test_phi1_defaults_to_hf_rope():
-    assert resolve_hf_rope_mode("microsoft/phi-1", False)
-    assert resolve_hf_rope_mode("Phi-1", False)
+    assert resolve_hf_rope_mode("microsoft/phi-1", None)
+    assert resolve_hf_rope_mode("Phi-1", None)
+
+
+def test_phi1_honors_explicit_legacy_rope_override():
+    assert not resolve_hf_rope_mode("microsoft/phi-1", False)
+    assert resolve_hf_rope_mode("microsoft/phi-1", True)
 
 
 def test_non_phi_models_keep_legacy_rope_default():
