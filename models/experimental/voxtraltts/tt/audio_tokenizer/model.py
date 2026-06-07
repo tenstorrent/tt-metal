@@ -41,6 +41,16 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
 
 AUDIO_TOKENIZER_ENCODER_OPTIONAL_PREFIXES = ("input_proj.", "encoder_blocks.")
 
+# Chunked audio decoder constants.
+# decode_full_forward processes at most _DECODE_CHUNK_T acoustic tokens at once to keep
+# the per-stage attention mask ([1,H,T,T] at T=chunk*8) within device DRAM free budget.
+# With 1600-token chunks the largest mask is [1,8,13056,13056]=~325 MB/bank vs 581 MB free.
+# _DECODE_OVERLAP left-context tokens are prepended from the previous chunk so positions
+# near the left boundary see real past context (== sliding window size == 16).
+_DECODE_CHUNK_T: int = 1600  # acoustic tokens per chunk (must be multiple of 32)
+_DECODE_OVERLAP: int = 32  # left-context tokens; ≥ sliding_window_size=16 AND multiple of 32
+_DECODE_UPSAMPLE: int = 8  # product of ConvTranspose1d strides (1×2×2×2 → 8)
+
 
 def extract_audio_tokenizer_state_dict(full_state_dict: dict) -> dict:
     prefix = "audio_tokenizer."
@@ -446,6 +456,93 @@ class VoxtralTTAudioTokenizer:
         self._attn_mask_cache[key] = mask_tt
         return mask_tt
 
+    def _make_sliding_window_mask_temp(self, seq_len: int, window: int) -> ttnn.Tensor:
+        """Like ``_decoder_sliding_window_attn_mask_tt`` but NOT cached. Caller must deallocate."""
+        mask = audio_tokenizer_sliding_window_attention_bias(
+            self.cfg.n_heads,
+            seq_len,
+            window,
+        ).to(torch.bfloat16)
+        return ttnn.from_torch(
+            mask,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _decode_full_forward_inner(self, chunk_b1tc: ttnn.Tensor, *, use_cache: bool = True) -> ttnn.Tensor:
+        """Core decoder forward for one (possibly chunked) segment.
+
+        ``use_cache=True``  — attention masks go into ``_attn_mask_cache`` (standard path).
+        ``use_cache=False`` — masks are created, used, and immediately deallocated so that
+                              only ONE mask is live at a time (~335 MB/bank peak vs 16 GB).
+        """
+        b, _, input_t, input_c = (int(chunk_b1tc.shape[i]) for i in range(4))
+        min_decode_t = 32
+        decode_t = max(min_decode_t, ((input_t + 31) // 32) * 32)
+        stack_input = chunk_b1tc
+        padded_stack_input = None
+        if input_t < decode_t:
+            pad = ttnn.zeros(
+                (b, 1, decode_t - input_t, input_c),
+                dtype=self._dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            stack_input = ttnn.concat([chunk_b1tc, pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(pad)
+            padded_stack_input = stack_input
+
+        x = self.decoder_blocks_0_forward(stack_input)
+        if padded_stack_input is not None:
+            ttnn.deallocate(padded_stack_input)
+
+        w = self._decoder_windows
+        if use_cache:
+            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[0])
+            x = self.decoder_blocks_1_forward(x, attn_mask=m)
+            x = self.decoder_blocks_2_forward(x)
+            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[1])
+            x = self.decoder_blocks_3_forward(x, attn_mask=m)
+            x = self.decoder_blocks_4_forward(x)
+            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[2])
+            x = self.decoder_blocks_5_forward(x, attn_mask=m)
+            ttnn.synchronize_device(self.mesh_device)
+            x = self.decoder_blocks_6_forward(x)
+            m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[3])
+            x = self.decoder_blocks_7_forward(x, attn_mask=m)
+        else:
+            # Non-cached: create, use, free each mask immediately — only one mask live at a time.
+            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[0])
+            x = self.decoder_blocks_1_forward(x, attn_mask=m)
+            ttnn.deallocate(m)
+            x = self.decoder_blocks_2_forward(x)
+            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[1])
+            x = self.decoder_blocks_3_forward(x, attn_mask=m)
+            ttnn.deallocate(m)
+            x = self.decoder_blocks_4_forward(x)
+            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[2])
+            x = self.decoder_blocks_5_forward(x, attn_mask=m)
+            ttnn.deallocate(m)
+            ttnn.synchronize_device(self.mesh_device)
+            x = self.decoder_blocks_6_forward(x)
+            m = self._make_sliding_window_mask_temp(int(x.shape[2]), w[3])
+            x = self.decoder_blocks_7_forward(x, attn_mask=m)
+            ttnn.deallocate(m)
+
+        if input_t < decode_t:
+            upsample = 1
+            for stride in parse_csv_ints(self.cfg.decoder_convs_strides_str)[1:]:
+                upsample *= int(stride)
+            target_t = input_t * upsample
+            if int(x.shape[2]) > target_t:
+                trimmed = ttnn.slice(x, [0, 0, 0, 0], [int(x.shape[0]), 1, target_t, int(x.shape[3])])
+                ttnn.deallocate(x)
+                x = trimmed
+        return x
+
     def decode_full_forward(self, latent_b1tc: ttnn.Tensor) -> ttnn.Tensor:
         """``[B,1,T,latent_dim]`` → ``[B,1,T_out,dim]``: all 12 decoder blocks, no ``output_proj``."""
         required = (
@@ -469,52 +566,49 @@ class VoxtralTTAudioTokenizer:
             )
 
         b, _, input_t, input_c = (int(latent_b1tc.shape[i]) for i in range(4))
-        # Pad T to a tile multiple for SDPA; trim after upsample (causal stack).
-        min_decode_t = 32
-        decode_t = max(min_decode_t, ((input_t + 31) // 32) * 32)
-        stack_input = latent_b1tc
-        padded_stack_input = None
-        if input_t < decode_t:
-            pad = ttnn.zeros(
-                (b, 1, decode_t - input_t, input_c),
-                dtype=self._dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            stack_input = ttnn.concat([latent_b1tc, pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(pad)
-            padded_stack_input = stack_input
 
-        x = self.decoder_blocks_0_forward(stack_input)
-        if padded_stack_input is not None:
-            ttnn.deallocate(padded_stack_input)
-        # Per-stage sliding windows (decoder_blocks.1/.3/.5/.7). Masks are cached by (seq_len, window)
-        # (see _decoder_sliding_window_attn_mask_tt); the cache owns them, so they are not deallocated here.
-        w = self._decoder_windows
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[0])
-        x = self.decoder_blocks_1_forward(x, attn_mask=m)
-        x = self.decoder_blocks_2_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[1])
-        x = self.decoder_blocks_3_forward(x, attn_mask=m)
-        x = self.decoder_blocks_4_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[2])
-        x = self.decoder_blocks_5_forward(x, attn_mask=m)
-        # Free L1 from prior SDPA before decoder_blocks_6 conv static-CB compile (P150).
-        ttnn.synchronize_device(self.mesh_device)
-        x = self.decoder_blocks_6_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[3])
-        x = self.decoder_blocks_7_forward(x, attn_mask=m)
-        if input_t < decode_t:
-            upsample = 1
-            for stride in parse_csv_ints(self.cfg.decoder_convs_strides_str)[1:]:
-                upsample *= int(stride)
-            target_t = input_t * upsample
-            if int(x.shape[2]) > target_t:
-                trimmed = ttnn.slice(x, [0, 0, 0, 0], [int(x.shape[0]), 1, target_t, int(x.shape[3])])
-                ttnn.deallocate(x)
-                x = trimmed
-        return x
+        if input_t <= _DECODE_CHUNK_T:
+            return self._decode_full_forward_inner(latent_b1tc, use_cache=True)
+
+        # Long sequence: chunk into _DECODE_CHUNK_T-token pieces.
+        # Each chunk includes _DECODE_OVERLAP left-context tokens from the previous chunk
+        # (tile-aligned: 32 = next multiple of 32 above window=16) so the sliding-window
+        # attention at each block sees the correct past context.
+        # Masks are NOT cached (use_cache=False) so only one mask is live at a time:
+        #   peak = [1,8,(1632*8),(1632*8)] = [1,8,13056,13056] bf16 ≈ 325 MB/bank (<< 581 MB free).
+        audio_chunks: list[ttnn.Tensor] = []
+        pos = 0
+        while pos < input_t:
+            ctx_start = max(0, pos - _DECODE_OVERLAP)
+            chunk_end = min(pos + _DECODE_CHUNK_T, input_t)
+            chunk_len = chunk_end - ctx_start
+
+            chunk_lat = ttnn.slice(latent_b1tc, [0, 0, ctx_start, 0], [b, 1, ctx_start + chunk_len, input_c])
+            chunk_out = self._decode_full_forward_inner(chunk_lat, use_cache=False)
+            if chunk_lat.is_allocated():
+                ttnn.deallocate(chunk_lat)
+
+            # Drop the context (overlap) frames from the beginning of this chunk's output.
+            ctx_frames = pos - ctx_start
+            audio_skip = ctx_frames * _DECODE_UPSAMPLE
+            chunk_audio_t = int(chunk_out.shape[2])
+            chunk_dim = int(chunk_out.shape[3])
+            if audio_skip > 0 and audio_skip < chunk_audio_t:
+                valid = ttnn.slice(chunk_out, [0, 0, audio_skip, 0], [b, 1, chunk_audio_t, chunk_dim])
+                ttnn.deallocate(chunk_out)
+                chunk_out = valid
+
+            audio_chunks.append(chunk_out)
+            pos = chunk_end
+
+        # Concatenate all audio chunks along the time dimension.
+        result = audio_chunks[0]
+        for chunk in audio_chunks[1:]:
+            merged = ttnn.concat([result, chunk], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(result)
+            ttnn.deallocate(chunk)
+            result = merged
+        return result
 
     def output_proj_forward(self, hidden_b1td: ttnn.Tensor) -> ttnn.Tensor:
         """``output_proj`` causal conv: ``[B,1,T,dim]`` → ``[B,1,T_out,C_mel]`` (``pretransform_patch_size`` channels)."""
