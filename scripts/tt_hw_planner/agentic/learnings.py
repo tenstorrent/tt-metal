@@ -158,9 +158,17 @@ def lookup_fix(
     arch_signature: str,
     first_diverging_qn: str,
     log_path: Path = _DEFAULT_LOG,
+    failure_class: Optional[str] = None,
+    error_extract: Optional[str] = None,
+    component_kind: Optional[str] = None,
 ) -> Optional[LearnedFix]:
     """Return the most recent learned fix matching this
-    (signature, qn) pair, or None."""
+    (signature, qn) pair, or None.
+
+    ``failure_class`` / ``error_extract`` / ``component_kind`` are
+    accepted for the richer in-loop tier-2 call site but do not yet
+    refine matching — ``LearnedFix`` persists only the (signature, qn)
+    key. They are reserved for a future schema that keys on them."""
     if not arch_signature:
         return None
     entries = _load_log(log_path)

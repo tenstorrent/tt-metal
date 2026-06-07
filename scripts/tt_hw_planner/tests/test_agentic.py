@@ -271,3 +271,38 @@ def test_correctness_gate_soft_skips_when_no_demo_ran():
 
     assert result is None
     assert prompt is None
+
+
+def test_lookup_fix_accepts_richer_inloop_kwargs(tmp_path):
+    from scripts.tt_hw_planner.agentic.learnings import lookup_fix, register_fix
+
+    log = tmp_path / "learned_fixes.json"
+    lock = tmp_path / ".learned_fixes.lock"
+    assert register_fix(
+        arch_signature="sig123",
+        first_diverging_qn="encoder_stack",
+        diff="--- a\n+++ b\n",
+        diff_files=["x.py"],
+        source_model_id="m",
+        log_path=log,
+        lock_path=lock,
+    )
+
+    hit = lookup_fix(
+        arch_signature="sig123",
+        first_diverging_qn="encoder_stack",
+        log_path=log,
+        failure_class="API_SIGNATURE",
+        error_extract="got multiple values",
+        component_kind="ADAPT",
+    )
+    assert hit is not None
+    assert hit.source_model_id == "m"
+
+    miss = lookup_fix(
+        arch_signature="sig123",
+        first_diverging_qn="other",
+        log_path=log,
+        failure_class="API_SIGNATURE",
+    )
+    assert miss is None
