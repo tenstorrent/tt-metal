@@ -312,9 +312,20 @@ def _invoke_agent(
                     f"err={counts['error']}"
                 )
                 if tail.strip():
-                    print(f"  [auto:{provider}] last log output:")
-                    for line in tail.splitlines()[-25:]:
-                        print(f"    | {line}")
+                    if _verbose():
+                        print(f"  [auto:{provider}] last log output:")
+                        for line in tail.splitlines()[-25:]:
+                            print(f"    | {line}")
+                    else:
+                        # Clean screen: one human-readable result line instead of
+                        # the raw stream-json tail (the full log is at the path
+                        # printed above). Surface a hint on non-zero exit.
+                        result_text = _extract_agent_result_text(agent_log)
+                        if result_text and result_text.strip():
+                            first = result_text.strip().splitlines()[0][:200]
+                            print(f"  [auto:{provider}] result: {first}")
+                        elif rc != 0:
+                            print(f"  [auto:{provider}] non-zero exit ({rc}); see log for details")
                 return rc
 
             elapsed = int(time.monotonic() - start)

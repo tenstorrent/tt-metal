@@ -18,11 +18,14 @@ def cmd_promote(args) -> int:
         _enforce_memory_fit_or_abort,
         _print_bringup_summary,
         _prompt_for_api_key,
+        _quiet_framework_logging,
         _resolve_tiered_model_aliases,
         _run_auto_iterate_loop,
         cmd_bringup,
         iter_loop_kwargs_from,
     )
+
+    _quiet_framework_logging()
 
     MODEL = args.model_id
     BOX = args.box

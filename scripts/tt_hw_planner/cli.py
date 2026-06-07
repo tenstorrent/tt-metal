@@ -7908,7 +7908,42 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
         return captured, False
 
 
+def _quiet_framework_logging() -> None:
+    """Quiet noisy framework logging on the bring-up terminal. No-op when
+    TT_HW_PLANNER_VERBOSE=1; full detail always lands in the per-agent and
+    pytest stream logs regardless. Suppresses, on screen only:
+      - HF "Loading checkpoint shards" progress bars + advisory warnings
+        (reprinted by capture + every per-agent prompt-block HF load);
+      - the loguru DEBUG dumps emitted at `import ttnn` (ttnn.CONFIG /
+        dispatch-core) and the tool's own bringup_plan INFO lines — in BOTH
+        this process and the pytest subprocesses (LOGURU_LEVEL is honored by
+        a child's fresh loguru import).
+    The C++/UMD logger (TT_METAL_LOGGER_LEVEL) is left untouched on purpose:
+    the stale-device recovery greps subprocess output for device-log markers,
+    so silencing it could mask the very lines that trigger a tt-smi reset.
+    """
+    if os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False"):
+        return
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("LOGURU_LEVEL", "WARNING")
+    try:
+        from transformers.utils import logging as _hf_logging
+
+        _hf_logging.disable_progress_bar()
+        _hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+    try:
+        from loguru import logger as _loguru_logger
+
+        _loguru_logger.remove()
+        _loguru_logger.add(sys.stderr, level="WARNING")
+    except Exception:
+        pass
+
+
 def cmd_up(args) -> int:
+    _quiet_framework_logging()
     # Resolve local-weights handling BEFORE any subprocess is spawned.
     # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
     # --local-dir or --offline-hf; prints an info line when cached
@@ -7950,21 +7985,6 @@ def cmd_bringup(args) -> int:
     with explicit flags; ``bringup`` exists purely so the common case
     is a one-liner.
     """
-    # Quiet the framework progress bars (HF "Loading checkpoint shards", which
-    # the capture + per-agent prompt-block loads reprint a dozen times) and HF
-    # advisory warnings that otherwise flood the bring-up terminal. Full detail
-    # still lands in the per-agent logs; re-enable on screen with
-    # TT_HW_PLANNER_VERBOSE=1.
-    if os.environ.get("TT_HW_PLANNER_VERBOSE", "") in ("", "0", "false", "False"):
-        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-        try:
-            from transformers.utils import logging as _hf_logging
-
-            _hf_logging.disable_progress_bar()
-            _hf_logging.set_verbosity_error()
-        except Exception:
-            pass
-
     # Build a fully-populated args namespace that cmd_up expects. We
     # take the existing args (which has model_id + box from the
     # bringup subparser) and fill in every other knob with the brain-
