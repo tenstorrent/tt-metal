@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -16,6 +18,74 @@ def _verbose() -> bool:
     Off by default: keep the terminal clean; the full agent stream always lands
     in the per-phase log file regardless."""
     return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+
+
+def _md_to_terminal(text: str) -> str:
+    """Strip the markdown markup (** , `, leading #) the agent emits so a
+    fallback summary reads cleanly on a terminal instead of as raw .md source."""
+    out = []
+    for ln in (text or "").splitlines():
+        s = re.sub(r"\*\*(.+?)\*\*", r"\1", ln)
+        s = re.sub(r"`([^`]+)`", r"\1", s)
+        s = s.replace("**", "")
+        s = re.sub(r"^\s{0,3}#{1,6}\s*", "", s)
+        out.append("  " + s)
+    return "\n".join(out)
+
+
+def _render_grader_report(demo_dir: Path) -> bool:
+    """Render the structured grader_report.json as a clean, aligned terminal
+    block (no markdown). Returns True if rendered, False if unavailable —
+    callers fall back to a stripped version of the agent's prose."""
+    try:
+        rep = json.loads((demo_dir / "grader_report.json").read_text())
+    except Exception:
+        return False
+
+    rule = "  " + "─" * 74
+    lines = [rule, f"  GRADER REPORT — {demo_dir.name}", rule]
+
+    calls = rep.get("calls") or []
+    if calls:
+        lines.append(f"  {'Call':<6} {'Re-run':<7} {'Final PCC':<38} Audit")
+        for c in calls:
+            pccs = c.get("final_pcc") or []
+            try:
+                pcc_s = " / ".join(f"{float(x):.6f}" for x in pccs)
+            except Exception:
+                pcc_s = ", ".join(str(x) for x in pccs)
+            lines.append(
+                f"  {str(c.get('call', '?')):<6} {str(c.get('rerun', '?')):<7} "
+                f"{pcc_s:<38} {c.get('source_audit', '')}"
+            )
+        lines.append(rule)
+
+    def _ok(d):
+        return "pass" if d.get("ok") else "FAIL"
+
+    struct = rep.get("structure") or {}
+    nw = rep.get("no_waste") or {}
+    holes = rep.get("holes") or []
+    lines.append(f"  {'Structure':<11} {_ok(struct)}")
+    nw_extra = ""
+    if nw:
+        nw_extra = f" — {nw.get('names_present', '?')}/{nw.get('graduated_total', '?')} graduated invoked"
+        missing = nw.get("missing") or []
+        if missing:
+            nw_extra += f", missing: {', '.join(map(str, missing))}"
+    lines.append(f"  {'No-waste':<11} {_ok(nw)}{nw_extra}")
+    if holes:
+        lines.append(f"  {'Holes':<11} {len(holes)}")
+        for h in holes[:8]:
+            lines.append(
+                f"    - [{h.get('severity', '?')}] {h.get('id', '?')} " f"@ {h.get('file', '?')}:{h.get('lines', '?')}"
+            )
+    else:
+        lines.append(f"  {'Holes':<11} none")
+    lines.append(f"  {'Verdict':<11} {rep.get('verdict', '?')}")
+    lines.append(rule)
+    print("\n" + "\n".join(lines))
+    return True
 
 
 def cmd_emit_e2e(args) -> int:
@@ -42,19 +112,24 @@ def cmd_emit_e2e(args) -> int:
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
     build_prompt = _build_agent_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
-    rc_build, _ = _run_agent(
+    rc_build, build_final = _run_agent(
         prompt=build_prompt,
         agent_bin=agent_bin,
         agent_model=agent_model,
         timeout_s=timeout_s,
         log_path=demo_dir / "_handoff" / "emit_e2e_builder.log",
+        label="builder",
     )
     if rc_build != 0:
         print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
         return 1
+    print("  ✓ builder finished (exit 0)")
 
     if skip_grade:
-        print("\n  (--no-grade) skipping independent grader phase.")
+        print("\n  (--no-grade) skipping independent grader phase.\n")
+        # No grader report to render; show a clean (markdown-stripped) build summary.
+        if not _verbose() and (build_final or "").strip():
+            print(_md_to_terminal(build_final))
         return 0
 
     grade_prompt = _build_grader_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
@@ -66,7 +141,13 @@ def cmd_emit_e2e(args) -> int:
             agent_model=agent_model,
             timeout_s=timeout_s,
             log_path=demo_dir / "_handoff" / f"emit_e2e_grader_round{rnd}.log",
+            label="grader",
         )
+        # Clean, professional terminal summary: render the structured
+        # grader_report.json; fall back to a markdown-stripped prose summary.
+        if not _render_grader_report(demo_dir) and (grade_final or "").strip():
+            print("\n" + _md_to_terminal(grade_final))
+
         if rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or ""):
             print("\n" + sep)
             print(f"  ✓ INDEPENDENT GRADER: PASS (round {rnd}) — verified by a separate agent")
@@ -87,6 +168,7 @@ def cmd_emit_e2e(args) -> int:
             agent_model=agent_model,
             timeout_s=timeout_s,
             log_path=demo_dir / "_handoff" / f"emit_e2e_fix_round{rnd}.log",
+            label="fix",
         )
 
     print("\n" + sep)
@@ -95,7 +177,7 @@ def cmd_emit_e2e(args) -> int:
     return 1
 
 
-def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, log_path: Path = None):
+def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, log_path: Path = None, label="agent"):
     cmd = [
         agent_bin,
         "-p",
@@ -109,12 +191,13 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
         "stream-json",
         "--verbose",
     ]
+    verbose = _verbose()
     log_fh = None
     if log_path is not None:
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fh = open(log_path, "w", buffering=1)
-            print(f"  (full agent stream → {log_path})")
+            print(f"  · streaming to {log_path}")
         except Exception:
             log_fh = None
     try:
@@ -135,6 +218,10 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
 
     final_text = ""
     last_assistant_text = ""
+    start = time.monotonic()
+    last_hb = start
+    tool_calls = 0
+    HB_EVERY_S = 45
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -143,14 +230,25 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
                     log_fh.write(line)
                 except Exception:
                     pass
-            rendered, final, atext = _render_stream_event(line)
+            rendered, final, atext, n_tool = _render_stream_event(line)
             if final:
                 final_text = final
             if atext:
                 last_assistant_text = atext
-            if rendered:
-                sys.stdout.write(rendered + "\n")
-                sys.stdout.flush()
+            tool_calls += n_tool
+            if verbose:
+                # Full transcript on screen only under TT_HW_PLANNER_VERBOSE.
+                if rendered:
+                    sys.stdout.write(rendered + "\n")
+                    sys.stdout.flush()
+            else:
+                # Clean default: a single throttled progress line; the full
+                # narration/tool stream is in the log file.
+                now = time.monotonic()
+                if now - last_hb >= HB_EVERY_S:
+                    sys.stdout.write(f"  · {label} working… {int(now - start)}s, {tool_calls} tool calls\n")
+                    sys.stdout.flush()
+                    last_hb = now
         rc = proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         proc.kill()
@@ -165,9 +263,10 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
             except Exception:
                 pass
 
-    # The agent's last assistant message is almost always identical to the
-    # `result` event; only print the summary block when it adds something new.
-    if final_text and final_text.strip() != last_assistant_text.strip():
+    # Verbose only: echo the agent's raw final summary (deduped against the
+    # last assistant turn). Non-verbose callers render a clean structured report
+    # instead of dumping the agent's raw markdown.
+    if verbose and final_text and final_text.strip() != last_assistant_text.strip():
         print("\n  ── agent final summary ──")
         for ln in final_text.splitlines():
             print("  " + ln)
@@ -177,29 +276,31 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
 def _render_stream_event(line: str):
     """Render one stream-json event to a screen line.
 
-    Returns ``(rendered, final, assistant_text)``: ``rendered`` is what to print
-    (or ``None`` to skip), ``final`` is the agent's terminal ``result`` text, and
-    ``assistant_text`` is the raw text of an assistant turn (used to dedup the
-    final summary against the last thing already shown)."""
+    Returns ``(rendered, final, assistant_text, n_tool_use)``: ``rendered`` is
+    what to print under verbose (or ``None``), ``final`` is the agent's terminal
+    ``result`` text, ``assistant_text`` is the raw text of an assistant turn
+    (used to dedup the verbose final summary), and ``n_tool_use`` is how many
+    tool calls this event carried (for the non-verbose progress heartbeat)."""
     line = line.rstrip("\n")
     if not line.strip():
-        return None, None, None
+        return None, None, None, 0
     try:
         ev = json.loads(line)
     except Exception:
         # Non-JSON lines (framework log spill) are noise on screen; the full
         # raw stream is in the log file. Show only under verbose.
-        return (("  · " + line) if (_verbose() and line.strip()) else None), None, None
+        return (("  · " + line) if (_verbose() and line.strip()) else None), None, None, 0
 
     etype = ev.get("type")
     if etype == "system":
         # init / thinking_tokens / task_started / task_notification / task_updated
         # carry no signal for the watcher and arrive dozens of times — drop them.
-        return None, None, None
+        return None, None, None, 0
 
     if etype == "assistant":
         out = []
         text_parts = []
+        n_tool = 0
         for c in (ev.get("message", {}) or {}).get("content", []) or []:
             t = c.get("type")
             if t == "text":
@@ -208,11 +309,13 @@ def _render_stream_event(line: str):
                     out.append("  " + txt.replace("\n", "\n  "))
                     text_parts.append(txt)
             elif t == "tool_use":
+                n_tool += 1
                 out.append("  → " + _fmt_tool(c.get("name", "?"), c.get("input", {}) or {}))
         return (
             ("\n".join(out) if out else None),
             None,
             ("\n".join(text_parts) if text_parts else None),
+            n_tool,
         )
 
     if etype == "user":
@@ -222,20 +325,20 @@ def _render_stream_event(line: str):
         # already says what the agent did, and the full result is in the log.
         # Keep these only under verbose.
         if not _verbose():
-            return None, None, None
+            return None, None, None, 0
         for c in (ev.get("message", {}) or {}).get("content", []) or []:
             if c.get("type") == "tool_result":
                 content = c.get("content")
                 txt = content if isinstance(content, str) else json.dumps(content)
                 first = (txt or "").strip().splitlines()[0] if (txt or "").strip() else ""
                 if first:
-                    return "      ↳ " + first[:160], None, None
-        return None, None, None
+                    return "      ↳ " + first[:160], None, None, 0
+        return None, None, None, 0
 
     if etype == "result":
-        return None, ev.get("result") or "", None
+        return None, ev.get("result") or "", None, 0
 
-    return None, None, None
+    return None, None, None, 0
 
 
 def _fmt_tool(name: str, inp: dict) -> str:
