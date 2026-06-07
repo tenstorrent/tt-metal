@@ -106,13 +106,13 @@ Limits below are what the TT port exercises on **BH QB `MeshShape(1, 4)`**. HF c
 |---|---|---|
 | **Input unit** | Tokenized source tokens (`processor(text=..., src_lang=...)`) | Log-mel frames from 16 kHz audio (`processor(audios=..., sampling_rate=16000)`) |
 | **Design / HF maximum** | **4096** source tokens (`max_position_embeddings`) | **4096** mel frames |
-| **Longest shape validated (PCC)** | Text encoder forward @ **4096** tokens ([`test_text_encoder.py`](tests/pcc/test_text_encoder.py)); text-decoder cross-attention prefill @ **512** encoder frames ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)) | Speech encoder forward @ **4096** mel frames ([`test_speech_encoder.py`](tests/pcc/test_speech_encoder.py)); text-decoder cross-attention prefill @ **512** subsampled encoder frames (same decoder test, S2TT path) |
+| **Longest shape validated (PCC)** | Text encoder forward @ **4096** tokens ([`test_text_encoder.py`](tests/pcc/test_text_encoder.py)); text-decoder cross-attention prefill @ **1024** encoder frames ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)) | Speech encoder forward @ **4096** mel frames ([`test_speech_encoder.py`](tests/pcc/test_speech_encoder.py)); text-decoder cross-attention prefill @ **1024** subsampled encoder frames (same decoder test, S2TT path) |
 | **Typical demo input** | Joyce-style English paragraph | Preamble WAV resampled to 16 kHz: **~479** mel frames (~9.6 s) |
 
 Notes:
 
 - **Encoder timeline vs raw input.** For text tasks the encoder timeline equals the tokenized source length (1 token → 1 text-encoder frame). For speech tasks the Conformer stack plus length adaptor (kernel/stride **8**) subsamples mel into a shorter encoder timeline fed to the text decoder (~8× shorter than mel length at the upper bound).
-- **512 decoder cross-attention limit.** Text-decoder prefill is PCC-validated only up to **512** encoder frames on BH 1×4. The next tile-aligned length (**1024**) overflows L1 on cross-attention prefill, so longer source inputs are not yet validated end-to-end through `generate()` even though the text encoder alone supports **4096** tokens.
+- **Decoder cross-attention prefill.** Text-decoder prefill is PCC-validated up to **1024** encoder frames on BH 1×4 ([`test_text_decoder.py`](tests/pcc/test_text_decoder.py)). End-to-end ``generate()`` at **4096**-token scale is not yet certified.
 - **Decoder KV budget.** `TTSeamlessM4Tv2Model` allocates text-decoder KV cache for **`max_text_seq_len=4096`** (seed + generated tokens). T2U is separately validated at **4096** encoder frames ([`test_text_to_unit.py`](tests/pcc/test_text_to_unit.py)).
 - **Utterance-level behavior.** SeamlessM4T v2 is trained on short clips; very long text or audio can degrade quality on both HF and TT (see **Known Limitations**). Segment long-form inputs for production use.
 
@@ -431,7 +431,7 @@ Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/up
 ## To Do
 
 - **Bit-exact deterministic decode.** Optional hardening: deterministic multi-device reductions (TTNN / CCL) on decoder / speech / T2U without breaking the speech-encoder L1 path — cross-run stability on demo inputs is already restored with gather+sum.
-- **End-to-end validation beyond 512 encoder frames.** Text-decoder cross-attention prefill PCC is validated only up to **512** subsampled encoder frames on BH 1×4; longer sources need L1 work or a new prefill strategy before `generate()` is certified at 4096-token scale.
+- **End-to-end validation at 4096-token scale.** Text-decoder cross-attention prefill PCC now reaches **1024** encoder frames; full ``generate()`` on max-length text/speech inputs still needs E2E certification.
 - **T2ST / S2ST waveform length vs HF.** Investigate remaining sample-count gap versus the bf16 reference while keeping plausible-voiced PCC gates.
 - **Utterance segmentation in demo.** Optional VAD / sentence splitting for long-form inputs so chained tasks stay in the target language.
 
