@@ -55,6 +55,10 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, me
 # the shape-specialized (JIT-compiled) kernels instead of recompiling cold (~7-20 s). 256 keeps the
 # extra (masked) frames — and the encoder's O(S^2) attention overhead — small (≤256, ~2-5% typical).
 _SPEECH_ENC_SEQ_BUCKET = 256
+# Dummy ``_encode_speech`` prewarm poisons persistent L1 only on this JIT bucket band (2048 mel
+# collapse). Longer buckets (e.g. 4096) still need the dummy forward for S2ST L1 layout.
+_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN = 1920
+_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX = 2560
 
 # ---------------------------------------------------------------------------
 # Output dataclasses
@@ -634,7 +638,13 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
 
     def prewarm_speech_encoder(self, mel_seq_lens: List[int]) -> None:
-        """Warm speech-encoder JIT cache for the given mel lengths (bucketed to 256 frames)."""
+        """Warm speech-encoder JIT for bucketed mel lengths.
+
+        Short buckets and long buckets (e.g. 4096) use a dummy ``_encode_speech`` forward for
+        kernel JIT. Only the 1920–2560 mel JIT band skips the dummy forward (cache-only
+        ``pre_warm``): a dummy forward there left bad persistent L1 / LN state and collapsed
+        S2TT/S2ST/ASR at 2048 mel to 1–2 tokens.
+        """
         n_mels = self.feature_projection_input_dim
         for sl in mel_seq_lens:
             sl = int(sl)
@@ -644,6 +654,9 @@ class TTSeamlessM4Tv2Model:
             if bucket in self._speech_prewarmed_buckets:
                 continue
             self._speech_prewarmed_buckets.add(bucket)
+            self.speech_encoder.pre_warm(batch=1, seq_len=bucket)
+            if _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN <= bucket <= _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX:
+                continue
             import torch as _torch
 
             feats = ttnn.from_torch(
