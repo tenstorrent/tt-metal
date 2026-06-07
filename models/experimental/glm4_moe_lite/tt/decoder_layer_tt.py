@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
 from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.experimental.glm4_moe_lite.tt.linear_helpers import prefill_linear_ws_out
+from models.experimental.glm4_moe_lite.tt.linear_helpers import prefill_linear_ws_out, prefill_per_head_linear
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
 from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
@@ -643,6 +643,8 @@ def run_decoder_layer_prefill_update_cache_tt(
             b_batch *= int(b.shape[i])
         if b_batch == 1 and m_total > ttnn.TILE_SIZE:
             return prefill_linear_ws_out(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
+        if b_batch > 1 and m_total > ttnn.TILE_SIZE:
+            return prefill_per_head_linear(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
         if mlp_compute_kernel_config is None:
             return ttnn.linear(a, b)
         return ttnn.linear(a, b, compute_kernel_config=mlp_compute_kernel_config)
