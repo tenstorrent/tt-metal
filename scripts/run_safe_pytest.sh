@@ -214,22 +214,15 @@ precompile_warm() {
     echo "PRECOMPILE: ✓ fingerprint matches your device (build_key ${realkey}) — the warm cache WILL be reused." >&2
 
     # 5. hardware-free meta-collect over the SAME selection -> warms the shared cache.
-    #    The heavy kernel COMPILE is parallel either way: the plugin compiles the deduped distinct set
-    #    via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS, ...) — an in-process C++
-    #    thread pool, NOT xdist. xdist (-n) only parallelizes test COLLECTION across processes.
-    #      • xdist present : -n N processes, each compiling its shard with 1 thread (workers=1).
-    #      • xdist absent  : ONE process, collection serial, compile parallel with N threads
-    #                        (workers=N). <-- this is the key fix: previously workers was hardcoded
-    #                        to 1 AND -n N errored out, so a no-xdist box warmed NOTHING serially.
-    #    A non-zero collect is surfaced (below), not swallowed by `|| true`.
-    local nflag=() collect_workers
-    if python3 -c "import xdist" >/dev/null 2>&1; then
-        nflag=(-n "$PRECOMPILE_WORKERS"); collect_workers=1
-        echo "PRECOMPILE: warming (xdist ${PRECOMPILE_WORKERS} procs x 1 compile-thread) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
-    else
-        collect_workers="$PRECOMPILE_WORKERS"
-        echo "PRECOMPILE: warming (no xdist; 1 proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
-    fi
+    #    SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process
+    #    C++ thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N, ...). xdist
+    #    (-n) would only parallelize the cheap COLLECT body-run across processes — and, measured, an
+    #    xdist multi-process prewarm LOSES ~half the cache (concurrent writers to the shared on-disk
+    #    cache + per-worker dedup): full conv2d warm hit 47.6% via xdist vs 99.8% single-process, same
+    #    fix/build. So we always run one process with N compile-threads. A non-zero collect is surfaced
+    #    (below), not swallowed by `|| true`.
+    local nflag=() collect_workers="$PRECOMPILE_WORKERS"
+    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
     t0=$(date +%s)
     TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_JIT_BUILD_FINGERPRINT="$PRECOMPILE_FINGERPRINT" \

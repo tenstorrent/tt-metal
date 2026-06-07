@@ -62,8 +62,11 @@ if [[ "$mockkey" != "$realkey" ]]; then
 fi
 echo "PRECOMPILE: ✓ build_key MATCHES ($realkey) with fingerprint replay — warm cache WILL be reused"
 
-# 5. hardware-free meta-collect (fingerprint replayed) -> warms the shared TT_METAL_CACHE
-if python3 -c "import xdist" >/dev/null 2>&1; then nf=(-n "$WORKERS"); cw=1; echo "PRECOMPILE: xdist ${WORKERS}p x1t"; else nf=(); cw="$WORKERS"; echo "PRECOMPILE: no xdist; 1p x${WORKERS}t"; fi
+# 5. hardware-free meta-collect (fingerprint replayed) -> warms the shared TT_METAL_CACHE.
+# SINGLE-PROCESS: the COMPILE is parallelized by the plugin's in-process C++ thread pool
+# (UP_FRONT_COLLECT_WORKERS=N). An xdist multi-process prewarm loses ~half the cache (concurrent
+# writers + per-worker dedup): measured full conv2d 47.6% (xdist) vs 99.8% (single-process), same build.
+nf=(); cw="$WORKERS"; echo "PRECOMPILE: single proc x ${WORKERS} compile-threads"
 t0=$(date +%s)
 env TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_JIT_BUILD_FINGERPRINT="$FP" \
     TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_MOCK_CLUSTER_DESC_PATH="$DESC" \
