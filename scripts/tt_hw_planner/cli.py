@@ -4552,12 +4552,43 @@ def _run_focused_pytest(
     lock_wait_state: Dict[str, object] = {"since": None, "blocker_pid": None, "abort": False}
     captured_tail: collections.deque = collections.deque(maxlen=4000)
 
+    # Screen-clean: the full pytest stream always goes to captured_tail (for
+    # the runtime-fallback drain) and to a log file on disk; the terminal only
+    # shows "interesting" lines (test ids/results, [bringup] stage=, PCC, the
+    # summary, lock waits) unless TT_HW_PLANNER_VERBOSE is set. Parsing of
+    # stage/lock state below is unchanged — it runs for every line.
+    _verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+    _pytest_log_fh = None
+    try:
+        _pytest_log_path = BRINGUP_ROOT() / "generated" / "test_reports" / "last_pytest_stream.log"
+        _pytest_log_path.parent.mkdir(parents=True, exist_ok=True)
+        _pytest_log_fh = open(_pytest_log_path, "w", errors="ignore")
+    except Exception:
+        _pytest_log_fh = None
+
+    def _pytest_line_interesting(s: str) -> bool:
+        s = s.strip()
+        if not s:
+            return False
+        if "[bringup] stage=" in s or "FINAL_PCC" in s or "Waiting for lock" in s:
+            return True
+        if s.startswith("models/") and "::" in s:
+            return True
+        if re.search(r"\b(PASSED|FAILED|ERROR)\b", s):
+            return True
+        if re.match(r"=+.*(passed|failed|error|skipped).*=+", s):
+            return True
+        return False
+
     def _pump():
         nonlocal current_test
         assert proc.stdout is not None
         for raw in proc.stdout:
-            sys.stdout.write(raw)
-            sys.stdout.flush()
+            if _pytest_log_fh is not None:
+                try:
+                    _pytest_log_fh.write(raw)
+                except Exception:
+                    pass
             captured_tail.append(raw)
             line = raw.rstrip("\n")
             m_test = re.match(r"(models/[^\s:]+::[^\s\[]+)", line)
@@ -4575,6 +4606,14 @@ def _run_focused_pytest(
                 m_pid = re.search(r"PID:\s*(\d+)", line)
                 if m_pid:
                     lock_wait_state["blocker_pid"] = int(m_pid.group(1))
+            if _verbose or _pytest_line_interesting(line):
+                sys.stdout.write(raw)
+                sys.stdout.flush()
+        if _pytest_log_fh is not None:
+            try:
+                _pytest_log_fh.close()
+            except Exception:
+                pass
 
     pump_thread = threading.Thread(target=_pump, daemon=True)
     pump_thread.start()
@@ -7168,15 +7207,20 @@ def _stub_forward_body_excerpt(stub_path: Path, *, max_lines: int = 30) -> str:
 def _ungraduated_breakdown(demo_dir: Path, components: List[str]) -> str:
     if not components:
         return ""
+    # Screen-clean: one line per component (name + state + path). The full
+    # forward-body excerpt is display-only diagnostic context (not fed to any
+    # prompt/report), so include it only under TT_HW_PLANNER_VERBOSE.
+    verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
     lines: List[str] = []
     for comp in components:
         safe = _safe_id(comp)
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         wrapper = "TORCH WRAPPER" if _stub_uses_torch_wrapper(stub_path) else "AUTOFILL STUB"
         lines.append(f"  - {comp}  [{wrapper}]  ({stub_path})")
-        body = _stub_forward_body_excerpt(stub_path, max_lines=8)
-        for bl in body.splitlines():
-            lines.append(f"      | {bl}")
+        if verbose:
+            body = _stub_forward_body_excerpt(stub_path, max_lines=8)
+            for bl in body.splitlines():
+                lines.append(f"      | {bl}")
     return "\n".join(lines)
 
 
@@ -10971,7 +11015,59 @@ def main(argv: Optional[List[str]] = None) -> int:
     pe2e.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite an existing test_e2e.py at the output path (default: no).",
+        help=(
+            "Overwrite existing tool-owned files (demo/, tt/, tests/test_demo.py, "
+            "tests/test_hf_parity.py, evaluation/, reference/, README.md, "
+            "requirements.txt, .gitignore, conftest.py). Bring-up artifacts "
+            "(_stubs/, bringup_status.json, tests/pcc/, demo.py) are preserved "
+            "unless --force is also passed."
+        ),
+    )
+    pe2e.add_argument(
+        "--task",
+        default=None,
+        help=(
+            "For multi-task models, emit only this task (e.g. s2tt|t2t|t2s|asr|llm|...). "
+            "Default for multi-task models: emit the first registered task. "
+            "Use --all-tasks to emit every supported task."
+        ),
+    )
+    pe2e.add_argument(
+        "--all-tasks",
+        action="store_true",
+        dest="all_tasks",
+        help=(
+            "For multi-task models (e.g. SeamlessM4T), emit one demo per "
+            "task head (s2tt + t2t + t2s). Single-task models ignore this flag."
+        ),
+    )
+    pe2e.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Additionally allow overwriting preserved files (tests/pcc/ + legacy demo.py). "
+            "Required only when re-running emit-e2e wants to clobber the bring-up "
+            "tool's outputs or a hand-written demo.py."
+        ),
+    )
+    pe2e.add_argument(
+        "--max-iter",
+        type=int,
+        default=5,
+        dest="max_iter",
+        help=(
+            "LLM diagnose-fix iteration budget when emitted demo output diverges "
+            "from HF golden. Default 5 (matches the per-component iter convention)."
+        ),
+    )
+    pe2e.add_argument(
+        "--readme-only",
+        action="store_true",
+        dest="readme_only",
+        help=(
+            "Re-run only the README synthesis step (e.g. after re-graduation "
+            "updated PCC/perf numbers). Does not touch demo/tt/tests/eval/ref."
+        ),
     )
     pe2e.set_defaults(func=cmd_emit_e2e)
 
