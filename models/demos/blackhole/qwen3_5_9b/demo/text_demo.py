@@ -54,6 +54,9 @@ PERF_TARGETS = {
     8192: {"min_decode_tok_s": 1.0, "max_ttft_s": 20.0},
     16384: {"min_decode_tok_s": 0.5, "max_ttft_s": 35.0},
     32768: {"min_decode_tok_s": 0.5, "max_ttft_s": 70.0},
+    # 256k (262016-token prompt): measured TTFT ~400s, decode ~11.3 tok/s on single P150.
+    # Gates set as regression guards with margin (TTFT +50%, decode floor ~half measured).
+    262144: {"min_decode_tok_s": 6.0, "max_ttft_s": 600.0},
 }
 
 # Frankenstein prompt config: seqlen → json_index in eval_frankenstein_long.json.
@@ -65,6 +68,10 @@ _FRANKENSTEIN_CONFIGS = {
     32768: 1,  # 140k chars ≈ 32k tokens
     65536: 2,  # 300k chars ≈ 70k tokens
     131072: 3,  # 500k chars ≈ 104k tokens (full text, Frankenstein caps at ~104k tokens)
+    # 256k needs a corpus longer than Frankenstein (~104k tokens). Index 4 is War and Peace
+    # (pg2600, ~3.2M chars) clipped to 1.2M chars ≈ 256k tokens so the prompt actually fills the
+    # context (the actual_len length guard in test_demo_text enforces this).
+    262144: 4,
 }
 
 
@@ -175,11 +182,25 @@ def _warmup_prefill(model, device, token_ids):
 
 
 BLOCK_SIZE = 64
-MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K token capacity
+PREFILL_CHUNK = 2048  # chunked-prefill chunk; prompts are padded up to a multiple of this
+# 256k ceiling: 4096 blocks × 64 tokens = 262144 token capacity = the model's native context.
+# The block budget (and the max_seq_len + KV cache + RoPE table derived from it) is sized per-seqlen
+# via _blocks_for, so short tests (128, 4k) keep a cheap cache and only the 256k case pays for 256k.
+MAX_BLOCK_BUDGET = 4096
+
+
+def _blocks_for(seqlen, max_generated_tokens):
+    """Paged-KV block budget for `seqlen`, rounded up to a block multiple and capped at the 256k
+    ceiling. Sized to cover the padded prefill bucket (seqlen rounded up to PREFILL_CHUNK) PLUS the
+    tokens we will decode, so prompt + generation both fit in the RoPE table / KV cache / position
+    space. Floored at 64 blocks (4k) so short prompts still get a sane cache."""
+    bucket = ((seqlen + PREFILL_CHUNK - 1) // PREFILL_CHUNK) * PREFILL_CHUNK
+    needed = bucket + max_generated_tokens
+    return min(MAX_BLOCK_BUDGET, max(64, (needed + BLOCK_SIZE - 1) // BLOCK_SIZE))
 
 
 @run_for_blackhole()
-@pytest.mark.timeout(2400)
+@pytest.mark.timeout(3600)  # 60 min/case: 256k prefill processes ~2.5x the tokens of the 128k case
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
@@ -196,6 +217,7 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
         (65536, 100, True),
         (65536, 100, False),
         (131072, 100, True),
+        (262144, 100, True),
     ],
     ids=[
         "traced_128",
@@ -209,6 +231,7 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
         "traced_64k",
         "paged_64k",
         "traced_128k",
+        "traced_256k",
     ],
 )
 def test_demo_text(
@@ -222,8 +245,10 @@ def test_demo_text(
 
     device = mesh_device
     device.enable_program_cache()
-    # Fixed block budget — max_seq_len derived from it
-    max_seq_len = MAX_NUM_BLOCKS * BLOCK_SIZE
+    # Per-seqlen block budget — max_seq_len (and the KV cache + RoPE table) derived from it.
+    # Sized to hold the padded prompt bucket plus the decoded tokens.
+    num_blocks = _blocks_for(seqlen, max_generated_tokens)
+    max_seq_len = num_blocks * BLOCK_SIZE
 
     t0 = time.time()
     model = Qwen35Model.from_pretrained(
@@ -236,9 +261,26 @@ def test_demo_text(
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
     token_ids = _get_prompt(seqlen, tokenizer)
+    # Reserve context for the tokens we generate: prefill writes the padded prompt bucket and decode
+    # extends by max_generated_tokens, so prompt + generation must fit within max_seq_len (the RoPE
+    # table / KV cache / position span). This only bites when the prompt fills the whole context
+    # (the 256k case, where seqlen == the model's native ceiling); smaller prompts sit well under it.
+    # Floor to a 128-multiple (GDN sub-chunk) so program shapes stay aligned.
+    max_prompt_len = ((max_seq_len - max_generated_tokens) // 128) * 128
+    if token_ids.shape[1] > max_prompt_len:
+        token_ids = token_ids[:, :max_prompt_len]
     actual_len = token_ids.shape[1]
+    # Long-context prompts are built from a corpus and clipped to seqlen; if the corpus is too
+    # short the clip silently shortens the prompt (e.g. a 256k case quietly running at ~104k).
+    # Guard the cases backed by the large (War and Peace, index 4) corpus, which is sized to fill
+    # the context, so they fail loudly instead of silently under-running. The Frankenstein-backed
+    # cases (indices 0-3) intentionally cap at ~104k tokens and are not guarded.
+    if _FRANKENSTEIN_CONFIGS.get(seqlen) == 4:
+        assert (
+            actual_len >= 0.95 * seqlen
+        ), f"prompt clipped to {actual_len} tokens, expected ~{seqlen} (corpus too short for seqlen={seqlen})"
     logger.info(
-        f"Prompt: {actual_len} tokens (block budget: {MAX_NUM_BLOCKS} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
+        f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
     # Multi-device (TP): route through the non-traced stateful generate path
@@ -271,6 +313,7 @@ def test_demo_text(
             device,
             token_ids,
             max_generated_tokens,
+            num_blocks,
         )
     else:
         generated, perf = _run_paged_generation(
@@ -279,6 +322,7 @@ def test_demo_text(
             device,
             token_ids,
             max_generated_tokens,
+            num_blocks,
         )
 
     perf["compile_time"] = t_compile
@@ -335,7 +379,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens):
     return generated, {"ttft_s": ttft, "decode_tok_s": (n_dec / dt) if dt > 0 else 0.0}
 
 
-def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
+def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
     """Prefill + paged traced decode loop. Returns (generated_tokens, perf_dict).
 
     Uses paged attention inside the trace: paged_update_cache + paged_sdpa_decode
@@ -344,14 +388,14 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     """
     T = token_ids.shape[1]
 
-    # Allocate paged KV caches + external DeltaNet state (fixed block budget)
+    # Allocate paged KV caches + external DeltaNet state (per-seqlen block budget)
     num_kv_heads = model.args.n_kv_heads
     head_dim = model.args.head_dim
-    kv_cache_shape = [MAX_NUM_BLOCKS, num_kv_heads, BLOCK_SIZE, head_dim]
+    kv_cache_shape = [num_blocks, num_kv_heads, BLOCK_SIZE, head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
 
     # Identity page table (host torch.Tensor — model converts internally)
-    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
     # Prefill via trace capture+replay. The chunk-seq GDN kernel is correct only at
     # <=16 sub-chunks (2048 tokens) per call and is now the only prefill engine, so we
@@ -438,21 +482,21 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
 
 
-def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens):
+def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
     """Prefill + paged decode loop (non-traced). Returns (generated_tokens, perf_dict).
 
     Uses paged KV cache for attention layers. DeltaNet uses external state.
     """
     T = token_ids.shape[1]
 
-    # Allocate paged KV caches + external DeltaNet state (fixed block budget)
+    # Allocate paged KV caches + external DeltaNet state (per-seqlen block budget)
     num_kv_heads = model.args.n_kv_heads
     head_dim = model.args.head_dim
-    kv_cache_shape = [MAX_NUM_BLOCKS, num_kv_heads, BLOCK_SIZE, head_dim]
+    kv_cache_shape = [num_blocks, num_kv_heads, BLOCK_SIZE, head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
 
     # Identity page table (host torch.Tensor)
-    page_table = torch.arange(MAX_NUM_BLOCKS, dtype=torch.int32).unsqueeze(0)
+    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
 
     # Prefill
     t0 = time.time()
