@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -66,10 +67,12 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    text_max_seq_len: int = 4096
+    text_max_seq_len: int = 65536
     text_dtype: str = "bfloat16"
     acoustic_dtype: str = "bfloat16"
     tokenizer_dtype: str = "bfloat16"
+    use_paged_kv_cache: bool = False
+    paged_block_size: int = 32
 
 
 @dataclass
@@ -77,11 +80,12 @@ class DataArgs:
     prompts_file: str = "models/experimental/voxtraltts/demo/data/sample_prompts.json"
     output_dir: str = "generated/voxtraltts_demo"
     mode: str = "text"
-    # Match :meth:`VoxtralTTSPipeline.forward_device_resident` default: generate until
-    # END_AUDIO or this cap. Use a smaller --max-speech-tokens for quick smoke tests.
-    max_speech_tokens: int = 65536
+    # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
+    # word count implies more tokens are needed (see _min_speech_tokens). Use a small
+    # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
+    max_speech_tokens: int = 12000
     seed: int = 0
-    default_voice: str = "casual_male"
+    default_voice: str = "casual_female"
     warmup_iters: int = 0
     inline_texts: list[str] | None = None
     voice: str | None = None
@@ -120,18 +124,32 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         "--max-speech-tokens",
         type=int,
         default=DataArgs.max_speech_tokens,
-        help="Autoregressive acoustic steps (upper bound). Default matches the TT pipeline "
-        "(65536); generation stops at END_AUDIO sooner for normal prompts.",
+        help="Autoregressive acoustic steps (upper bound). The demo auto-raises this value "
+        "when the word count requires more tokens (~8 tokens/word). Default 12000 covers "
+        "~1500 words; use 0 or a small value for quick smoke tests.",
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--warmup-iters", type=int, default=0)
     p.add_argument("--default-voice", type=str, default="casual_male")
+    p.add_argument(
+        "--use-paged-kv-cache",
+        action="store_true",
+        default=False,
+        help="Enable paged KV cache to bypass L1 CB size limit. Allows text_max_seq_len>4096 on Blackhole P150.",
+    )
+    p.add_argument(
+        "--paged-block-size", type=int, default=32, help="KV block size for paged attention (multiple of 32)."
+    )
     ns = p.parse_args(argv)
     if ns.text and ns.mode != "text":
         p.error("--text is only valid with --mode text")
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
-        tt=TTArgs(text_max_seq_len=ns.text_max_seq_len),
+        tt=TTArgs(
+            text_max_seq_len=ns.text_max_seq_len,
+            use_paged_kv_cache=ns.use_paged_kv_cache,
+            paged_block_size=ns.paged_block_size,
+        ),
         data=DataArgs(
             prompts_file=ns.prompts,
             output_dir=ns.output_dir,
@@ -163,7 +181,48 @@ def _open_device():
     return mesh, original
 
 
+def _check_seq_len_memory(text_max_seq_len: int) -> None:
+    """Warn early if text_max_seq_len will likely cause OOM.
+
+    KV cache is pre-allocated at model init regardless of actual input length.
+    Formula: seq_len × 32 layers × 8 KV heads × 128 head_dim × 2 (K+V) × 2 bytes (bf16).
+    """
+    kv_bytes = text_max_seq_len * 32 * 8 * 128 * 2 * 2
+    kv_gb = kv_bytes / (1024**3)
+    DEVICE_DRAM_GB = 32.0  # Blackhole P150 (A84) — 32 GB LPDDR5 DRAM
+    WEIGHTS_GB = 14.5  # Voxtral-4B-TTS: text+acoustic+tokenizer weights + driver/OS overhead
+    RUNTIME_HEADROOM_GB = 4.0
+    usable_gb = DEVICE_DRAM_GB * 0.85
+    estimated_total_gb = WEIGHTS_GB + kv_gb + RUNTIME_HEADROOM_GB
+    available_gb = usable_gb - WEIGHTS_GB - RUNTIME_HEADROOM_GB
+
+    logger.info(
+        f"[memory] text_max_seq_len={text_max_seq_len} → KV cache = {kv_gb:.2f} GB "
+        f"(Blackhole P150: {DEVICE_DRAM_GB:.0f} GB DRAM, estimated total footprint ~{estimated_total_gb:.2f} GB)"
+    )
+    if estimated_total_gb > usable_gb:
+        raise MemoryError(
+            f"\n{'='*70}\n"
+            f"OOM RISK: text_max_seq_len={text_max_seq_len} requires {kv_gb:.2f} GB for the text KV cache.\n"
+            f"Estimated total footprint is ~{estimated_total_gb:.2f} GB, above the safe {usable_gb:.2f} GB budget\n"
+            f"for a {DEVICE_DRAM_GB:.0f} GB Blackhole P150 after model weights and runtime headroom.\n\n"
+            f"This can reach 'Pipeline ready' and then be killed by the OS/runtime without a Python traceback.\n\n"
+            f"Fix — reduce text_max_seq_len. Recommended values:\n"
+            f"  ≤650  words / ≤4 min  →  text_max_seq_len=4096   (KV={4096*32*8*128*4/1024**3:.2f} GB)\n"
+            f"  ≤1300 words / ≤8 min  →  text_max_seq_len=8192   (KV={8192*32*8*128*4/1024**3:.2f} GB)\n"
+            f"  ≤2600 words / ≤17 min →  text_max_seq_len=16384  (KV={16384*32*8*128*4/1024**3:.2f} GB)\n"
+            f"  ≤5200 words / ≤34 min →  text_max_seq_len=32768  (KV={32768*32*8*128*4/1024**3:.2f} GB)\n"
+            f"{'='*70}"
+        )
+    elif kv_gb > available_gb * 0.6:
+        logger.warning(
+            f"[memory] KV cache ({kv_gb:.2f} GB) uses {kv_gb/available_gb*100:.0f}% of available DRAM — "
+            f"consider reducing text_max_seq_len to avoid OOM."
+        )
+
+
 def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
+    _check_seq_len_memory(args.tt.text_max_seq_len)
     return VoxtralTTSPipeline.from_model_name(
         mesh,
         model_name_or_path=args.model.model_name_or_path,
@@ -171,6 +230,8 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
         text_dtype=_ttnn_dtype(args.tt.text_dtype),
         acoustic_dtype=_ttnn_dtype(args.tt.acoustic_dtype),
         tokenizer_dtype=_ttnn_dtype(args.tt.tokenizer_dtype),
+        use_paged_kv_cache=args.tt.use_paged_kv_cache,
+        paged_block_size=args.tt.paged_block_size,
     )
 
 
@@ -180,6 +241,16 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
 
 
 def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
+    # Plain-text support: entire .txt file is treated as ONE prompt item.
+    # All lines are joined with a space so paragraphs flow into a single string.
+    if str(path).endswith(".txt"):
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        text = " ".join(line.strip() for line in content.splitlines() if line.strip())
+        if not text:
+            raise ValueError(f"No text found in {path}")
+        return [{"id": 0, "text": text, "voice": default_voice}]
+
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     if isinstance(raw, dict) and "items" in raw:
@@ -217,8 +288,113 @@ def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
 def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
+    # Peak-normalize to 0.95 so the loudest sample uses ~95% of the int16 range.
+    # Without this the model output sits at ~34% of max (inaudible at normal volume).
+    peak = float(np.abs(w).max())
+    if peak > 1e-6:
+        w = w * (0.95 / peak)
     w = np.clip(w * 32767.0, -32768.0, 32767.0).astype(np.int16)
     wavfile.write(str(path), sample_rate, w)
+
+
+def _min_speech_tokens(text: str) -> int:
+    """Lower-bound estimate of acoustic tokens needed for *text* with a 1.4× safety margin.
+
+    Voxtral generates at ~12.5 acoustic tokens/second.  Typical narration speed is
+    ~130 words/minute (2.17 words/second) → ~5.8 tokens/word.  Multiplied by 1.4 gives
+    ~8 tokens/word.  The returned value is a FLOOR; callers should take
+    ``max(user_supplied, _min_speech_tokens(text))``.
+    """
+    return max(4096, len(text.split()) * 8)
+
+
+# Threshold above which text is split into chunks to prevent AR degeneration.
+# The model's free-run PCC (~0.79) causes accumulated errors that collapse the
+# semantic code distribution to a single repeated value after ~200 tokens (~20 words).
+# Keeping each chunk ≤ _CHUNK_MAX_WORDS prevents that collapse.
+_CHUNK_THRESHOLD_WORDS = 35
+_CHUNK_MAX_WORDS = 20
+
+
+def _split_into_chunks(text: str, max_words: int = _CHUNK_MAX_WORDS) -> list[str]:
+    """Split *text* into sentence-aligned chunks of at most *max_words* words each."""
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    chunks: list[str] = []
+    buf: list[str] = []
+    for sent in sentences:
+        words = sent.split()
+        if not words:
+            continue
+        if len(buf) + len(words) <= max_words:
+            buf.extend(words)
+        else:
+            if buf:
+                chunks.append(" ".join(buf))
+            # If a single sentence exceeds the limit, hard-split it word-by-word.
+            while len(words) > max_words:
+                chunks.append(" ".join(words[:max_words]))
+                words = words[max_words:]
+            buf = words
+    if buf:
+        chunks.append(" ".join(buf))
+    return [c for c in chunks if c.strip()]
+
+
+def _run_chunked_text_mode(
+    pipe: "VoxtralTTSPipeline",
+    text: str,
+    voice: str,
+    seed: int,
+    sample_rate: int,
+    out_path: Path,
+) -> None:
+    """Generate audio chunk-by-chunk to avoid AR degeneration on long texts.
+
+    Each chunk is generated by an independent ``forward_device_resident`` call so the
+    AR loop never accumulates enough errors to collapse the semantic-code distribution.
+    The chunk waveforms are concatenated and peak-normalised before saving.
+    """
+    chunks = _split_into_chunks(text)
+    logger.info(f"[chunked] {len(text.split())} words → {len(chunks)} chunks " f"(max {_CHUNK_MAX_WORDS} words each)")
+    all_wavs: list[torch.Tensor] = []
+    total_frames = 0
+    t_start = perf_counter()
+
+    for i, chunk in enumerate(chunks):
+        n_words = len(chunk.split())
+        # Give each chunk 12 tokens/word headroom (vs 8 for full-text estimate) because
+        # short prompts generate slower speech and may have longer pauses.
+        chunk_max_tokens = max(600, n_words * 12)
+        logger.info(f"[chunked] chunk {i + 1}/{len(chunks)}: {n_words} words | max_tokens={chunk_max_tokens}")
+
+        out = pipe.forward_device_resident(
+            text=chunk,
+            voice=voice,
+            max_tokens=chunk_max_tokens,
+            seed=seed,
+        )
+        if out.waveform.numel() > 0:
+            all_wavs.append(out.waveform.reshape(-1))
+            total_frames += int(out.codes_b37t.shape[2])
+        if not out.hit_end_audio:
+            logger.warning(
+                f"[chunked] chunk {i + 1}: reached max_tokens={chunk_max_tokens} without END_AUDIO — "
+                f"chunk may be cut off."
+            )
+
+    total_s = perf_counter() - t_start
+    _log_perf("chunked_generate", ttft_s=0, n_frames=total_frames, total_s=total_s)
+
+    if not all_wavs:
+        logger.error("[chunked] No audio generated from any chunk.")
+        return
+
+    combined = torch.cat(all_wavs, dim=0)
+    _save_wav(out_path, combined, sample_rate)
+    logger.info(
+        f"Saved chunked waveform → {out_path}  "
+        f"({combined.numel()} samples @ {sample_rate} Hz, {len(chunks)} chunks)"
+    )
 
 
 def _log_perf(label: str, *, ttft_s: float, n_frames: int, total_s: float) -> None:
@@ -236,7 +412,27 @@ def run_text_mode(
     sample_rate: int,
     out_path: Path,
 ) -> None:
-    """Full TT TTS (device-resident AR loop): text → acoustic codes → waveform."""
+    """Full TT TTS (device-resident AR loop): text → acoustic codes → waveform.
+
+    For texts longer than ``_CHUNK_THRESHOLD_WORDS`` words the input is split into
+    sentence-aligned chunks and each chunk is generated independently.  This prevents the
+    AR degeneration (semantic-code collapse) that occurs after ~200 acoustic tokens when
+    running in free-run mode with PCC ≈ 0.79.
+    """
+    if len(text.split()) > _CHUNK_THRESHOLD_WORDS:
+        _run_chunked_text_mode(pipe, text, voice, seed, sample_rate, out_path)
+        return
+
+    # Short text path — single forward pass.
+    # Auto-raise max_tokens if the word count suggests more tokens are needed.
+    min_needed = _min_speech_tokens(text)
+    if max_tokens < min_needed:
+        logger.warning(
+            f"[tt_generate] max_tokens={max_tokens} is below the estimated minimum "
+            f"({min_needed}) for {len(text.split())} words. Auto-raising to {min_needed}."
+        )
+        max_tokens = min_needed
+
     t0 = perf_counter()
     out = pipe.forward_device_resident(text=text, voice=voice, max_tokens=max_tokens, seed=seed)
     wav = out.waveform
@@ -257,7 +453,10 @@ def run_text_mode(
             f"unique={int(semantic.unique().numel())}, first10={semantic[:10].tolist()}"
         )
     if not out.hit_end_audio:
-        logger.warning(f"[tt_generate] Reached max_speech_tokens={max_tokens} without END_AUDIO; output was truncated.")
+        logger.warning(
+            f"[tt_generate] Reached max_speech_tokens={max_tokens} without END_AUDIO; output was truncated. "
+            f"Suggested minimum for {len(text.split())} words: {_min_speech_tokens(text)} tokens."
+        )
 
     codes_path = out_path.with_suffix(".codes.pt")
     torch.save(
