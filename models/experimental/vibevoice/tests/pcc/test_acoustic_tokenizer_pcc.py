@@ -175,3 +175,45 @@ def test_acoustic_tokenizer_decode_pcc(mesh_device, ac_tok_state, vv_config, ac_
     # dtype=float32 on Blackhole, so the floor cannot be raised further.
     passed, pcc_val = comp_pcc(ref_compare[:T_min], tt_dec_torch[:T_min], pcc=0.98)
     assert passed, f"Acoustic tokenizer decode PCC {pcc_val:.6f} < 0.98"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_acoustic_tokenizer_decode_real_latents_pcc(mesh_device, ac_tok_state, vv_config, ac_tokenizer_tt):
+    """Decode PCC on *real* encoder latents instead of torch.randn noise.
+
+    Same decoder workload as test_acoustic_tokenizer_decode_pcc (T_enc=32) but the
+    latents come from the fp32 reference encoder on real audio.  Random latents are
+    the worst case for PCC (no signal structure to dominate bf16 rounding); smooth
+    real latents should clear 0.99 even though the convs run in bf16.
+    """
+    torch.manual_seed(0)
+
+    # 102400 = 3200 (product of encoder ratios 8*5*5*4*2*2) * 32 -> T_enc == 32,
+    # matching the random-latent test's decoder workload exactly.
+    AUDIO_LEN_RT = 102400
+    audio = torch.randn(1, 1, AUDIO_LEN_RT, dtype=torch.bfloat16)
+
+    # Real latents from the fp32 reference encoder: [1, vae_dim, T_enc]
+    ref_latents = _reference_acoustic_encode(ac_tok_state, audio.float(), vv_config)
+
+    # Feed the SAME latents to both decoders (isolates decoder precision on real input)
+    ref_dec = _reference_acoustic_decode(ac_tok_state, ref_latents.float(), vv_config)  # [1, 1, T_audio]
+
+    lat_4d = ref_latents.to(torch.bfloat16).permute(0, 2, 1).unsqueeze(1)  # [1, 1, T_enc, vae_dim]
+    lat_tt = ttnn.as_tensor(
+        lat_4d,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_dec = ac_tokenizer_tt.decode(lat_tt)  # [1, 1, 1, T_audio]
+    tt_dec_torch = ttnn.to_torch(tt_dec).to(torch.float32).squeeze()  # [T_audio]
+
+    ref_compare = ref_dec.to(torch.float32).squeeze()  # [T_audio]
+    T_min = min(ref_compare.shape[-1], tt_dec_torch.shape[-1])
+
+    passed, pcc_val = comp_pcc(ref_compare[:T_min], tt_dec_torch[:T_min], pcc=0.99)
+    print(f"[decode real-latents] PCC = {pcc_val:.6f}")
+    assert passed, f"Acoustic tokenizer decode (real latents) PCC {pcc_val:.6f} < 0.99"
