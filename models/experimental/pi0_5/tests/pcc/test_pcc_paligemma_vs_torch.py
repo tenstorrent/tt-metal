@@ -41,7 +41,7 @@ if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
 PCC_THRESHOLD = 0.90

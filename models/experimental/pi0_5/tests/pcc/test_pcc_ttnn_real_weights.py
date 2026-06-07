@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PI0.5 TTNN smoke tests on the real lerobot/pi05_base checkpoint.
+PI0.5 TTNN smoke tests on the real pi05_libero_upstream checkpoint.
 
 These tests focus on the *new* pi0.5 code paths (suffix → adaRMS action
 expert → action projection) without depending on the shared VLM / SigLIP
@@ -18,7 +18,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),

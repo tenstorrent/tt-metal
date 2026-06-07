@@ -30,7 +30,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 NUM_WARMUP_ITERATIONS = 2
 NUM_INFERENCE_ITERATIONS = 20

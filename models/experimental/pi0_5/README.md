@@ -135,7 +135,7 @@ pi0_5/
 │   ├── pcc/                  # Reference-vs-spec correctness
 │   └── perf/                 # Latency / throughput on Blackhole
 └── weights/
-    └── pi05_base/            # Symlink or directory of pi05_base safetensors
+    └── pi05_libero_upstream/ # Default checkpoint dir; safetensors + config.json + assets/
 ```
 
 ---
@@ -149,7 +149,7 @@ from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
 from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
 
-loader = Pi0_5WeightLoader("/path/to/pi05_base")
+loader = Pi0_5WeightLoader("/path/to/pi05_libero_upstream")
 model  = Pi0_5Model(Pi0_5ModelConfig(), loader)
 
 actions = model.sample_actions(
@@ -256,7 +256,7 @@ PI0_NUM_CAMERAS=2 PI05_NUM_DENOISE_STEPS=5 pytest …
 
 ## Tests
 
-All tests below are skipped automatically if `models/experimental/pi0_5/weights/pi05_base/model.safetensors` is missing.
+All tests below are skipped automatically if the default checkpoint (`models/experimental/pi0_5/weights/pi05_libero_upstream/model.safetensors`, or whatever `$PI05_CHECKPOINT_DIR` points at) is missing.
 
 ### PCC (correctness) tests
 
@@ -269,7 +269,7 @@ PYTHONPATH=$PWD python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_suffix.py            # suffix layer (sincos+MLP, time_mlp_out silu)
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_adarms_gemma.py      # AdaRMS Gemma block
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_e2e_reference.py     # E2E reference (no device)
-python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_real_weights.py      # E2E pytorch with real pi05_base weights
+python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_real_weights.py      # E2E pytorch with real pi05_libero_upstream weights
 python_env/bin/pytest -xvs models/experimental/pi0_5/tests/pcc/test_pcc_ttnn_real_weights.py # E2E TTNN with real weights — needs device
 
 # Per-step velocity + 10-seed e2e PCC distribution (the headline E2E correctness number):
@@ -284,7 +284,7 @@ The e2e PCC of a 10-step flow-matching Euler integrator is intrinsically **seed-
 
 The right thing to report is the **mean e2e PCC across N seeds**. `test_pcc_pi05_per_step_vs_torch.py` runs a 10-seed sweep by default and gates on `mean ≥ 0.95`.
 
-**Latest measured E2E PCC distribution (10 seeds, Blackhole, pi05_base weights, SigLIP BS on):**
+**Latest measured E2E PCC distribution (10 seeds, Blackhole, pi05_libero_upstream weights, SigLIP BS on):**
 
 | metric | value |
 |---|---|

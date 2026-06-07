@@ -7,7 +7,7 @@ PI0.5 PCC Test - TTNN (tt/) vs PyTorch (reference/)
 Tests Pi0.5 model with adaRMS conditioning.
 
 Config:
-    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0_5/weights/pi05_base
+    - Checkpoint: $TT_METAL_HOME/models/experimental/pi0_5/weights/pi05_libero_upstream
     - Full denoising: 10 steps
     - Batch size: 1
 

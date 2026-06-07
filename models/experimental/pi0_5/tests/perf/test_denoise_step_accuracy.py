@@ -3,7 +3,7 @@
 
 """
 PI0.5 denoise-step accuracy sweep — self-consistency at different
-`num_denoising_steps` values on real lerobot/pi05_base weights.
+`num_denoising_steps` values on real pi05_libero_upstream weights.
 
 Idea:
   Take the 10-step output as the reference. For each smaller N, run
@@ -32,7 +32,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 SEED = 0
 LANG_SEQ_LEN = 32
 

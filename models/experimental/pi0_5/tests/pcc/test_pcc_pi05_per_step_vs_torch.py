@@ -62,7 +62,7 @@ TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
 # PI0_CHECKPOINT (legacy for this file) for back-compat.
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")),
+    os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream")),
 )
 BATCH_SIZE = 1
 SEED = 42  # used for per-step velocity diagnostics (first seed in the sweep)

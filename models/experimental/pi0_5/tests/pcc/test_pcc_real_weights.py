@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PI0.5 reference inference on the real lerobot/pi05_base checkpoint.
+PI0.5 reference inference on the real pi05_libero_upstream checkpoint.
 
 Skipped if the checkpoint isn't present locally.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import torch
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 
 pytestmark = pytest.mark.skipif(
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_pi0_5_reference_sample_actions_real_weights():
-    """Load real pi05_base weights, run reference sample_actions, check shapes/finite."""
+    """Load real pi05_libero_upstream weights, run reference sample_actions, check shapes/finite."""
     from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model

@@ -38,7 +38,7 @@ import ttnn
 
 from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
 
-_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
 NUM_WARMUP = 2

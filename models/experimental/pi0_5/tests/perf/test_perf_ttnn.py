@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PI0.5 TTNN performance test on the real lerobot/pi05_base checkpoint.
+PI0.5 TTNN performance test on the real pi05_libero_upstream checkpoint.
 
 Measures steady-state per-denoise-step latency on the action-expert path
 (embed_suffix → forward_expert(adaRMS) → project_output) with a synthetic
@@ -29,7 +29,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 NUM_WARMUP_ITERATIONS = 2
 NUM_INFERENCE_ITERATIONS = 10

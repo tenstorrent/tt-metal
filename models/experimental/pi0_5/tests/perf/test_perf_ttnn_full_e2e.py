@@ -31,7 +31,7 @@ import ttnn
 
 from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
 
-_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
 NUM_WARMUP = 0
@@ -88,7 +88,7 @@ def _build_inputs(cfg, device, num_cameras: int = NUM_CAMERAS):
     indirect=True,
 )
 def test_pi0_5_ttnn_full_e2e_fps(device):
-    """End-to-end `sample_actions` latency on real pi05_base weights."""
+    """End-to-end `sample_actions` latency on real pi05_libero_upstream weights."""
     from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
