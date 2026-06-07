@@ -207,6 +207,14 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
+ALWI void init_sdpa_streaming_semaphores() {
+    // reduce_trigger splits QK row-max reduce across a PACK->UNPACK handshake:
+    // PACK posts FPU_SFPU after QK writes are visible, then UNPACK waits before
+    // running the second half of the reduce MOP. Default firmware init covers
+    // common math/pack semaphores, but not FPU_SFPU, so initialize it here.
+    PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
+}
+
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
 ALWI void recip_tile_first_column_wh_idst0_direct() {
     // WH SDPA normalize always operates on DST tile 0. The generic unary-SFPU
@@ -1601,6 +1609,8 @@ void sdpa_standard_v2(
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
     const bool use_zigzag_balancing = false) {
+    init_sdpa_streaming_semaphores();
+
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
@@ -1931,6 +1941,8 @@ void sdpa_ring_v2(
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true) {
+    init_sdpa_streaming_semaphores();
+
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
