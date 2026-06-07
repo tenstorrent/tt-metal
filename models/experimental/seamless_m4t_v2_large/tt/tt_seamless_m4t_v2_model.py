@@ -613,6 +613,7 @@ class TTSeamlessM4Tv2Model:
         self._lm_cluster_axis = mesh_cluster_axis(self.device)
         self._argmax_off_sharded: Optional[ttnn.Tensor] = None  # cached [nd,1,nch] global-offset table
         self._argmax_tok_mesh_composer: Optional[ttnn.MeshComposer] = None
+        self._argmax_tie_break_bias_cache: dict[int, ttnn.Tensor] = {}
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
@@ -749,6 +750,36 @@ class TTSeamlessM4Tv2Model:
 
     # Number of vocab chunks for the fused decode argmax (tile-aligned so multicore argmax is valid).
     _ARGMAX_CHUNKS = 32
+    # Bias subtracted along argmax dims so ``ttnn.argmax`` picks the lowest index on ties (HF ``torch.argmax``).
+    _ARGMAX_TIE_BREAK_EPS = 1e-9
+
+    def _argmax_tie_break_bias_1d(self, length: int) -> ttnn.Tensor:
+        """Cached float32 ``[1,1,1,L]`` bias: ``idx * eps`` (lowest index wins on equal scores)."""
+        cached = self._argmax_tie_break_bias_cache.get(length)
+        if cached is not None:
+            return cached
+        idx = torch.arange(length, dtype=torch.float32) * self._ARGMAX_TIE_BREAK_EPS
+        bias = ttnn.from_torch(
+            idx.reshape(1, 1, 1, length),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._argmax_tie_break_bias_cache[length] = bias
+        return bias
+
+    @staticmethod
+    def _apply_tie_break_subtract(scores_f32: ttnn.Tensor, bias_1d: ttnn.Tensor) -> ttnn.Tensor:
+        """Subtract ``bias_1d`` broadcast along the last dim of ``scores_f32`` (caller owns inputs)."""
+        rank = len(tuple(scores_f32.shape))
+        if rank == 3:
+            bias = ttnn.reshape(bias_1d, [1, 1, int(bias_1d.shape[-1])])
+        elif rank == 4:
+            bias = bias_1d
+        else:
+            bias = ttnn.reshape(bias_1d, [1] * (rank - 1) + [int(bias_1d.shape[-1])])
+        return ttnn.sub(scores_f32, bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
@@ -809,37 +840,79 @@ class TTSeamlessM4Tv2Model:
         )
         return self._argmax_off_sharded
 
-    def _ondevice_global_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        """Device-side greedy argmax over width-sharded ``[1,1,V/tp]`` logits → global token id."""
-        nch = self._ARGMAX_CHUNKS
+    def _ondevice_global_argmax_from_chunks(
+        self,
+        local_idx: ttnn.Tensor,
+        chunk_max: ttnn.Tensor,
+        v_loc: int,
+        *,
+        dealloc_inputs: bool = False,
+    ) -> ttnn.Tensor:
+        """Cross-shard greedy combine from trace-fused ``(local_idx, chunk_max)`` → global token id."""
         nd = self._lm_num_devices
-        off = self._argmax_off_table(int(logits.shape[-1]))
-        local_idx, chunk_max = self._decode_argmax_token(logits)  # [1,1,nch] uint32 RM, bf16 TILE
+        n_flat = nd * self._ARGMAX_CHUNKS
+        off = self._argmax_off_table(v_loc)
         li = ttnn.to_layout(ttnn.typecast(local_idx, ttnn.int32), ttnn.TILE_LAYOUT)
-        ttnn.deallocate(local_idx)
-        cand = ttnn.add(li, off)  # [1,1,nch] int32 — global token candidate per (device, chunk)
+        if dealloc_inputs:
+            ttnn.deallocate(local_idx)
+        cand = ttnn.add(li, off)
         ttnn.deallocate(li)
         if nd > 1:
             cm_g = ttnn.all_gather(chunk_max, dim=-1, cluster_axis=self._lm_cluster_axis, num_links=1)
             cand_g = ttnn.all_gather(cand, dim=-1, cluster_axis=self._lm_cluster_axis, num_links=1)
-            ttnn.deallocate(chunk_max)
+            if dealloc_inputs:
+                ttnn.deallocate(chunk_max)
             ttnn.deallocate(cand)
         else:
             cm_g, cand_g = chunk_max, cand
+            if dealloc_inputs:
+                ttnn.deallocate(chunk_max)
         cm_u = ttnn.untilize(cm_g, use_multicore=True)
         ttnn.deallocate(cm_g)
-        flat = ttnn.argmax(cm_u, dim=-1, keepdim=True, use_multicore=True)  # [1,1,1] uint32 RM
+        cm_f = ttnn.typecast(cm_u, ttnn.float32)
         ttnn.deallocate(cm_u)
-        flat_t = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)  # gather needs TILE (fill_pad)
+        cm_b = self._apply_tie_break_subtract(
+            ttnn.reshape(cm_f, [1, 1, n_flat]),
+            self._argmax_tie_break_bias_1d(n_flat),
+        )
+        ttnn.deallocate(cm_f)
+        flat = ttnn.argmax(cm_b, dim=-1, keepdim=True, use_multicore=True)
+        ttnn.deallocate(cm_b)
+        flat_t = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
         ttnn.deallocate(flat)
-        token = ttnn.gather(cand_g, dim=-1, index=flat_t)  # [1,1,1] int32 TILE
+        token = ttnn.gather(cand_g, dim=-1, index=flat_t)
         ttnn.deallocate(cand_g)
         ttnn.deallocate(flat_t)
-        token_u = ttnn.typecast(ttnn.reshape(token, [1, 1]), ttnn.uint32)  # [1,1] uint32 TILE
+        token_u = ttnn.typecast(ttnn.reshape(token, [1, 1]), ttnn.uint32)
         ttnn.deallocate(token)
         token_rm = ttnn.to_layout(token_u, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(token_u)
         return token_rm
+
+    def _ondevice_global_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Device-side greedy argmax over width-sharded ``[1,1,V/tp]`` logits → global token id."""
+        local_idx, chunk_max = self._decode_argmax_token(logits)
+        return self._ondevice_global_argmax_from_chunks(
+            local_idx,
+            chunk_max,
+            int(logits.shape[-1]),
+            dealloc_inputs=True,
+        )
+
+    def _device_greedy_token_from_trace_chunks(
+        self,
+        tok_tt: tuple[ttnn.Tensor, ttnn.Tensor],
+        v_loc: int,
+    ) -> int:
+        """Read global greedy token from trace-owned chunk argmax buffers (single scalar D2H)."""
+        li, cm = tok_tt
+        # ``all_gather`` must not consume trace-owned ``tok_tt`` buffers — clone before combine.
+        li_copy = ttnn.clone(li, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        cm_copy = ttnn.clone(cm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        token_tt = self._ondevice_global_argmax_from_chunks(li_copy, cm_copy, v_loc, dealloc_inputs=True)
+        token_id = _read_int_scalar(token_tt)
+        ttnn.deallocate(token_tt)
+        return token_id
 
     @staticmethod
     def _global_greedy_token_from_chunk_tensors(
@@ -1015,7 +1088,7 @@ class TTSeamlessM4Tv2Model:
         read_cq_id: int = 0,
         d2h_event: Optional[object] = None,
     ) -> int:
-        """Greedy next token after a traced step (chunk D2H + host combine when trace is active)."""
+        """Greedy next token after a traced step (host chunk combine or rep-penalty fallback)."""
         rt = self._kv_decode_rt
         tok_tt = rt.tok_tt if rt is not None else None
         if tok_tt is not None:
@@ -2805,7 +2878,7 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(unit_ids_argmax)
             unit_ids_argmax = unit_rm
 
-        # Unit id remap matches HF ``masked_fill`` + offset; done on host for PCC (device ``where`` diverged).
+        # Unit id remap (EOS/pad mask + vocoder offset) on host — device ``where`` on uint32 still diverges.
         if padding_tt.dtype != ttnn.bfloat16:
             pad_bf = ttnn.typecast(padding_tt, ttnn.bfloat16)
             ttnn.deallocate(padding_tt)
@@ -2830,6 +2903,12 @@ class TTSeamlessM4Tv2Model:
         ttnn.deallocate(unit_ids_argmax)
         ttnn.deallocate(pad_bf)
 
+        rm_host = (unit_host == int(self.t2u_eos_token_id)) | (pad_host < 0.5)
+        pad_id = int(self.t2u_pad_token_id)
+        off = int(self.vocoder_offset)
+        u = unit_host.clone()
+        u[rm_host] = pad_id
+        voc = _torch.where(u == pad_id, u, u - off).to(_torch.int32)
         output_unit_ids_tt = ttnn.from_torch(
             unit_host.to(_torch.int32),
             dtype=ttnn.uint32,
@@ -2837,14 +2916,6 @@ class TTSeamlessM4Tv2Model:
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        rm_host = (unit_host == int(self.t2u_eos_token_id)) | (pad_host < 0.5)
-
-        pad_id = int(self.t2u_pad_token_id)
-        off = int(self.vocoder_offset)
-        u = unit_host.clone()
-        u[rm_host] = pad_id
-        voc = _torch.where(u == pad_id, u, u - off).to(_torch.int32)
         vocoder_input = ttnn.from_torch(
             voc,
             dtype=ttnn.uint32,
