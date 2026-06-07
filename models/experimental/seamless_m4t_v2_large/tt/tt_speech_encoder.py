@@ -47,7 +47,10 @@ _LONG_SEQ_LINEAR_CHUNK_ROWS = 16 * TILE
 _LONG_SEQ_LINEAR_IN0_BLOCK_W = 8
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # Keep conformer residuals in DRAM above this frame count (L1 CB pressure on long audio).
-_LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
+# NOTE (1-C experiment): lowered 1024 -> 128 to route mid-length audio (~4-11s) through the
+# proven DRAM-bypass LN path; the sharded-LN path has a latent use-after-free ("Tensor is not
+# allocated") in that mid range. Revert to 1024 if PCC/perf regresses.
+_LONG_AUDIO_RES_DRAM_THRESHOLD = 128
 # Query-block relative attention above this seq (avoids O(S²) L1 use).
 _ATTN_QUERY_CHUNK_THRESHOLD = 3072
 _ATTN_QUERY_CHUNK = 512
