@@ -203,6 +203,49 @@ static_assert(
     return ttsl::hash::hash_objects_with_default_seed(spec);
 }
 
+// Regression guard: dispatch_option2_spec_hash must remain instantiable for an
+// Option 2 factory. The Option 2 path used to reference the Option 1 adapter's
+// nested types (shared_variables_t, cached_mesh_workload_t) for its cache wrapper,
+// but the Option 1 adapter has `requires HasFastCacheHitPathOptIn` — which is
+// false for Option 2 factories by definition. The substitution failure only
+// surfaced when an Option 2 factory was actually wired up. This block forces
+// instantiation now so the regression is caught at compile time.
+namespace option2_instantiation_guard {
+
+struct Attrs {};
+struct Args {};
+struct Spec {};
+struct Ret {};
+
+struct Option2Factory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(const Attrs&, const Args&, Ret&) {
+        return {};
+    }
+};
+
+struct FakeDeviceOp {
+    using operation_attributes_t = Attrs;
+    using tensor_args_t = Args;
+    using spec_return_value_t = Spec;
+    using tensor_return_value_t = Ret;
+    using program_factory_t = std::variant<Option2Factory>;
+
+    static void validate_on_program_cache_miss(const Attrs&, const Args&) {}
+    static Ret create_output_tensors(const Attrs&, const Args&) { return {}; }
+    static Spec compute_output_specs(const Attrs&, const Args&) { return {}; }
+    static program_factory_t select_program_factory(const Attrs&, const Args&) { return Option2Factory{}; }
+};
+
+// Taking the address of the function-template specialization forces full
+// instantiation of its body. If dispatch_option2_spec_hash references types
+// that aren't valid for an Option 2 factory, this fails to compile.
+[[maybe_unused]] inline auto _force_option2_dispatch_instantiation() {
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<FakeDeviceOp>;
+    return &ttnn::device_operation::detail::dispatch_option2_spec_hash<Adapter, Option2Factory>;
+}
+
+}  // namespace option2_instantiation_guard
+
 TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
     using ::ttnn::operations::examples::ExampleDeviceOperation;
     EXPECT_EQ(

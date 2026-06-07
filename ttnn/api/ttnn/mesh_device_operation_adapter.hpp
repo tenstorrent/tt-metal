@@ -258,6 +258,24 @@ public:
         }
     }
 
+    // Walk tensor_args and tensor_return_value via reflection, collecting the
+    // MeshTensor of every Tensor leaf. Deterministic, stable across calls
+    // (reflection order is field-declaration order). Available to every
+    // factory adapter that needs to validate or bind against the io tensors;
+    // sits at MeshDeviceOperationAdapter scope (rather than nested in an
+    // adapter) so it can be used by code paths that don't share the inner
+    // adapter's template parameters or constraints — in particular by
+    // dispatch_option2_spec_hash, which handles factories that don't satisfy
+    // the Option 1 adapter's `HasFastCacheHitPathOptIn` requirement.
+    static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_io_mesh_tensors(
+        const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
+        std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
+        const auto visit = [&result](const tt::tt_metal::Tensor& t) { result.push_back(std::cref(t.mesh_tensor())); };
+        ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_args);
+        ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_return_value);
+        return result;
+    }
+
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of `ProgramFactoryConcept`
     // types.
     template <ProgramFactoryConcept ProgramFactory>
@@ -661,22 +679,6 @@ public:
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        // Walk tensor_args and tensor_return_value via reflection, collecting
-        // the MeshTensor of every Tensor leaf. The walk order is deterministic
-        // (reflection-driven, stable across calls), so the resulting indices
-        // are stable across calls. Metal 2.0 analog of the descriptor adapter's
-        // collect_tensor_buffers, at the MeshTensor level instead of Buffer*.
-        static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_mesh_tensors(
-            const tensor_args_t& tensor_args, const tensor_return_value_t& tensor_return_value) {
-            std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
-            const auto visit = [&result](const tt::tt_metal::Tensor& t) {
-                result.push_back(std::cref(t.mesh_tensor()));
-            };
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_args);
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_return_value);
-            return result;
-        }
-
         // Disallow DFB size overrides on the Option 1 path.
         // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
         //
@@ -754,7 +756,7 @@ public:
         //
         // NOTE on host perf: the index-based binding scheme is what makes a
         // fast cache-hit path possible, but the current straightforward
-        // implementation isn't there yet — collect_mesh_tensors returns a
+        // implementation isn't there yet — collect_io_mesh_tensors returns a
         // heap std::vector, and apply_descriptor builds a fresh TensorArgument
         // vector each dispatch. Both costs are fixable by mirroring the
         // descriptor adapter's compile-time-unrolled walker + SmallVector +
@@ -806,7 +808,8 @@ public:
             auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             assert_no_dfb_size_overrides(artifacts.run_params);
             assert_no_common_runtime_args(artifacts.run_params);
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            auto io_mesh_tensors =
+                MeshDeviceOperationAdapter::collect_io_mesh_tensors(tensor_args, tensor_return_value);
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -835,7 +838,8 @@ public:
             const operation_attributes_t& /*attrs*/,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            auto io_mesh_tensors =
+                MeshDeviceOperationAdapter::collect_io_mesh_tensors(tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
                 std::vector<TensorArgument> fresh_tensor_args;

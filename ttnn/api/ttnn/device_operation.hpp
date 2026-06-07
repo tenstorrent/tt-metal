@@ -422,9 +422,16 @@ void dispatch_option2_spec_hash(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     std::size_t program_factory_index) {
-    using Adapter =
-        typename mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
-    using cached_mesh_workload_t = typename Adapter::cached_mesh_workload_t;
+    // Option 2 has no cross-dispatch state: the factory runs on every dispatch
+    // and the full ProgramRunArgs is re-applied each time. shared_variables_t
+    // is just an empty marker satisfying the AdaptedCachedMeshWorkload type
+    // slot. (Defining it locally rather than reusing the Option 1 adapter's
+    // shared_variables_t keeps this function independent of the Option 1
+    // adapter's `HasFastCacheHitPathOptIn` requires-clause — Option 2
+    // factories don't satisfy that requirement, so going through the adapter
+    // would be a substitution failure here.)
+    struct shared_variables_t {};
+    using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
     // Always run cache-miss validation; if cache hit and a separate cache-hit
     // validator is provided, also run that below.
@@ -435,12 +442,26 @@ void dispatch_option2_spec_hash(
     auto artifacts =
         ProgramSpecFactory::create_program_artifacts(operation_attributes, tensor_args, tensor_return_value);
 
-    // Validate io-tensor reachability (op-owned MeshTensors die at factory
-    // return and would leave SetProgramRunArgs's copy with freed device
-    // addresses). The resolved bindings are discarded — Option 2 doesn't store
-    // them, the factory is re-run every dispatch.
-    auto io_mesh_tensors = Adapter::collect_mesh_tensors(tensor_args, tensor_return_value);
-    (void)Adapter::resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+    // Validate io-tensor reachability inline (op-owned MeshTensors die at
+    // factory return and would leave SetProgramRunArgs's copy with freed device
+    // addresses; route through create_workload_artifacts if you need op-owned
+    // resources). Bindings aren't stored — Option 2 re-runs the factory on
+    // every dispatch — so this is a check-only pass.
+    auto io_mesh_tensors = mesh_device_operation_t::collect_io_mesh_tensors(tensor_args, tensor_return_value);
+    for (const auto& tensor_arg : artifacts.run_params.tensor_args) {
+        const auto* target = &tensor_arg.tensor.get();
+        const bool reachable =
+            std::any_of(io_mesh_tensors.begin(), io_mesh_tensors.end(), [target](const auto& wrapped) {
+                return &wrapped.get() == target;
+            });
+        TT_FATAL(
+            reachable,
+            "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
+            "tensor_return_value. Option 2 (create_program_artifacts) does not support "
+            "op-owned resource tensors; route through create_workload_artifacts "
+            "(WorkloadArtifactConcept) if you need them.",
+            tensor_arg.tensor_parameter_name);
+    }
 
     ttsl::hash::hash_t program_hash = 0;
     bool program_cache_hit = false;
@@ -490,11 +511,11 @@ void dispatch_option2_spec_hash(
     }
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, typename Adapter::shared_variables_t> shared_variables;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& range : tensor_coords.ranges()) {
         auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
         tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-        shared_variables.emplace(range, typename Adapter::shared_variables_t{});
+        shared_variables.emplace(range, shared_variables_t{});
         mesh_workload.add_program(range, std::move(program));
     }
     auto cached_workload = cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
