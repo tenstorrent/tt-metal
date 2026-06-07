@@ -549,7 +549,7 @@ The TT model runs encoders, decoder, T2U, and vocoder on device, but `**TTSeamle
 | Trailing pad / EOS trim | Host (Python) | `_trim_seq_host_for_speech` before T2U |
 | Subword → character tables | Host (torch, init-time) | Precomputed **`T2UCharLookupTables`** built once from `generation_config`; ~8 MB CPU torch tensors |
 | T2U char ids / duration counts | Host (torch) | ``prepare_speech_from_seq``: dense char gather + ``from_torch_uint32_rm`` (~1 ms; ``t2u_char_prep_ms`` in demo) |
-| Decoder hidden for T2U | Device (text decoder) | Cached during **eager** KV decode when ``use_decode_trace=False``; traced decode still runs one ``_decoder_hidden`` pass (~70–85 ms) |
+| Decoder hidden for T2U | Host (torch) + device | Incremental CPU cache during KV/trace decode (default on; ~3–8 ms upload vs ~75 ms ``_decoder_hidden``). ``SEAMLESS_USE_SPEECH_HIDDEN_CACHE=0`` forces teacher-forcing; ``SEAMLESS_VALIDATE_SPEECH_HIDDEN=1`` checks PCC+max_err |
 | T2U forward trace | Device (optional) | Pass ``use_t2u_trace=True`` to capture/replay Metal trace after first compile (fixed shapes; off in demo) |
 | T2U unit id → vocoder vocab remap | Host (PyTorch) | T2U **`argmax`** on device, then unit ids + padding mask read back; EOS/pad masking and **`vocoder_offset`** applied with `torch.where`, re-uploaded for the vocoder |
 

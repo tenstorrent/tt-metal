@@ -16,6 +16,7 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Sequence, Tuple, Union
@@ -261,6 +262,7 @@ class TextDecoderKvDecodeRuntime:
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
     trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
+    last_dec_out_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
 
 
 def _subsampled_lens_dev(attention_mask_2d: ttnn.Tensor, kernel_size: int, stride: int) -> ttnn.Tensor:
@@ -649,45 +651,84 @@ class TTSeamlessM4Tv2Model:
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
-        self._speech_hidden_parts: list[ttnn.Tensor] = []
+        self._speech_hidden_host: Optional[torch.Tensor] = None
+        self._speech_hidden_rows: int = 0
+        self._speech_hidden_write_row: int = 0
         self._speech_hidden_cache_active = False
         self._t2u_trace_key: Optional[tuple[Any, ...]] = None
 
+    def _ensure_speech_hidden_host(self) -> torch.Tensor:
+        if self._speech_hidden_host is not None:
+            return self._speech_hidden_host
+        cap = tile_align(int(self.max_text_seq_len))
+        self._speech_hidden_host = torch.zeros(1, cap, int(self.hidden_size), dtype=torch.bfloat16)
+        return self._speech_hidden_host
+
     def _reset_speech_hidden_cache(self) -> None:
-        for t in self._speech_hidden_parts:
-            ttnn.deallocate(t)
-        self._speech_hidden_parts = []
+        self._speech_hidden_host = None
+        self._speech_hidden_rows = 0
+        self._speech_hidden_write_row = 0
         self._speech_hidden_cache_active = False
 
-    def _stash_speech_hidden_block(self, hidden: ttnn.Tensor, *, start: int, end: int) -> None:
-        """Append decoder hidden rows ``[start:end)`` from a prefill ``[B,S,H]`` tensor."""
+    def _stash_speech_hidden_row(self, dec_out: ttnn.Tensor, row: int) -> None:
+        """Read back one decode hidden row onto CPU (trace-safe; no device writes during capture)."""
+        if not self._speech_hidden_cache_active or row < 0:
+            return
+        h = int(self.hidden_size)
+        ttnn.synchronize_device(self.device)
+        host_row = to_torch_replicated_first_shard(dec_out).to(torch.bfloat16).reshape(1, 1, h)
+        self._ensure_speech_hidden_host()
+        self._speech_hidden_host[:, row : row + 1, :].copy_(host_row.cpu())
+        self._bump_speech_hidden_rows(row)
+
+    def _copy_speech_hidden_block(self, hidden: ttnn.Tensor, *, start: int, end: int) -> None:
+        """Read back prefill hidden rows ``[start:end)`` onto the CPU speech hidden cache."""
         if not self._speech_hidden_cache_active or end <= start:
             return
         h = int(self.hidden_size)
+        ttnn.synchronize_device(self.device)
         block = ttnn.slice(hidden, [0, start, 0], [1, end, h], (1, 1, 1))
-        self._speech_hidden_parts.append(block)
+        host_block = to_torch_replicated_first_shard(block).to(torch.bfloat16).reshape(1, end - start, h)
+        ttnn.deallocate(block)
+        self._ensure_speech_hidden_host()
+        self._speech_hidden_host[:, start:end, :].copy_(host_block.cpu())
+        self._speech_hidden_rows = end
 
-    def _stash_speech_hidden_step(self, dec_out: ttnn.Tensor) -> None:
-        """Append one decode-step hidden ``[B,1,H]`` (cloned before ``dec_out`` deallocate)."""
-        if not self._speech_hidden_cache_active:
+    def _copy_speech_hidden_step(self, dec_out: ttnn.Tensor, row: int) -> None:
+        self._stash_speech_hidden_row(dec_out, row)
+
+    def _bump_speech_hidden_rows(self, row: int) -> None:
+        """Host-side row watermark (trace replay does not re-run ``_stash_speech_hidden_row``)."""
+        if self._speech_hidden_cache_active and row >= 0:
+            self._speech_hidden_rows = max(self._speech_hidden_rows, row + 1)
+
+    def _stash_traced_decode_hidden(self) -> None:
+        """Read back the last traced decode hidden row (must run outside trace capture)."""
+        rt = self._kv_decode_rt
+        if rt is None or not self._speech_hidden_cache_active:
             return
-        self._speech_hidden_parts.append(ttnn.clone(dec_out, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        bucket = rt.trace_cache_seq_len
+        if bucket is None:
+            return
+        dec_out = rt.last_dec_out_tt_by_cache_seq_len.get(int(bucket))
+        if dec_out is None:
+            return
+        self._stash_speech_hidden_row(dec_out, int(self._speech_hidden_write_row))
 
     def _speech_hidden_for_t2u(self, logical_rows: int) -> Optional[Tuple[ttnn.Tensor, int]]:
-        """Concat cached decode hiddens to ``[1, padded_dec_seq, H]`` when row count matches."""
-        if not self._speech_hidden_cache_active or not self._speech_hidden_parts:
+        """Upload cached CPU hiddens ``[1, logical_rows, H]`` for T2U when the cache is complete."""
+        if not self._speech_hidden_cache_active or self._speech_hidden_host is None:
             return None
-        if logical_rows <= 0:
+        if logical_rows <= 0 or self._speech_hidden_rows < logical_rows:
             return None
-        hidden = (
-            self._speech_hidden_parts[0]
-            if len(self._speech_hidden_parts) == 1
-            else ttnn.concat(self._speech_hidden_parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        host = self._speech_hidden_host[:, :logical_rows, :].contiguous()
+        hidden = ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        got = int(hidden.shape[1])
-        if got != logical_rows:
-            ttnn.deallocate(hidden)
-            return None
         padded_dec_seq = tile_align(logical_rows)
         if padded_dec_seq != logical_rows:
             hidden = ttnn.pad(
@@ -696,6 +737,34 @@ class TTSeamlessM4Tv2Model:
                 value=0.0,
             )
         return hidden, padded_dec_seq
+
+    def _speech_hidden_pcc_against_teacher(
+        self,
+        cached: ttnn.Tensor,
+        ref: ttnn.Tensor,
+        logical_rows: int,
+    ) -> tuple[bool, float, float]:
+        """PCC + max-abs error between cached and teacher-forcing hiddens."""
+        import torch as _torch
+
+        h = int(self.hidden_size)
+        c_view = ttnn.slice(cached, [0, 0, 0], [1, logical_rows, h], (1, 1, 1))
+        r_view = ttnn.slice(ref, [0, 0, 0], [1, logical_rows, h], (1, 1, 1))
+        c_host = to_torch_replicated_first_shard(c_view).to(_torch.bfloat16).reshape(-1)
+        r_host = to_torch_replicated_first_shard(r_view).to(_torch.bfloat16).reshape(-1)
+        ttnn.deallocate(c_view)
+        ttnn.deallocate(r_view)
+        if c_host.numel() == 0 or r_host.numel() == 0:
+            return False, 0.0, float("inf")
+        c_f = c_host.to(_torch.float32)
+        r_f = r_host.to(_torch.float32)
+        max_err = float((c_f - r_f).abs().max().item())
+        vx = c_f - c_f.mean()
+        vy = r_f - r_f.mean()
+        denom = vx.norm() * vy.norm()
+        pcc = float((vx * vy).sum().item() / denom.item()) if denom.item() > 0 else 1.0
+        ok = pcc >= 0.99 and max_err <= 0.25
+        return ok, pcc, max_err
 
     def prewarm_vocoder_shape_buckets(self, *, unit_seq: int, t_audio: int, batch: int = 1) -> None:
         """Warm vocoder conv programs for bucketed ``(unit_seq, t_audio)``."""
@@ -1489,6 +1558,9 @@ class TTSeamlessM4Tv2Model:
         if old_tok is not None:
             for _t in old_tok:
                 ttnn.deallocate(_t)
+        old_dec = rt.last_dec_out_tt_by_cache_seq_len.pop(bucket, None)
+        if old_dec is not None:
+            ttnn.deallocate(old_dec)
         if rt.trace_cache_seq_len == bucket:
             rt.trace_id = None
             rt.trace_cache_seq_len = None
@@ -1514,6 +1586,9 @@ class TTSeamlessM4Tv2Model:
                 ttnn.deallocate(_t)
         rt.tok_tt_by_cache_seq_len.clear()
         rt.tok_tt = None
+        for dec_out in rt.last_dec_out_tt_by_cache_seq_len.values():
+            ttnn.deallocate(dec_out)
+        rt.last_dec_out_tt_by_cache_seq_len.clear()
         self._free_kv_host_readback_buffers(rt)
         rt.trace_id = None
         rt.trace_cache_seq_len = None
@@ -1681,9 +1756,8 @@ class TTSeamlessM4Tv2Model:
         return logits
 
     def _decode_trace_bucket(self, position: int) -> int:
-        """SDPA bucket used for the single Metal decode trace (BH: one capture only)."""
-        del position
-        return self._fixed_decode_trace_sdpa_len()
+        """SDPA bucket for decode trace at ``position`` (matches eager ``cache_seq_len=position+1``)."""
+        return self.text_decoder.decode_trace_cache_seq_len(int(position) + 1)
 
     def _select_decode_trace_for_position(self, position: int, batch_size: int) -> Optional[int]:
         """Return trace id for the SDPA bucket at ``position``, or None if not captured yet."""
@@ -1707,6 +1781,8 @@ class TTSeamlessM4Tv2Model:
         cross_attn_cache: list,
         *,
         cache_seq_len: int,
+        stash_speech_hidden: bool = True,
+        retain_dec_out: bool = False,
     ) -> ttnn.Tensor:
         """One KV decode step + width-sharded ``lm_head`` → ``[1, 1, V/tp]`` logits *per device*."""
         dec_out = self.text_decoder.forward(
@@ -1722,8 +1798,13 @@ class TTSeamlessM4Tv2Model:
             cache_seq_len=cache_seq_len,
             trace_no_profiler=True,
         )
+        if stash_speech_hidden:
+            self._copy_speech_hidden_step(dec_out, self._speech_hidden_write_row)
         logits = self._lm_head_sharded(dec_out)
-        ttnn.deallocate(dec_out)
+        if retain_dec_out:
+            rt.last_dec_out_tt_by_cache_seq_len[int(cache_seq_len)] = dec_out
+        else:
+            ttnn.deallocate(dec_out)
         return logits
 
     def capture_text_decoder_decode_trace(
@@ -1749,6 +1830,7 @@ class TTSeamlessM4Tv2Model:
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
         self._reset_kv_decode_cur_pos(position, batch_size)
         ttnn.synchronize_device(self.device)
+        self._speech_hidden_write_row = int(position)
 
         # Compile outside trace (``tt_transformers`` / Llama pattern). JIT during capture
         # issues host→device writes forbidden while ``trace_id`` is active.
@@ -1759,6 +1841,7 @@ class TTSeamlessM4Tv2Model:
             kv_cache,
             cross_attn_cache,
             cache_seq_len=config_cache_len,
+            stash_speech_hidden=False,
         )
         # Pre-compile the fused argmax too — else it JITs during capture → "Writes not supported".
         compile_tok = self._decode_argmax_token(compile_logits)
@@ -1784,6 +1867,8 @@ class TTSeamlessM4Tv2Model:
                 kv_cache,
                 cross_attn_cache,
                 cache_seq_len=config_cache_len,
+                stash_speech_hidden=False,
+                retain_dec_out=True,
             )
             capture_tok = self._decode_argmax_token(capture_logits)
 
@@ -1802,6 +1887,7 @@ class TTSeamlessM4Tv2Model:
         rt.trace_id = trace_id
         rt.trace_cache_seq_len = config_cache_len
         ttnn.synchronize_device(self.device)
+        self._stash_traced_decode_hidden()
 
     def execute_text_decoder_decode_trace(self, *, cache_seq_len: Optional[int] = None) -> ttnn.Tensor:
         """Replay a captured decode trace; caller must upload inputs and reset ``cur_pos_tt`` first."""
@@ -1822,6 +1908,7 @@ class TTSeamlessM4Tv2Model:
         rt.logits_tt = logits_tt
         rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(bucket)
         ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
+        self._stash_traced_decode_hidden()
         return logits_tt
 
     def _decode_token_with_kv_cache_traced(
@@ -1836,7 +1923,7 @@ class TTSeamlessM4Tv2Model:
         batch_size: int = 1,
     ) -> ttnn.Tensor:
         ttnn.synchronize_device(self.device)
-        cache_seq_len = self._fixed_decode_trace_sdpa_len()
+        cache_seq_len = self._decode_trace_bucket(position)
         rt = self._ensure_kv_decode_runtime(batch_size)
         need_capture = cache_seq_len not in rt.trace_ids_by_cache_seq_len
         if need_capture:
@@ -1854,6 +1941,7 @@ class TTSeamlessM4Tv2Model:
             return rt.logits_tt
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
         self._reset_kv_decode_cur_pos(position, batch_size)
+        self._speech_hidden_write_row = int(position)
         return self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
 
     def _decode_loop_selffed(
@@ -1878,10 +1966,11 @@ class TTSeamlessM4Tv2Model:
         dev = self.device
         prev_set = prev_token_ids if prev_token_ids is not None else set(seq_host)
         h2d_cq = 1 if use_2cq else 0
-        cache_seq_len = self._fixed_decode_trace_sdpa_len()
 
         cur_tok = int(seq_host[cur_pos])
         t_step = phase_timer.begin_step() if phase_timer is not None else None
+        self._speech_hidden_write_row = int(cur_pos)
+        cache_seq_len = self._decode_trace_bucket(cur_pos)
         if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
             self.capture_text_decoder_decode_trace(
                 cur_tok,
@@ -1894,6 +1983,10 @@ class TTSeamlessM4Tv2Model:
                 cache_seq_len=cache_seq_len,
             )
         else:
+            rt.trace_id = rt.trace_ids_by_cache_seq_len[cache_seq_len]
+            rt.trace_cache_seq_len = cache_seq_len
+            rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_seq_len)
+            rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_seq_len)
             self._upload_kv_decode_step_inputs(cur_tok, cur_pos, batch_size, cq_id=h2d_cq)
             self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=h2d_cq)
             if use_2cq:
@@ -1901,6 +1994,7 @@ class TTSeamlessM4Tv2Model:
                 ttnn.wait_for_event(0, write_event)
             ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
 
+        self._stash_traced_decode_hidden()
         next_id = self._greedy_token_after_traced_step(
             rt.logits_tt,
             1,
@@ -1922,6 +2016,8 @@ class TTSeamlessM4Tv2Model:
         for _ in range(max_steps - 1):
             d2h_event = None
             t_step = phase_timer.begin_step() if phase_timer is not None else None
+            self._speech_hidden_write_row = int(cur_pos)
+            cache_seq_len = self._decode_trace_bucket(cur_pos)
             if use_2cq:
                 if cq0_idle is not None:
                     ttnn.wait_for_event(1, cq0_idle)
@@ -1929,14 +2025,47 @@ class TTSeamlessM4Tv2Model:
                 self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=1)
                 write_event = ttnn.record_event(dev, 1)
                 ttnn.wait_for_event(0, write_event)
+                if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
+                    self.capture_text_decoder_decode_trace(
+                        int(seq_host[cur_pos]),
+                        cur_pos,
+                        enc_tt,
+                        cross_4d,
+                        kv_cache,
+                        cross_attn_cache,
+                        batch_size=batch_size,
+                        cache_seq_len=cache_seq_len,
+                    )
+                else:
+                    rt.trace_id = rt.trace_ids_by_cache_seq_len[cache_seq_len]
+                    rt.trace_cache_seq_len = cache_seq_len
+                    rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_seq_len)
+                    rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_seq_len)
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
                 cq0_idle = ttnn.record_event(dev, 0)
                 d2h_event = self._start_chunk_argmax_d2h(rt.tok_tt, cq_id=1, blocking=False)
             else:
                 self._upload_pos_only(cur_pos, batch_size)
                 self._reset_kv_decode_cur_pos(cur_pos, batch_size)
+                if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
+                    self.capture_text_decoder_decode_trace(
+                        int(seq_host[cur_pos]),
+                        cur_pos,
+                        enc_tt,
+                        cross_4d,
+                        kv_cache,
+                        cross_attn_cache,
+                        batch_size=batch_size,
+                        cache_seq_len=cache_seq_len,
+                    )
+                else:
+                    rt.trace_id = rt.trace_ids_by_cache_seq_len[cache_seq_len]
+                    rt.trace_cache_seq_len = cache_seq_len
+                    rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_seq_len)
+                    rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_seq_len)
                 ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=True)
 
+            self._stash_traced_decode_hidden()
             next_id = self._greedy_token_after_traced_step(
                 rt.logits_tt,
                 1,
@@ -2036,6 +2165,7 @@ class TTSeamlessM4Tv2Model:
         if cross_4d is None:
             cross_4d = build_cross_attn_mask_4d(encoder_attn_2d, tgt_seq=1, device=self.device)
         cur_pos = self.text_decoder.borrow_current_decode_pos_tensor(position, batch_size=batch_size)
+        self._speech_hidden_write_row = int(position)
         dec_out = self.text_decoder.forward(
             token_ids,
             pos_tt,
@@ -2049,7 +2179,7 @@ class TTSeamlessM4Tv2Model:
             cache_seq_len=position + 1,
             trace_no_profiler=True,
         )
-        self._stash_speech_hidden_step(dec_out)
+        self._copy_speech_hidden_step(dec_out, int(position))
         logits = self._lm_head(dec_out)
         ttnn.deallocate(dec_out)
         ttnn.deallocate(pos_tt)
@@ -2593,15 +2723,9 @@ class TTSeamlessM4Tv2Model:
         phase_timer.encoder_ms = phase_timer.elapsed_ms(t_phase)
 
         reuse_text_sequences = text_sequences is not None
-        use_decode_trace_flag = bool(kwargs_text.get("use_decode_trace", False))
-        if (
-            generate_speech
-            and not reuse_text_sequences
-            and num_beams == 1
-            and not do_sample
-            and not use_decode_trace_flag
-        ):
+        if generate_speech and not reuse_text_sequences and num_beams == 1 and not do_sample:
             self._speech_hidden_cache_active = True
+            self._ensure_speech_hidden_host()
 
         # ---- Seed decoder sequence (skipped when reusing T2TT ``text_sequences``) ----
         seed_tt: Optional[ttnn.Tensor] = None
@@ -2700,7 +2824,7 @@ class TTSeamlessM4Tv2Model:
                     kv_cache,
                     cross_attn_cache,
                 )
-                self._stash_speech_hidden_block(warm_out, start=0, end=seed_len)
+                self._copy_speech_hidden_block(warm_out, start=0, end=seed_len)
                 phase_timer.prefill_ms = phase_timer.elapsed_ms(t_prefill)
                 ttnn.deallocate(warm_tt)
                 cross_valid = True
@@ -2787,6 +2911,7 @@ class TTSeamlessM4Tv2Model:
                             ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
                             # Update op_event: CQ0 has finished this trace step.
                             _2cq_op_event = ttnn.record_event(self.device, 0)
+                            self._stash_traced_decode_hidden()
                             logits = rt.logits_tt
                     else:
                         logits = self._decode_token_with_kv_cache_traced(
@@ -2959,22 +3084,56 @@ class TTSeamlessM4Tv2Model:
         t_t2u = phase_timer.sync_now()
         logical_seq_len = len(seq_host)
         logical_hidden_rows = logical_seq_len - 1
-        cached_hidden = self._speech_hidden_for_t2u(logical_hidden_rows)
+        disable_hidden_cache = os.environ.get("SEAMLESS_USE_SPEECH_HIDDEN_CACHE", "1").lower() in (
+            "0",
+            "false",
+            "no",
+        )
+        cached_hidden = None if disable_hidden_cache else self._speech_hidden_for_t2u(logical_hidden_rows)
+        dec_hidden_padded: ttnn.Tensor
+        padded_dec_seq: int
         if cached_hidden is not None:
-            dec_hidden_padded, padded_dec_seq = cached_hidden
+            cached_tensor, cached_pad = cached_hidden
+            validate = os.environ.get("SEAMLESS_VALIDATE_SPEECH_HIDDEN", "0").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            use_cache = True
+            if validate:
+                dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_hidden_rows], (1, 1))
+                ref_hidden, ref_pad = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
+                ttnn.deallocate(dec_in_tt)
+                ok, pcc, max_err = self._speech_hidden_pcc_against_teacher(
+                    cached_tensor, ref_hidden, logical_hidden_rows
+                )
+                if not ok or cached_pad != ref_pad:
+                    from loguru import logger
+
+                    logger.warning(
+                        f"Speech hidden cache rejected (PCC={pcc:.4f}, max_err={max_err:.4f}, "
+                        f"pad {cached_pad} vs {ref_pad}); using teacher-forcing _decoder_hidden for T2U"
+                    )
+                    ttnn.deallocate(cached_tensor)
+                    dec_hidden_padded, padded_dec_seq = ref_hidden, ref_pad
+                    use_cache = False
+                else:
+                    ttnn.deallocate(ref_hidden)
+            if use_cache:
+                dec_hidden_padded, padded_dec_seq = cached_tensor, cached_pad
             self._reset_speech_hidden_cache()
         else:
             dec_in_tt = ttnn.slice(sequences_tt, [0, 0], [batch_size, logical_hidden_rows], (1, 1))
             dec_hidden_padded, padded_dec_seq = self._decoder_hidden(enc_tt2, enc_attn_tt2, dec_in_tt)
             ttnn.deallocate(dec_in_tt)
+        t_char_prep = phase_timer.sync_now()
+        phase_timer.t2u_decoder_hidden_ms = phase_timer.elapsed_ms(t_t2u)
         ttnn.deallocate(enc_tt2)
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
 
         # T2U prep: characters & char counts come from the generated text-token sequence.
         real_dec_len = sum(1 for x in seq_host[:-1] if x != pad_token_id)
-        t_char_prep = phase_timer.sync_now()
-        phase_timer.t2u_decoder_hidden_ms = phase_timer.elapsed_ms(t_t2u)
         if self._t2u_char_tables is None:
             seq_full_ints = list(seq_host)
             t2u_ids = [pad_token_id if t == eos_id else int(t) for t in seq_full_ints[2:-1]]
