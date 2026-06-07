@@ -275,7 +275,7 @@ prep_ubuntu_system() {
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
 
     # Add LLVM repository for Clang 17
-    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/apt-llvm-org.gpg
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     # Also v20
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
