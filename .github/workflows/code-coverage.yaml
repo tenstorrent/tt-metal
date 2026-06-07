@@ -113,15 +113,23 @@ jobs:
           merge-multiple: false
 
       - name: Generate per-area coverage reports
+        env:
+          # Single source of truth for the list of areas.
+          # Update this (and add a generate_area block below) when adding new areas.
+          COVERAGE_AREAS: "ttnn metal-runtime"
         run: |
           set -euo pipefail
           IGNORE_REGEX='(^|/)\.cpmcache/|(^|/)build[^/]*/|(^|/)third_party/'
           mkdir -p /work/coverage /work/coverage_html
 
+          # Persist the area list for downstream steps (step summary, index, publish).
+          echo "$COVERAGE_AREAS" > /work/coverage/areas.txt
+
           # ------------------------------------------------------------------ #
           # Helper: generate HTML + JSON for a single area.
           #   $1 = area name (matches profdata dir and output subdir)
           #   Remaining args: instrumented object paths
+          # Returns 1 on error so callers can decide whether to fail-fast or warn.
           # ------------------------------------------------------------------ #
           generate_area() {
             local area="$1"; shift
@@ -132,6 +140,13 @@ jobs:
             local json_out="/work/coverage/${area}-summary.json"
 
             echo "::group::Coverage — ${area}"
+
+            # Check objects first — no point merging profdata if there is nothing to report against.
+            if [ ${#objects[@]} -eq 0 ]; then
+              echo "::error::No instrumented objects found for area '${area}' — cannot generate coverage"
+              echo "::endgroup::"
+              return 1
+            fi
 
             # Collect profdata files for this area
             shopt -s globstar nullglob
@@ -146,12 +161,6 @@ jobs:
             # Merge
             llvm-profdata-20 merge -sparse "${profdata_files[@]}" -o "${merged}"
             echo "Merged profdata: $(du -h "${merged}" | cut -f1)"
-
-            if [ ${#objects[@]} -eq 0 ]; then
-              echo "::error::No instrumented objects found for area '${area}'"
-              echo "::endgroup::"
-              return 1
-            fi
 
             local obj_flags=()
             for obj in "${objects[@]}"; do obj_flags+=("-object=${obj}"); done
@@ -186,7 +195,8 @@ jobs:
           while IFS= read -r -d '' obj; do
             ttnn_objects+=("$obj")
           done < <(find /opt/venv/lib -path "*/ttnn/build/lib/*.so" -print0 2>/dev/null)
-          generate_area "ttnn" "${ttnn_objects[@]}"
+          generate_area "ttnn" "${ttnn_objects[@]}" \
+            || echo "::warning::ttnn coverage generation failed — continuing with remaining areas"
 
           # ------------------------------------------------------------------ #
           # Area: metal-runtime
@@ -200,7 +210,8 @@ jobs:
           while IFS= read -r -d '' obj; do
             metal_runtime_objects+=("$obj")
           done < <(find /work/build/lib -name "libtt_metal*.so" -type f -print0 2>/dev/null)
-          generate_area "metal-runtime" "${metal_runtime_objects[@]}"
+          generate_area "metal-runtime" "${metal_runtime_objects[@]}" \
+            || echo "::warning::metal-runtime coverage generation failed — continuing with remaining areas"
 
       - name: Generate step summary
         if: always()
@@ -208,7 +219,7 @@ jobs:
           python3 - <<'EOF'
           import json, os, pathlib
 
-          areas = ["ttnn", "metal-runtime"]
+          areas = pathlib.Path("/work/coverage/areas.txt").read_text().split()
           summary_file = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
 
           with open(summary_file, "a") as out:
@@ -236,7 +247,7 @@ jobs:
           python3 - <<'EOF'
           import json, os, pathlib, datetime
 
-          areas = ["ttnn", "metal-runtime"]
+          areas = pathlib.Path("/work/coverage/areas.txt").read_text().split()
           html_root = pathlib.Path("/work/coverage_html")
           html_root.mkdir(parents=True, exist_ok=True)
 
@@ -262,7 +273,7 @@ jobs:
               )
 
           commit = os.environ.get("GITHUB_SHA", "unknown")[:7]
-          date_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+          date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
           html = f"""<!DOCTYPE html>
           <html lang="en">
@@ -304,13 +315,16 @@ jobs:
 
           cp -r /work/coverage_html/. .
           # Publish per-area JSON summaries
-          for area in ttnn metal-runtime; do
+          areas=$(cat /work/coverage/areas.txt)
+          for area in $areas; do
             src="/work/coverage/${area}-summary.json"
             [ -f "$src" ] && cp "$src" "${area}-summary.json" || true
           done
-          printf '{"date":"%s","commit":"%s","areas":["ttnn","metal-runtime"]}\n' \
+          areas_json=$(python3 -c "import json,pathlib; print(json.dumps(pathlib.Path('/work/coverage/areas.txt').read_text().split()))")
+          printf '{"date":"%s","commit":"%s","areas":%s}\n' \
             "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            "${{ github.sha }}" > meta.json
+            "${{ github.sha }}" \
+            "$areas_json" > meta.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -117,13 +117,15 @@ jobs:
       - name: Upload profdata artifact
         if: ${{ inputs.collect-coverage && always() }}
         run: |
-          if ! ls /work/coverage/*.profraw 1>/dev/null 2>&1; then
+          profraw_count=$(find /work/coverage -name "*.profraw" | wc -l)
+          if [ "$profraw_count" -eq 0 ]; then
             echo "No profraw files found, skipping upload"
             exit 0
           fi
-          llvm-profdata-20 merge -sparse /work/coverage/*.profraw \
-            -o /work/coverage/job.profdata
-          echo "Merged $(ls /work/coverage/*.profraw | wc -l) profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
+          # Use find+xargs to avoid ARG_MAX limits when many processes emit profraw files.
+          find /work/coverage -name "*.profraw" -print0 | \
+            xargs -0 llvm-profdata-20 merge -sparse -o /work/coverage/job.profdata
+          echo "Merged ${profraw_count} profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
         shell: bash
       - name: Upload profdata
         if: ${{ inputs.collect-coverage && always() }}
