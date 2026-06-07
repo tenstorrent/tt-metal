@@ -858,8 +858,6 @@ def test_tt_decoder_full_forward_fallback_pcc(device):
             params.generator,
             use_torch_stft_fallback=True,
             use_torch_phase_fallback=True,
-            use_torch_linear_fallback=True,
-            use_torch_tanh_fallback=True,
         )
 
     mc = ttnn.DRAM_MEMORY_CONFIG
@@ -968,8 +966,6 @@ def test_tt_decoder_full_forward_no_fallback_matched_source_noise(device):
         params,
         use_torch_stft_fallback=True,
         use_torch_phase_fallback=True,
-        use_torch_linear_fallback=True,
-        use_torch_tanh_fallback=True,
     )
 
     B = int(F0_curve.shape[0])

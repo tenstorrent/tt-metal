@@ -133,12 +133,8 @@ def _ref_har_and_audio(ref: Generator, x: torch.Tensor, s: torch.Tensor, f0: tor
 
 
 def _assert_generator_no_fallbacks(tt_mod: TTGenerator) -> None:
-    assert not tt_mod._m_source._use_torch_linear_fallback
-    assert not tt_mod._m_source._use_torch_tanh_fallback
     assert not tt_mod._m_source._sinegen.use_torch_phase_fallback
-    assert not tt_mod._m_source._sinegen.use_torch_sinegen_fallback
     assert not tt_mod._stft._use_torch_stft_fallback
-    assert not tt_mod._stft._use_torch_stft_conv_fallback
 
 
 def _pcc_ref_tt(ref_t: torch.Tensor, tt_t: ttnn.Tensor) -> float:
@@ -202,13 +198,7 @@ def test_tt_generator_m_source_no_fallback_pcc(device):
     torch.rand = _fake_rand
     torch.randn_like = _fake_randn_like
     try:
-        tt_mod = TTGenerator(
-            device,
-            params,
-            use_torch_phase_fallback=False,
-            use_torch_linear_fallback=False,
-            use_torch_tanh_fallback=False,
-        )
+        tt_mod = TTGenerator(device, params, use_torch_phase_fallback=False)
         with torch.no_grad():
             sine_merge_ref, noise_ref, uv_ref = ref.m_source(f0u)
     finally:
@@ -1745,10 +1735,7 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
        values (~3.3e-5 cycles) are amplified by 2π × upsample_scale=300 ≈ 1885× → ~0.25 rad
        phase error, comparable to sine_amp=0.1.  CPU float32 cumsum eliminates this.
 
-    3. **Source linear+tanh** (``use_torch_linear_fallback=True``, ``use_torch_tanh_fallback=True``):
-       runs both operations on CPU float32 to remove remaining source-merge BF16 error.
-
-    These fallbacks together are expected to reach the tight PCC target.
+    These two fallbacks together are expected to reach the tight PCC target.
     """
     ckpt_path = _find_checkpoint()
     if ckpt_path is None:
@@ -1760,7 +1747,7 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
     x, s, f0 = _setup_test_inputs(T_x)
 
     params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    # Enable full STFT transform fallback + SineGen phase fallback + source linear/tanh fallbacks.
+    # Enable full STFT transform fallback + SineGen phase fallback.
     # TTGenerator is constructed inside the same zeros context so self._noise_raw /
     # self._out_noise_raw match the zeros noise used by the reference forward.
     with torch.no_grad(), _torch_random_zeros():
@@ -1770,8 +1757,6 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
             params,
             use_torch_stft_fallback=True,
             use_torch_phase_fallback=True,
-            use_torch_linear_fallback=True,
-            use_torch_tanh_fallback=True,
         )
 
     x_nlc = x.transpose(1, 2).contiguous()
@@ -1787,171 +1772,8 @@ def test_tt_generator_full_forward_torch_stft_fallback_pcc(device):
     assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
     assert torch.isfinite(y_h).all(), "TTGenerator (fallbacks) produced NaN/Inf"
     _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
-    print(f"TTGenerator full-forward (phase + STFT + linear + tanh fallback) PCC: {pcc:.6f}")
-    assert pcc > 0.99, f"PCC too low with phase + STFT + linear + tanh fallbacks: {pcc}"
-
-
-@pytest.mark.xfail(
-    reason=(
-        "SineGen 1.2% BF16 phase noise at upsample_scale=300 cascades into near-zero STFT bins; "
-        "use_torch_phase_fallback is also required to reach PCC > 0.99."
-    ),
-    strict=False,
-)
-def test_tt_generator_stft_linear_fallback_no_sinegen_pcc(device):
-    """STFT transform + l_linear on CPU; SineGen phase chain stays pure TTNN.
-
-    Isolates whether SineGen's BF16 phase error at upsample_scale=300 (PCC=0.988 in isolation)
-    is sufficient to prevent full-forward PCC > 0.99, or whether fixing only STFT+l_linear is
-    enough.
-
-    - ``use_torch_stft_fallback=True``: torch.stft on CPU (fixes atan2 BF16 degradation)
-    - ``use_torch_linear_fallback=True``: l_linear+tanh on CPU (fixes ~2% BF16 dot-product error)
-    - ``use_torch_phase_fallback=False``: SineGen phase chain stays on TTNN (has 1.2% BF16 noise)
-
-    If this test passes > 0.99, the SineGen fallback is not strictly required — the 1.2% sinegen
-    noise does not cascade into the audio output.  If it fails, the SineGen fallback is needed
-    to clean up the input to l_linear and STFT.
-    """
-    ckpt_path = _find_checkpoint()
-    if ckpt_path is None:
-        pytest.skip("Kokoro checkpoint not found locally.")
-
-    ref = _build_kokoro_generator()
-    _load_trained_weights(ref, ckpt_path)
-    T_x = 5
-    x, s, f0 = _setup_test_inputs(T_x)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    with torch.no_grad(), _torch_random_zeros():
-        y_ref = ref(x, s, f0)
-        tt_mod = TTGenerator(
-            device,
-            params,
-            use_torch_stft_fallback=True,
-            use_torch_linear_fallback=True,
-            use_torch_phase_fallback=False,  # SineGen stays on TTNN — this is what we're testing
-        )
-
-    x_nlc = x.transpose(1, 2).contiguous()
-    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = tt_mod(x_tt, s_tt, f0_tt)
-
-    y_h = ttnn.to_torch(y_tt).float()
-    while y_h.dim() > y_ref.dim():
-        y_h.squeeze_(0)
-
-    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
-    assert torch.isfinite(y_h).all(), "TTGenerator produced NaN/Inf"
-    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
-    print(f"TTGenerator (STFT+linear fallback, TTNN sinegen) PCC: {pcc:.6f}")
-    assert pcc > 0.99, (
-        f"PCC {pcc:.6f} < 0.99: SineGen 1.2% BF16 noise cascades into near-zero STFT bins "
-        f"even with precise l_linear and torch.stft — use_torch_phase_fallback is also needed."
-    )
-
-
-@pytest.mark.xfail(
-    reason=(
-        "Keeping TTNN linear while only moving tanh to CPU is expected to preserve most BF16 "
-        "dot-product error from l_linear and may stay below 0.99 PCC."
-    ),
-    strict=False,
-)
-def test_tt_generator_stft_tanh_fallback_no_sinegen_pcc(device):
-    """STFT transform + tanh on CPU; SineGen phase chain and l_linear stay pure TTNN.
-
-    This isolates whether moving only tanh to CPU materially improves PCC once STFT transform
-    precision is fixed, while still keeping SineGen phase + l_linear in TTNN.
-    """
-    ckpt_path = _find_checkpoint()
-    if ckpt_path is None:
-        pytest.skip("Kokoro checkpoint not found locally.")
-
-    ref = _build_kokoro_generator()
-    _load_trained_weights(ref, ckpt_path)
-    T_x = 5
-    x, s, f0 = _setup_test_inputs(T_x)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    with torch.no_grad(), _torch_random_zeros():
-        y_ref = ref(x, s, f0)
-        tt_mod = TTGenerator(
-            device,
-            params,
-            use_torch_stft_fallback=True,
-            use_torch_tanh_fallback=True,
-            use_torch_linear_fallback=False,
-            use_torch_phase_fallback=False,
-        )
-
-    x_nlc = x.transpose(1, 2).contiguous()
-    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = tt_mod(x_tt, s_tt, f0_tt)
-
-    y_h = ttnn.to_torch(y_tt).float()
-    while y_h.dim() > y_ref.dim():
-        y_h.squeeze_(0)
-
-    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
-    assert torch.isfinite(y_h).all(), "TTGenerator produced NaN/Inf"
-    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
-    print(f"TTGenerator (STFT+tanh fallback, TTNN linear+sinegen) PCC: {pcc:.6f}")
-    assert pcc > 0.99, (
-        f"PCC {pcc:.6f} < 0.99: tanh-only fallback is insufficient; l_linear and/or sinegen "
-        f"precision still dominate the remaining error."
-    )
-
-
-@pytest.mark.xfail(
-    reason=(
-        "All fallbacks except linear still keep TTNN l_linear BF16 dot-product error; "
-        "PCC is expected to stay below 0.99."
-    ),
-    strict=False,
-)
-def test_tt_generator_full_forward_all_fallbacks_except_linear_pcc(device):
-    """Full TT forward with STFT/phase/tanh fallbacks enabled, but linear kept on TTNN."""
-    ckpt_path = _find_checkpoint()
-    if ckpt_path is None:
-        pytest.skip("Kokoro checkpoint not found locally.")
-
-    ref = _build_kokoro_generator()
-    _load_trained_weights(ref, ckpt_path)
-    T_x = 5
-    x, s, f0 = _setup_test_inputs(T_x)
-
-    params = preprocess_tt_generator(ref, device, time_len_x=T_x)
-    with torch.no_grad(), _torch_random_zeros():
-        y_ref = ref(x, s, f0)
-        tt_mod = TTGenerator(
-            device,
-            params,
-            use_torch_stft_fallback=True,
-            use_torch_phase_fallback=True,
-            use_torch_tanh_fallback=True,
-            use_torch_linear_fallback=False,
-        )
-
-    x_nlc = x.transpose(1, 2).contiguous()
-    x_tt = ttnn.from_torch(x_nlc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    s_tt = ttnn.from_torch(s, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    f0_tt = ttnn.from_torch(f0, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = tt_mod(x_tt, s_tt, f0_tt)
-
-    y_h = ttnn.to_torch(y_tt).float()
-    while y_h.dim() > y_ref.dim():
-        y_h.squeeze_(0)
-
-    assert y_h.shape == y_ref.shape, (y_h.shape, y_ref.shape)
-    assert torch.isfinite(y_h).all(), "TTGenerator (fallbacks except linear) produced NaN/Inf"
-    _, pcc = comp_pcc(y_ref, y_h, pcc=0.0)
-    print(f"TTGenerator full-forward (phase + STFT + tanh fallback, TTNN linear) PCC: {pcc:.6f}")
-    assert pcc > 0.99, f"PCC too low with all fallbacks except linear: {pcc}"
+    print(f"TTGenerator full-forward (phase + STFT fallback) PCC: {pcc:.6f}")
+    assert pcc > 0.99, f"PCC too low with phase + STFT fallbacks: {pcc}"
 
 
 def test_tt_generator_full_forward_smoke(device):
