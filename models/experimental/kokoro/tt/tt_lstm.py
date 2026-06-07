@@ -18,6 +18,56 @@ import torch
 
 import ttnn
 
+from .tt_matmul_memory import maybe_to_memory_config as _maybe_to_mc_pair
+
+_TILE = 32
+# Per-step LSTM state/gate tensors are tiny at bring-up widths (H<=64); keep them in L1 when
+# tile-padded storage fits (gx precompute buffers stay on the caller's memory_config).
+# At Kokoro-82M H=256 the recurrent ``h @ W_h^T`` matmul CB footprint clashes with L1
+# tensor allocations on BH (see kmodel L1 circular-buffer overlap at ~137 KiB).
+_L1_STEP_BUDGET_BYTES = 512 * 1024
+_L1_STEP_HIDDEN_MAX = 64
+
+
+def _dtype_nbytes(dtype) -> int:
+    return 4 if dtype == ttnn.float32 else 2
+
+
+def _tile_padded_volume(shape: tuple[int, ...] | list[int]) -> int:
+    n = 1
+    for d in shape:
+        n *= math.ceil(int(d) / _TILE) * _TILE
+    return n
+
+
+def _tensor_nbytes(shape: tuple[int, ...] | list[int], dtype) -> int:
+    return _tile_padded_volume(shape) * _dtype_nbytes(dtype)
+
+
+def _maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> ttnn.Tensor:
+    out, owns = _maybe_to_mc_pair(x, mc)
+    if owns:
+        ttnn.deallocate(x)
+    return out
+
+
+def _lstm_step_memory_config(
+    *,
+    batch: int,
+    hidden: int,
+    dtype,
+    fp32_state: bool,
+    fallback: ttnn.MemoryConfig,
+) -> ttnn.MemoryConfig:
+    """L1-interleaved for per-step ops when small enough (see ``tt_matmul_memory`` sweep note)."""
+    if hidden > _L1_STEP_HIDDEN_MAX:
+        return fallback
+    state_dtype = ttnn.float32 if fp32_state else dtype
+    peak = 3 * _tensor_nbytes((batch, 4 * hidden), dtype) + 4 * _tensor_nbytes((batch, hidden), state_dtype)
+    if peak <= _L1_STEP_BUDGET_BYTES:
+        return ttnn.L1_MEMORY_CONFIG
+    return fallback
+
 
 @dataclass(frozen=True)
 class TTLSTMParams:
@@ -83,11 +133,10 @@ def _lstm_step(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    # ``gates_x`` (= x_t @ W_x^T, shape [B, 4H]) is precomputed for the whole sequence by
-    # the caller (one batched matmul, see tt_bilstm_nlc) — it doesn't depend on the
-    # recurrent state. Only the recurrent ``h @ W_h^T`` is per-step. The bias is added
-    # separately (not folded into a matmul) to keep accumulation bit-identical to the
-    # reference, which the precision-sensitive duration/F0 paths require.
+    # ``gates_x`` (= x_t @ W_x^T + b, shape [B, 4H]) is precomputed for the whole sequence
+    # by the caller (one batched matmul with the bias folded into its epilogue, see
+    # tt_bilstm_nlc) — it doesn't depend on the recurrent state. Only the recurrent
+    # ``h @ W_h^T`` is per-step, and the gate sum is then a single add.
     gates_h = ttnn.linear(
         h,
         params.w_h,
@@ -98,7 +147,6 @@ def _lstm_step(
     )
     gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
     ttnn.deallocate(gates_h)
-    gates = ttnn.add(gates, params.b, memory_config=memory_config)
 
     gs = tuple(int(s) for s in gates.shape)
     if len(gs) > 2:
@@ -120,6 +168,9 @@ def _lstm_step(
     ttnn.deallocate(sig)
     g = ttnn.tanh(ttnn.slice(gates, [0, 2 * H], [gates.shape[0], 3 * H], [1, 1]), memory_config=memory_config)
 
+    # c_new = f*c + i*g. Kept as separate mul/mul/add: the fused addcmul (MAC) changes
+    # the cell-state accumulation, which feeds the F0 curve (amplified ~1885x by the
+    # vocoder) and dropped end-to-end PCC below the 0.84 floor (0.855 -> 0.825).
     c_new = ttnn.add(
         ttnn.multiply(f, c, memory_config=memory_config),
         ttnn.multiply(i, g, memory_config=memory_config),
@@ -186,10 +237,20 @@ def tt_bilstm_nlc(
     When ``fp32_state`` is True, hidden/cell states are accumulated in fp32 to avoid
     Hz-level drift in long F0/N decoder chains (shared BiLSTM in ``F0Ntrain``).
     """
-    B, L, _ = x_nlc.shape
+    B, L, C_in = x_nlc.shape
     H = fwd.hidden_size
     H4 = 4 * H
     state_dtype = ttnn.float32 if fp32_state else ttnn.bfloat16
+    # ``[L, B, 4H]`` gate projections are much larger than per-step state — keep them DRAM
+    # even when the caller passes L1 for pipeline activations.
+    gx_mc = ttnn.DRAM_MEMORY_CONFIG if memory_config.buffer_type == ttnn.BufferType.L1 else memory_config
+    step_mc = _lstm_step_memory_config(
+        batch=B,
+        hidden=H,
+        dtype=x_nlc.dtype,
+        fp32_state=fp32_state,
+        fallback=memory_config,
+    )
 
     # Input gate projections (``x @ W_x^T``) don't depend on the recurrent state, so compute
     # them for the WHOLE sequence in one batched matmul per direction (bit-identical: matmul
@@ -197,15 +258,21 @@ def tt_bilstm_nlc(
     # cheap leading-dim slice — this removes the per-step untilize+slice+tilize churn that
     # dominated the loop (slicing a single timestep out of the TILE-laid [B,L,C] sequence).
     def _precompute_gates_x(p: TTLSTMParams) -> ttnn.Tensor:
+        # Fold the gate bias into the matmul epilogue here (once for the whole sequence)
+        # instead of adding it per timestep — saves one elementwise add per step. The
+        # stored bias is [1,1,1,4H] (rank 4); reshape to [1,1,4H] so the linear output
+        # stays rank-3 [B,L,4H] for the permute below.
+        # L1 in0 + DRAM out is valid (sweep: matmul reads L1 activations); gx buffer stays DRAM.
+        bias = ttnn.reshape(p.b, [1, 1, H4], memory_config=gx_mc)
         gx = ttnn.linear(
             x_nlc,
             p.w_x,
-            bias=None,
+            bias=bias,
             transpose_b=True,
-            memory_config=memory_config,
+            memory_config=gx_mc,
             compute_kernel_config=compute_kernel_config,
         )  # [B, L, 4H]
-        gx_t = ttnn.permute(gx, (1, 0, 2), memory_config=memory_config)  # [L, B, 4H]
+        gx_t = ttnn.permute(gx, (1, 0, 2), memory_config=gx_mc)  # [L, B, 4H]
         ttnn.deallocate(gx)
         return gx_t
 
@@ -213,16 +280,10 @@ def tt_bilstm_nlc(
     gx_rev = _precompute_gates_x(rev)
 
     def _gates_x_at(gx_all: ttnn.Tensor, t: int) -> ttnn.Tensor:
-        return ttnn.reshape(
-            ttnn.slice(gx_all, [t, 0, 0], [t + 1, B, H4], [1, 1, 1]), [B, H4], memory_config=memory_config
-        )
+        return ttnn.reshape(ttnn.slice(gx_all, [t, 0, 0], [t + 1, B, H4], [1, 1, 1]), [B, H4], memory_config=gx_mc)
 
-    h0 = ttnn.zeros(
-        [B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
-    )
-    c0 = ttnn.zeros(
-        [B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
-    )
+    h0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
+    c0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
 
     valid_all = None
     # Timesteps t < min(lengths) have every batch row valid, so the pack-padded blend
@@ -239,7 +300,7 @@ def tt_bilstm_nlc(
                 seq_len=L,
                 sequence_lengths=sequence_lengths,
                 device=x_nlc.device(),
-                memory_config=memory_config,
+                memory_config=step_mc,
                 dtype=state_dtype,
             )
 
@@ -248,16 +309,23 @@ def tt_bilstm_nlc(
     outs_f = []
     for t in range(L):
         gxt = _gates_x_at(gx_fwd, t)
+        if step_mc.buffer_type == ttnn.BufferType.L1:
+            gxt = _maybe_to_memory_config(gxt, step_mc)
         h_old, c_old = h_f, c_f
         h_new, c_new = _lstm_step(
-            gxt, h_f, c_f, fwd, compute_kernel_config=compute_kernel_config, memory_config=memory_config
+            gxt,
+            h_f,
+            c_f,
+            fwd,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=step_mc,
         )
         if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
-            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
-            h_f = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
-            c_f = _blend_state(vt_b1, c_new, c_old, memory_config=memory_config)
-            outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=memory_config))
+            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
+            h_f = _blend_state(vt_b1, h_new, h_old, memory_config=step_mc)
+            c_f = _blend_state(vt_b1, c_new, c_old, memory_config=step_mc)
+            outs_f.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
         else:
             h_f, c_f = h_new, c_new
             outs_f.append(h_f)
@@ -267,16 +335,23 @@ def tt_bilstm_nlc(
     outs_b_rev = []
     for t in reversed(range(L)):
         gxt = _gates_x_at(gx_rev, t)
+        if step_mc.buffer_type == ttnn.BufferType.L1:
+            gxt = _maybe_to_memory_config(gxt, step_mc)
         h_old, c_old = h_b, c_b
         h_new, c_new = _lstm_step(
-            gxt, h_b, c_b, rev, compute_kernel_config=compute_kernel_config, memory_config=memory_config
+            gxt,
+            h_b,
+            c_b,
+            rev,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=step_mc,
         )
         if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
-            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=memory_config)
-            h_b = _blend_state(vt_b1, h_new, h_old, memory_config=memory_config)
-            c_b = _blend_state(vt_b1, c_new, c_old, memory_config=memory_config)
-            outs_b_rev.append(ttnn.multiply(vt_b1, h_new, memory_config=memory_config))
+            vt_b1 = ttnn.reshape(vt, [B, 1], memory_config=step_mc)
+            h_b = _blend_state(vt_b1, h_new, h_old, memory_config=step_mc)
+            c_b = _blend_state(vt_b1, c_new, c_old, memory_config=step_mc)
+            outs_b_rev.append(ttnn.multiply(vt_b1, h_new, memory_config=step_mc))
         else:
             h_b, c_b = h_new, c_new
             outs_b_rev.append(h_b)
@@ -288,6 +363,15 @@ def tt_bilstm_nlc(
 
     outs_b = list(reversed(outs_b_rev))
 
-    hs_f = ttnn.concat([ttnn.reshape(h, [B, 1, H], memory_config=memory_config) for h in outs_f], dim=1)
-    hs_b = ttnn.concat([ttnn.reshape(h, [B, 1, H], memory_config=memory_config) for h in outs_b], dim=1)
+    # Assemble per-timestep [B, H] outputs into [B, L, H] with bulk ops instead of an
+    # individual [B,H]->[B,1,H] reshape per timestep: concat along dim 0 -> [L*B, H],
+    # reshape to [L, B, H], then permute to [B, L, H]. Pure data movement (bit-identical),
+    # but trades 2*L per-step reshapes for a few bulk TM ops.
+    def _stack_time(outs):
+        cat = ttnn.concat(outs, dim=0)  # [L*B, H]
+        cat = ttnn.reshape(cat, [L, B, H], memory_config=memory_config)  # [L, B, H]
+        return ttnn.permute(cat, (1, 0, 2), memory_config=memory_config)  # [B, L, H]
+
+    hs_f = _stack_time(outs_f)
+    hs_b = _stack_time(outs_b)
     return ttnn.concat([hs_f, hs_b], dim=2)
