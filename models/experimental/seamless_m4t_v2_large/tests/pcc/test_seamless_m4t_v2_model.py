@@ -59,6 +59,9 @@ _TGT_SPA = "spa"
 _RMS_RATIO_LO = 0.70
 _RMS_RATIO_HI = 1.43
 _VOICING_FRAC_TOL = 0.15
+# TT/HF speech length tracks vocoder ``t_audio``; modest decode/T2U drift is expected.
+_SAMPLE_COUNT_RATIO_LO = 0.92
+_SAMPLE_COUNT_RATIO_HI = 1.08
 
 
 def _weights_dir_or_skip() -> str:
@@ -232,8 +235,18 @@ def _assert_tokens_close_after_speech(hf_ids: list, tt_ids: list, *, task: str, 
     ), f"[{task}] Too few content tokens (HF={len(hf_ids)} TT={len(tt_ids)} min_prefix={min_prefix})"
 
 
-def _assert_audio_plausible_voiced(hf_wav: np.ndarray, tt_wav: np.ndarray, *, task: str) -> None:
-    """T2ST/S2ST: non-empty audio with RMS and voicing fraction near HF."""
+def _assert_audio_plausible_voiced(
+    hf_wav: np.ndarray,
+    tt_wav: np.ndarray,
+    *,
+    task: str,
+    sample_count_ratio: tuple[float, float] | None = None,
+) -> None:
+    """T2ST/S2ST: non-empty audio with RMS and voicing fraction near HF.
+
+    When ``sample_count_ratio=(lo, hi)`` is set, also require ``tt_samples/hf_samples`` in band.
+    Speech-input S2ST often diverges in intermediate text length vs HF — leave ratio unchecked there.
+    """
     hf_n, hf_rms, hf_voice = _audio_stats(hf_wav)
     tt_n, tt_rms, tt_voice = _audio_stats(tt_wav)
     logger.info(f"[{task}] HF audio: samples={hf_n} rms={hf_rms:.4f} voicing={hf_voice:.3f}")
@@ -248,6 +261,14 @@ def _assert_audio_plausible_voiced(hf_wav: np.ndarray, tt_wav: np.ndarray, *, ta
     assert (
         abs(tt_voice - hf_voice) <= 2 * _VOICING_FRAC_TOL
     ), f"[{task}] voicing frac diff > {2 * _VOICING_FRAC_TOL} (TT={tt_voice:.3f} HF={hf_voice:.3f})"
+    ratio_n = tt_n / hf_n
+    if sample_count_ratio is not None:
+        lo, hi = sample_count_ratio
+        assert lo <= ratio_n <= hi, (
+            f"[{task}] sample-count ratio TT/HF={ratio_n:.3f} outside [{lo}, {hi}] "
+            f"(HF={hf_n} TT={tt_n}) — check T2U duration / ``t_audio`` drift"
+        )
+    logger.info(f"[{task}] sample-count ratio TT/HF={ratio_n:.3f} (HF={hf_n} TT={tt_n})")
 
 
 @pytest.mark.timeout(5400)
@@ -322,7 +343,12 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
             **common_kwargs,
             **tt_extra,
         )
-        _assert_audio_plausible_voiced(hf_hin_wav, _unpack_tt_speech(tt_out), task="T2ST")
+        _assert_audio_plausible_voiced(
+            hf_hin_wav,
+            _unpack_tt_speech(tt_out),
+            task="T2ST",
+            sample_count_ratio=(_SAMPLE_COUNT_RATIO_LO, _SAMPLE_COUNT_RATIO_HI),
+        )
 
         audio_inputs = processor(audios=hf_hin_wav, sampling_rate=sr, return_tensors="pt")
         sp_input_features = audio_inputs["input_features"]
