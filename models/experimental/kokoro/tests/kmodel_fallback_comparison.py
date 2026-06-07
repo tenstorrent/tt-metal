@@ -119,12 +119,7 @@ def _run_tt(
             ref,
             params,
             use_torch_stft_fallback=cfg.stft,
-            use_torch_stft_conv_fallback=cfg.stft_conv,
-            use_torch_atan2_fallback=cfg.atan2,
             use_torch_phase_fallback=cfg.phase,
-            use_torch_sinegen_fallback=cfg.sinegen,
-            use_torch_linear_fallback=cfg.linear,
-            use_torch_tanh_fallback=cfg.tanh,
         )
     out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()

@@ -71,13 +71,6 @@ _CKPT_CANDIDATES = (
 STFT_PHASE_FALLBACK_KWARGS = dict(
     use_torch_stft_fallback=True,
     use_torch_phase_fallback=True,
-    use_torch_sinegen_fallback=False,
-    use_torch_linear_fallback=False,
-    use_torch_tanh_fallback=False,
-    use_torch_stft_conv_fallback=False,
-    use_torch_atan2_fallback=False,
-    use_torch_f0n_conv_fallback=False,
-    use_torch_f0_upsamp_fallback=False,
 )
 
 
@@ -553,7 +546,6 @@ def _collect_sinegen_rows(
         device,
         params,
         use_torch_phase_fallback=use_torch_phase_fallback,
-        use_torch_sinegen_fallback=False,
     )
     rng_tt = upload_m_source_rng(rng, device, dtype=params.activation_dtype)
     f0_tt = ttnn.from_torch(
@@ -672,9 +664,6 @@ def _format_stft_phase_report(data: StftPhaseReportData) -> str:
         "|------|-------|--------|",
         "| `use_torch_stft_fallback` | **True** | `torch.stft` on CPU for harmonic STFT |",
         "| `use_torch_phase_fallback` | **True** | SineGen phase chain on CPU float32 |",
-        "| `use_torch_sinegen_fallback` | False | No full CPU SineGen |",
-        "| `use_torch_f0n_conv_fallback` | **False** | F0/N stride-2 conv on device |",
-        "| `use_torch_f0_upsamp_fallback` | **False** | f0 nearest upsample on device |",
         "",
         f"**Text:** `{data.text}`",
         f"**Phonemes ({len(data.phonemes)}):** `{data.phonemes}`",

@@ -211,14 +211,7 @@ class TTKModel:
         params: TTKModelParams,
         *,
         use_torch_stft_fallback: bool = False,
-        use_torch_stft_conv_fallback: bool = False,
-        use_torch_atan2_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
-        use_torch_sinegen_fallback: bool = False,
-        use_torch_f0n_conv_fallback: bool = False,
-        use_torch_f0_upsamp_fallback: Optional[bool] = None,
-        use_torch_linear_fallback: bool = False,
-        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.vocab = ref.vocab
@@ -226,14 +219,7 @@ class TTKModel:
         self.params = params
         self._ref_decoder = ref.decoder  # kept for lazy preprocess_tt_decoder calls
         self._use_stft_fallback = use_torch_stft_fallback
-        self._use_stft_conv_fallback = use_torch_stft_conv_fallback
-        self._use_atan2_fallback = use_torch_atan2_fallback
         self._use_phase_fallback = use_torch_phase_fallback
-        self._use_sinegen_fallback = use_torch_sinegen_fallback
-        self._use_f0n_conv_fallback = use_torch_f0n_conv_fallback
-        self._use_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
-        self._use_linear_fallback = use_torch_linear_fallback
-        self._use_tanh_fallback = use_torch_tanh_fallback
 
         self._bert = TTCustomAlbert(device, params.bert)
         self._predictor = TTProsodyPredictor(device, params.predictor)
@@ -257,14 +243,7 @@ class TTKModel:
                 self.device,
                 dec_params,
                 use_torch_stft_fallback=self._use_stft_fallback,
-                use_torch_stft_conv_fallback=self._use_stft_conv_fallback,
-                use_torch_atan2_fallback=self._use_atan2_fallback,
                 use_torch_phase_fallback=self._use_phase_fallback,
-                use_torch_sinegen_fallback=self._use_sinegen_fallback,
-                use_torch_f0n_conv_fallback=self._use_f0n_conv_fallback,
-                use_torch_f0_upsamp_fallback=self._use_f0_upsamp_fallback,
-                use_torch_linear_fallback=self._use_linear_fallback,
-                use_torch_tanh_fallback=self._use_tanh_fallback,
             )
         return self._decoder_cache[t_mel]
 

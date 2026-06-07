@@ -686,9 +686,6 @@ def run_full_plan(*, write_report: Path | None = None) -> None:
                 params,
                 use_torch_stft_fallback=True,
                 use_torch_phase_fallback=True,
-                use_torch_sinegen_fallback=True,
-                use_torch_linear_fallback=True,
-                use_torch_tanh_fallback=True,
             )
         tt_pros = _run_tt_prosody(tt_model, input_ids, text_mask, input_lengths, lengths_list, ref_s)
 
@@ -846,9 +843,6 @@ def main() -> None:
                 params,
                 use_torch_stft_fallback=True,
                 use_torch_phase_fallback=True,
-                use_torch_sinegen_fallback=True,
-                use_torch_linear_fallback=True,
-                use_torch_tanh_fallback=True,
             )
         tt_caps = _run_tt_decode_stack(tt_model, asr, F0, N, s_style)
         _print_table(_compare_stages(ref_caps, tt_caps, "Ref prosody → ref vs TT decode"))

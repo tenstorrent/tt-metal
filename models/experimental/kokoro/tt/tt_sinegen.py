@@ -250,12 +250,10 @@ class TTSineGen:
         params: TTSineGenParams,
         *,
         use_torch_phase_fallback: bool = False,
-        use_torch_sinegen_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
         self.use_torch_phase_fallback = use_torch_phase_fallback
-        self.use_torch_sinegen_fallback = use_torch_sinegen_fallback
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -323,87 +321,6 @@ class TTSineGen:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _torch_sinegen_full_fallback(
-        self,
-        f0_btd: ttnn.Tensor,
-        rand_ini: Optional[ttnn.Tensor],
-        noise_raw: Optional[ttnn.Tensor],
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """CPU float32 fallback for the full SineGen path.
-
-        This computes the entire reference chain on CPU:
-        ``rad -> downsample -> cumsum -> upsample -> sin -> uv/noise -> out``.
-        """
-        import torch.nn.functional as F_torch
-
-        p = self.params
-        B = int(f0_btd.shape[0])
-        f0_cpu = ttnn.to_torch(f0_btd).float().reshape(B, p.time_len, 1)
-        harmonics_cpu = ttnn.to_torch(p.harmonics).float().reshape(1, 1, p.dim)
-
-        fn = f0_cpu * harmonics_cpu
-        rad = (fn / p.sampling_rate) % 1.0
-
-        if rand_ini is None:
-            rand_ini_cpu = torch.zeros(B, 1, p.dim, dtype=torch.float32)
-        else:
-            rand_ini_cpu = ttnn.to_torch(rand_ini).float().reshape(B, 1, p.dim)
-        rand_ini_cpu[..., 0] = 0.0
-        rad[:, 0:1, :] = rad[:, 0:1, :] + rand_ini_cpu
-
-        rad_t = rad.transpose(1, 2)
-        rad_down_t = F_torch.interpolate(rad_t, scale_factor=1.0 / p.upsample_scale, mode="linear", align_corners=False)
-        rad_down = rad_down_t.transpose(1, 2)
-
-        phase = torch.cumsum(rad_down, dim=1) * (2.0 * math.pi)
-        phase_up_t = F_torch.interpolate(
-            phase.transpose(1, 2) * p.upsample_scale,
-            scale_factor=float(p.upsample_scale),
-            mode="linear",
-            align_corners=False,
-        )
-        phase_up = phase_up_t.transpose(1, 2)
-
-        sine_amp_float = float(ttnn.to_torch(p.sine_amp).flatten()[0].item())
-        noise_std_float = float(ttnn.to_torch(p.noise_std).flatten()[0].item())
-        voiced_threshold_float = float(ttnn.to_torch(p.voiced_threshold).flatten()[0].item())
-
-        sine_waves = torch.sin(phase_up) * sine_amp_float
-        uv_cpu = (f0_cpu > voiced_threshold_float).float()
-        noise_amp = uv_cpu * noise_std_float + (1.0 - uv_cpu) * (sine_amp_float / 3.0)
-
-        if noise_raw is None:
-            noise_raw_cpu = ttnn.to_torch(self._noise_raw).float()
-            if B > 1:
-                noise_raw_cpu = noise_raw_cpu.expand(B, -1, -1).contiguous()
-        else:
-            noise_raw_cpu = ttnn.to_torch(noise_raw).float().reshape(B, p.time_len, p.dim)
-        noise_cpu = noise_amp * noise_raw_cpu
-        out_cpu = sine_waves * uv_cpu + noise_cpu
-
-        out_tt = ttnn.from_torch(
-            out_cpu.contiguous(),
-            dtype=p.activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        uv_tt = ttnn.from_torch(
-            uv_cpu.contiguous(),
-            dtype=p.activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        noise_tt = ttnn.from_torch(
-            noise_cpu.contiguous(),
-            dtype=p.activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return out_tt, uv_tt, noise_tt
-
     def _zero_btd(self, B: int) -> ttnn.Tensor:
         return ttnn.zeros(
             [B, self.params.time_len, self.params.dim],
@@ -448,50 +365,48 @@ class TTSineGen:
         if int(f0_btd.shape[1]) != p.time_len:
             raise ValueError(f"f0_btd time length {int(f0_btd.shape[1])} != params.time_len {p.time_len}")
 
-        if self.use_torch_sinegen_fallback:
-            return self._torch_sinegen_full_fallback(f0_btd, rand_ini, noise_raw)
-
         # ``uv = (f0 > voiced_threshold).float()`` → [B, T, 1]
         uv_bool = ttnn.gt(f0_btd, p.voiced_threshold, memory_config=memory_config)
         uv = ttnn.typecast(uv_bool, p.activation_dtype, memory_config=memory_config)
         ttnn.deallocate(uv_bool)
 
-        # ``fn = f0 * harmonics`` → [B, T, dim]
-        fn = ttnn.multiply(f0_btd, p.harmonics, memory_config=memory_config)
-
-        # ``rad = (fn / sampling_rate) % 1`` → [B, T, dim]
-        rad = ttnn.multiply(fn, p.inv_sampling_rate, memory_config=memory_config)
-        ttnn.deallocate(fn)
-        rad = ttnn.remainder(rad, p.one, memory_config=memory_config)
-
-        # ``rad[:, 0, :] += rand_ini`` with the fundamental's slot zeroed.
-        if rand_ini is not None:
-            rand_masked = ttnn.multiply(rand_ini, p.fundamental_zero_mask, memory_config=memory_config)
-            # Pad the ``[B, 1, dim]`` row to ``[B, T, dim]`` by concat with zeros.
-            if p.time_len > 1:
-                tail = ttnn.zeros(
-                    [B, p.time_len - 1, p.dim],
-                    dtype=rad.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                    memory_config=memory_config,
-                )
-                rand_pad = ttnn.concat([rand_masked, tail], dim=1, memory_config=memory_config)
-                ttnn.deallocate(tail)
-            else:
-                rand_pad = rand_masked
-            rad = ttnn.add(rad, rand_pad, memory_config=memory_config)
-            ttnn.deallocate(rand_pad)
-            if rand_pad is not rand_masked:
-                ttnn.deallocate(rand_masked)
-
         if self.use_torch_phase_fallback:
             # CPU float32 phase chain: BF16 MAC error on small cumsum values (< 0.05 cycles)
             # is amplified by 2π × upsample_scale (= 1885 for Kokoro) → ~0.06–0.25 rad error
             # vs sine_amp=0.1, destroying PCC.  Only the phase chain falls back; uv/noise stay TT.
-            ttnn.deallocate(rad)
+            # Branch before building ``rad`` on device — ``_torch_phase_fallback`` recomputes
+            # fn/rad/rand_ini from ``f0_btd`` on CPU.
             sine_waves_unmasked = self._torch_phase_fallback(f0_btd, rand_ini)
         else:
+            # ``fn = f0 * harmonics`` → [B, T, dim]
+            fn = ttnn.multiply(f0_btd, p.harmonics, memory_config=memory_config)
+
+            # ``rad = (fn / sampling_rate) % 1`` → [B, T, dim]
+            rad = ttnn.multiply(fn, p.inv_sampling_rate, memory_config=memory_config)
+            ttnn.deallocate(fn)
+            rad = ttnn.remainder(rad, p.one, memory_config=memory_config)
+
+            # ``rad[:, 0, :] += rand_ini`` with the fundamental's slot zeroed.
+            if rand_ini is not None:
+                rand_masked = ttnn.multiply(rand_ini, p.fundamental_zero_mask, memory_config=memory_config)
+                # Pad the ``[B, 1, dim]`` row to ``[B, T, dim]`` by concat with zeros.
+                if p.time_len > 1:
+                    tail = ttnn.zeros(
+                        [B, p.time_len - 1, p.dim],
+                        dtype=rad.dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.device,
+                        memory_config=memory_config,
+                    )
+                    rand_pad = ttnn.concat([rand_masked, tail], dim=1, memory_config=memory_config)
+                    ttnn.deallocate(tail)
+                else:
+                    rand_pad = rand_masked
+                rad = ttnn.add(rad, rand_pad, memory_config=memory_config)
+                ttnn.deallocate(rand_pad)
+                if rand_pad is not rand_masked:
+                    ttnn.deallocate(rand_masked)
+
             # On-device fp32 phase chain: BF16 cumsum/lerp × 2π×upsample_scale loses phase at Kokoro scale.
             rad_fp32, owns_rad = _to_fp32_if_needed(rad, memory_config)
             if owns_rad:
