@@ -102,12 +102,15 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
         return 2, ""
 
     final_text = ""
+    last_assistant_text = ""
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            rendered, final = _render_stream_event(line)
+            rendered, final, atext = _render_stream_event(line)
             if final:
                 final_text = final
+            if atext:
+                last_assistant_text = atext
             if rendered:
                 sys.stdout.write(rendered + "\n")
                 sys.stdout.flush()
@@ -117,7 +120,9 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
         print(f"\n  ✗ agent exceeded {timeout_s}s; killed")
         return 1, final_text
 
-    if final_text:
+    # The agent's last assistant message is almost always identical to the
+    # `result` event; only print the summary block when it adds something new.
+    if final_text and final_text.strip() != last_assistant_text.strip():
         print("\n  ── agent final summary ──")
         for ln in final_text.splitlines():
             print("  " + ln)
@@ -125,30 +130,43 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int)
 
 
 def _render_stream_event(line: str):
+    """Render one stream-json event to a screen line.
+
+    Returns ``(rendered, final, assistant_text)``: ``rendered`` is what to print
+    (or ``None`` to skip), ``final`` is the agent's terminal ``result`` text, and
+    ``assistant_text`` is the raw text of an assistant turn (used to dedup the
+    final summary against the last thing already shown)."""
     line = line.rstrip("\n")
     if not line.strip():
-        return None, None
+        return None, None, None
     try:
         ev = json.loads(line)
     except Exception:
-        return ("  · " + line) if line.strip() else None, None
+        return ("  · " + line) if line.strip() else None, None, None
 
     etype = ev.get("type")
     if etype == "system":
-        sub = ev.get("subtype", "")
-        return (f"  [system] {sub}" if sub else None), None
+        # init / thinking_tokens / task_started / task_notification / task_updated
+        # carry no signal for the watcher and arrive dozens of times — drop them.
+        return None, None, None
 
     if etype == "assistant":
         out = []
+        text_parts = []
         for c in (ev.get("message", {}) or {}).get("content", []) or []:
             t = c.get("type")
             if t == "text":
                 txt = (c.get("text") or "").strip()
                 if txt:
                     out.append("  " + txt.replace("\n", "\n  "))
+                    text_parts.append(txt)
             elif t == "tool_use":
                 out.append("  → " + _fmt_tool(c.get("name", "?"), c.get("input", {}) or {}))
-        return ("\n".join(out) if out else None), None
+        return (
+            ("\n".join(out) if out else None),
+            None,
+            ("\n".join(text_parts) if text_parts else None),
+        )
 
     if etype == "user":
         for c in (ev.get("message", {}) or {}).get("content", []) or []:
@@ -157,13 +175,13 @@ def _render_stream_event(line: str):
                 txt = content if isinstance(content, str) else json.dumps(content)
                 first = (txt or "").strip().splitlines()[0] if (txt or "").strip() else ""
                 if first:
-                    return "      ↳ " + first[:160], None
-        return None, None
+                    return "      ↳ " + first[:160], None, None
+        return None, None, None
 
     if etype == "result":
-        return None, ev.get("result") or ""
+        return None, ev.get("result") or "", None
 
-    return None, None
+    return None, None, None
 
 
 def _fmt_tool(name: str, inp: dict) -> str:
