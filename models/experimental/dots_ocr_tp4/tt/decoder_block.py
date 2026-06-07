@@ -48,10 +48,10 @@ class DotsOCRDecoderBlockTP4:
         b.mlp = DotsOCRMLPTP4.from_torch(mesh_device, config, torch_layer.mlp, weight_dtype=weight_dtype)
         return b
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
         residual = x
         h = self.input_layernorm.forward(x)
-        h = self.self_attn.forward(h)
+        h = self.self_attn.forward(h, past_key_value=past_key_value, cache_position=cache_position)
         x = ttnn.add(residual, h)
         ttnn.deallocate(h)
 

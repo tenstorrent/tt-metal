@@ -42,10 +42,14 @@ class DotsOCRPrefillModelTP4:
             )
         return m
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Decoder body only -> replicated hidden [B, S, H]."""
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        """Decoder body -> replicated hidden [B, S, H].
+
+        Pass ``past_key_value`` (paged KV cache) to fill it during prefill or to
+        read/extend it during decode (seq_len==1). ``cache_position`` is the
+        new-token position tensor used by the decode path."""
         for layer in self.layers:
-            x = layer.forward(x)
+            x = layer.forward(x, past_key_value=past_key_value, cache_position=cache_position)
         return x
 
     def forward_with_head(
@@ -61,3 +65,20 @@ class DotsOCRPrefillModelTP4:
         return self.head.forward(
             hidden, last_token_only=last_token_only, return_token=return_token, token_index=token_index
         )
+
+    def prefill_with_head(self, x: ttnn.Tensor, past_key_value, token_index, return_token: bool = True):
+        """Prefill that FILLS the paged KV cache, then runs the head at the real
+        last token. ``x`` may be right-padded to a tile multiple; pass the real
+        last position as ``token_index``. Returns (logits, token_ids)."""
+        assert self.head is not None, "model head not built"
+        hidden = self.forward(x, past_key_value=past_key_value)
+        return self.head.forward(hidden, last_token_only=True, return_token=return_token, token_index=token_index)
+
+    def decode_with_head(self, x: ttnn.Tensor, past_key_value, cache_position, return_token: bool = True):
+        """Single-token decode reading/extending the paged KV cache, then head.
+
+        ``x`` is the new token's embedding [B, 1, H] (replicated); ``cache_position``
+        is the int32 position tensor of that token. Returns (logits, token_ids)."""
+        assert self.head is not None, "model head not built"
+        hidden = self.forward(x, past_key_value=past_key_value, cache_position=cache_position)
+        return self.head.forward(hidden, last_token_only=True, return_token=return_token, token_index=None)
