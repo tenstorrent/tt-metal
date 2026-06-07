@@ -30,10 +30,12 @@ namespace ckernel {
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
-ALWI void elu_tile(uint32_t idst, uint32_t param0) { MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(calculate_elu, RC, APPROX, DST_ACCUM_MODE, idst, param0)); }
+ALWI void elu_tile(uint32_t idst, uint32_t param0) {
+    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_elu, (APPROX, DST_ACCUM_MODE), RC, idst, param0));
+}
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void elu_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(elu, APPROX)); }
+ALWI void elu_tile_init() { MATH(SFPU_INIT(elu)); }
 #endif
 }  // namespace ckernel
