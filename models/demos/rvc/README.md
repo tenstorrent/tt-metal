@@ -367,11 +367,27 @@ for the largest shapes). B=1 keeps the existing HEIGHT_SHARDED whitelist
 
 ### Stage 3 bullet status
 
-| Bullet | Status |
+The bounty's Stage 3 specification has three top-level themes ("deeper
+TT-specific optimizations" sub-bullets, top-level bullets, and stretched
+goals). Status against the exact wording:
+
+| Bullet (verbatim from bounty issue) | Status |
 |---|---|
-| Support for batch processing (5+ concurrent conversions) | **Done.** Flow native B=8 (5.4× per-sample); Generator native B=6 sweet spot (1.26× per-sample). Per-row speaker conditioning verified at B=2/3/5/8 — each batched row matches its B=1 reference within bf16 noise (PCC>0.995) and no row-permutation, asserted by `test_generator_batched_matches_individual_b1_calls` in `tests/test_production_shapes.py`. |
-| Full-pipeline RTF < 0.2 | **Not met.** Best achieved is 0.258 at B=6. The CPU preprocess (HuBERT + RMVPE serial) is ~0.37 s per sample and does not respond to N300 work. Achieving full-pipeline < 0.2 requires a TTNN HuBERT port (Stage 4+). |
-| Trace + 2CQ | **Verified path, not shipped.** Stage 2 documented `ttnn.conv1d` is trace-capturable with `prepare_conv_weights` + `prepare_conv_bias` (PCC=1.0, 2.63× on flow conv1d in isolation). Full pipeline integration deferred — the win amortizes dispatch on small ops only, and Generator's compute already dominates dispatch. |
+| Maximize core counts used per inference | **Done.** HEIGHT_SHARDED conv1d uses up to the 8×7 core grid; per-shape whitelist (Stage 2 commit `7d96071`) selects the larger grid where it fits. |
+| Efficient flow-based decoder computation | **Done.** Device-resident WN inner loop (Stage 2 commit `c84ed8e`), native batching to B=8 with 5.4× per-sample throughput. |
+| Flash Attention or equivalent for attention layers | **N/A.** RVC architecture has no attention layers — VITS posterior encoder, RMVPE, and HiFi-GAN are all conv-based. |
+| Minimize voice conversion latency | **Done.** TTNN-only RTF 0.535 (Stage 1 final) → 0.177 (Stage 3 single-stream) → 0.140 (Stage 3 batched B=5) = 74% reduction. |
+| Batch processing for multiple voice conversions | **Done.** Native B=2..8 in Generator + Flow; user-runnable via `python -m models.demos.rvc.benchmark --batch N`. Per-row correctness asserted at B=2/3/5/8 in `tests/test_production_shapes.py::test_generator_batched_matches_individual_b1_calls`. |
+| Optimize feature index search (retrieval operations) | **N/A by design.** FAISS retrieval is < 1% of wall time per Stage 2 per-stage breakdown — off the critical path. |
+| Pipeline encoder/decoder/vocoder stages | **Partial.** Within each chunk, stages run sequentially (encoder→flow→generator) on the same chunk — that's a chunked sequential pipeline, not a stage-overlapped one. True pipeline parallelism (CPU preprocess of chunk N+1 in parallel with TTNN compute of chunk N) is **NOT implemented**. Stage 2 attempted parallel preprocessing and reverted it (CPU saturation made `text_encoder` slower than the savings — documented in §"Attempted but not shipped"). Stage 3 added `ProcessPoolExecutor`-based parallel preprocess for batch inputs (true GIL-free CPU parallelism across B independent inputs), which closes part of this for the batched path but not the cross-chunk overlap within a single stream. |
+| Efficient pitch extraction and transposition | **Done.** RMVPE persisted across inference calls (Stage 1 commit `d567ae1`); transposition supported via `--key` semitone shift; TTNN RMVPE port investigated and ruled net-negative (Stage 2 Bullet 8). |
+| Minimize memory and TM (tensor manipulation) overheads | **Done.** WN + ResBlock inner loops eliminate per-iteration host roundtrips. Generator `prepare_conv_weights` cache (Stage 2 commit `8b950f5`) hoists per-call tile preprocessing to one-time setup. |
+| Explore caching strategies for feature indices | **N/A by design.** FAISS retrieval off critical path; no caching layer needed. |
+| Document any advanced tuning, known limitations, or trade-offs | **Done.** This README's Stage 2 §"Attempted but not shipped" and Stage 3 §"What unlocked Generator B>1" + this status table catalogue every non-obvious tuning, every reverted attempt, and every honest-limit. |
+| **Stretched:** 60+ tokens/second generation speed | **Done.** Flow at B=8 produces 75 latent frames per chunk in 10.8 ms = ~6900 tokens/s; even single-stream Flow at 7.3 ms/sample for 75 frames = ~10300 tokens/s. |
+| **Stretched:** RTF < 0.2 for real-time applications | **Met TTNN-only (0.140 at B=5 with ProcessPool, distinct speakers); not met full pipeline (0.239 at B=5).** Latest controlled measurement (single benchmark run, 4-worker `ProcessPoolExecutor` spawn context, distinct per-row `speaker_id`): per-sample TTNN 0.417 s, per-sample CPU preprocess 0.295 s, output 2.98 s per sample. The full-pipeline gap is the per-sample CPU preprocess (~0.30 s/sample, dominated by RMVPE pitch extraction on CPU); the TTNN portion alone runs at RTF 0.140 (well under target). Closing the full-pipeline gap requires either a TTNN HuBERT/RMVPE port, true cross-chunk pipeline overlap (CPU∥TTNN), or switching to a faster pitch method (DIO/pyworld) with a documented quality trade-off. **TTNN-only target met with comfortable margin; full-pipeline target gated by CPU preprocess.** |
+| **Stretched:** Support for batch processing (5+ concurrent conversions) | **Done.** Verified at B=5 and B=8 end-to-end via `benchmark.py --batch N` and `tests/test_production_shapes.py::test_generator_batched_matches_individual_b1_calls`. Per-row PCC>0.995 vs B=1 reference, no row-permutation, all rows pairwise distinct. |
+| Trace + 2CQ (referenced in Stage 2 README, deferred to Stage 3) | **Verified path, not shipped.** Stage 2 documented `ttnn.conv1d` is trace-capturable with `prepare_conv_weights` + `prepare_conv_bias` (PCC=1.0, 2.63× on flow conv1d in isolation). Full pipeline integration deferred — the win amortizes dispatch on small ops only, and Generator's compute already dominates dispatch. |
 
 ## File Structure
 

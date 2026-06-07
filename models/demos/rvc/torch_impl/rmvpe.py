@@ -346,6 +346,14 @@ class RMVPEPitchAlgorithm:
             state_dict = load_file(str(model_path), device="cpu")
         else:
             raise ValueError(f"Unsupported model format: {model_path.suffix}")
+        # Older RVC RMVPE safetensors store 1x1 shortcut conv weights as 2D
+        # [out, in] tensors; newer torch (>=2.10) loads Conv2d weights strictly
+        # as 4D [out, in, 1, 1]. Reshape on load so both the original
+        # checkpoint format and re-saved checkpoints work without a separate
+        # conversion step.
+        for k in list(state_dict.keys()):
+            if "shortcut.weight" in k and state_dict[k].dim() == 2:
+                state_dict[k] = state_dict[k].unsqueeze(-1).unsqueeze(-1)
         model.load_state_dict(state_dict, strict=True)
         model.eval()
         self.model = model
