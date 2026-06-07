@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..discovery import safe_relative_to_root
 
 
+def _verbose() -> bool:
+    """Screen-verbosity gate (matches cli.py's TT_HW_PLANNER_VERBOSE convention).
+    Off by default: keep the terminal clean; full detail always lands in the logs."""
+    return os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+
+
 def _bringup_cwd() -> Path:
     env = os.environ.get("TT_HW_PLANNER_BRINGUP_CWD")
     if env:
@@ -188,7 +194,8 @@ def _invoke_agent(
     else:
         budget_str = f"{timeout_s}s ({timeout_s // 60} min)" if timeout_s > 0 else "unbounded"
     print(f"\n  [auto:{provider}] invoking {agent_bin} (model={model}, budget={budget_str}) ...")
-    print(f"  [auto:{provider}] cmd: {' '.join(cmd)}")
+    if _verbose():
+        print(f"  [auto:{provider}] cmd: {' '.join(cmd)}")
 
     log_name = f"{provider}_{iter_tag}.log" if iter_tag else f"{provider}_last_run.log"
     agent_log = cwd / "_handoff" / log_name
@@ -278,8 +285,7 @@ def _invoke_agent(
     deliverable_warning_emitted = False
 
     heartbeat_screen_s = 60
-    last_heartbeat_t = start
-    last_heartbeat_events = -1
+    last_heartbeat_t = 0.0  # 0.0 => first heartbeat prints promptly, then throttled
 
     try:
         while True:
@@ -497,11 +503,15 @@ def _invoke_agent(
                 summary = f"stall_age={int(stall_age)}s"
             if deliverable_dirs_resolved:
                 summary += f" deliverable={'YES' if deliverable_written else 'NO'}"
-            _hb_events = counts["tool_use"] + counts["assistant"]
             _hb_now = time.monotonic()
-            if _hb_events != last_heartbeat_events or (_hb_now - last_heartbeat_t) >= heartbeat_screen_s:
+            # Rate-limit the on-screen heartbeat to once per heartbeat_screen_s.
+            # (The previous `events-changed OR stale` condition printed on nearly
+            # every tick during active work — the event count almost always
+            # changes — which defeated the throttle and, with N parallel agents,
+            # produced the `still running...` spam.) The poll/stall/kill logic
+            # below still runs every heartbeat_s tick regardless of this gate.
+            if (_hb_now - last_heartbeat_t) >= heartbeat_screen_s:
                 print(f"  [auto:{provider}] still running... {elapsed}s " f"elapsed [{summary}] {growth_note}")
-                last_heartbeat_events = _hb_events
                 last_heartbeat_t = _hb_now
             time.sleep(heartbeat_s)
     finally:

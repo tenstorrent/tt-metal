@@ -7950,6 +7950,21 @@ def cmd_bringup(args) -> int:
     with explicit flags; ``bringup`` exists purely so the common case
     is a one-liner.
     """
+    # Quiet the framework progress bars (HF "Loading checkpoint shards", which
+    # the capture + per-agent prompt-block loads reprint a dozen times) and HF
+    # advisory warnings that otherwise flood the bring-up terminal. Full detail
+    # still lands in the per-agent logs; re-enable on screen with
+    # TT_HW_PLANNER_VERBOSE=1.
+    if os.environ.get("TT_HW_PLANNER_VERBOSE", "") in ("", "0", "false", "False"):
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        try:
+            from transformers.utils import logging as _hf_logging
+
+            _hf_logging.disable_progress_bar()
+            _hf_logging.set_verbosity_error()
+        except Exception:
+            pass
+
     # Build a fully-populated args namespace that cmd_up expects. We
     # take the existing args (which has model_id + box from the
     # bringup subparser) and fill in every other knob with the brain-
