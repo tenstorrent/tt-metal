@@ -12,6 +12,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.experimental.dots_ocr_tp4.tt.common import DotsOCRConfig, from_replicated_to_torch, to_replicated
+from models.experimental.dots_ocr_tp4.tt.kv_cache import create_paged_kv_cache
 from models.experimental.dots_ocr_tp4.tt.model import DotsOCRPrefillModelTP4
 from models.experimental.dots_ocr_tp4.tests.common import device_params, resolve_mesh_shape
 from models.experimental.dots_ocr_tp4.tests.torch_reference import TorchDecoderStack
@@ -25,7 +26,7 @@ def test_dots_ocr_prefill_model_tp4(mesh_device, num_layers, seq_len):
     torch.manual_seed(0)
     torch.set_grad_enabled(False)
 
-    config = DotsOCRConfig()
+    config = DotsOCRConfig(num_hidden_layers=num_layers)
     H = config.hidden_size
 
     torch_stack = TorchDecoderStack(config, num_layers=num_layers).eval()
@@ -35,7 +36,11 @@ def test_dots_ocr_prefill_model_tp4(mesh_device, num_layers, seq_len):
     tt_model = DotsOCRPrefillModelTP4.from_torch(mesh_device, config, torch_stack.layers)
     x_tt = to_replicated(x, mesh_device, dtype=ttnn.bfloat16)
 
-    out_tt = tt_model.forward(x_tt)
+    # Pass a paged KV cache so prefill populates it (each chip writes its one
+    # KV head) -> the PagedFillCacheDeviceOperation kernel runs per layer in the
+    # profiled prefill. The cache write is a side effect; PCC is unaffected.
+    paged_cache = create_paged_kv_cache(config, mesh_device, batch_size=1)
+    out_tt = tt_model.forward(x_tt, past_key_value=paged_cache)
     ttnn.synchronize_device(mesh_device)
 
     out_torch = from_replicated_to_torch(out_tt, mesh_device).to(torch.float32).reshape(torch_out.shape)

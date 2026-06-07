@@ -137,12 +137,20 @@ class DotsOCRAttentionTP4:
             rope_convention="half_half",
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        batch_size = int(x.shape[0])
-        seq_len = int(x.shape[-2])
+        # Decode SDPA program config (q/k chunk 0 -> kernel picks per cur_pos).
+        try:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            self._sdpa_decode_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                q_chunk_size=0,
+                k_chunk_size=0,
+                exp_approx_mode=False,
+            )
+        except Exception:
+            self._sdpa_decode_program_config = None
 
+    def _project_qkv_heads(self, x, batch_size, seq_len, heads_mem_config):
+        """qkv linear (+bias) -> per-chip [Q3 | K1 | V1] -> create heads."""
         qkv = ttnn.linear(
             x,
             self.qkv_w,
@@ -152,19 +160,52 @@ class DotsOCRAttentionTP4:
             compute_kernel_config=self.compute_kernel_config,
         )
         qkv = ttnn.reshape(qkv, (batch_size, 1, seq_len, -1))
-
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=self.q_heads_per_chip,
             num_kv_heads=self.kv_heads_per_chip,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=heads_mem_config,
         )
         ttnn.deallocate(qkv)
+        return q, k, v
+
+    def _o_proj_all_reduce(self, attn):
+        out = ttnn.linear(
+            attn,
+            self.o_w,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        ttnn.deallocate(attn)
+        out = all_reduce(out, self.mesh_device)
+        if self.o_bias is not None:
+            out = ttnn.add(out, self.o_bias)
+        return out
+
+    def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        seq_len = int(x.shape[-2])
+        if past_key_value is not None and seq_len == 1:
+            return self._forward_decode(x, past_key_value, cache_position)
+        return self._forward_prefill(x, past_key_value)
+
+    def _forward_prefill(self, x: ttnn.Tensor, past_key_value=None) -> ttnn.Tensor:
+        batch_size = int(x.shape[0])
+        seq_len = int(x.shape[-2])
+
+        q, k, v = self._project_qkv_heads(x, batch_size, seq_len, ttnn.DRAM_MEMORY_CONFIG)
 
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
         q = ttnn.experimental.rotary_embedding(q, cos, sin)
         k = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        # Populate the paged KV cache (per chip: this chip's 1 KV head, rotated K
+        # + raw V, bf16 as paged_fill_cache requires) so decode can read it.
+        if past_key_value is not None:
+            past_key_value.paged_fill_on_device(k, v, layer_idx=self.layer_idx, batch_idx=0)
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -182,17 +223,73 @@ class DotsOCRAttentionTP4:
 
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.squeeze(attn, 1)  # [B, S, q_heads_per_chip*head_dim]
+        return self._o_proj_all_reduce(attn)
 
-        out = ttnn.linear(
-            attn,
-            self.o_w,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+    def _forward_decode(self, x: ttnn.Tensor, past_key_value, cache_position) -> ttnn.Tensor:
+        """Single-token decode reading/writing the paged KV cache (per chip)."""
+        batch_size = int(x.shape[0])
+        cur_pos = cache_position  # ttnn int32 [batch] = position of the new token
+
+        q, k, v = self._project_qkv_heads(x, batch_size, 1, ttnn.DRAM_MEMORY_CONFIG)
+
+        cos, sin = self._rotary_setup.get_cos_sin_for_decode(cur_pos)
+        q = ttnn.experimental.rotary_embedding(q, cos, sin)
+        k = ttnn.experimental.rotary_embedding(k, cos, sin)
+
+        # rotary_embedding materializes the tile-padded seq dim (S=1 -> 32);
+        # slice it back to the single decode token before the paged kernels,
+        # otherwise the permute leaves a 32-tall seq that over-shards K/V.
+        if int(q.shape[2]) != 1:
+            q = q[:, :, :1, :]
+        if int(k.shape[2]) != 1:
+            k = k[:, :, :1, :]
+
+        # [B, H, S=1, D] -> [S=1, B, H, D] for the paged kernels.
+        q = ttnn.permute(q, (2, 0, 1, 3))
+        kv_key = ttnn.permute(k, (2, 0, 1, 3))
+        kv_value = ttnn.permute(v, (2, 0, 1, 3))
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+
+        # Height-shard K/V for paged_update (it requires sharded input). One
+        # batch per core; the per-core shard is [TILE, head_dim] holding this
+        # chip's single KV head (padded to a tile). Use the explicit shard-shape
+        # form so 1 KV head -> exactly 1 shard (the auto-divide form mis-counts
+        # shards when num_kv_heads/chip == 1).
+        shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
         )
-        ttnn.deallocate(attn)
+        kv_key = ttnn.to_memory_config(kv_key, shard_cfg)
+        kv_value = ttnn.to_memory_config(kv_value, shard_cfg)
+        past_key_value.paged_update_on_device(kv_key, kv_value, layer_idx=self.layer_idx, current_pos=cur_pos)
+        ttnn.deallocate(kv_key)
+        ttnn.deallocate(kv_value)
 
-        out = all_reduce(out, self.mesh_device)
-        if self.o_bias is not None:
-            out = ttnn.add(out, self.o_bias)
-        return out
+        attn = past_key_value.paged_sdpa_decode(
+            q,
+            self.layer_idx,
+            current_pos=cur_pos,
+            scale=self.scaling,
+            program_config=self._sdpa_decode_program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+        )
+        ttnn.deallocate(q)
+
+        # [S=1, B, H, D] -> concat heads -> [1, 1, B, H*D]
+        sdpa_out_memcfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, self.head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=batch_size),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        attn = ttnn.to_memory_config(attn, sdpa_out_memcfg)
+        attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=self.q_heads_per_chip)
+        attn = ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, int(attn.shape[-1])])
+        attn = ttnn.squeeze(attn, 1)  # [1, B, H*D]
+        return self._o_proj_all_reduce(attn)
