@@ -23,7 +23,7 @@ import ttnn
 
 from models.common.utility_functions import is_blackhole, nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
-    all_reduce_sum_replicate,
+    decoder_all_reduce_sum_replicate,
     build_ln_sharded_config,
     matmul_multicast_1d_program_config,
     matmul_program_config,
@@ -793,7 +793,7 @@ class TTSeamlessM4Tv2Decoder:
         )
         ttnn.deallocate(merged)
         if tp > 1:
-            proj = all_reduce_sum_replicate(
+            proj = decoder_all_reduce_sum_replicate(
                 proj,
                 self.device,
                 cluster_axis=self._cluster_axis,
@@ -901,7 +901,7 @@ class TTSeamlessM4Tv2Decoder:
         )
         ttnn.deallocate(merged)
         if tp > 1:
-            proj = all_reduce_sum_replicate(
+            proj = decoder_all_reduce_sum_replicate(
                 proj,
                 self.device,
                 cluster_axis=self._cluster_axis,
@@ -1144,7 +1144,7 @@ class TTSeamlessM4Tv2Decoder:
         )
         ttnn.deallocate(merged)
         if tp > 1:
-            proj = all_reduce_sum_replicate(
+            proj = decoder_all_reduce_sum_replicate(
                 proj,
                 self.device,
                 cluster_axis=self._cluster_axis,
@@ -1329,7 +1329,7 @@ class TTSeamlessM4Tv2Decoder:
             )
             ttnn.deallocate(ff_in)
             if self._tp > 1:
-                ff = all_reduce_sum_replicate(
+                ff = decoder_all_reduce_sum_replicate(
                     ff,
                     self.device,
                     cluster_axis=self._cluster_axis,
