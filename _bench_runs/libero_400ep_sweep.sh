@@ -57,6 +57,7 @@ nl -ba "$TASKS" | xargs -P 32 -L 1 bash -c '
   PI0_VLM_MLP_MINIMAL=1 \
   PI0_VLM_MINIMAL_CFG=4,8,8,1,8 \
   PI0_SDPA_DENOISE_K_FORCE=96 \
+  PI0_MQA_HEAD_SPLIT=1 \
   PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream \
   TT_METAL_CACHE='"$ROOT"'/.tt_metal_cache \
   TT_METAL_HOME='"$ROOT"' \
