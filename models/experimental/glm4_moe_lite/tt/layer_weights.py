@@ -119,6 +119,32 @@ def _env_dram_sharded_attn() -> bool:
     return _env_dram_sharded_weights() and os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_ATTN", "").strip() == "1"
 
 
+def _env_lm_head_weight_dtype() -> ttnn.DataType:
+    """Weight dtype for the LM head (hidden → vocab logits projection).
+
+    Defaults to BFP8 — halves DRAM bandwidth vs BF16 (635MB → 317MB for
+    K=2048, N=154880).  Override via GLM4_MOE_LITE_LM_HEAD_DTYPE=bf16 if
+    quality regression is observed.
+    """
+    override = os.environ.get("GLM4_MOE_LITE_LM_HEAD_DTYPE", "").strip().lower()
+    if override in {"bf16", "bfloat16"}:
+        return ttnn.bfloat16
+    return ttnn.bfloat8_b  # default: BFP8
+
+
+def _env_dram_sharded_lm_head() -> bool:
+    """DRAM-shard the LM head weight for higher-bandwidth decode (M=32, K=2048, N=vocab).
+
+    Enable via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1.
+
+    The standard 1D-multicast LM head broadcasts the full BF16 weight over the NOC,
+    saturating it at ~74% DRAM utilization.  DRAM-sharded eliminates the NOC multicast
+    for weights: each compute core reads directly from its assigned DRAM bank, giving
+    full parallel DRAM bandwidth and typically 2-4× lower latency on this op.
+    """
+    return os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD", "").strip() == "1"
+
+
 def _env_dram_sharded_mlp() -> bool:
     """MLP DRAM sharding (ON by default when main flag is set).
 
