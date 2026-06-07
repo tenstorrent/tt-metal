@@ -192,7 +192,8 @@ jobs:
           # Matrix for tt-metal-l2-tests and didt-tests (N150, N300, P100, P150b)
           matrix_l2='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
+            # [precompile-prototype] N150 disabled to run a single conv job on N300 — REVERT before merge.
+            # matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
             matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then

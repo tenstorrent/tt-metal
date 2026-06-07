@@ -120,6 +120,8 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        # [precompile-prototype] explicit shared JIT cache: the warm step populates it, the test step reuses it.
+        TT_METAL_CACHE: /work/.precompile_cache
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -147,6 +149,15 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: 🔎 [precompile-prototype] runner specs
+        run: |
+          echo "nproc=$(nproc)  online_cpus=$(getconf _NPROCESSORS_ONLN)"
+          lscpu | grep -E '^(CPU\(s\)|Model name|Thread|Socket|Core)' || true
+          free -h || true
+          echo "TT_METAL_CACHE=$TT_METAL_CACHE"
+      - name: 🔥 [precompile-prototype] warm JIT cache (hardware-free, parallel)
+        timeout-minutes: 60
+        run: bash scripts/precompile_warm.sh tests/ttnn/nightly/unit_tests/operations/conv -m "not disable_fast_runtime_mode"
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
