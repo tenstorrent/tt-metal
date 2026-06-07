@@ -18,8 +18,6 @@ import torch
 
 import ttnn
 
-from .tt_matmul_memory import maybe_to_memory_config as _maybe_to_mc_pair
-
 _TILE = 32
 # Per-step LSTM state/gate tensors are tiny at bring-up widths (H<=64); keep them in L1 when
 # tile-padded storage fits (gx precompute buffers stay on the caller's memory_config).
@@ -44,13 +42,6 @@ def _tensor_nbytes(shape: tuple[int, ...] | list[int], dtype) -> int:
     return _tile_padded_volume(shape) * _dtype_nbytes(dtype)
 
 
-def _maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> ttnn.Tensor:
-    out, owns = _maybe_to_mc_pair(x, mc)
-    if owns:
-        ttnn.deallocate(x)
-    return out
-
-
 def _lstm_step_memory_config(
     *,
     batch: int,
@@ -71,7 +62,13 @@ def _lstm_step_memory_config(
 
 @dataclass(frozen=True)
 class TTLSTMParams:
-    """One-direction LSTM gate weights: ``x @ W_x + h @ W_h + b`` with ``W_*`` stored for ``transpose_b=True``."""
+    """One-direction LSTM gate weights for ``x @ W_x + h @ W_h + b``.
+
+    ``W_*`` are stored **pre-transposed** (``[in, 4H]``) so the matmuls run with the default
+    ``transpose_b=False``. PyTorch's ``weight_*h`` are ``[4H, in]`` (laid out for ``x @ W^T``);
+    transposing once at upload avoids re-transposing ``W_h`` on every recurrent timestep (one
+    ``TransposeDeviceOperation``/step otherwise).
+    """
 
     w_x: ttnn.Tensor
     w_h: ttnn.Tensor
@@ -100,15 +97,16 @@ def preprocess_tt_lstm_1layer(
         b_hh = getattr(lstm, f"bias_hh_{prefix}").detach().cpu()
         b = (b_ih + b_hh).reshape(1, 1, 1, -1)
 
+        # Store transposed (PyTorch gives [4H, in]; we want [in, 4H] for transpose_b=False).
         w_x = ttnn.from_torch(
-            w_ih,
+            w_ih.t().contiguous(),
             dtype=weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         w_h = ttnn.from_torch(
-            w_hh,
+            w_hh.t().contiguous(),
             dtype=weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -141,7 +139,6 @@ def _lstm_step(
         h,
         params.w_h,
         bias=None,
-        transpose_b=True,
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
@@ -268,7 +265,6 @@ def tt_bilstm_nlc(
             x_nlc,
             p.w_x,
             bias=bias,
-            transpose_b=True,
             memory_config=gx_mc,
             compute_kernel_config=compute_kernel_config,
         )  # [B, L, 4H]
@@ -280,7 +276,14 @@ def tt_bilstm_nlc(
     gx_rev = _precompute_gates_x(rev)
 
     def _gates_x_at(gx_all: ttnn.Tensor, t: int) -> ttnn.Tensor:
-        return ttnn.reshape(ttnn.slice(gx_all, [t, 0, 0], [t + 1, B, H4], [1, 1, 1]), [B, H4], memory_config=gx_mc)
+        # Slice the timestep directly into the per-step memory config (L1 when small enough).
+        # The DRAM gx buffer is read once and the [B, 4H] row lands where the gate add wants it,
+        # so the per-step DRAM->L1 copy that a follow-up to_memory_config would emit is avoided.
+        return ttnn.reshape(
+            ttnn.slice(gx_all, [t, 0, 0], [t + 1, B, H4], [1, 1, 1], memory_config=step_mc),
+            [B, H4],
+            memory_config=step_mc,
+        )
 
     h0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
     c0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
@@ -309,8 +312,6 @@ def tt_bilstm_nlc(
     outs_f = []
     for t in range(L):
         gxt = _gates_x_at(gx_fwd, t)
-        if step_mc.buffer_type == ttnn.BufferType.L1:
-            gxt = _maybe_to_memory_config(gxt, step_mc)
         h_old, c_old = h_f, c_f
         h_new, c_new = _lstm_step(
             gxt,
@@ -335,8 +336,6 @@ def tt_bilstm_nlc(
     outs_b_rev = []
     for t in reversed(range(L)):
         gxt = _gates_x_at(gx_rev, t)
-        if step_mc.buffer_type == ttnn.BufferType.L1:
-            gxt = _maybe_to_memory_config(gxt, step_mc)
         h_old, c_old = h_b, c_b
         h_new, c_new = _lstm_step(
             gxt,
@@ -363,14 +362,14 @@ def tt_bilstm_nlc(
 
     outs_b = list(reversed(outs_b_rev))
 
-    # Assemble per-timestep [B, H] outputs into [B, L, H] with bulk ops instead of an
-    # individual [B,H]->[B,1,H] reshape per timestep: concat along dim 0 -> [L*B, H],
-    # reshape to [L, B, H], then permute to [B, L, H]. Pure data movement (bit-identical),
-    # but trades 2*L per-step reshapes for a few bulk TM ops.
+    # Assemble per-timestep [B, H] outputs into [B, L, H]. Concatenate along the *last* dim
+    # (H=64 is tile-aligned) -> [B, L*H], then a single reshape -> [B, L, H]. Concatenating on
+    # dim 0 instead would force an unpad of every input (its dim-0 size 1 is tile-padded to 32),
+    # emitting one UntilizeWithUnpadding per timestep; the width concat is a clean tile copy and
+    # drops the trailing permute too. Pure data movement (bit-identical).
     def _stack_time(outs):
-        cat = ttnn.concat(outs, dim=0)  # [L*B, H]
-        cat = ttnn.reshape(cat, [L, B, H], memory_config=memory_config)  # [L, B, H]
-        return ttnn.permute(cat, (1, 0, 2), memory_config=memory_config)  # [B, L, H]
+        cat = ttnn.concat(outs, dim=-1)  # [B, L*H]
+        return ttnn.reshape(cat, [B, L, H], memory_config=memory_config)  # [B, L, H]
 
     hs_f = _stack_time(outs_f)
     hs_b = _stack_time(outs_b)
