@@ -88,4 +88,17 @@ bool GetEnable2EriscMode();
  */
 uint64_t GetBuildKey();
 
+/**
+ * @brief Capture device 0's JIT build fingerprint to a file for up-front precompile.
+ *
+ * Serializes the build-determining device values that a hardware-free (mock/sim) build resolves
+ * differently from the real fast-dispatch run (num_l1_banks, dispatch core type/axis, resolved
+ * 2-erisc). Call on a REAL device; the precompile runner then points the mock at the file via
+ * TT_METAL_JIT_BUILD_FINGERPRINT so the warm cache is keyed identically. A single artifact replacing
+ * per-field TT_METAL_FORCE_* knobs. Requires a device's build env to exist.
+ *
+ * @param path Filesystem path to write the fingerprint to.
+ */
+void CaptureJitBuildFingerprint(const std::string& path);
+
 }  // namespace tt::tt_metal

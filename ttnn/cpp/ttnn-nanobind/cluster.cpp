@@ -89,6 +89,27 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> import ttnn
                 >>> key = ttnn.cluster.get_build_key()
         )doc");
+
+    mod.def(
+        "capture_jit_build_fingerprint",
+        &ttnn::cluster::capture_jit_build_fingerprint,
+        nb::arg("path"),
+        R"doc(
+            Capture device 0's JIT build fingerprint to a file (for up-front precompile).
+
+            Serializes the build-determining values a hardware-free (mock/sim) build resolves
+            differently from the real fast-dispatch run (num_l1_banks, dispatch core type/axis,
+            resolved 2-erisc). Call on a REAL device; replay it under a mock/sim target via the env
+            var TT_METAL_JIT_BUILD_FINGERPRINT so the warmed cache is keyed identically to the real
+            run. A single artifact replacing per-field force knobs. Requires a device to be open.
+
+            Args:
+                path (str): Filesystem path to write the fingerprint to.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.cluster.capture_jit_build_fingerprint("/tmp/fp.txt")
+        )doc");
 }
 
 }  // namespace

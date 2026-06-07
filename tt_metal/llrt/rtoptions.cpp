@@ -364,6 +364,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
             log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
             this->enable_2_erisc_mode = false;
         }
+        // NOTE: other build-determining values that a hardware-free build resolves differently (e.g.
+        // num_l1_banks, dispatch core type/axis) are captured+replayed as a single artifact via
+        // TT_METAL_JIT_BUILD_FINGERPRINT, applied in create_jit_device_config (jit_build layer) --
+        // not as per-field knobs here. See tt_metal/jit_build/jit_build_fingerprint.hpp.
     }
 
     TT_FATAL(

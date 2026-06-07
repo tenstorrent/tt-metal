@@ -17,6 +17,8 @@ bool get_enable_2_erisc_mode() { return tt::tt_metal::GetEnable2EriscMode(); }
 
 uint64_t get_build_key() { return tt::tt_metal::GetBuildKey(); }
 
+void capture_jit_build_fingerprint(const std::string& path) { tt::tt_metal::CaptureJitBuildFingerprint(path); }
+
 }  // namespace cluster
 
 using namespace cluster;

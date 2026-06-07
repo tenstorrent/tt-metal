@@ -113,6 +113,10 @@ EXTRA_ARGS=("$@")
 # pre-warmed cache is transparently reused. We never override it. The cluster descriptor (HW-stable)
 # is cached in /tmp; the build_key is recomputed each run (it depends on source, not just HW).
 PRECOMPILE_DESC="/tmp/tt_precompile_cluster_desc.yaml"
+# Build fingerprint: the real device's build-determining values that a hardware-free (slow-dispatch)
+# build resolves differently (num_l1_banks, dispatch core type/axis, resolved 2-erisc). Captured fresh
+# each run (source-dependent, like build_key) and replayed in the mock via TT_METAL_JIT_BUILD_FINGERPRINT.
+PRECOMPILE_FINGERPRINT="/tmp/tt_precompile_build_fingerprint.txt"
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
 # ============================================================================
@@ -131,15 +135,18 @@ PY
 }
 
 _precompile_realkey() {
-    # Brief REAL device open -> prints "RKEY <2erisc> <build_key>". build_key depends on source,
-    # so this is recomputed every run (not cached). MUST open the device the same way the tests do
-    # (open_mesh_device) — the build_key differs between the single-device and mesh open paths.
-    timeout 180 env PYTHONPATH="$REPO_DIR" python3 - >"/tmp/precompile_real_$$.log" 2>&1 <<'PY'
-import ttnn
+    # Brief REAL device open -> prints "RKEY <2erisc> <build_key>" AND writes the build fingerprint
+    # (num_l1_banks, dispatch core type/axis, resolved 2-erisc) to $PRECOMPILE_FINGERPRINT. build_key
+    # depends on source, so this is recomputed every run (not cached). MUST open the device the same
+    # way the tests do (open_mesh_device) — the build_key differs between single-device and mesh paths.
+    timeout 180 env PRECOMPILE_FP="$PRECOMPILE_FINGERPRINT" PYTHONPATH="$REPO_DIR" \
+        python3 - >"/tmp/precompile_real_$$.log" 2>&1 <<'PY'
+import os, ttnn
 md = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
 try:
     f = 1 if ttnn.cluster.get_enable_2_erisc_mode() else 0
     k = ttnn.cluster.get_build_key()
+    ttnn.cluster.capture_jit_build_fingerprint(os.environ["PRECOMPILE_FP"])
 finally:
     ttnn.close_mesh_device(md)
 print(f"RKEY {f} {k}")
@@ -148,9 +155,10 @@ PY
 }
 
 _precompile_mockkey() {
-    # $1=2erisc. Hardware-free mock open with the captured fingerprint -> prints "MKEY <build_key>".
+    # $1=2erisc. Hardware-free mock open replaying the captured build fingerprint -> "MKEY <key>".
     timeout 120 env \
-        TT_METAL_FORCE_2_ERISC_MODE="$1" TT_METAL_SLOW_DISPATCH_MODE=1 \
+        TT_METAL_FORCE_2_ERISC_MODE="$1" TT_METAL_JIT_BUILD_FINGERPRINT="$PRECOMPILE_FINGERPRINT" \
+        TT_METAL_SLOW_DISPATCH_MODE=1 \
         TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" PYTHONPATH="$REPO_DIR" \
         python3 - >"/tmp/precompile_mock_$$.log" 2>&1 <<'PY'
 import ttnn
@@ -165,7 +173,7 @@ PY
 
 precompile_warm() {
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
-    echo "PRECOMPILE: ===== warming JIT cache (hardware-free, ${PRECOMPILE_WORKERS}-way) =====" >&2
+    echo "PRECOMPILE: ===== warming JIT cache (hardware-free) =====" >&2
 
     # 1. cluster descriptor (HW-stable, cached per container)
     if ! _precompile_descriptor; then
@@ -173,18 +181,19 @@ precompile_warm() {
         return 0
     fi
 
-    # 2. real device fingerprint: resolved 2-erisc + the build_key your run will actually use
+    # 2. real device fingerprint: resolved 2-erisc + the build_key your run will use, and the build
+    #    fingerprint file (num_l1_banks, dispatch core type/axis) written to $PRECOMPILE_FINGERPRINT
     local probe force2 realkey
     probe="$(_precompile_realkey | sed -n 's/^RKEY //p' | tail -1)"
     if [[ -z "$probe" ]]; then
         echo "PRECOMPILE: ✗ couldn't read your device's build_key -> COLD. Either the device is unhealthy, or" >&2
-        echo "PRECOMPILE:   the build predates the get_build_key/get_enable_2_erisc_mode bindings (re-run ./build_metal.sh)." >&2
+        echo "PRECOMPILE:   the build predates the get_build_key/capture_jit_build_fingerprint bindings (re-run ./build_metal.sh)." >&2
         echo "PRECOMPILE:   See /tmp/precompile_real_$$.log" >&2
         return 0
     fi
-    force2="${probe%% *}"; realkey="${probe##* }"
+    read -r force2 realkey <<< "$probe"
 
-    # 3. mock fingerprint build_key (hardware-free)
+    # 3. mock build_key (hardware-free), replaying the captured build fingerprint
     local mockkey
     mockkey="$(_precompile_mockkey "$force2" | sed -n 's/^MKEY //p' | tail -1)"
     if [[ -z "$mockkey" ]]; then
@@ -199,22 +208,48 @@ precompile_warm() {
         echo "PRECOMPILE:   Results stay CORRECT — you just don't get the speedup. Cause (mock fingerprint != real device):" >&2
         echo "PRECOMPILE:     • stale descriptor from another machine/docker -> rm -f $PRECOMPILE_DESC ; re-run" >&2
         echo "PRECOMPILE:     • a multi-device / Blackhole config the (1,1) hardware-free fingerprint didn't reproduce" >&2
-        echo "PRECOMPILE:       (harvesting / dispatch_core / 2-erisc / arch)." >&2
+        echo "PRECOMPILE:       (harvesting / dispatch_core / 2-erisc / num_l1_banks / arch)." >&2
         return 0
     fi
     echo "PRECOMPILE: ✓ fingerprint matches your device (build_key ${realkey}) — the warm cache WILL be reused." >&2
 
-    # 5. hardware-free meta-collect over the SAME selection -> warms the shared cache in parallel
-    echo "PRECOMPILE: warming over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
-    local clog="/tmp/precompile_collect_$$.log" t0 t1
+    # 5. hardware-free meta-collect over the SAME selection -> warms the shared cache.
+    #    The heavy kernel COMPILE is parallel either way: the plugin compiles the deduped distinct set
+    #    via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS, ...) — an in-process C++
+    #    thread pool, NOT xdist. xdist (-n) only parallelizes test COLLECTION across processes.
+    #      • xdist present : -n N processes, each compiling its shard with 1 thread (workers=1).
+    #      • xdist absent  : ONE process, collection serial, compile parallel with N threads
+    #                        (workers=N). <-- this is the key fix: previously workers was hardcoded
+    #                        to 1 AND -n N errored out, so a no-xdist box warmed NOTHING serially.
+    #    A non-zero collect is surfaced (below), not swallowed by `|| true`.
+    local nflag=() collect_workers
+    if python3 -c "import xdist" >/dev/null 2>&1; then
+        nflag=(-n "$PRECOMPILE_WORKERS"); collect_workers=1
+        echo "PRECOMPILE: warming (xdist ${PRECOMPILE_WORKERS} procs x 1 compile-thread) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    else
+        collect_workers="$PRECOMPILE_WORKERS"
+        echo "PRECOMPILE: warming (no xdist; 1 proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
+    fi
+    local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
     t0=$(date +%s)
-    TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_JIT_BUILD_FINGERPRINT="$PRECOMPILE_FINGERPRINT" \
+    TT_METAL_SLOW_DISPATCH_MODE=1 \
     TT_METAL_MOCK_CLUSTER_DESC_PATH="$PRECOMPILE_DESC" \
-    UP_FRONT_COLLECT=1 UP_FRONT_META_COLLECT=1 UP_FRONT_COLLECT_WORKERS=1 \
+    UP_FRONT_COLLECT=1 UP_FRONT_META_COLLECT=1 UP_FRONT_COLLECT_WORKERS="$collect_workers" \
     LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
-        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p up_front_collect_plugin -n "$PRECOMPILE_WORKERS" \
-        > "$clog" 2>&1 || true
+        pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p up_front_collect_plugin "${nflag[@]}" \
+        > "$clog" 2>&1
+    cstatus=$?
     t1=$(date +%s)
+    # Don't pretend it warmed if the collect failed. A non-zero exit (pytest usage/collection error,
+    # plugin failure, etc.) means we warmed nothing -> say so plainly; the real run still runs COLD and
+    # CORRECT, just without the speedup. (pytest exit 5 = "no tests collected" counts as a failure here.)
+    if [[ $cstatus -ne 0 ]]; then
+        echo "PRECOMPILE: ✗ warm collect FAILED (pytest exit $cstatus) after $((t1-t0))s -> warmed NOTHING; running COLD." >&2
+        grep -iE "error|unrecognized|no tests ran|no tests collected" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
+        echo "PRECOMPILE:   (full collect log: $clog)" >&2
+        return 0
+    fi
     echo "PRECOMPILE: ✓ warm pass complete in $((t1-t0))s (build_key ${realkey}) — the real run below reuses it. Log: $clog" >&2
 }
 
