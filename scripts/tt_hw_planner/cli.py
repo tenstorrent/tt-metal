@@ -4552,11 +4552,6 @@ def _run_focused_pytest(
     lock_wait_state: Dict[str, object] = {"since": None, "blocker_pid": None, "abort": False}
     captured_tail: collections.deque = collections.deque(maxlen=4000)
 
-    # Screen-clean: the full pytest stream always goes to captured_tail (for
-    # the runtime-fallback drain) and to a log file on disk; the terminal only
-    # shows "interesting" lines (test ids/results, [bringup] stage=, PCC, the
-    # summary, lock waits) unless TT_HW_PLANNER_VERBOSE is set. Parsing of
-    # stage/lock state below is unchanged — it runs for every line.
     _verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
     _pytest_log_fh = None
     try:
@@ -7207,9 +7202,6 @@ def _stub_forward_body_excerpt(stub_path: Path, *, max_lines: int = 30) -> str:
 def _ungraduated_breakdown(demo_dir: Path, components: List[str]) -> str:
     if not components:
         return ""
-    # Screen-clean: one line per component (name + state + path). The full
-    # forward-body excerpt is display-only diagnostic context (not fed to any
-    # prompt/report), so include it only under TT_HW_PLANNER_VERBOSE.
     verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
     lines: List[str] = []
     for comp in components:

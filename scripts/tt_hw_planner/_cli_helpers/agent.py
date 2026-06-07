@@ -277,11 +277,6 @@ def _invoke_agent(
     deliverable_written = False
     deliverable_warning_emitted = False
 
-    # Screen-clean heartbeat: the loop still ticks every heartbeat_s (its
-    # stall/deliverable monitoring is unchanged), but the "still running"
-    # line only re-prints when progress actually changes or once per
-    # heartbeat_screen_s, so N parallel agents don't flood the terminal
-    # with identical quiet ticks. Full detail remains in the agent log.
     heartbeat_screen_s = 60
     last_heartbeat_t = start
     last_heartbeat_events = -1
