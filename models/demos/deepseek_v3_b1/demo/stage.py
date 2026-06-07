@@ -199,7 +199,6 @@ class EmbeddingStage(StageKind):
         pipeline_config = ctx.pipeline_config
         if self._d2h_page_size is not None:
             size_to_payload = {
-                TOKEN_META_PAGE_SIZE_BYTES: PassthroughPayload.TOKEN,
                 TOKEN_META_PAGE_SIZE_BYTES: PassthroughPayload.TOKEN_META,
                 ACTIVATION_PAGE_SIZE_BYTES: PassthroughPayload.ACTIVATION,
                 ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES: PassthroughPayload.ACTIVATION_W_TOKEN_META,
@@ -353,10 +352,12 @@ class SpecLMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
+        mtp_level: int = 1,
     ) -> None:
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._spec_weights = spec_weights
+        self._mtp_level = mtp_level
         self._state: dict[str, Any] = {}
 
     def _get_sender_coord(self, ctx: StageContext, pipeline_block):
@@ -399,7 +400,6 @@ class SpecLMHeadStage(StageKind):
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
 
-        # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
         torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -596,6 +596,7 @@ class SpecLMHeadStage(StageKind):
             termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
+            mtp_level=self._mtp_level,
             metadata_tensor=d["metadata_tensor"],
             k=1,
         )
@@ -626,8 +627,8 @@ class BaseLMHeadStage(StageKind):
         persistent_mode: bool = True,
         mtp_weights: DeepSeekV3MTPWeights | None = None,
         embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
-        send_mtp_output_downstream: bool = False,
         seed: int = 2005,
+        mtp_level: int = 0,
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
@@ -636,12 +637,12 @@ class BaseLMHeadStage(StageKind):
         self._persistent_mode = persistent_mode
         self._mtp_weights = mtp_weights
         self._embedding_weights = embedding_weights
+        self._mtp_level = mtp_level
         self._enable_mtp = mtp_weights is not None
         if self._enable_mtp and self._embedding_weights is None:
             raise ValueError("embedding_weights are required when mtp_weights are provided")
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
-        self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._seed = seed
         self._lmhead_state: dict[str, Any] = {}
 
@@ -657,13 +658,10 @@ class BaseLMHeadStage(StageKind):
         )
         up_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         up_fifo = activation_fifo_size_bytes(up_page, self._upstream_fifo_pages)
-        # MTP: forward activation+metadata downstream; non-MTP: only the token result goes downstream.
-        if self._send_mtp_output_downstream:
-            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
-        else:
-            down_page = TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = TOKEN_META_FIFO_SIZE
+        down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        down_fifo = activation_fifo_size_bytes(down_page, self._downstream_fifo_pages)
+
+        loopback = LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -673,6 +671,7 @@ class BaseLMHeadStage(StageKind):
             downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            loopback=loopback,
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
@@ -977,6 +976,7 @@ class BaseLMHeadStage(StageKind):
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             termination_semaphore=d.get("termination_semaphore"),
             is_mtp_base_stage=True,
+            mtp_level=self._mtp_level,
             metadata_tensor=d.get("metadata_tensor"),
             reduce_semaphores=d.get("reduce_semaphores"),
             mtp_bcast_semaphores=d.get("mtp_bcast_semaphores"),
@@ -1111,7 +1111,10 @@ class _CombinedPipelineBlock:
             f"[COMBINED P{my_stage_idx}] _CombinedPipelineBlock created: "
             f"exit_dev={exit_node_coord} "
             f"spec_root={spec_root_device_coord} spec_exit={spec_exit_device_coord} "
-            f"d2h_dev={loopback_exit_coord}",
+            f"d2h_dev={loopback_exit_coord} "
+            f"loopback_entry={loopback_entry_coord} "
+            f"prev_stage_exit={prev_stage_exit_coord} "
+            f"next_stage_entry={next_stage_entry_coord}",
         )
 
     def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str = "deepseek") -> None:
@@ -1187,12 +1190,14 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
+        mtp_level: int = 1,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             spec_weights=spec_weights,
+            mtp_level=mtp_level,
         )
         self._embedding_weights = embedding_weights
         self._loopback_input_fifo_pages = loopback_input_fifo_pages
