@@ -59,8 +59,29 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             GLM51Config.NUM_EXPERTS_PER_TOKEN,
             8,
         ),
+        (
+            640,
+            GLM51Config.EMB_SIZE,
+            GLM51Config.NUM_ROUTED_EXPERTS,
+            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+        ),
+        (
+            3200,
+            GLM51Config.EMB_SIZE,
+            64,
+            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+        ),
+        (
+            640,
+            GLM51Config.EMB_SIZE,
+            64,
+            GLM51Config.NUM_EXPERTS_PER_TOKEN,
+            8,
+        ),
     ],
-    ids=["glm5.1-3200"],
+    ids=["glm5.1-3200", "glm5.1-640", "glm5.1-3200-smaller-experts", "glm5.1-640-smaller-experts"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
