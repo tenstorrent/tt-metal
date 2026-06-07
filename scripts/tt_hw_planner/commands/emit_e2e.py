@@ -88,6 +88,29 @@ def _render_grader_report(demo_dir: Path) -> bool:
     return True
 
 
+def _render_compute_split(model_id: str) -> None:
+    """Show how much of the pipeline runs natively on the TT device vs torch on
+    CPU — reusing the exact split the auto-iterate loop prints (component-level
+    + op-level), read from bringup_status.json + the op-synth manifests."""
+    try:
+        from ..cli import _format_compute_split, _format_op_split
+    except Exception:
+        return
+    lines = []
+    try:
+        lines += _format_compute_split(model_id, label="compute split (TT device vs CPU)")
+    except Exception:
+        pass
+    try:
+        lines += _format_op_split(model_id, label="operations")
+    except Exception:
+        pass
+    if lines:
+        print()
+        for ln in lines:
+            print(ln)
+
+
 def cmd_emit_e2e(args) -> int:
     try:
         from ..cli import _quiet_framework_logging
@@ -130,6 +153,7 @@ def cmd_emit_e2e(args) -> int:
         # No grader report to render; show a clean (markdown-stripped) build summary.
         if not _verbose() and (build_final or "").strip():
             print(_md_to_terminal(build_final))
+        _render_compute_split(model_id)
         return 0
 
     grade_prompt = _build_grader_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
@@ -147,6 +171,7 @@ def cmd_emit_e2e(args) -> int:
         # grader_report.json; fall back to a markdown-stripped prose summary.
         if not _render_grader_report(demo_dir) and (grade_final or "").strip():
             print("\n" + _md_to_terminal(grade_final))
+        _render_compute_split(model_id)
 
         if rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or ""):
             print("\n" + sep)
