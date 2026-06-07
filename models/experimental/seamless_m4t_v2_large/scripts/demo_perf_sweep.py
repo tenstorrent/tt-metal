@@ -19,16 +19,20 @@ decoded task outputs (translated/transcribed text; speech stats and WAV files fo
 
 Run from repo root::
 
-    python models/experimental/seamless_m4t_v2_large/demo/measure_perf.py
+    python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
+
+Weights are auto-downloaded on first run via ``ensure_seamless_m4t_v2_large_weights()`` (same as
+``demo.py``). Override with ``SEAMLESS_M4T_V2_WEIGHTS=/path/to/seamless-m4t-v2-large``.
 
 Optional::
 
-    python .../measure_perf.py --output outputs/perf_sweep.txt --min-len 32 --max-len 512
+    python .../demo_perf_sweep.py --output scripts/outputs/perf_sweep.txt --min-len 32 --max-len 512
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -51,6 +55,7 @@ from models.experimental.seamless_m4t_v2_large.demo import demo as demo_mod
 from models.experimental.seamless_m4t_v2_large.reference.torch_seamless_m4t_v2_model import (
     load_pretrained_seamless_m4t_v2_model,
 )
+from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import source_text_for_enc_len
 from models.experimental.seamless_m4t_v2_large.tt.common import hf_aligned_generation_kwargs
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import (
@@ -59,7 +64,7 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model impor
     TTSeamlessM4Tv2GreedySearchOutput,
 )
 
-OUTPUT_DIR = demo_mod.OUTPUT_DIR
+OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
 DEFAULT_LOG = OUTPUT_DIR / "perf_sweep.txt"
 STORY_URL = "https://www.gutenberg.org/cache/epub/11/pg11.txt"
 STORY_FILE = OUTPUT_DIR / "alice_in_wonderland.txt"
@@ -78,6 +83,14 @@ SEQ_LEN_MAX = 4096
 # state that collapses S2TT/S2ST/ASR on the timed run (notably at 2048 mel). Warm on a
 # throwaway device, then time on a fresh session (same pattern as cold-start preflight).
 _SPEECH_SPLIT_WARMUP_MEL = 1792
+
+
+def _weights_dir() -> Path:
+    """Resolve checkpoint path; download from Hugging Face Hub on first use if missing."""
+    env = os.environ.get("SEAMLESS_M4T_V2_WEIGHTS")
+    if env:
+        return Path(env).expanduser().resolve()
+    return ensure_seamless_m4t_v2_large_weights()
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +300,7 @@ def _log_text_task_output(log: PerfLog, task: str, tgt_lang: str, text: str) -> 
 
 
 def _speech_wav_path(task: str, seq_len: int) -> Path:
-    """Per sweep-point WAV under ``demo/outputs`` (e.g. ``t2st_seq4096.wav``)."""
+    """Per sweep-point WAV under ``scripts/outputs`` (e.g. ``t2st_seq4096.wav``)."""
     return OUTPUT_DIR / f"{task.lower()}_seq{seq_len}.wav"
 
 
@@ -649,7 +662,7 @@ def main(argv: list[str] | None = None) -> None:
     lengths = sequence_lengths(args.min_len, args.max_len)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    weights_dir = demo_mod._weights_dir()
+    weights_dir = _weights_dir()
     path = str(weights_dir)
     processor = AutoProcessor.from_pretrained(path, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)

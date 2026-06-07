@@ -509,7 +509,7 @@ class TTSeamlessM4Tv2Encoder:
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
         tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
         # Block-sharded L1 matmul CBs clash with decode-trace L1 reservation at long prefill
-        # (``measure_perf`` / demo @ seq=4096). Use interleaved DRAM fallback above 2048 tokens.
+        # (``demo_perf_sweep`` / demo @ seq=4096). Use interleaved DRAM fallback above 2048 tokens.
         _TP_BS_M_MAX = 2048
         if tuned is not None and m <= _TP_BS_M_MAX:
             program_config, in0_mem, out_mem = tuned
