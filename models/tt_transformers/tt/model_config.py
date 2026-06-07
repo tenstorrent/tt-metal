@@ -152,12 +152,10 @@ class ModelOptimizations:
             if base_model_name_lower.startswith("phi-1"):
                 logger.info(
                     f"Model {model_name} uses Phi-1 topology and is sensitive to attention/KV quantization, "
-                    "using BF16/HIFI4 attention in accuracy mode"
+                    "using BF16/HIFI4 attention in accuracy mode while keeping the standard MLP precision path"
                 )
                 settings = {
                     "TensorPrecision": {
-                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
-                        TensorGroup.FF2: PrecisionSetting.BF16,
                         TensorGroup.WQKV: PrecisionSetting.BF16,
                         TensorGroup.KV_CACHE: PrecisionSetting.BF16,
                         TensorGroup.WO: PrecisionSetting.BF16,
