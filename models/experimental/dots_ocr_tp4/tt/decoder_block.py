@@ -22,6 +22,15 @@ from models.experimental.dots_ocr_tp4.tt.mlp import DotsOCRMLPTP4
 from models.experimental.dots_ocr_tp4.tt.rmsnorm import DotsOCRRMSNormTP4
 
 
+def _gate_up_dtype_for_layer(layer_idx) -> "ttnn.DataType":
+    # Mirror the production dots.ocr recipe: gate/up is BFP4 on the early layers
+    # (0-6) and promoted to BFP8 on the later, accuracy-sensitive layers (>=7).
+    # Pure BFP4 everywhere over-degrades the 28-layer real-weight PCC.
+    if layer_idx is not None and int(layer_idx) >= 7:
+        return ttnn.bfloat8_b
+    return ttnn.bfloat4_b
+
+
 class DotsOCRDecoderBlockTP4:
     def __init__(self, mesh_device, config, layer_idx=0, weight_dtype=ttnn.bfloat16):
         self.mesh_device = mesh_device
@@ -45,7 +54,13 @@ class DotsOCRDecoderBlockTP4:
         b.post_attention_layernorm = DotsOCRRMSNormTP4.from_torch(
             mesh_device, torch_layer.post_attention_layernorm, eps=config.rms_norm_eps
         )
-        b.mlp = DotsOCRMLPTP4.from_torch(mesh_device, config, torch_layer.mlp, weight_dtype=weight_dtype)
+        b.mlp = DotsOCRMLPTP4.from_torch(
+            mesh_device,
+            config,
+            torch_layer.mlp,
+            weight_dtype=weight_dtype,
+            gate_up_weight_dtype=_gate_up_dtype_for_layer(layer_idx),
+        )
         return b
 
     def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:

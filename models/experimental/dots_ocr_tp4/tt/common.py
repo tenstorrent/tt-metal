@@ -109,6 +109,87 @@ def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1) -> ttnn.Tensor:
     return gathered
 
 
+def matmul_m_dim(x) -> int:
+    """Folded M dimension (product of all dims but the last) of a tensor."""
+    s = x.shape
+    m = 1
+    for i in range(len(s) - 1):
+        m *= int(s[i])
+    return m
+
+
+def _largest_divisor_leq(n: int, cap: int) -> int:
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+def prefill_matmul_2d_config(mesh_device, m: int, k: int, n: int, fp32_dest: bool = False):
+    """Tuned 2D-mcast matmul program config for a per-chip prefill matmul
+    [M,K] x [K,N]. Returns None for shapes that aren't tile-aligned or for
+    decode (M==32/1) so the caller falls back to the auto heuristic.
+
+    With an interleaved (mcast) in0 the 2D kernel only needs gy | M_tiles,
+    gx | N_tiles and in0_block_w | K_tiles — so it works for the awkward
+    TP-sharded N/K that the auto heuristic degrades to in0_block_w=1 on.
+    """
+    if m % 32 or k % 32 or n % 32:
+        return None
+    mt, kt, nt = m // 32, k // 32, n // 32
+    if mt <= 1:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    gy = _largest_divisor_leq(mt, grid.y)
+    gx = _largest_divisor_leq(nt, grid.x)
+    per_core_m = mt // gy
+    per_core_n = nt // gx
+    # in0_block_w: largest divisor of K-tiles in [2, 8] for good reuse.
+    in0_block_w = 1
+    for d in (8, 7, 6, 5, 4, 3, 2):
+        if kt % d == 0:
+            in0_block_w = d
+            break
+    if in0_block_w == 1:
+        in0_block_w = kt  # K-tiles prime; do the whole K in one block
+    # L1 budget guard: when M_tiles has no good divisor <= grid_y (e.g. a prime
+    # tile count like 89 -> gy=1, per_core_M=89), the per-core circular buffers
+    # blow past L1. Estimate the CB footprint and fall back to the auto heuristic
+    # (correct, just not tuned) rather than crash.
+    TILE_BYTES = 32 * 32 * 2  # bf16 tile; conservative upper bound
+    in0_cb = per_core_m * in0_block_w * TILE_BYTES * 2  # double-buffered
+    in1_cb = in0_block_w * per_core_n * TILE_BYTES * 2
+    out_cb = per_core_m * per_core_n * TILE_BYTES
+    if in0_cb + in1_cb + out_cb > 1_300_000:  # headroom under the 1.5MB L1
+        return None
+
+    dst = 4 if fp32_dest else 8
+    out_subblock_w = _largest_divisor_leq(per_core_n, min(4, dst))
+    out_subblock_h = 1
+    while out_subblock_h * 2 * out_subblock_w <= dst and per_core_m % (out_subblock_h * 2) == 0:
+        out_subblock_h *= 2
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def to_l1(t: ttnn.Tensor) -> ttnn.Tensor:
+    """Place a tensor in L1 interleaved (matmul in0 reads faster from L1)."""
+    if t.memory_config().buffer_type == ttnn.BufferType.L1:
+        return t
+    return ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+
+
 def all_gather_last_dim(t: ttnn.Tensor, mesh_device, num_links: int = 1) -> ttnn.Tensor:
     """All-gather a [.., N/ndev] column-sharded tensor along its last dim across
     the TP axis -> full replicated [.., N]. Used by the column-parallel LM head."""

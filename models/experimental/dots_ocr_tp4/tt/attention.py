@@ -21,7 +21,13 @@ Output out : replicated [B, S, H]
 import torch
 import ttnn
 
-from models.experimental.dots_ocr_tp4.tt.common import all_reduce, mesh_num_devices, shard_to_mesh
+from models.experimental.dots_ocr_tp4.tt.common import (
+    all_reduce,
+    matmul_m_dim,
+    mesh_num_devices,
+    prefill_matmul_2d_config,
+    shard_to_mesh,
+)
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
 
@@ -54,15 +60,29 @@ class DotsOCRAttentionTP4:
         self.o_bias = None
         self._rotary_setup = None
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+        # Precision recipe matched to the production dots.ocr prefill profile:
+        #   qkv : BF16 x BFP8 -> BF16 @ HiFi2
+        #   o   : BF16 x BFP4 -> BFP8 @ LoFi
+        #   sdpa: BF16 @ LoFi (math_approx)
+        self.qkv_weight_dtype = ttnn.bfloat8_b
+        self.o_weight_dtype = ttnn.bfloat4_b
+        self.qkv_compute = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.o_compute = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
         self.sdpa_program_config = None
+        # SDPA is BF16 in/out (matches the profile); fidelity is internal and
+        # not constrained by the dtype recipe, so keep it at HiFi2 for accuracy.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -110,7 +130,7 @@ class DotsOCRAttentionTP4:
 
         fused_w = torch.cat(w_blocks, dim=0)  # [nd*640, H]
         # ttnn.linear wants [K=H, N]; transpose then shard the N dim across chips.
-        self.qkv_w = shard_to_mesh(fused_w.t().contiguous(), self.mesh_device, dim=-1, dtype=self.weight_dtype)
+        self.qkv_w = shard_to_mesh(fused_w.t().contiguous(), self.mesh_device, dim=-1, dtype=self.qkv_weight_dtype)
         if has_bias:
             fused_b = torch.cat(b_blocks, dim=0).reshape(1, -1)  # [1, nd*640]
             self.qkv_bias = shard_to_mesh(fused_b, self.mesh_device, dim=-1, dtype=ttnn.bfloat16)
@@ -118,7 +138,7 @@ class DotsOCRAttentionTP4:
         # o_proj row-parallel: weight [H, q_size]; shard the contraction dim
         # (q_size) which lines up 1:1 with the per-chip Q-head columns.
         o_w = torch_attn.o_proj.weight.data  # [H, q_size]
-        self.o_w = shard_to_mesh(o_w.t().contiguous(), self.mesh_device, dim=0, dtype=self.weight_dtype)
+        self.o_w = shard_to_mesh(o_w.t().contiguous(), self.mesh_device, dim=0, dtype=self.o_weight_dtype)
         o_has_bias = getattr(torch_attn.o_proj, "bias", None) is not None
         if o_has_bias:
             # o_proj bias is added once to the full (reduced) output -> replicate.
@@ -151,13 +171,17 @@ class DotsOCRAttentionTP4:
 
     def _project_qkv_heads(self, x, batch_size, seq_len, heads_mem_config):
         """qkv linear (+bias) -> per-chip [Q3 | K1 | V1] -> create heads."""
+        qkv_pc = prefill_matmul_2d_config(
+            self.mesh_device, matmul_m_dim(x), int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
+        )
         qkv = ttnn.linear(
             x,
             self.qkv_w,
             bias=self.qkv_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.qkv_compute,
+            program_config=qkv_pc,
         )
         qkv = ttnn.reshape(qkv, (batch_size, 1, seq_len, -1))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -171,12 +195,16 @@ class DotsOCRAttentionTP4:
         return q, k, v
 
     def _o_proj_all_reduce(self, attn):
+        o_pc = prefill_matmul_2d_config(
+            self.mesh_device, matmul_m_dim(attn), int(attn.shape[-1]), int(self.o_w.shape[-1]), fp32_dest=False
+        )
         out = ttnn.linear(
             attn,
             self.o_w,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.o_compute,
+            program_config=o_pc,
         )
         ttnn.deallocate(attn)
         out = all_reduce(out, self.mesh_device)

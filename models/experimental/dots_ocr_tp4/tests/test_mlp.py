@@ -53,4 +53,6 @@ def test_dots_ocr_mlp_tp4(mesh_device, seq_len):
 
     out_torch = from_replicated_to_torch(out_tt, mesh_device).to(torch.float32).reshape(torch_out.shape)
 
-    assert_with_pcc(torch_out.to(torch.float32), out_torch, pcc=0.99)
+    # MLP uses the production low-precision recipe (BFP4 gate/up + BFP4 down,
+    # BFP8 activations); a single SwiGLU at this width lands ~0.99 PCC.
+    assert_with_pcc(torch_out.to(torch.float32), out_torch, pcc=0.98)
