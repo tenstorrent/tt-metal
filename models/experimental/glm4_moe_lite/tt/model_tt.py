@@ -33,8 +33,11 @@ from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
 from models.experimental.glm4_moe_lite.tt.layer0_tt import _rot_transformation_mat_torch, make_rope_tensors
 from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _env_dense_dtype,
+    _env_dram_sharded_lm_head,
+    _env_lm_head_weight_dtype,
     _env_tp_enabled,
     _linear_weight_tt,
+    _maybe_dram_shard_linear_weight,
     convert_decoder_layer_weights,
 )
 from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
@@ -301,13 +304,20 @@ class Glm4MoeLiteDenseOnlyTT:
             lm_head_tp_axis = None
             lm_head_tp_size = int(num_devices)
             lm_head_vocab_per_shard = vocab // int(num_devices)
+        lm_head_dtype = _env_lm_head_weight_dtype()
+        lm_head_dtype_tag = "bf8" if lm_head_dtype == ttnn.bfloat8_b else "bf16"
+        _lm_head_cache_key = (
+            f"lm_head_w_{lm_head_variant}_{lm_head_dtype_tag}" if lm_head_variant else f"lm_head_w_{lm_head_dtype_tag}"
+        )
         lm_head_w = _linear_weight_tt(
             device=device,
             torch_weight_out_in=state["lm_head.weight"],
-            cache_file=cache_dir / f"lm_head_w_{lm_head_variant}" if lm_head_variant else cache_dir / "lm_head_w",
-            dtype=dense_dtype,
+            cache_file=cache_dir / _lm_head_cache_key,
+            dtype=lm_head_dtype,
             mesh_mapper=lm_head_mapper,
         )
+        if _env_dram_sharded_lm_head():
+            lm_head_w = _maybe_dram_shard_linear_weight(lm_head_w, device, force=True)
 
         num_layers_env = os.environ.get("GLM4_MOE_LITE_NUM_LAYERS", "").strip()
         if num_layers_env and os.environ.get("GLM4_MOE_LITE_DEBUG_ALLOW_PARTIAL_LAYERS", "").strip() != "1":

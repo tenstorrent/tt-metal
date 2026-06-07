@@ -53,6 +53,18 @@ LM_HEAD_MATMUL_OVERRIDES = Matmul1dProgOverrides(
 )
 
 
+# Default compute kernel config for prefill 1D+ws matmuls.
+# Without an explicit CKC, TTNN defaults to LoFi when a program_config is given,
+# which degrades accuracy.  HiFi2 matches what ttnn.linear auto-selects for
+# BFP8 weights without an explicit program config.
+_PREFILL_CKC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
+
 def _auto_in0_block_w(k_tiles: int) -> int:
     for candidate in (4, 3, 2):
         if k_tiles % candidate == 0:
@@ -142,6 +154,53 @@ def compute_1d_prog_cfg(
     )
 
 
+def _lm_head_dram_sharded(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """DRAM-sharded LM head for M=32 decode (b must be DRAM WIDTH_SHARDED).
+
+    Eliminates the NOC weight multicast used by 1D configs: each compute core reads
+    directly from its DRAM bank, achieving higher parallel DRAM bandwidth utilization.
+    HiFi4 + fp32_dest_acc is preserved to avoid top-1 logit flip vs the 1D path.
+    """
+    from models.demos.deepseek_v3.utils.config_helpers import (
+        get_activation_sharding_core_counts_for_dram_matmul,
+        get_dram_sharded_matmul_config,
+    )
+
+    grid = device.compute_with_storage_grid_size()
+    max_cores = int(grid.x) * int(grid.y)
+    K = int(b.shape[2])
+    N = int(b.shape[3])
+    input_cores = max(get_activation_sharding_core_counts_for_dram_matmul(K, max_cores))
+    output_cores = max(get_activation_sharding_core_counts_for_dram_matmul(N, max_cores))
+
+    a_sharded = ttnn.to_memory_config(a, _ds_act_mc(device, K))
+    prog_cfg = get_dram_sharded_matmul_config(
+        m=_DS_BATCH,
+        k=K,
+        n=N,
+        input_num_shards=input_cores,
+        output_num_shards=output_cores,
+    )
+    result = ttnn.linear(
+        a_sharded,
+        b,
+        program_config=prog_cfg,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        compute_kernel_config=_lm_head_compute_kernel_config(),
+    )
+    ttnn.deallocate(a_sharded, force=False)
+    downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.to_memory_config(result, downstream_mc)
+    ttnn.deallocate(result, force=False)
+    return out
+
+
 def lm_head_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -158,7 +217,13 @@ def lm_head_linear(
     template-style drift, so we pin an explicit HiFi4 + fp32 DST accumulation kernel config
     here. ``fp32_dest_acc_en`` is also threaded into ``compute_1d_prog_cfg`` so the
     out-subblock heuristic respects the smaller (4-tile) DST budget.
+
+    When the weight ``b`` is DRAM WIDTH_SHARDED (set via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1),
+    routes to ``_lm_head_dram_sharded`` which uses parallel direct-DRAM reads instead of the
+    NOC weight multicast, achieving higher bandwidth for the large M=32×K=2048×N=vocab matmul.
     """
+    if b.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return _lm_head_dram_sharded(a, b, device=device, memory_config=memory_config)
     m_total = 1
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
@@ -244,6 +309,192 @@ def compute_1d_mlp_down_prog_cfg(
     )
 
 
+def _prefill_1d_prog_and_ws_mc(device: Any, b_weight: ttnn.Tensor, m_total: int) -> tuple:
+    """1D multicast program config + WIDTH_SHARDED output MC for prefill (M > TILE_SIZE).
+
+    Grid heuristic derived from sweep (test_prefill_matmul_sweep.py) across all 6
+    GLM-4 MoE Lite prefill shapes:
+      - Largest num_cores | Nt where per_core_N % out_subblock_w == 0 for some
+        out_subblock_w ∈ {4, 3, 2}.  Avoids per_core_N=5 (only subblock_w=1,
+        severe SLOW penalty) and per_core_N=1 (no parallelism).
+      - WIDTH_SHARDED L1 output: each core writes to its own L1 bank (no NOC hop
+        during the matmul).  Sweep showed 10-15% improvement across all shapes.
+    """
+    K = int(b_weight.shape[-2])
+    N = int(b_weight.shape[-1])
+    mt = max(1, (m_total + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    kt = (K + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    nt = (N + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+    max_cores = max_x * max_y
+
+    # Find largest nc | nt where per_core_N ≥ 2 and per_core_N has a good subblock
+    # (divisible by 4, 3, or 2).  Iterating top-down means the first hit is the winner.
+    best_nc, best_pcn, best_osw = 1, nt, 1
+    for nc in range(min(nt, max_cores), 0, -1):
+        if nt % nc != 0:
+            continue
+        pcn = nt // nc
+        if pcn < 2:
+            continue
+        osw = next((w for w in (4, 3, 2) if pcn % w == 0), 1)
+        if osw >= 2:
+            best_nc, best_pcn, best_osw = nc, pcn, osw
+            break
+    # Fallback: any nc with per_core_N ≥ 2 (no subblock constraint)
+    if best_osw == 1:
+        for nc in range(min(nt, max_cores), 0, -1):
+            if nt % nc == 0 and nt // nc >= 2:
+                best_nc, best_pcn = nc, nt // nc
+                best_osw = next((w for w in (4, 3, 2) if best_pcn % w == 0), 1)
+                break
+
+    # Fit best_nc into the physical grid (maximize gx to spread across columns).
+    core_x, core_y = 1, best_nc
+    for gx in range(min(max_x, best_nc), 0, -1):
+        if best_nc % gx != 0:
+            continue
+        gy = best_nc // gx
+        if gy <= max_y:
+            core_x, core_y = gx, gy
+            break
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=_auto_in0_block_w(kt),
+        out_subblock_h=1,
+        out_subblock_w=best_osw,
+        per_core_M=mt,
+        per_core_N=best_pcn,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    out_mc = ttnn.create_sharded_memory_config(
+        shape=(1, 1, mt * ttnn.TILE_SIZE, best_pcn * ttnn.TILE_SIZE),
+        core_grid=ttnn.CoreGrid(y=core_y, x=core_x),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return prog_cfg, out_mc
+
+
+def _prefill_linear_ws_out(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    cfg: Glm4RuntimeConfig,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    downstream_mc = memory_config if memory_config is not None else (cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
+    return prefill_linear_ws_out(
+        a, b, device=device, compute_kernel_config=cfg.mlp_compute_kernel_config(), memory_config=downstream_mc
+    )
+
+
+def prefill_linear_ws_out(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    compute_kernel_config: Any = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Prefill linear: 1D multicast program config + WIDTH_SHARDED L1 output.
+
+    Avoids per-core DRAM writes during the matmul by having each core write
+    its result to a local L1 shard.  A single to_memory_config gather follows.
+    Only applied when the weight tensor has no batch dimension (b_batch == 1)
+    and M > TILE_SIZE (prefill mode).  Safe to call from code that doesn't
+    have access to Glm4RuntimeConfig.
+    """
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    prog_cfg, ws_mc = _prefill_1d_prog_and_ws_mc(device, b, m_total)
+    ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
+    # Move activation to L1 interleaved so the matmul reads from L1 instead of DRAM.
+    # Sweep confirmed l1/dram/ws beats dram/dram/ws for all 6 GLM-4 prefill shapes.
+    a_l1 = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
+    ttnn.deallocate(a_l1, force=False)
+    downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.to_memory_config(out_sharded, downstream_mc)
+    ttnn.deallocate(out_sharded, force=False)
+    return out
+
+
+def prefill_per_head_linear(
+    a: ttnn.Tensor,
+    b: ttnn.Tensor,
+    *,
+    device: Any,
+    compute_kernel_config: Any = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    """Per-head batched prefill linear for [1,H,M,K]×[1,H,K,N] (fuse_batch=False).
+
+    Uses 1D mcast_in0 with nc=Nt (one N-tile/core, max N parallelism) and
+    per_core_M=Mt.  Activation is staged in L1; output gathered to memory_config.
+
+    Sweep results for GLM-4 MoE Lite (test_prefill_batched_matmul_sweep.py):
+      kv_b1 Nt=16 → nc=16 (8×2), bw=2  72.90µs  6.90 TFLOPs (+1.29× vs auto ~94µs)
+      kv_b2 Nt=8  → nc=8  (8×1), bw=4  121.38µs 5.53 TFLOPs (+1.80× vs auto ~219µs)
+    """
+    mt = max(1, (int(a.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE)
+    kt = (int(b.shape[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    nt = (int(b.shape[-1]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+
+    grid = device.compute_with_storage_grid_size()
+    max_x, max_y = int(grid.x), int(grid.y)
+
+    # nc = Nt (one N-tile per core); reduce until nc fits on the hardware grid.
+    nc = nt
+    while nc > 1 and (nt % nc != 0 or nc > max_x * max_y):
+        nc -= 1
+
+    core_x, core_y = 1, nc
+    for gx in range(min(max_x, nc), 0, -1):
+        if nc % gx == 0 and (nc // gx) <= max_y:
+            core_x, core_y = gx, nc // gx
+            break
+
+    per_core_N = max(1, nt // nc)
+    out_subblock_h, out_subblock_w = _auto_out_subblock_w(
+        per_core_N=per_core_N,
+        per_core_M=mt,
+        fp32_dest_acc_en=False,
+    )
+
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+        in0_block_w=_auto_in0_block_w(kt),
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=mt,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
+    a_l1 = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    out_l1 = ttnn.linear(
+        a_l1, b, program_config=prog_cfg, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=ckc
+    )
+    ttnn.deallocate(a_l1, force=False)
+    downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    out = ttnn.to_memory_config(out_l1, downstream_mc)
+    ttnn.deallocate(out_l1, force=False)
+    return out
+
+
 def mlp_linear(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -263,14 +514,24 @@ def mlp_linear(
         kwargs["memory_config"] = mc
     ckc = cfg.mlp_compute_kernel_config()
     kwargs["compute_kernel_config"] = ckc
-    if cfg.explicit_prog_cfg:
-        m_total = 1
-        for i in range(len(a.shape) - 1):
-            m_total *= int(a.shape[i])
-        b_batch = 1
-        for i in range(len(b.shape) - 2):
-            b_batch *= int(b.shape[i])
-        if m_total <= ttnn.TILE_SIZE and b_batch == 1:
+    m_total = 1
+    for i in range(len(a.shape) - 1):
+        m_total *= int(a.shape[i])
+    b_batch = 1
+    for i in range(len(b.shape) - 2):
+        b_batch *= int(b.shape[i])
+    if b_batch > 1 and m_total > ttnn.TILE_SIZE:
+        return prefill_per_head_linear(
+            a,
+            b,
+            device=device,
+            compute_kernel_config=ckc,
+            memory_config=memory_config,
+        )
+    if b_batch == 1:
+        if m_total > ttnn.TILE_SIZE:
+            return _prefill_linear_ws_out(a, b, device=device, cfg=cfg, memory_config=memory_config)
+        if cfg.explicit_prog_cfg and m_total <= ttnn.TILE_SIZE:
             # Thread fp32-DST into the subblock heuristic so out_subblock_w respects the 4-tile DST budget.
             kwargs["program_config"] = compute_1d_prog_cfg(device, b, m_total, fp32_dest_acc_en=cfg.moe_fp32_acc)
     return ttnn.linear(a, b, **kwargs)
@@ -293,6 +554,8 @@ def mlp_down_linear(
     m_total = 1
     for i in range(len(a.shape) - 1):
         m_total *= int(a.shape[i])
+    if m_total > ttnn.TILE_SIZE:
+        return _prefill_linear_ws_out(a, b, device=device, cfg=cfg, memory_config=memory_config)
     kwargs["program_config"] = compute_1d_mlp_down_prog_cfg(device, b, m_total)
     return ttnn.linear(a, b, **kwargs)
 
