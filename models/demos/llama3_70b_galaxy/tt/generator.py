@@ -1341,7 +1341,7 @@ class Generator(WarmupForwardMixin):
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
             )
             host_page_table = host_inputs[DECODE_PAGE_TABLE_INPUT_IDX]
-            device_page_table = self.trace_inputs_decode[return_logits][DECODE_PAGE_TABLE_INPUT_IDX]
+            device_page_table = self.trace_inputs_decode[on_device_logits][DECODE_PAGE_TABLE_INPUT_IDX]
             if host_page_table is not None:
                 ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
         if page_table_changed:

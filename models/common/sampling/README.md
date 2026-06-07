@@ -36,6 +36,7 @@ tt_tokens = sampling.sample(
 
 `SamplingGenerator.sample()` accepts `enable_trace=True` to record/replay
 sampling traces.
+
 ## File Map
 
 | File | Purpose |
