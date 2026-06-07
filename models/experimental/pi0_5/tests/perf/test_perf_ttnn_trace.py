@@ -103,7 +103,7 @@ def test_pi0_5_ttnn_perf_trace(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded ({cfg.expert_config.depth} expert layers)")
 

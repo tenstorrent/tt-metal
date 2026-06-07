@@ -118,7 +118,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded; {len(model._adarms_cond_per_step_bs1)} adarms_cond tensors precomputed")
 
@@ -185,7 +185,7 @@ def test_pi0_5_ttnn_perf_trace_2cq(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 

@@ -31,7 +31,7 @@ def test_pi0_5_reference_sample_actions_real_weights():
     torch.manual_seed(0)
 
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig(num_denoising_steps=2)  # 2 steps to keep this cheap
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR, num_denoising_steps=2)  # 2 steps to keep this cheap
     model = Pi0_5Model(cfg, loader)
 
     batch_size = 1

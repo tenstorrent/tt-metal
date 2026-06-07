@@ -818,8 +818,8 @@ class Pi0_5ModelTTNN:
     ) -> "Pi0_5ModelTTNN":
         weight_loader = PI0WeightLoader(model_path)
         if config is None:
-            config = Pi0_5ModelConfig(
+            config = Pi0_5ModelConfig.from_checkpoint(
+                model_path,
                 action_dim=weight_loader.config.action_dim,
-                action_horizon=weight_loader.config.action_horizon,
             )
         return cls(config, weight_loader, device)

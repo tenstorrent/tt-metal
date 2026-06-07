@@ -32,7 +32,7 @@ def _build_ttnn_model(device):
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
 
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig(num_denoising_steps=2)
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR, num_denoising_steps=2)
     return cfg, Pi0_5ModelTTNN(cfg, loader, device)
 
 
