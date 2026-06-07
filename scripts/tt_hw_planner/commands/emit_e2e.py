@@ -18,6 +18,7 @@ def cmd_emit_e2e(args) -> int:
     agent_bin = getattr(args, "agent_bin", "claude") or "claude"
     timeout_s = int(getattr(args, "agent_timeout_s", 0) or 0) or 14400
     skip_grade = bool(getattr(args, "no_grade", False))
+    max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 3
 
     sep = "=" * 78
     print(sep)
@@ -41,23 +42,35 @@ def cmd_emit_e2e(args) -> int:
         print("\n  (--no-grade) skipping independent grader phase.")
         return 0
 
-    print("\n  ===== PHASE 3: GRADER agent (independent adversarial verify) =====\n")
     grade_prompt = _build_grader_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
-    rc_grade, grade_final = _run_agent(
-        prompt=grade_prompt,
-        agent_bin=agent_bin,
-        agent_model=agent_model,
-        timeout_s=timeout_s,
-    )
+    for rnd in range(1, max_grade_rounds + 1):
+        print(f"\n  ===== PHASE 3: GRADER agent (round {rnd}/{max_grade_rounds}) =====\n")
+        rc_grade, grade_final = _run_agent(
+            prompt=grade_prompt,
+            agent_bin=agent_bin,
+            agent_model=agent_model,
+            timeout_s=timeout_s,
+        )
+        if rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or ""):
+            print("\n" + sep)
+            print(f"  ✓ INDEPENDENT GRADER: PASS (round {rnd}) — verified by a separate agent")
+            print(sep)
+            return 0
+        if rnd == max_grade_rounds:
+            break
+        print(f"\n  ===== FIX agent (round {rnd}/{max_grade_rounds - 1}) — addressing grader findings =====\n")
+        fix_prompt = _build_fix_prompt(
+            model_id=model_id,
+            demo_dir=demo_dir,
+            pcc=pcc,
+            grader_findings=grade_final or "",
+        )
+        _run_agent(prompt=fix_prompt, agent_bin=agent_bin, agent_model=agent_model, timeout_s=timeout_s)
 
-    verdict_pass = rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or "")
     print("\n" + sep)
-    if verdict_pass:
-        print("  ✓ INDEPENDENT GRADER: PASS — pipeline verified by a separate agent")
-    else:
-        print("  ✗ INDEPENDENT GRADER: did NOT confirm PASS — see grader report above")
+    print(f"  ✗ INDEPENDENT GRADER: did NOT pass within {max_grade_rounds} round(s) — see grader report")
     print(sep)
-    return 0 if verdict_pass else 1
+    return 1
 
 
 def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int):
@@ -168,6 +181,40 @@ def _fmt_tool(name: str, inp: dict) -> str:
         return name
 
 
+def _build_fix_prompt(*, model_id: str, demo_dir: Path, pcc: float, grader_findings: str) -> str:
+    return f"""The independent GRADER FAILED the end-to-end TTNN pipeline of
+`{model_id}` at {demo_dir}. Your job is to fix EXACTLY the holes it found —
+nothing else — and leave a result that an adversarial grader will pass.
+
+FIRST read {demo_dir}/grader_report.json — it lists every hole as a structured
+record: {{id, call, modules, file, lines, mechanism, fix_hint, severity}}. Work
+through the `holes` array and close EACH one at its file:lines using its
+fix_hint. (grader_report.md and the verdict text below are supporting context.)
+
+Grader verdict text:
+{grader_findings}
+
+Fix rules:
+  - Make every flagged module GENUINELY on the real compute path: its real
+    input must come from the actual pipeline (the previous stage's output),
+    and its output must flow downstream into the FINAL output that the PCC
+    asserts on. NO off-path side-runs, NO random/synthetic inputs whose output
+    is discarded, NO counter that is bumped while the real compute bypasses
+    the stub. If a monolithic top-level stub inlines work instead of delegating
+    to its graduated children, either route the pipeline THROUGH the children
+    so they are the real compute path, or replace the inlined section with real
+    calls to those child stubs whose outputs are used.
+  - Do NOT weaken any gate, lower any PCC threshold, add skips, or relax the
+    no-waste requirement. Keep input from the real HF processor/tokenizer and
+    the golden from the real HF reference.
+  - Keep the yito package structure intact.
+  - Re-run the affected tests/e2e on the TT device yourself and confirm they
+    still pass with PCC >= {pcc} AND the flagged modules now fire on-path.
+
+Edit only what is needed to close the grader's holes. Report what you changed
+and the device re-run result."""
+
+
 def _build_grader_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
     return f"""You are the independent GRADER for the end-to-end TTNN pipeline of
 `{model_id}` at {demo_dir}. You did NOT build this pipeline. Your job is NOT to
@@ -204,7 +251,32 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    UNION of INVOKED stubs across all task heads' runs == that graduated set.
    Name any graduated module that is never invoked.
 
-Then output a verdict block, EXACTLY in this form (one row per Call):
+WRITE the structured machine-readable report to {demo_dir}/grader_report.json
+so the fix agent gets precise targets. Use EXACTLY this schema:
+  {{
+    "verdict": "PASS" | "FAIL",
+    "calls": [
+      {{"call": "<id>", "rerun": "pass|fail", "final_pcc": [<num>, ...],
+        "source_audit": "clean|ISSUE"}}
+    ],
+    "structure": {{"ok": true|false, "detail": "<...>"}},
+    "no_waste": {{"ok": true|false, "graduated_total": <N>, "on_path": <N>,
+                  "names_present": <N>, "missing": [<name>, ...]}},
+    "holes": [
+      {{"id": "<short-slug>",
+        "call": "<id>",
+        "modules": ["<graduated module name>", ...],
+        "file": "<path relative to {demo_dir}>",
+        "lines": "<start-end>",
+        "mechanism": "<exactly how the gate is gamed / what is wrong>",
+        "fix_hint": "<concrete action that would make it genuinely pass>",
+        "severity": "blocker" | "minor"}}
+    ]
+  }}
+A clean call contributes no holes. Every FAIL reason MUST appear as a hole with
+file+lines+mechanism+fix_hint filled in (no vague entries).
+
+Then ALSO print this verdict block to stdout (one row per Call):
 
   GRADER_REPORT
   | Call | re-run | final_pcc | source-audit | holes_found |
@@ -215,9 +287,10 @@ Then output a verdict block, EXACTLY in this form (one row per Call):
                               + STRUCTURE pass + NO_WASTE pass. Otherwise:
   GRADER_VERDICT: FAIL
 
-Do not write or edit any pipeline/stub files — you are read-only except for a
-short {demo_dir}/grader_report.md you may write with your findings. Be skeptical;
-if anything is ambiguous, it is a FAIL."""
+Do not write or edit any pipeline/stub/test files — you are read-only except for
+{demo_dir}/grader_report.json (the structured report above) and an optional
+{demo_dir}/grader_report.md prose summary. Be skeptical; if anything is
+ambiguous, it is a FAIL with a hole describing the ambiguity."""
 
 
 def _build_agent_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
