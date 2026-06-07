@@ -1481,6 +1481,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
 
             if sampling_trace_enabled:
+                # NOTE: sampling trace can be keyed depending on sampling params,
+                # this traces only for the current ones
                 sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
         logger.info("Done Capturing Decode Trace")
 

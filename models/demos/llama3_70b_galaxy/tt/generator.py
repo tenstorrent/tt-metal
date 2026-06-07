@@ -1165,7 +1165,6 @@ class Generator(WarmupForwardMixin):
         if defer_device_sampling:
             return tt_tok
         if sampling_params is not None:
-            tt_out_tok = self.trace_inputs_decode[on_device_logits][0] if enable_trace else None
             tt_tok, tt_log_probs = self.sample_decode_on_device(
                 tt_tok,
                 sampling_params=sampling_params,
@@ -1173,7 +1172,6 @@ class Generator(WarmupForwardMixin):
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
-                tt_out_tok=tt_out_tok,
                 enable_trace=enable_trace,
             )
 
@@ -1369,9 +1367,9 @@ class Generator(WarmupForwardMixin):
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
-        tt_out_tok=None,
         enable_trace=False,
     ):
+        tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
         sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
         sampling_module = self.model.sampling
         sampling_module.reset_sampling_params(sampling_params)
