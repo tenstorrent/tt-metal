@@ -840,10 +840,19 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
+    // In-place latent-V optimization: when the Q chunk is a single tile (Sq_chunk_t==1) the
+    // second matmul (softmax@V) is data-movement bound, so instead of materializing V from K^T
+    // (an L1->L1 transfer) we read the first vDHt rows of K^T directly. V is never produced and the
+    // phase-2 matmul consumes one V column tile per issue (out_subblock_w=1). The kernels derive the
+    // same predicate from their compile-time args via the shared kt_inplace_v_enabled() helper.
+    const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
+
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
-    // materialize next V while compute still consumes current V.
+    // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
+    // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
+    // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
+    // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
     uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -903,6 +912,11 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     auto [out_out_subblock_h, out_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    // In-place latent-V reads non-contiguous K^T rows as V columns, so the phase-2 matmul must
+    // emit exactly one output column tile per issue.
+    if (kt_inplace_v) {
+        out_out_subblock_w = 1;
+    }
     // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
     // height for odd Q chunks. The writer must drain cb_out with the same row-group
     // cadence that compute pushes, otherwise deferred-save rows can be popped and

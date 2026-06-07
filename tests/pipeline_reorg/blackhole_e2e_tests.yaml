@@ -126,6 +126,7 @@
   # running on one machine class lets us keep a tighter tolerance (PR #44069).
   cmd: |
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
     SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
     bh_deskbox:

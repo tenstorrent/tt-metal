@@ -891,7 +891,8 @@ template <
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
-    uint32_t v_cb_physical_width_t = vDHt>
+    uint32_t v_cb_physical_width_t = vDHt,
+    bool kt_inplace_v = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1065,7 +1066,11 @@ static void sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    cb_pop_front(cb_kt_in, DHt * KT_stride);
+    // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
+    // softmax@V matmul (handled where the materialized-V pop would normally fire).
+    if constexpr (!kt_inplace_v) {
+        cb_pop_front(cb_kt_in, DHt * KT_stride);
+    }
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
     // reader can start fetching the next Q chunk during Phase 2.
@@ -1136,7 +1141,10 @@ static void sdpa_inner_loop_step(
                 }
                 if (kt_sub == 0) {
                     cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                    cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    // In-place latent-V reads V from K^T, already fronted by Phase 1's K^T wait.
+                    if constexpr (!kt_inplace_v) {
+                        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
                 }
                 if (kt_sub > 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1154,12 +1162,18 @@ static void sdpa_inner_loop_step(
                     // Configure once before v_subblock loop; skip inside.
                     configure_row_pack_width(out_cb, qktv_subblock_w);
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                        // In-place latent-V reads V column v_subblock straight from K^T row v_subblock,
+                        // walking that row with in1 stride 1; the materialized path reads contiguous V
+                        // columns (in1 stride vDHt). qktv_subblock_w is 1 for the in-place path (the
+                        // host forces it), so the pack offset / width below collapse to one tile.
+                        const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride + kt_sub * matmul_inner)
+                                                                     : (kt_sub * matmul_inner * vDHt + v_index_offset);
+                        blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
                             out_cb,
                             qktv_in0_index_offset + kt_sub * matmul_inner,
-                            kt_sub * matmul_inner * vDHt + v_index_offset,
+                            qktv_in1_index,
                             0,
                             v_subblock * qktv_subblock_w,
                             qktv_subblock_w,
@@ -1275,12 +1289,16 @@ static void sdpa_inner_loop_step(
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    blocked_matmul_and_pack<false, vDHt, vDHt>(
+                    // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above. The
+                    // in-place branch is only exercised at runtime when Sq_chunk_t > 1, which the host
+                    // gates off for this path; folded into the ternary for correctness regardless.
+                    const uint32_t qktv_in1_index = kt_inplace_v ? (v_subblock * KT_stride) : v_index_offset;
+                    blocked_matmul_and_pack<false, kt_inplace_v ? 1 : vDHt, vDHt>(
                         cb_qkt_im,
                         cb_v_in,
                         out_cb,
                         qktv_in0_index_offset,
-                        v_index_offset,
+                        qktv_in1_index,
                         w_q,
                         v_subblock * qktv_subblock_w,
                         qktv_subblock_w,
@@ -1387,6 +1405,9 @@ static void sdpa_inner_loop_step(
 
         // All rows pushed individually — no bulk push needed.
 
+        // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
+        // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
+        // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
         cb_pop_front(cb_v_in, KT_stride * v_cb_physical_width_t);
         cb_pop_front(cb_qkt_im, Sq_chunk_t * KT_stride);
     }
@@ -1705,6 +1726,7 @@ template <
     bool kv_pad_rotation_enabled = false,
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
+    bool kt_inplace_v = false,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -1829,8 +1851,11 @@ void sdpa_ring_v2(
             if (is_causal_iter && k_chunk >= causal_k_limit) {
                 cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
                 sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                // In-place latent-V never pushes a V entry, so only K^T needs draining.
+                if constexpr (!kt_inplace_v) {
+                    cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
                 KV_chunks_processed_in_iter++;
                 return true;
             }
@@ -2097,7 +2122,8 @@ void sdpa_ring_v2(
                 q_local_padded_Nt,
                 chunk_size_t,
                 local_padded_Nt,
-                v_cb_physical_width_t>(
+                v_cb_physical_width_t,
+                kt_inplace_v>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2163,12 +2189,15 @@ void sdpa_ring_v2(
     }
 
     // Dummy KV pop for CB write-pointer phase alignment across chained reader cores.
-    for (uint32_t dummy_chunk = 0;
-         dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
+    for (uint32_t dummy_chunk = 0; dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(
+                                                     KV_chunks_processed_in_iter);
          ++dummy_chunk) {
         cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        // In-place latent-V never pushes a V entry, so there is nothing extra to drain.
+        if constexpr (!kt_inplace_v) {
+            cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        }
     }
 }
