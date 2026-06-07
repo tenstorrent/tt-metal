@@ -34,6 +34,25 @@ namespace ttnn::device_operation {
  *
  */
 struct ProgramArtifacts {
+    // Op-owned device tensors (config / lookup / scratch) allocated by the
+    // factory and kept alive for the lifetime of the cached Program(s).
+    // MeshTensor is an RAII mesh device-memory object with unique ownership;
+    // the framework moves these into the cache entry so their device
+    // allocations outlive the (asynchronous) dispatch and stay valid across
+    // cache hits.  Empty for the common case of an op that owns no resources.
+    //
+    // Only meaningful under the MinimizeCacheHitCost strategy: that path runs
+    // the factory exactly once (on cache miss), so the tensors are allocated
+    // once.  The default MaximizeCacheReuse path re-runs the factory on every
+    // dispatch and would re-allocate them, so non-empty mesh_tensors are
+    // rejected there (see dispatch_option2_spec_hash).
+    //
+    // GlobalSemaphores are intentionally NOT offered here: a semaphore is a
+    // cross-program / cross-device coordination resource, which makes no sense
+    // on a single Program.  Ops that need op-owned semaphores belong on the
+    // multi-program workload concept (MeshWorkloadArtifacts).
+    std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
+
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_params;
 };

@@ -451,6 +451,20 @@ void dispatch_option2_spec_hash(
     auto artifacts =
         ProgramSpecFactory::create_program_artifacts(operation_attributes, tensor_args, tensor_return_value);
 
+    // Forbidden cell: op-owned tensors under MaximizeCacheReuse. This strategy
+    // re-runs the factory on every dispatch, so any op-owned mesh_tensors would
+    // be re-allocated each time and the cached Program left referencing freed
+    // device memory (Option 2 stores no shared state to keep them alive — see
+    // the empty shared_variables_t above). Op-owned tensors require
+    // MinimizeCacheHitCost, whose cache-hit path skips the factory and keeps the
+    // miss-time tensors alive.
+    TT_FATAL(
+        artifacts.mesh_tensors.empty(),
+        "create_program_artifacts returned op-owned mesh_tensors under the default MaximizeCacheReuse "
+        "strategy, which re-runs the factory every dispatch and would re-allocate them. Op-owned tensors "
+        "require the MinimizeCacheHitCost strategy: declare `caching_strategy = "
+        "ProgramCachingStrategy::MinimizeCacheHitCost` on the factory.");
+
     // Validate io-tensor reachability inline (op-owned MeshTensors die at
     // factory return and would leave SetProgramRunArgs's copy with freed device
     // addresses; route through create_workload_artifacts if you need op-owned

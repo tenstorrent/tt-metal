@@ -276,6 +276,23 @@ public:
         return result;
     }
 
+    // Like collect_io_mesh_tensors, but appends op-owned mesh_tensors AFTER the
+    // io tensors.  Order matters: bindings are recorded against this exact
+    // ordering on cache miss and must match on cache hit.  Shared by the
+    // adapters that support op-owned tensors — single-program ProgramSpec
+    // factories (op-owned mesh_tensors only) and multi-program Workload
+    // factories (mesh_tensors + semaphores).
+    static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_all_mesh_tensors(
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t& tensor_return_value,
+        const std::vector<tt::tt_metal::MeshTensor>& owned_mesh_tensors) {
+        auto result = collect_io_mesh_tensors(tensor_args, tensor_return_value);
+        for (const auto& t : owned_mesh_tensors) {
+            result.push_back(std::cref(t));
+        }
+        return result;
+    }
+
     // An adapter for creating a factory that abides to `MeshWorkloadFactoryConcept` out of `ProgramFactoryConcept`
     // types.
     template <ProgramFactoryConcept ProgramFactory>
@@ -624,13 +641,17 @@ public:
     //     assert_no_dfb_size_overrides and assert_no_common_runtime_args below
     //     for the per-error guidance.
     //   - Every TensorArgument returned by the factory must reference a
-    //     MeshTensor reachable from tensor_args or tensor_return_value (the
+    //     MeshTensor reachable from tensor_args, tensor_return_value, or the
+    //     op-owned mesh_tensors returned in the same ProgramArtifacts (the
     //     adapter matches by pointer identity within the call). Op-owned
-    //     MeshTensors do not work — they're local to create_program_artifacts
-    //     and are destroyed at return, leaving the cached Program holding
-    //     addresses freed before the asynchronous device dispatch completes.
-    //     Ops that need op-owned mesh resources should use
-    //     create_workload_artifacts (WorkloadSpecFactoryConcept) instead.
+    //     MeshTensors ARE supported on this path: they're moved out of the
+    //     ProgramArtifacts into the cache entry and kept alive for the cached
+    //     workload's lifetime, so the cached Program's references stay valid
+    //     across the asynchronous dispatch and across cache hits. This works
+    //     because MinimizeCacheHitCost runs the factory exactly once (on miss),
+    //     so the tensors are allocated once. (Op-owned GlobalSemaphores are not
+    //     offered here — a semaphore is a cross-program coordination resource;
+    //     ops that need one belong on create_workload_artifacts.)
     //
     // Runtime arguments:
     //   Per-node RTAs are supported. They are the standard mechanism for
@@ -663,20 +684,31 @@ public:
         using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
-        // Stored per range across cache entries: for each TensorArgument in a
-        // program's ProgramRunArgs, which io_tensor (by index into the
-        // deterministic reflection-driven enumeration) it was bound to.
-        // Pointer identity is only valid within a single call; the index is
-        // stable across calls.
+        // For each TensorArgument in the ProgramRunArgs, which entry in the
+        // combined {io tensors, op-owned mesh_tensors} enumeration it was bound
+        // to.  Pointer identity is only valid within a single call; the index
+        // is stable across calls.
         struct ResolvedTensorBinding {
             TensorParameterName tensor_parameter_name;
-            std::size_t io_tensor_idx;
+            std::size_t tensor_idx;
         };
 
         struct shared_variables_t {
+            // Op-owned device tensors moved out of the factory's ProgramArtifacts
+            // and kept alive for the cached workload's lifetime.  MeshTensor is
+            // move-only and owns its device allocation, so it is moved in once
+            // and referenced by index from here on.  (Single-program factories
+            // own tensors only — no GlobalSemaphores; those live on the
+            // multi-program workload concept.)
+            std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
+            // The spec is stamped identically across every coordinate range, so
+            // the bindings are identical too — resolved once, applied to every
+            // program on cache hit.
             std::vector<ResolvedTensorBinding> bindings;
         };
-        using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
+        // Workload-level shared state (single slot, not per-range) so the
+        // move-only mesh_tensors are stored exactly once for the whole workload.
+        using cached_mesh_workload_t = CachedMeshWorkload<shared_variables_t>;
 
         // Disallow DFB size overrides on the Option 1 path.
         // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
@@ -748,38 +780,37 @@ public:
             }
         }
 
-        // Match each TensorArgument's MeshTensor reference back to its index in the
-        // io_tensor enumeration. Cache-miss path only.
-        // TT_FATALs on a TensorArgument that doesn't reference an io_tensor — see
-        // the adapter-level Design comment on why op-owned resource tensors are
-        // not supported on this concept.
+        // Match each TensorArgument's MeshTensor reference back to its index in
+        // the combined {io tensors, op-owned mesh_tensors} enumeration.
+        // Cache-miss path only.  TT_FATALs on a TensorArgument that references
+        // neither an io tensor nor an op-owned tensor.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a
         // fast cache-hit path possible, but the current straightforward
-        // implementation isn't there yet — collect_io_mesh_tensors returns a
+        // implementation isn't there yet — collect_all_mesh_tensors returns a
         // heap std::vector, and apply_descriptor builds a fresh TensorArgument
         // vector each dispatch. Both costs are fixable by mirroring the
         // descriptor adapter's compile-time-unrolled walker + SmallVector +
         // cached TensorArgument storage pattern. Deferred pending profiling.
         static std::vector<ResolvedTensorBinding> resolve_bindings(
             const std::vector<TensorArgument>& factory_tensor_args,
-            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
+            const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
             for (const auto& tensor_arg : factory_tensor_args) {
                 const auto* target = &tensor_arg.tensor.get();
-                auto it = std::find_if(io_mesh_tensors.begin(), io_mesh_tensors.end(), [target](const auto& wrapped) {
+                auto it = std::find_if(mesh_tensors.begin(), mesh_tensors.end(), [target](const auto& wrapped) {
                     return &wrapped.get() == target;
                 });
                 TT_FATAL(
-                    it != io_mesh_tensors.end(),
-                    "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
-                    "tensor_return_value. ProgramSpecFactoryConcept does not support op-owned "
-                    "resource tensors; route through the multi-program factory concept if you need them.",
+                    it != mesh_tensors.end(),
+                    "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args, "
+                    "tensor_return_value, or the op-owned mesh_tensors returned in the same "
+                    "ProgramArtifacts.",
                     tensor_arg.tensor_parameter_name);
                 bindings.push_back(
                     {tensor_arg.tensor_parameter_name,
-                     static_cast<std::size_t>(std::distance(io_mesh_tensors.begin(), it))});
+                     static_cast<std::size_t>(std::distance(mesh_tensors.begin(), it))});
             }
             return bindings;
         }
@@ -800,24 +831,26 @@ public:
             auto* mesh_device = first_tensor.value().device();
             TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
 
-            // The factory produces a single ProgramArtifacts; the adapter stamps it
-            // across all coordinate ranges. Validate fast-path-specific constraints
-            // and resolve bindings once; copy the (identical) bindings into each
-            // per-range shared state so they're available on cache hits for
-            // UpdateTensorArgs.
+            // The factory produces a single ProgramArtifacts; the adapter stamps
+            // it across all coordinate ranges. Validate fast-path-specific
+            // constraints, move any op-owned tensors into the cache entry, and
+            // resolve the (identical-across-ranges) bindings once.
             auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             assert_no_dfb_size_overrides(artifacts.run_params);
             assert_no_common_runtime_args(artifacts.run_params);
-            auto io_mesh_tensors =
-                MeshDeviceOperationAdapter::collect_io_mesh_tensors(tensor_args, tensor_return_value);
-            auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
+
+            // Move op-owned tensors into the cache entry FIRST, then enumerate
+            // against the post-move storage; otherwise the bindings would index
+            // a soon-to-be-moved local.
+            shared_variables_t shared_variables{.mesh_tensors = std::move(artifacts.mesh_tensors), .bindings = {}};
+            const auto mesh_tensors = MeshDeviceOperationAdapter::collect_all_mesh_tensors(
+                tensor_args, tensor_return_value, shared_variables.mesh_tensors);
+            shared_variables.bindings = resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
-            std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
                 auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
                 tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-                shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
@@ -838,15 +871,18 @@ public:
             const operation_attributes_t& /*attrs*/,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto io_mesh_tensors =
-                MeshDeviceOperationAdapter::collect_io_mesh_tensors(tensor_args, tensor_return_value);
+            auto& sv = cached_workload.shared_variables;
+            // Combine fresh io tensors with the cached op-owned mesh_tensors
+            // (which are stable across hits) in the same order bindings were
+            // recorded against on cache miss.
+            const auto mesh_tensors =
+                MeshDeviceOperationAdapter::collect_all_mesh_tensors(tensor_args, tensor_return_value, sv.mesh_tensors);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
                 std::vector<TensorArgument> fresh_tensor_args;
                 fresh_tensor_args.reserve(sv.bindings.size());
                 for (const auto& b : sv.bindings) {
                     fresh_tensor_args.push_back(TensorArgument{
-                        .tensor_parameter_name = b.tensor_parameter_name, .tensor = io_mesh_tensors[b.io_tensor_idx]});
+                        .tensor_parameter_name = b.tensor_parameter_name, .tensor = mesh_tensors[b.tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
@@ -957,25 +993,6 @@ public:
         };
         using cached_mesh_workload_t = CachedMeshWorkload<shared_variables_t>;
 
-        // Walk io tensors then workload mesh_tensors.  Order matters: bindings
-        // are recorded against this exact ordering on cache miss and must
-        // match on cache hit.
-        static std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> collect_all_mesh_tensors(
-            const tensor_args_t& tensor_args,
-            const tensor_return_value_t& tensor_return_value,
-            const std::vector<tt::tt_metal::MeshTensor>& workload_mesh_tensors) {
-            std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>> result;
-            const auto visit = [&result](const tt::tt_metal::Tensor& t) {
-                result.push_back(std::cref(t.mesh_tensor()));
-            };
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_args);
-            ttsl::reflection::visit_object_of_type<tt::tt_metal::Tensor>(visit, tensor_return_value);
-            for (const auto& wmt : workload_mesh_tensors) {
-                result.push_back(std::cref(wmt));
-            }
-            return result;
-        }
-
         static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
             TT_FATAL(
                 run_args.dfb_run_overrides.empty(),
@@ -1031,8 +1048,8 @@ public:
                 .mesh_tensors = std::move(artifacts.mesh_tensors),
                 .bindings_per_range = {}};
 
-            const auto mesh_tensor_refs =
-                collect_all_mesh_tensors(tensor_args, tensor_return_value, shared_variables.mesh_tensors);
+            const auto mesh_tensor_refs = MeshDeviceOperationAdapter::collect_all_mesh_tensors(
+                tensor_args, tensor_return_value, shared_variables.mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             for (auto& precursor : artifacts.program_precursors) {
@@ -1052,7 +1069,8 @@ public:
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             auto& sv = cached_workload.shared_variables;
-            const auto mesh_tensor_refs = collect_all_mesh_tensors(tensor_args, tensor_return_value, sv.mesh_tensors);
+            const auto mesh_tensor_refs =
+                MeshDeviceOperationAdapter::collect_all_mesh_tensors(tensor_args, tensor_return_value, sv.mesh_tensors);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& bindings = sv.bindings_per_range.at(coordinate_range);
                 std::vector<TensorArgument> fresh_tensor_args;
