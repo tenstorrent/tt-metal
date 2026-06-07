@@ -32,7 +32,7 @@ from torch.nn.utils import parametrize
 import ttnn
 
 from .tt_adain_resblk_1d import TTAdainResBlk1d, TTAdainResBlk1dParams, preprocess_tt_adain_resblk_1d
-from .tt_conv import TTConv1dParams, tt_conv1d_nlc, tt_conv1d_nlc_cpu, tt_conv1d_stride2_k3_1ch_nlc
+from .tt_conv import TTConv1dParams, tt_conv1d_nlc, tt_conv1d_stride2_k3_1ch_nlc
 from .tt_generator import (
     TTGenerator,
     TTGeneratorParams,
@@ -191,8 +191,8 @@ class TTDecoder:
     """TTNN port of ``Decoder`` (``TorchSTFT`` path; ``disable_complex=True`` is out of scope).
 
     Generator fallback controls are passed through to :class:`TTGenerator`.
-    For highest-PCC matching on BH hardware, combine STFT/phase with source linear/tanh
-    fallbacks (see :class:`TTGenerator` and ``test_tt_generator_pcc``).
+    For highest-PCC matching on BH hardware, enable both ``use_torch_stft_fallback`` and
+    ``use_torch_phase_fallback`` (see ``test_tt_decoder_pcc``).
     """
 
     def __init__(
@@ -201,18 +201,10 @@ class TTDecoder:
         params: TTDecoderParams,
         *,
         use_torch_stft_fallback: bool = False,
-        use_torch_stft_conv_fallback: bool = False,
-        use_torch_atan2_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
-        use_torch_sinegen_fallback: bool = False,
-        use_torch_f0n_conv_fallback: bool = False,
-        use_torch_f0_upsamp_fallback: Optional[bool] = None,
-        use_torch_linear_fallback: bool = False,
-        use_torch_tanh_fallback: bool = False,
     ) -> None:
         self.device = device
         self.params = params
-        self._use_torch_f0n_conv_fallback = use_torch_f0n_conv_fallback
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -226,13 +218,7 @@ class TTDecoder:
             device,
             params.generator,
             use_torch_stft_fallback=use_torch_stft_fallback,
-            use_torch_stft_conv_fallback=use_torch_stft_conv_fallback,
-            use_torch_atan2_fallback=use_torch_atan2_fallback,
             use_torch_phase_fallback=use_torch_phase_fallback,
-            use_torch_sinegen_fallback=use_torch_sinegen_fallback,
-            use_torch_f0_upsamp_fallback=use_torch_f0_upsamp_fallback,
-            use_torch_linear_fallback=use_torch_linear_fallback,
-            use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
 
     def forward(
@@ -276,15 +262,14 @@ class TTDecoder:
         else:
             n_nlc = N_curve
 
-        # CPU fallback (P1): exact match to PyTorch reference.
-        # TT path: reshape+permute+elementwise — avoids ttnn.conv1d broken-range on BH.
-        # Both share the same (x_nlc, params, device, memory_config) signature.
-        _f0n_conv = tt_conv1d_nlc_cpu if self._use_torch_f0n_conv_fallback else tt_conv1d_stride2_k3_1ch_nlc
+        # Stride-2 k=3 1-ch conv via reshape+permute+elementwise (avoids ttnn.conv1d broken-range on BH).
         F0_down = _to_interleaved(
-            _f0n_conv(x_nlc=f0_nlc, params=p.F0_conv, device=dev, memory_config=memory_config), memory_config
+            tt_conv1d_stride2_k3_1ch_nlc(x_nlc=f0_nlc, params=p.F0_conv, device=dev, memory_config=memory_config),
+            memory_config,
         )  # [B, T_mel, 1]
         N_down = _to_interleaved(
-            _f0n_conv(x_nlc=n_nlc, params=p.N_conv, device=dev, memory_config=memory_config), memory_config
+            tt_conv1d_stride2_k3_1ch_nlc(x_nlc=n_nlc, params=p.N_conv, device=dev, memory_config=memory_config),
+            memory_config,
         )  # [B, T_mel, 1]
 
         if len(f0_shape) == 2:

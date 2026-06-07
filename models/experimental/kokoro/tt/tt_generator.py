@@ -39,9 +39,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-import torch
 import torch.nn as nn
-import torch.nn.functional as F_torch
 from torch.nn.utils import parametrize
 
 import ttnn
@@ -330,38 +328,6 @@ def _upsample_nearest_axis1(x_nlc: ttnn.Tensor, *, scale: int, memory_config: tt
     return ttnn.repeat_interleave(x_nlc, scale, 1, memory_config=memory_config)
 
 
-def _f0_upsamp_cpu_nlc(
-    f0_b_t_1: ttnn.Tensor,
-    *,
-    scale: int,
-    device,
-    memory_config: ttnn.MemoryConfig,
-    out_dtype=ttnn.float32,
-) -> ttnn.Tensor:
-    """``Generator.f0_upsamp`` on CPU, then upload — matches PyTorch ``nn.Upsample(nearest)``.
-
-    ``ttnn.repeat_interleave`` on long F0 curves (e.g. ``T_f0=162`` → ``T_har=48600``) can differ by
-    up to ~1 Hz per sample; for maximum reference parity use this when ``use_torch_stft_fallback=True``.
-    """
-    if scale == 1:
-        return f0_b_t_1
-    x = ttnn.to_torch(f0_b_t_1).float()
-    while x.dim() > 3 and x.shape[0] == 1:
-        x = x.squeeze(0)
-    # NLC ``[B, T_f0, 1]`` → BCT ``[B, 1, T_f0]`` for ``nn.Upsample``.
-    x_b1t = x.transpose(1, 2).contiguous()
-    with torch.no_grad():
-        y_b1t = F_torch.interpolate(x_b1t, scale_factor=scale, mode="nearest")
-    y_nlc = y_b1t.transpose(1, 2).contiguous()
-    return ttnn.from_torch(
-        y_nlc,
-        dtype=out_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=memory_config,
-    )
-
-
 # ---------------------------------------------------------------------------
 # module
 # ---------------------------------------------------------------------------
@@ -371,8 +337,7 @@ class TTGenerator:
     """TTNN port of ``Generator`` (``TorchSTFT`` only).
 
     ``use_torch_stft_fallback=True`` routes the entire STFT ``transform`` through CPU ``torch.stft``.
-    ``use_torch_stft_conv_fallback=True`` runs only the strided conv on CPU — see
-    :class:`~models.experimental.kokoro.tt.tt_torch_stft.TTTorchSTFT`.
+    ``use_torch_phase_fallback=True`` runs the SineGen phase chain on CPU float32.
     """
 
     def __init__(
@@ -381,19 +346,10 @@ class TTGenerator:
         params: TTGeneratorParams,
         *,
         use_torch_stft_fallback: bool = False,
-        use_torch_stft_conv_fallback: bool = False,
-        use_torch_atan2_fallback: bool = False,
         use_torch_phase_fallback: bool = False,
-        use_torch_sinegen_fallback: bool = False,
-        use_torch_linear_fallback: bool = False,
-        use_torch_tanh_fallback: bool = False,
-        use_torch_f0_upsamp_fallback: Optional[bool] = None,
     ) -> None:
         self.device = device
         self.params = params
-        if use_torch_f0_upsamp_fallback is None:
-            use_torch_f0_upsamp_fallback = use_torch_stft_fallback
-        self._use_torch_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
         # HiFi4 (with fp32_dest_acc_en) measured better than HiFi3 for the STFT precision
         # bottleneck (cos(phase) PCC 0.78 vs 0.77; near-zero sign match 0.70 vs 0.69). Apply the
         # same setting to the surrounding convs / resblocks so the chain stays consistent.
@@ -408,16 +364,11 @@ class TTGenerator:
             device,
             params.m_source,
             use_torch_phase_fallback=use_torch_phase_fallback,
-            use_torch_sinegen_fallback=use_torch_sinegen_fallback,
-            use_torch_linear_fallback=use_torch_linear_fallback,
-            use_torch_tanh_fallback=use_torch_tanh_fallback,
         )
         self._stft = TTTorchSTFT(
             device,
             params.stft,
             use_torch_stft_fallback=use_torch_stft_fallback,
-            use_torch_stft_conv_fallback=use_torch_stft_conv_fallback,
-            use_torch_atan2_fallback=use_torch_atan2_fallback,
         )
         # Keep the full harmonic-source path (SineGen + Source linear + STFT) on the same
         # precision profile as the rest of the generator to avoid mixed-fidelity phase drift.
@@ -454,20 +405,11 @@ class TTGenerator:
         if len(f_shape) == 2:
             ttnn.deallocate(f0_b_t_1)
         f0_b_t_1 = f0_fp32
-        if self._use_torch_f0_upsamp_fallback:
-            f0_har = _f0_upsamp_cpu_nlc(
-                f0_b_t_1,
-                scale=p.upsample_scale_full,
-                device=self.device,
-                memory_config=memory_config,
-                out_dtype=ttnn.float32,
-            )
-        else:
-            f0_har = _upsample_nearest_axis1(
-                f0_b_t_1,
-                scale=p.upsample_scale_full,
-                memory_config=memory_config,
-            )
+        f0_har = _upsample_nearest_axis1(
+            f0_b_t_1,
+            scale=p.upsample_scale_full,
+            memory_config=memory_config,
+        )
         ttnn.deallocate(f0_b_t_1)
 
         # m_source -> har_source ``[B, T_har, 1]``

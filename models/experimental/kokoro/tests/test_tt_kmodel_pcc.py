@@ -95,15 +95,8 @@ _TEST_TEXT = "Hello from Tenstorrent."
 _VOICE = "af_heart"
 _LANG_CODE = "a"
 
-# Config E plus SineGen CPU fallback for long harmonic grids at max phoneme length.
-_MAX_LENGTH_FALLBACK_KWARGS = {
-    **STFT_PHASE_FALLBACK_KWARGS,
-    "use_torch_sinegen_fallback": True,
-    "use_torch_linear_fallback": True,
-    "use_torch_tanh_fallback": True,
-    "use_torch_f0_upsamp_fallback": True,
-    "use_torch_f0n_conv_fallback": True,
-}
+# Config E for long harmonic grids at max phoneme length.
+_MAX_LENGTH_FALLBACK_KWARGS = dict(STFT_PHASE_FALLBACK_KWARGS)
 
 _CKPT_CANDIDATES = (
     Path("/home/ubuntu/ign-tt/kokoro/examples/checkpoints/kokoro-v1_0.pth"),
@@ -243,13 +236,6 @@ def _tt_audio(
     *,
     use_torch_stft_fallback: bool,
     use_torch_phase_fallback: bool,
-    use_torch_linear_fallback: bool = False,
-    use_torch_tanh_fallback: bool = False,
-    use_torch_stft_conv_fallback: bool = False,
-    use_torch_atan2_fallback: bool = False,
-    use_torch_sinegen_fallback: bool = False,
-    use_torch_f0n_conv_fallback: bool = True,
-    use_torch_f0_upsamp_fallback: bool | None = None,
 ) -> torch.Tensor:
     # Construct inside _zero_noise so init-time randn_like calls match _ref_audio zeros.
     with _zero_noise():
@@ -258,14 +244,7 @@ def _tt_audio(
             ref,
             params,
             use_torch_stft_fallback=use_torch_stft_fallback,
-            use_torch_stft_conv_fallback=use_torch_stft_conv_fallback,
-            use_torch_atan2_fallback=use_torch_atan2_fallback,
             use_torch_phase_fallback=use_torch_phase_fallback,
-            use_torch_sinegen_fallback=use_torch_sinegen_fallback,
-            use_torch_linear_fallback=use_torch_linear_fallback,
-            use_torch_tanh_fallback=use_torch_tanh_fallback,
-            use_torch_f0n_conv_fallback=use_torch_f0n_conv_fallback,
-            use_torch_f0_upsamp_fallback=use_torch_f0_upsamp_fallback,
         )
     out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()
@@ -319,11 +298,8 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
         params,
         phonemes,
         ref_s,
-        use_torch_stft_conv_fallback=False,
         use_torch_stft_fallback=False,
         use_torch_phase_fallback=False,
-        use_torch_linear_fallback=False,
-        use_torch_f0n_conv_fallback=False,
     )
 
     assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
@@ -338,8 +314,6 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     if debug_mode in {"stft", "phase", "both", "full"}:
         use_stft = debug_mode in {"stft", "both", "full"}
         use_phase = debug_mode in {"phase", "both", "full"}
-        use_linear = debug_mode == "full"
-        use_tanh = debug_mode == "full"
         y_debug = _tt_audio(
             device,
             ref,
@@ -348,8 +322,6 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
             ref_s,
             use_torch_stft_fallback=use_stft,
             use_torch_phase_fallback=use_phase,
-            use_torch_linear_fallback=use_linear,
-            use_torch_tanh_fallback=use_tanh,
         )
         _, pcc_debug = comp_pcc(y_ref.unsqueeze(0), y_debug.unsqueeze(0), pcc=0.0)
         print("TTKModel PCC debug: " f"mode={debug_mode}, no_fallback={pcc:.6f}, debug_mode_pcc={pcc_debug:.6f}")
@@ -413,49 +385,6 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
         f"PCC {pcc:.6f} below floor (0.84) with config E fallbacks; "
         "run kmodel_pcc_stage_diagnostic.py --stft-phase-fallback --write-report"
     )
-
-
-def test_tt_kmodel_conv_and_atan2_fallback_pcc(device):
-    """Config F — per-op STFT alternative: conv + atan2 + Phase + SineGen. Empirical PCC ≈ 0.387.
-
-    Per-op version of :func:`test_tt_kmodel_stft_and_phase_fallback_pcc`: instead of the full
-    ``torch.stft`` bypass, only the strided conv2d (``use_torch_stft_conv_fallback``) and the
-    atan2/sqrt step (``use_torch_atan2_fallback``) run on CPU — the STFT window-accumulation,
-    iSTFT, and all other ops remain on-device.
-
-    This path is weaker than full ``torch.stft`` (0.387 vs 0.408) because the on-device window
-    multiplication and conv padding still propagate BF16 error; useful for measuring whether
-    only the atan2 SFPU is the bottleneck. See ``test_tt_torch_stft_pcc.py`` for the per-op
-    proof that conv+atan2 fallback achieves cos(phase) PCC > 0.99 on harmonic input in
-    isolation, and the module docstring for the full sweep.
-    """
-    ckpt_path = _find_checkpoint()
-    if ckpt_path is None:
-        pytest.skip("Kokoro-82M checkpoint not found locally.")
-
-    ref, params, phonemes, ref_s = _setup(ckpt_path, device)
-    y_ref = _ref_audio(ref, phonemes, ref_s)
-
-    y_hat = _tt_audio(
-        device,
-        ref,
-        params,
-        phonemes,
-        ref_s,
-        use_torch_stft_fallback=False,
-        use_torch_stft_conv_fallback=True,
-        use_torch_atan2_fallback=True,
-        use_torch_phase_fallback=True,
-        use_torch_sinegen_fallback=True,
-    )
-
-    assert y_hat.shape == y_ref.shape, (y_hat.shape, y_ref.shape)
-    assert torch.isfinite(y_hat).all(), "TTKModel (conv+atan2+phase fallback) produced NaN/Inf"
-    assert y_hat.abs().max().item() > 1e-3, "TTKModel (conv+atan2+phase fallback) produced ~zero output"
-
-    _, pcc = comp_pcc(y_ref.unsqueeze(0), y_hat.unsqueeze(0), pcc=0.0)
-    print(f"\nTTKModel (conv+atan2+phase fallback) PCC: {pcc:.6f}  phonemes={len(phonemes)}")
-    assert pcc > 0.35, f"PCC {pcc:.6f} below expected floor (0.35) with conv+atan2+phase+sinegen fallback"
 
 
 # ---------------------------------------------------------------------------
