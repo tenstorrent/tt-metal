@@ -139,8 +139,18 @@ def _invoke_agent(
         _snapshot_deliverable_state,
         _summarize_stream_json_event,
     )
+    import builtins as _bi
     import subprocess
     import threading
+
+    # Every `[auto:<provider>] ...` line below is tool-progress narration about
+    # the agent subprocess — NOT the agent's own output (that streams to the
+    # _handoff/<provider>_*.log file). Keep the terminal clean by shadowing
+    # print() here so this status goes to screen only under
+    # TT_HW_PLANNER_VERBOSE=1. Genuine errors (file=sys.stderr) always show.
+    def print(*a, **k):  # noqa: A001 - intentional local shadow to gate status output
+        if _verbose() or k.get("file") is sys.stderr:
+            _bi.print(*a, **k)
 
     effective_timeout_s = _agent_complexity_timeout(timeout_s, complexity_bonus)
 
