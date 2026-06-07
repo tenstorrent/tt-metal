@@ -34,8 +34,8 @@ from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from
 _DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
-NUM_WARMUP = 0
-NUM_ITERS = 1
+NUM_WARMUP = int(os.environ.get("PI05_E2E_NUM_WARMUP", "0"))
+NUM_ITERS = int(os.environ.get("PI05_E2E_NUM_ITERS", "1"))
 LANG_SEQ_LEN = 256
 SEED = 0
 TRACE_REGION_SIZE = 80_000_000

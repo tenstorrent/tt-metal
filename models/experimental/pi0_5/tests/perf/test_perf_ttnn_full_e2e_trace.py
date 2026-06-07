@@ -30,8 +30,8 @@ _DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi0
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
 
-NUM_WARMUP = 2
-NUM_ITERS = 20
+NUM_WARMUP = int(os.environ.get("PI05_TRACE_NUM_WARMUP", "2"))
+NUM_ITERS = int(os.environ.get("PI05_TRACE_NUM_ITERS", "20"))
 LANG_SEQ_LEN = 256  # tile-aligned
 SEED = 0
 TRACE_REGION_SIZE = 134_217_728  # 128 MiB — full sample_actions trace ~81 MB
