@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -31,6 +32,13 @@ struct JitBuildFingerprint {
     // Captured so the artifact is self-describing; multi-erisc is applied via the existing
     // TT_METAL_FORCE_2_ERISC_MODE (it is an llrt/firmware-capability concern, not a jit_build one).
     bool enable_2_erisc_mode = true;
+    // The real device's compute_with_storage_grid_size() (x,y). On Blackhole fast dispatch reserves
+    // Tensix cores for prefetch/dispatch, so the real worker grid is SMALLER than what the slow-dispatch
+    // mock reports; ops (conv/matmul/...) read this grid at runtime to derive per-kernel compile-time args,
+    // so a mismatch keys those kernels differently -> warm-cache miss. Replayed by Device::
+    // compute_with_storage_grid_size on non-silicon so the warm run shards exactly like the real run.
+    uint32_t compute_grid_x = 0;
+    uint32_t compute_grid_y = 0;
 
     // Compact "k=v;k=v" form, written to / read from the fingerprint file.
     std::string serialize() const;
@@ -45,5 +53,10 @@ void capture_jit_build_fingerprint(const std::string& path);
 // parsed once and cached. nullopt when the env is unset or the file can't be parsed. Applied only by
 // create_jit_device_config, and only on non-silicon (mock/sim) targets.
 const std::optional<JitBuildFingerprint>& active_jit_build_fingerprint();
+
+// The captured real-device compute grid (x,y) to replay, iff a fingerprint is active, carries a grid,
+// and the target is non-silicon (mock/sim). nullopt otherwise (incl. on real silicon -> use the real
+// grid). Called by Device::compute_with_storage_grid_size so warm-collect ops shard like the real run.
+std::optional<std::pair<uint32_t, uint32_t>> active_fingerprint_compute_grid();
 
 }  // namespace tt::tt_metal

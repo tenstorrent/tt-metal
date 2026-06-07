@@ -30,7 +30,8 @@ namespace tt::tt_metal {
 std::string JitBuildFingerprint::serialize() const {
     std::ostringstream os;
     os << "num_l1_banks=" << num_l1_banks << ";dispatch_core_type=" << dispatch_core_type
-       << ";dispatch_core_axis=" << dispatch_core_axis << ";enable_2_erisc_mode=" << (enable_2_erisc_mode ? 1 : 0);
+       << ";dispatch_core_axis=" << dispatch_core_axis << ";enable_2_erisc_mode=" << (enable_2_erisc_mode ? 1 : 0)
+       << ";compute_grid_x=" << compute_grid_x << ";compute_grid_y=" << compute_grid_y;
     return os.str();
 }
 
@@ -59,6 +60,12 @@ std::optional<JitBuildFingerprint> JitBuildFingerprint::deserialize(std::string_
                 } else if (key == "enable_2_erisc_mode") {
                     fp.enable_2_erisc_mode = (std::stoi(val) != 0);
                     any = true;
+                } else if (key == "compute_grid_x") {
+                    fp.compute_grid_x = static_cast<uint32_t>(std::stoul(val));
+                    any = true;
+                } else if (key == "compute_grid_y") {
+                    fp.compute_grid_y = static_cast<uint32_t>(std::stoul(val));
+                    any = true;
                 }
             } catch (...) {
                 return std::nullopt;
@@ -82,6 +89,14 @@ void capture_jit_build_fingerprint(const std::string& path) {
     fp.dispatch_core_type = static_cast<uint32_t>(cfg.dispatch_core_type);
     fp.dispatch_core_axis = static_cast<uint32_t>(cfg.dispatch_core_axis);
     fp.enable_2_erisc_mode = MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+    // Capture the real device's compute_with_storage_grid_size — exactly the call Device:: makes — so the
+    // mock can replay it (fast dispatch reserves Tensix cores -> smaller grid than the slow-dispatch mock).
+    auto& ctx = MetalContext::instance();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    const auto& dispatch_core_config = ctx.get_dispatch_core_manager().get_dispatch_core_config();
+    const CoreCoord& grid = get_compute_grid_size(env, 0, cfg.num_hw_cqs, dispatch_core_config);
+    fp.compute_grid_x = static_cast<uint32_t>(grid.x);
+    fp.compute_grid_y = static_cast<uint32_t>(grid.y);
     std::ofstream(path) << fp.serialize();
     log_info(tt::LogBuildKernels, "Captured JIT build fingerprint to {}: {}", path, fp.serialize());
 }
@@ -108,6 +123,18 @@ const std::optional<JitBuildFingerprint>& active_jit_build_fingerprint() {
         return fp;
     }();
     return cached;
+}
+
+std::optional<std::pair<uint32_t, uint32_t>> active_fingerprint_compute_grid() {
+    const auto& fp = active_jit_build_fingerprint();
+    if (!fp.has_value() || fp->compute_grid_x == 0 || fp->compute_grid_y == 0) {
+        return std::nullopt;
+    }
+    // Replay only on non-silicon (mock/sim) — never override the real device's own grid.
+    if (MetalContext::instance().rtoptions().get_target_device() == tt::TargetDevice::Silicon) {
+        return std::nullopt;
+    }
+    return std::make_pair(fp->compute_grid_x, fp->compute_grid_y);
 }
 
 JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {

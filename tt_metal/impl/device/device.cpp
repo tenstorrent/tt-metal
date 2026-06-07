@@ -7,6 +7,7 @@
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"
 
+#include "jit_build/jit_build_fingerprint.hpp"
 #include <core_descriptor.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
@@ -590,6 +591,13 @@ CoreCoord Device::dram_grid_size() const {
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {
+    // Up-front precompile (mock/sim only): a hardware-free warm runs slow dispatch, which reserves no
+    // Tensix cores and so reports a LARGER worker grid than the real fast-dispatch run. Ops read this grid
+    // at runtime to derive per-kernel compile-time args, so the warm cache would key those kernels
+    // differently and miss. Replay the real device's captured grid so warm-collect ops shard identically.
+    if (auto grid = active_fingerprint_compute_grid()) {
+        return CoreCoord(grid->first, grid->second);
+    }
     const auto& dispatch_core_config = context_->get_dispatch_core_manager().get_dispatch_core_config();
     return tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
 }
