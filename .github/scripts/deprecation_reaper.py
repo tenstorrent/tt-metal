@@ -85,24 +85,27 @@ def find_overdue(manifest, now):
 
 
 def build_body(overdue):
-    lines = [
-        MARKER,
+    header_note = (
         "_Auto-managed by the deprecation-reaper workflow. Do not edit by hand; "
-        "remove the entry from `.github/deprecations.json` once the code is deleted._",
-        "",
+        + "remove the entry from `.github/deprecations.json` once the code is deleted._"
+    )
+    intro = (
         "The following deprecated APIs have passed their scheduled removal date and "
-        "should be deleted in a follow-up PR:",
-        "",
-    ]
+        + "should be deleted in a follow-up PR:"
+    )
+    lines = [MARKER, header_note, "", intro, ""]
     owners = set()
     for d in overdue:
         owners.update(d.get("owners", []))
+        introduced = (
+            f"- Introduced by [#{d['introduced_by_pr']}]({d['pr_url']}) "
+            + f"(merged {d['merged_at'].date()}, removal due {d['deadline'].date()})"
+        )
         lines += [
             f"### `{d['id']}` — overdue by {d['days_overdue']} day(s)",
             f"- {d['description']}",
             f"- Files: {', '.join('`'+f+'`' for f in d['files'])}",
-            f"- Introduced by [#{d['introduced_by_pr']}]({d['pr_url']}) "
-            f"(merged {d['merged_at'].date()}, removal due {d['deadline'].date()})",
+            introduced,
             f"- Owners: {', '.join('@'+o for o in d.get('owners', []))}",
             "",
         ]
@@ -196,9 +199,7 @@ def main():
     else:
         ensure_label(args.dry_run)
         if args.dry_run:
-            print(
-                f"[dry-run] create issue '{TRACKING_TITLE}' (label {TRACKING_LABEL}, " f"assignees {owners}):\n{body}"
-            )
+            print(f"[dry-run] create issue '{TRACKING_TITLE}' (label {TRACKING_LABEL}, assignees {owners}):\n{body}")
         else:
             create = [
                 "gh",
