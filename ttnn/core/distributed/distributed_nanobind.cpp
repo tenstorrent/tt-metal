@@ -291,6 +291,15 @@ void py_module(nb::module_& mod) {
                     List[MeshDevice]: The submeshes created on this MeshDevice.
         )doc")
         .def(
+            "quiesce_devices",
+            &MeshDevice::quiesce_devices,
+            nb::call_guard<nb::gil_scoped_release>(),
+            R"doc(
+              Drain all command queues of this MeshDevice and its submeshes and reset their
+              in-use state. Call before closing a mesh that has carved submeshes so the shared
+              command queue is idle, otherwise close throws "cq is in use by child submesh".
+        )doc")
+        .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
