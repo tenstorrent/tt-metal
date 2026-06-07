@@ -74,10 +74,24 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
                                     !transpose_k_heads && !read_from_input_tensor_kv && num_kv_heads > 0 &&
                                     num_q_heads % num_kv_heads == 0 && q_out_w_tiles > 0;
 
+    // PI0_MQA_HEAD_SPLIT=1 opt-in: when also head_split_enabled AND num_kv_heads < num_q_heads
+    // (= MQA or GQA), parallelize across num_q_heads instead of num_kv_heads. K and V are
+    // shared across q_heads_per_kv Q-heads in each KV-group, so the "first" Q-head per group
+    // is the designated writer of K and V; other Q-heads write only their Q slice. Targets
+    // the pi0.5 denoise expert MQA case (M=1, num_q_heads=8, num_kv_heads=1) where the
+    // existing path runs at 1 core. Default off — preserves existing GQA/Qwen behaviour
+    // unless the consumer explicitly opts in.
+    const char* mqa_split_env = std::getenv("PI0_MQA_HEAD_SPLIT");
+    const bool mqa_split_enabled = head_split_enabled && mqa_split_env != nullptr &&
+                                   std::string(mqa_split_env) == "1" && num_kv_heads < num_q_heads;
+
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
     uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    if (head_split_enabled) {
+    if (mqa_split_enabled) {
+        // MQA path: num_blocks = M_tiles * num_q_heads (1 work unit per Q-head per seq-tile).
+        num_blocks *= num_q_heads;
+    } else if (head_split_enabled) {
         // Specialized Qwen-style fused-QKV split: split each sequence tile into KV-head groups.
         // For Qwen3-Embedding-0.6B bs=1/ISL=512 this creates 16 seq blocks * 8 KV groups
         // = 128 work units instead of the generic path's 16 sequence-only units.
@@ -175,13 +189,19 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     }
 
     const char* reader_kernel_path =
-        head_split_enabled
+        mqa_split_enabled
+            ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "reader_tm_tile_layout_nlp_create_qkv_heads_mqa_split.cpp"
+        : head_split_enabled
             ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
               "reader_tm_tile_layout_nlp_create_qkv_heads_head_split.cpp"
             : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
               "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
     const char* writer_kernel_path =
-        head_split_enabled
+        mqa_split_enabled
+            ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
+              "writer_tm_tile_layout_nlp_create_qkv_heads_mqa_split.cpp"
+        : head_split_enabled
             ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
               "writer_tm_tile_layout_nlp_create_qkv_heads_head_split.cpp"
             : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
