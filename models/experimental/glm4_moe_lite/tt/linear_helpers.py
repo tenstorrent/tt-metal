@@ -239,7 +239,10 @@ def lm_head_linear(
     }
     if memory_config is not None:
         kwargs["memory_config"] = memory_config
-    return ttnn.linear(a, b, **kwargs)
+    a_l1 = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    result = ttnn.linear(a_l1, b, **kwargs)
+    ttnn.deallocate(a_l1, force=False)
+    return result
 
 
 def _lm_head_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
