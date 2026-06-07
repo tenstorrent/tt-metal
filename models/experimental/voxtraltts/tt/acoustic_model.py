@@ -220,11 +220,18 @@ class VoxtralTTAcousticModel:
         model_name_or_path: str = DEFAULT_VOXTRAL_MODEL,
         dtype: ttnn.DataType = ttnn.bfloat16,
         weight_cache_path: Path | None = None,
+        preloaded_state_dict: dict | None = None,
     ) -> "VoxtralTTAcousticModel":
         cfg = load_voxtral_config(model_name_or_path)
         at = cfg.audio_model_args.acoustic_transformer_args
         am = cfg.audio_model_args
-        full = _load_safetensors_state_dict(model_name_or_path)
+        # Reuse an already-loaded checkpoint when provided to avoid loading the full
+        # ~7.45GiB safetensors into host RAM a second time (host OOM risk).
+        full = (
+            preloaded_state_dict
+            if preloaded_state_dict is not None
+            else _load_safetensors_state_dict(model_name_or_path)
+        )
         sd = extract_acoustic_state_dict(full)
         n_decode = getattr(at, "n_decoding_steps", None)
         if n_decode is None:
