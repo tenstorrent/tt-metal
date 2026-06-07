@@ -205,3 +205,145 @@ def test_generator_correctness_vs_torch_at_target_len(fresh_gen, checkpoint):
     assert out.shape == ref.shape, f"shape mismatch: ttnn={out.shape} ref={ref.shape}"
     pcc = compute_pcc(ref, out)
     assert pcc > 0.95, f"PCC={pcc:.6f} below 0.95 threshold at T={T}"
+
+
+def test_generator_b2_per_row_speaker_conditioning(checkpoint):
+    """Regression for PR #45686 review: B>1 with different speaker embeddings
+    per row must produce different audio per row.
+
+    Earlier the cond_linear path used g[:1] and broadcast row-0 conditioning
+    across the whole batch, so a mixed-target B=2 batch silently produced
+    identical audio for both rows. Existing tests only exercised B=1 or
+    single-g paths, so this could ship silently.
+
+    Uses random g per row instead of two checkpoint speaker embeddings to
+    avoid coupling to which embedding rows are distinct in this checkpoint
+    (e.g. emb_g(0) and emb_g(1) are byte-identical in rvc-nano v2/48k).
+
+    Opens its own device with l1_small_size=131072 instead of using the
+    fresh_gen fixture's 32768 — B>1 conv shapes have larger halo
+    allocations and OOM the smaller L1_SMALL bank.
+    """
+    T = 60
+    torch.manual_seed(0)
+    # Two distinct target-speaker conditioning vectors. Don't pull from
+    # checkpoint emb_g because rvc-nano has duplicate embedding rows for
+    # speakers 0 and 1 — that would mask the bug we're testing for.
+    g = torch.randn(2, 256, 1)
+    # Identical z and har for both rows so any per-row output difference is
+    # entirely attributable to the speaker conditioning.
+    z_one = torch.randn(1, 192, T)
+    har_one = torch.randn(1, 1, T * 480)
+    z = z_one.repeat(2, 1, 1)
+    har = har_one.repeat(2, 1, 1)
+
+    dev = ttnn.open_device(device_id=0, l1_small_size=131072)
+    try:
+        gen = TTNNGeneratorNSF.from_checkpoint(checkpoint, dev)
+        try:
+            out = gen(z, har, g)
+        finally:
+            gen.deallocate()
+    finally:
+        ttnn.close_device(dev)
+
+    assert out.shape == (2, 1, T * 480), f"shape mismatch: {out.shape}"
+    diff = (out[0] - out[1]).abs().max().item()
+    assert diff > 1e-3, (
+        f"per-row speaker conditioning broken: identical z/har with different "
+        f"g produced max_diff={diff:.2e} between rows (expected > 0)"
+    )
+
+
+@pytest.mark.parametrize("B", [2, 3, 5, 8])
+def test_generator_batched_matches_individual_b1_calls(checkpoint, B):
+    """Strong per-row equivalence across the full batch range used by the
+    Stage 3 "5+ concurrent conversions" bullet.
+
+    For each B in [2, 3, 5, 8]:
+      - Compute B distinct B=1 references (different z, har, g per row).
+      - Run one B=B batched call with the same inputs concatenated.
+      - Per row: PCC > 0.995 vs its B=1 ref AND PCC(row_i, ref_i) >
+        PCC(row_i, ref_j) for all j != i (no row permutation).
+      - All rows pairwise distinct (no broadcast / row collapse).
+
+    Catches: row-0 broadcast (PR review bug), row permutation, latent
+    broadcast in ResBlocks / upsample / noise / conv_pre / conv_post,
+    and any per-B regression that B=2-only testing would miss.
+
+    Tolerance 0.995 (not 1.0) because B>1 picks different conv configs
+    than B=1 (act_block_h_override=32 at B>1 vs the HEIGHT_SHARDED
+    whitelist at B=1) and per-element values differ within bf16
+    quantisation. Empirically the noise is ~1e-3 relative; 0.995 leaves
+    a small margin.
+    """
+    T = 60
+    torch.manual_seed(0)
+    zs = [torch.randn(1, 192, T) for _ in range(B)]
+    hars = [torch.randn(1, 1, T * 480) for _ in range(B)]
+    gs = [torch.randn(1, 256, 1) for _ in range(B)]
+
+    def pcc(a, b):
+        a, b = a.flatten().double(), b.flatten().double()
+        a, b = a - a.mean(), b - b.mean()
+        denom = (torch.sqrt(torch.sum(a * a) * torch.sum(b * b)) + 1e-12)
+        return float(torch.sum(a * b) / denom)
+
+    # B=1 references — fresh device so per-call state can't leak in
+    dev = ttnn.open_device(device_id=0, l1_small_size=131072)
+    try:
+        gen = TTNNGeneratorNSF.from_checkpoint(checkpoint, dev)
+        try:
+            refs = [gen(zs[i], hars[i], gs[i]).clone() for i in range(B)]
+        finally:
+            gen.deallocate()
+    finally:
+        ttnn.close_device(dev)
+
+    # Batched B call — fresh device so it can't share warm state with the
+    # B=1 path and accidentally re-emit those values.
+    dev = ttnn.open_device(device_id=0, l1_small_size=131072)
+    try:
+        gen = TTNNGeneratorNSF.from_checkpoint(checkpoint, dev)
+        try:
+            z = torch.cat(zs, dim=0)
+            har = torch.cat(hars, dim=0)
+            g = torch.cat(gs, dim=0)
+            out = gen(z, har, g)
+        finally:
+            gen.deallocate()
+    finally:
+        ttnn.close_device(dev)
+
+    assert out.shape == (B, 1, T * 480), f"shape mismatch at B={B}: {out.shape}"
+
+    # (a) all rows pairwise distinct — catches broadcast / row collapse
+    for i in range(B):
+        for j in range(i + 1, B):
+            d = (out[i] - out[j]).abs().max().item()
+            assert d > 1e-3, (
+                f"B={B} rows {i} and {j} are identical (max_diff={d:.2e}) — "
+                f"per-row routing broken"
+            )
+
+    # (b) each row matches its own B=1 reference within bf16 noise
+    pccs_self = [pcc(refs[i], out[i:i+1]) for i in range(B)]
+    for i, p in enumerate(pccs_self):
+        assert p > 0.995, (
+            f"B={B} row {i} does not match its B=1 reference (PCC={p:.4f}). "
+            f"Per-row correctness bug, row permutation, or numerical "
+            f"regression beyond bf16 noise."
+        )
+
+    # (c) row i must match ref_i better than any other ref_j — catches
+    # a permutation that happens to preserve overall row PCC by coincidence.
+    for i in range(B):
+        for j in range(B):
+            if i == j:
+                continue
+            p_wrong = pcc(refs[j], out[i:i+1])
+            assert pccs_self[i] > p_wrong, (
+                f"B={B} row {i} matches ref{j} (PCC={p_wrong:.4f}) "
+                f"better than its own ref{i} (PCC={pccs_self[i]:.4f}) — "
+                f"row-permutation bug at B={B}."
+            )

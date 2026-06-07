@@ -87,7 +87,7 @@ rm -rf .git
 popd
 
 mkdir -p "${DATA_DIR}"
-rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}"
+rm -rf "${TARGET_ASSETS_DIR}" "${TARGET_CONFIGS_DIR}" "${TARGET_SPEECH_DIR}"
 mv "${REPO_FOLDER}/assets" "${TARGET_ASSETS_DIR}"
 mv "${REPO_FOLDER}/configs" "${TARGET_CONFIGS_DIR}"
 mv "${REPO_FOLDER}/speech" "${TARGET_SPEECH_DIR}"
