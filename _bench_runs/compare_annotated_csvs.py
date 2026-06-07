@@ -10,10 +10,13 @@ Uses the same annotation heuristics as annotate_ops_csv.py:
 
 Usage:
     python _bench_runs/compare_annotated_csvs.py csv1 csv2 [csv3 ...]
+    python _bench_runs/compare_annotated_csvs.py \\
+        --labels num_cams=1 num_cams=2 num_cams=3 \\
+        cam1.csv cam2.csv cam3.csv
 """
 
+import argparse
 import csv
-import sys
 from collections import OrderedDict
 from pathlib import Path
 
@@ -126,12 +129,26 @@ def annotate(in_csv: str):
 
 
 def main():
-    csvs = sys.argv[1:] or [
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("csvs", nargs="*", help="ops_perf_results CSV files (positional, in label order)")
+    ap.add_argument(
+        "--labels",
+        help="Comma-separated column labels matching the CSV positional order, e.g. "
+        "--labels=num_cams=1,num_cams=2,num_cams=3. Defaults to num_cams=N with N descending.",
+    )
+    args = ap.parse_args()
+
+    csvs = args.csvs or [
         "/home/tt-admin/sdawle/pi0/tt-metal/generated/profiler/reports/2026_06_07_04_52_56/ops_perf_results_2026_06_07_04_52_56.csv",
         "/home/tt-admin/sdawle/pi0/tt-metal/generated/profiler/reports/2026_06_07_05_01_59/ops_perf_results_2026_06_07_05_01_59.csv",
         "/home/tt-admin/sdawle/pi0/tt-metal/generated/profiler/reports/2026_06_07_05_05_29/ops_perf_results_2026_06_07_05_05_29.csv",
     ]
-    labels = ["num_cams=3", "num_cams=2", "num_cams=1"]
+    if args.labels:
+        labels = [s.strip() for s in args.labels.split(",")]
+        if len(labels) != len(csvs):
+            ap.error(f"--labels has {len(labels)} entries but {len(csvs)} CSVs were given")
+    else:
+        labels = [f"num_cams={n}" for n in range(len(csvs), 0, -1)]
 
     results = []
     for label, csv_path in zip(labels, csvs):
@@ -152,7 +169,9 @@ def main():
     header = f"  {'STAGE':<18}"
     for lbl, _, _ in cols:
         header += f"  {lbl:>15}"
-    header += f"  {'Δ3→1':>10}"
+    # Delta column: last column minus first column.
+    delta_label = f"Δ({cols[0][0]}→{cols[-1][0]})" if len(cols) >= 2 else ""
+    header += f"  {delta_label:>20}"
     print(header)
     print("  " + "-" * 92)
 
