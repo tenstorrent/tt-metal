@@ -76,24 +76,13 @@ ALWI void matmul_block_math_dynamic_throttle(
 /**
  * Which matmul init to call, and when:
  *
- * Pick the init that matches the matmul you run:
- * - matmul_tiles (single tile)  -> mm_init / mm_init_short / mm_init_short_with_dt
- * - matmul_block (block of tiles) -> mm_block_init / mm_block_init_short / mm_block_init_short_with_dt /
- *                                    mm_block_init_short_with_both_dt
+ * Pick the init that matches the matmul you run, and call it once before the first matmul:
+ * - matmul_tiles (single tile)    -> mm_init
+ * - matmul_block (block of tiles) -> mm_block_init
  *
- * Full vs short init:
- * - Use the full init (mm_init, mm_block_init) once at the start, before the first matmul. It does the
- *   full HW configure of unpacker, math and packer.
- * - Use a short init (mm_init_short, mm_block_init_short) to switch the engine back into matmul mode after
- *   running a different op (e.g. eltwise) in the same kernel. It is cheaper and does not re-configure the
- *   packer. The output CB must not have changed since the last full init.
- *
- * The _with_dt / _with_both_dt variants:
+ * The _with_dt / _with_both_dt variants also reconfigure input data formats before init:
  * - Use _with_dt when the input data format changed since the last init (it reconfigures srcA first).
  * - Use _with_both_dt when both input data formats changed (it reconfigures srcA and srcB).
- *
- * So a typical kernel: call mm_init (or mm_block_init) once, run matmuls, and only call a short / _with_dt
- * init when you interleave another op or change input data formats.
  *
  * Initialization for matmul_tiles operation. Must be called before matmul_tiles.
  *

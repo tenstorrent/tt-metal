@@ -109,9 +109,10 @@ ALWI void reconfig_data_format_srcb(const uint32_t srcb_old_operand, const uint3
  * call will always perform the reconfiguration, regardless of the data format of the old operand.
  * If the new CB ID is the same as the current one, reconfiguration will still occur.
  *
- * NOTE: If you change the packed CB more than once within the same block of code, use the two-argument
- * overload pack_reconfig_data_format(old_cb_id, new_cb_id) instead. The single-argument overload can hang
- * when called again with a different CB, because it does not know the previous format.
+ * NOTE: This single-argument overload always reconfigures the packer. The two-argument overload
+ * pack_reconfig_data_format(old_cb_id, new_cb_id) instead reconfigures only when the old and new data formats
+ * differ. If you change the packed CB more than once within the same block of code, prefer the two-argument
+ * overload; reusing this single-argument overload with a different CB has been reported to hang in some cases.
  *
  * NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed at op init. pack_reconfig_data_format
  * only reprograms THCON IN_DATA_FORMAT (gasket), not the MOP or buffer descriptors. When the pack output
