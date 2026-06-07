@@ -243,9 +243,173 @@ Any items the audit flagged as YELLOW that affect this port, plus any new findin
 
 ---
 
+## Working with kernel code
+
+*Read this before you touch a kernel file. This section governs every device-side edit in the port.*
+
+### The principle
+
+**The premise.** A Metal 2.0 port is a *host-side* restructuring. The kernel diff that comes out the other end should be a mechanical projection of the host changes — nothing more. The expected post-port behavior of the kernel — its compiled output, its performance, every observable side effect — is *identical* to the pre-port behavior. If your kernel diff looks like anything other than a thin shell of mechanical substitutions, something has gone off-script.
+
+**Two deliverables.** You're producing two things, not one: the diff and the port report. Both are load-bearing. The diff is what ships; the report is what feeds back into the framework's understanding of where its assumptions break, which ops were tricky and why, which kernel patterns surfaced that we hadn't anticipated. A clean diff with a thorough report has the same success-tier as a clean diff with a sparse report — possibly higher, depending on what the report contains. Don't treat the report as a write-up of what you already did; treat it as a deliverable in its own right.
+
+**Why the kernel is special.** Kernel code is performance-tuned and brittle. Many of these kernels have been hand-optimized over years and contain subtle structural choices whose reasons aren't always documented. Subtle behavioral or performance regressions — the kind that arise from "harmless-looking" kernel edits — can take days to bisect, and the trust damage from one such regression outlives the bisection. The cost of any single local improvement is rarely worth that asymmetry. The whitelist below isn't conservatism; it's a structural defense against an asymmetry the porter cannot evaluate at edit time.
+
+**The pulls, named.** This recipe will at points ask you to leave things alone that you can see how to improve. When you read a kernel that has a duplicated block and you can see the cleaner refactor — don't refactor. When you spot what looks like a bug — don't fix it. When you find a stale comment — leave it (or, at most, tweak it to match the line you're forced to change). When you can see a perf optimization — don't make it. *Write each one up in the report.* That writeup is more valuable than the local change would have been: it surfaces something we didn't know, and it lets the right person — often someone who knows that kernel's history — decide what to do about it.
+
+If at any point during the port you find yourself reaching past the whitelist below, treat that as a signal — *the port has met its limit, not the porter has met theirs.* The [§When the whitelist doesn't fit](#when-the-whitelist-doesnt-fit) off-ramp at the bottom of this section is the proper resolution; it is on the same success tier as a completed port.
+
+### The whitelist
+
+The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. The single `#include` a porter adds to a kernel is `experimental/kernel_args.h` (which pulls in `get_arg`, `args::`, `dfb::`, `sem::`, `ta::`); the generated headers are auto-included by the build system — do not `#include` them yourself.
+
+**1. CircularBuffer → DataflowBuffer.** The object type swap, methods unchanged. Variable name updates limited to following the API rename (`cb_*` → `dfb_*`) — to keep the kernel readable. Don't rename for any other reason.
+
+```cpp
+// Legacy:
+CircularBuffer cb_in(cb_in_idx);
+cb_in.wait_front(1);
+cb_in.pop_front(1);
+
+// Metal 2.0:
+DataflowBuffer dfb_in(dfb::in);
+dfb_in.wait_front(1);
+dfb_in.pop_front(1);
+```
+
+**2. CB id → DFBAccessor at LLK / kernel-lib call sites.** Magic-number CB indices (some older kernels hardcoded these) and `uint32_t cb_*_idx` CTA reads are replaced by the `dfb::<name>` handle. The accessor's implicit conversion to `uint32_t` lets it flow into LLK primitives (`reduce_init`, `pack_tile`, `matmul_init`, etc.) and kernel-library helpers expecting a CB id, without extraction or wrapping.
+
+```cpp
+// Legacy:
+constexpr uint32_t cb_in_idx  = get_compile_time_arg_val(0);
+constexpr uint32_t cb_out_idx = get_compile_time_arg_val(1);
+reduce_init<...>(cb_in_idx, cb_scale_idx, cb_out_idx);
+pack_tile(0, cb_out_idx);
+
+// Metal 2.0:
+reduce_init<...>(dfb::in, dfb::scale, dfb::out);
+pack_tile(0, dfb::out);
+```
+
+**3. Resource construction from named tokens.** Every kernel-side resource is constructed from its named binding token:
+
+```cpp
+DataflowBuffer  dfb_in(dfb::in);
+TensorAccessor  input(ta::input);
+Semaphore       done(sem::done);
+```
+
+For `TensorAccessor` specifically, this *replaces* the legacy multi-step construction dance. The host-side binding mechanism now packs the layout metadata into the kernel's compile-time args at program creation and auto-injects the per-enqueue base address — work the kernel used to do explicitly via `TensorAccessorArgs<N>()` (with manual offset chaining) and a buffer-address RTA read. The kernel-side rewrite collapses to the one-line construction:
+
+```cpp
+// Legacy:
+constexpr auto input_args = TensorAccessorArgs<N>();    // N = preceding CTA count
+constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+uint32_t input_addr = get_arg_val<uint32_t>(0);
+uint32_t index_addr = get_arg_val<uint32_t>(1);
+auto input = TensorAccessor(input_args, input_addr);
+auto index = TensorAccessor(index_args, index_addr);
+
+// Metal 2.0:
+auto input = TensorAccessor(ta::input);
+auto index = TensorAccessor(ta::index);
+```
+
+If positional RTAs survive after the buffer-address RTA goes away (uncommon — most ports also convert all RTAs to named per rule 4), re-index them.
+
+> *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name` and `ta::name` do not. The recipe assumes no out-of-op call site requires passing a `sem::` or `ta::` handle — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below.
+
+**4. Named arguments throughout.** Compile-time, runtime, and common runtime arguments all become named via `get_arg(args::<name>)`. The CTA / RTA / CRTA distinction is a host-only concern; the kernel uses one uniform retrieval syntax. Pick names that match the variables they were going to be assigned to.
+
+```cpp
+// Legacy:
+constexpr uint32_t page_size = get_compile_time_arg_val(0);
+constexpr uint32_t num_pages = get_compile_time_arg_val(1);
+uint32_t start_page          = get_arg_val<uint32_t>(0);
+uint32_t bank_id             = get_common_arg_val<uint32_t>(0);
+
+// Metal 2.0:
+constexpr auto page_size = get_arg(args::page_size);  // CTA
+constexpr auto num_pages = get_arg(args::num_pages);  // CTA
+auto start_page          = get_arg(args::start_page); // RTA
+const auto bank_id       = get_arg(args::bank_id);    // CRTA
+```
+
+Varargs (`get_vararg(i)`) only when a subset of arguments is *genuinely dynamic in kernel code* — i.e. retrieved in a loop where `i` is a runtime variable (the canonical case: an N-dimensional shape gated on a CTA-bound `rank`). When each argument is referenced by a constant index, the named form is clearer on both sides. **Report any retained varargs use in the port report.**
+
+**5. No raw pointers in arguments.** Raw pointers — typically buffer base addresses — must not be passed as compile-time, runtime, common runtime, or vararg arguments. The binding mechanism handles base addresses for tensors automatically; if a kernel *genuinely* needs a raw pointer for an exotic case (legacy code that performed explicit address arithmetic), get it from a `TensorAccessor` (zero overhead):
+
+```cpp
+// Legacy:
+uint32_t input_addr = get_arg_val<uint32_t>(0);
+// ... explicit address arithmetic on input_addr ...
+
+// Metal 2.0:
+auto input = TensorAccessor(ta::input);
+uint32_t input_addr = input.get_bank_base_address(bank_id);  // when truly needed
+```
+
+Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal page-access methods are the standard path. `get_bank_base_address` is the escape hatch for explicit address arithmetic cases only.
+
+**6. Conditionally bound resources (DFB, tensor, semaphore).** A binding declared conditionally on the host (omitted from the kernel's bindings when a path isn't taken) requires kernel-side coordination:
+
+- The condition that selects the binding moves from a CTA to a kernel-side `#define` (emitted by the host via `KernelSpec::compiler_options.defines`).
+- `#ifdef`-gate the `constexpr` alias of the binding token at file scope.
+- `#ifdef`-gate any expression — including file-scope ternaries — that references the alias.
+
+```cpp
+// Legacy:
+constexpr uint32_t cb_fusion_idx = get_compile_time_arg_val(2);
+constexpr bool fuse_pre_add      = get_compile_time_arg_val(3);
+constexpr uint32_t cb_x = fuse_pre_add ? cb_fusion_idx : cb_out_idx;
+
+// Metal 2.0:
+#ifdef FUSE_PRE_ADD
+constexpr uint32_t cb_fusion = dfb::fusion;
+#endif
+#ifdef FUSE_PRE_ADD
+constexpr uint32_t cb_x = cb_fusion;
+#else
+constexpr uint32_t cb_x = cb_out;
+#endif
+```
+
+The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the code — so `dfb::fusion` never enters name lookup in the unfused build, and the conditionally-bound resource is honored end-to-end. See [patterns catalog — Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings) for the deeper rationale.
+
+**7. Comments — preserve.** The kernel's self-documentation is load-bearing. Slight tweaks to align an existing comment with the line you're forced to change are fine; **deletion is not.** When in doubt, err on the side of preserving information.
+
+The temptation is strongest when adding `#ifdef` blocks — the new structure may feel like it "obviates" an old explanatory comment that sat above the conditional. It doesn't. The explanation of *why* the conditional exists is still valuable; the change in HOW it's gated doesn't retire the WHY. Keep the comments.
+
+**8. No edits to kernel code outside the op's directory.** Shared kernels (under `ttnn/cpp/ttnn/kernel_lib/`, framework primitive locations, or anywhere outside this op's own top-level directory) are vetted for Metal 2.0 compatibility *before* op porting begins. If you find you need to edit one to complete the port, that's a signal the vetting missed something — and the most valuable thing you can do is surface that fact, not bundle the fix. Document in the port report:
+
+- The shared kernel file (path).
+- The function or construct that needed change.
+- What Metal 2.0–side change would have been needed (named-arg conversion, `dfb::` handle plumbed through a uint32_t parameter, etc.).
+
+The fix belongs in a separate PR, owned by the team responsible for the shared kernel. **Do not bundle external-kernel changes into the port PR.** If the implicit conversion `DFBAccessor → uint32_t` is enough to make a call site work without modifying the callee, that's fine — pass the handle and move on. But if you'd need to edit the callee, stop.
+
+For shared kernels that live *inside* `ttnn/cpp/ttnn/operations` but are used by multiple ops (a kernel that several siblings rely on), see [patterns catalog — Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel) for the fork-vs-in-place decision.
+
+### When the whitelist doesn't fit
+
+If you reach a point where the kernel changes the port would require fall outside the whitelist above, **stop.** Don't improvise. Don't introduce a "clever" workaround. Don't expand the whitelist by one rule "just this once." Capitulate gracefully.
+
+**This is not a failed port — it is a *successful capitulation*.** Same success tier as a clean port. The framework's calibration depends on knowing where its assumptions break, and a grounded capitulation gives the maintainers a clear picture of what to refine before the next porting wave. A creative workaround buried in a kernel diff gives them noise; a clean writeup gives them signal.
+
+Record in the port report's *Successful failure* section:
+
+- The op (path, factory).
+- The kernel file and the specific lines / constructs that needed to change.
+- A short explanation of *why* mechanical conversion failed — what the kernel was doing that didn't fit a binding-token replacement, a comment-preserving `#ifdef`, or whichever rule was the sticking point.
+- (If you can sketch it) what the off-whitelist change would have been, accurate enough that a maintainer can evaluate the gap.
+
+**The stop-signal we see most often:** *if you find yourself reaching past the op's own directory to make kernel changes, that's the signal.* The op shouldn't have made it to porting if its kernel needs out-of-dir changes — flag this prominently in the report. Other signals will surface as porting experience accumulates; this list will grow.
+
+---
+
 ## Construct paired spec + run-params
 
-*Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together.*
+*Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together. Kernel-side edits performed alongside this step are governed by [§Working with kernel code](#working-with-kernel-code).*
 
 **Operating principle**: prefer designated initializers. Metal 2.0 was designed to support them and the spec reads as data, not as procedure.
 
