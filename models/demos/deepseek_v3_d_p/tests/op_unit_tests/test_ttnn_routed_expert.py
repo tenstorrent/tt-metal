@@ -159,7 +159,7 @@ def run_torch_routed_experts(
 # case executes 64 sequential expert FFNs at full DS-V3 dims. That is ~3 min on a
 # warm galaxy chip and exceeds the global 300s pytest-timeout on a cold/slower P150
 # CI runner. Override per-test (not the repo-wide default in pytest.ini).
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1800)
 def test_ttnn_routed_expert(
     mesh_device,
     device_params,
