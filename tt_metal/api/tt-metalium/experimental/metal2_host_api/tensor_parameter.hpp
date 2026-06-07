@@ -42,7 +42,7 @@ struct TensorParameter {
     ////////////////////////////////////////////////
     // Advanced options (see advanced_options.hpp)
     ////////////////////////////////////////////////
-    TensorParameterAdvancedOptions advanced_options;
+    TensorParameterRelaxations relaxations;
 };
 
 }  // namespace tt::tt_metal::experimental
