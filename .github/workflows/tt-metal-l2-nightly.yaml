@@ -196,7 +196,8 @@ jobs:
             matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
+            # [bh-ci-validate] P100 disabled to run a single conv job on P150b — REVERT before merge.
+            # matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
             matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
           fi
           echo "matrix-l2-tests=$matrix_l2" >> $GITHUB_OUTPUT

@@ -120,6 +120,8 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        # [bh-ci-validate] explicit shared JIT cache: warm step populates it, test step reuses it.
+        TT_METAL_CACHE: /work/.precompile_cache
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -147,9 +149,17 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
+      - name: 🔎 [bh-ci-validate] runner specs
+        run: |
+          echo "arch=$ARCH_NAME nproc=$(nproc)"; lscpu | grep -E '^(Model name|CPU\(s\))' || true
+          echo "TT_METAL_CACHE=$TT_METAL_CACHE"
+          python3 -c "import ttnn; print('has capture_jit_build_fingerprint:', hasattr(ttnn.cluster,'capture_jit_build_fingerprint'))" || true
+      - name: 🔥 [bh-ci-validate] warm JIT cache (hardware-free, fingerprint replay)
+        timeout-minutes: 60
+        run: bash scripts/ci_precompile_warm.sh tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py -k "resnet50 or vae_sdxl"
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py -k "resnet50 or vae_sdxl" -v -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
