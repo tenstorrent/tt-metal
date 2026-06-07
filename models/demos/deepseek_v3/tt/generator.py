@@ -1061,6 +1061,56 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return tt_out
 
+    def sample_decode_on_device(
+        self,
+        tt_logits,
+        sampling_params=None,
+        reset_batch=False,
+        prompt_tokens=None,
+        output_tokens=None,
+        slot_remap=None,
+        enable_trace=False,
+        user_slots=None,
+    ):
+        """Public on-device decode-sampling entry point.
+
+        Matches the ``tt_transformers.Generator.sample_decode_on_device`` method
+        name/signature so a model-agnostic caller (e.g. vLLM running forward and
+        sampling as separate steps) can sample uniformly: given the decode logits
+        returned by ``decode_forward(sample_on_device=True)``, return sampled
+        token ids on device.
+
+        Contract differences vs the tt_transformers base (deferred reconciliation):
+        - Deepseek applies sampling *state* (params/seeds, lazy generator
+          creation) in :meth:`_validate_and_initialize_sampling`, gated on
+          param change — not unconditionally per step. Passing ``sampling_params``
+          here refreshes that state (idempotent when unchanged); the vLLM bridge
+          already initialises it before the forward, so it passes ``None``.
+        - ``prompt_tokens`` / ``output_tokens`` / ``slot_remap`` are not yet
+          threaded into deepseek's penalty/seed state (see
+          :meth:`_reset_sampling_state` TODO); accepted for signature
+          compatibility and currently ignored.
+        """
+        if sampling_params is not None:
+            self._validate_and_initialize_sampling(sampling_params, sample_on_device=True, enable_trace=enable_trace)
+        return self._sample_tokens_device(
+            tt_logits, enable_trace=enable_trace, user_slots=user_slots, skip_precompile=True
+        )
+
+    def sample_prefill_on_device(self, tt_logits, user_slots, enable_trace=False):
+        """Public on-device prefill-sampling entry point.
+
+        Deepseek samples prefill per user (``user_slots``), unlike the
+        tt_transformers base which accumulates deferred prefill tasks across a
+        batched prefill — so the signature differs by architecture. The shared
+        guarantee is "given prefill logits + the target slot(s), return sampled
+        token ids on device". State is set up by the caller via
+        :meth:`_validate_and_initialize_sampling` as for decode.
+        """
+        return self._sample_tokens_device(
+            tt_logits, user_slots=user_slots, enable_trace=enable_trace, skip_precompile=True
+        )
+
     def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
             tt_out_tok,

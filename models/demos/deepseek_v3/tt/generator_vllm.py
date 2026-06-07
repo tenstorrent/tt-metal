@@ -189,9 +189,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             )
 
             if sample_on_device:
-                prefill_logits_sampled_device = self._sample_tokens_device(
-                    prefill_logits, user_slots=[user_id], skip_precompile=True
-                )
+                prefill_logits_sampled_device = self.sample_prefill_on_device(prefill_logits, user_slots=[user_id])
                 prefill_logits_sampled_host = self._tokens_from_device(
                     prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
@@ -251,10 +249,9 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
 
         if sample_on_device:
-            decode_output = self._sample_tokens_device(
+            decode_output = self.sample_decode_on_device(
                 decode_step_output,
                 enable_trace=enable_trace,
-                skip_precompile=True,
             )
             if read_from_device:
                 decode_output = self._tokens_from_device(
