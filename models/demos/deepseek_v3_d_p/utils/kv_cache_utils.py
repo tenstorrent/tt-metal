@@ -15,6 +15,7 @@ import ttnn
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
+PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
 def create_kv_chunk_address_table(config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes):
@@ -165,11 +166,6 @@ def create_kv_chunk_address_table_kimi(
     Returns:
         lookup_table: Populated KvChunkAddressTable
     """
-    assert seq_len % (mesh_shape[sp_axis] * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) == 0, (
-        f"seq_len {seq_len} must be divisible by sp_factor({mesh_shape[sp_axis]}) * "
-        f"{NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK} for the sequential layout"
-    )
-
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
     host_name = socket.gethostname()
 
@@ -197,7 +193,15 @@ def create_kv_chunk_address_table_kimi(
             f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
         )
 
-    seq_len_local = seq_len // mesh_shape[sp_axis]
+    tokens_per_chunk_per_device = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+    num_seq_chunks = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks contained in the sequence length
+    assert (
+        seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
+    ), f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_OUTPUT_TOKENS}"
+    assert tokens_per_chunk_per_device % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
+        f"{PREFILL_CHUNK_OUTPUT_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_per_device}, "
+        f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
+    )
 
     slot = 0
     dram_bank_base_addr = tt_kvpe_cache.buffer_address()
@@ -205,19 +209,20 @@ def create_kv_chunk_address_table_kimi(
         group_idx = device_group_idx_per_row[local_idx]
         curr_bank_id = 0
         curr_bank_offset = 0
-        device_token_start = global_row * seq_len_local
-        device_token_end = device_token_start + seq_len_local
         for layer in range(num_layers):
-            for position in range(device_token_start, device_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                location = ttnn.experimental.disaggregation.KvCacheLocation()
-                location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
-                location.size_bytes = chunk_size_bytes
-                location.device_group_index = group_idx
-                lookup_table.set(layer, position, slot, location)
+            for seq_chunk in range(num_seq_chunks):
+                chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + global_row * tokens_per_chunk_per_device
+                chunk_token_end = chunk_token_start + tokens_per_chunk_per_device
+                for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    location = ttnn.experimental.disaggregation.KvCacheLocation()
+                    location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                    location.size_bytes = chunk_size_bytes
+                    location.device_group_index = group_idx
+                    lookup_table.set(layer, position, slot, location)
 
-                curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
-                if curr_bank_id == 0:
-                    curr_bank_offset += chunk_size_bytes
+                    curr_bank_id = (curr_bank_id + 1) % BH_NUM_DRAM_BANKS
+                    if curr_bank_id == 0:
+                        curr_bank_offset += chunk_size_bytes
 
     return lookup_table
 
