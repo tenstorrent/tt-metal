@@ -8,6 +8,7 @@
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 namespace df = norm::layernorm::device::kernels::dataflow;
 
@@ -122,16 +123,26 @@ void kernel_main() {
         cb_partial_obj.wait_front(block_h * num_tiles_scaler);
 
         if constexpr (num_blocks > 1) {
-            reduce_sender_sem.set(VALID);
+            // Phase-1 control-flag broadcast (mcast_pipe partial migration, C3 two-phase).
+            // The consumed-drain (R->S) wait stays raw — it is the protocol gate that must precede
+            // the flag broadcast. The flag set(VALID)+set_multicast(EXCLUDE_SRC) is absorbed by
+            // Pipe::send_signal() (raise_flag + flush). Phase-2 (monotone set(block+2) streaming)
+            // is DEFERRED RAW: it reuses this same reduce_sender_sem cell as a counter, which the
+            // Flag/Counter Pipe verbs cannot express per-side without desyncing the receiver base.
+            // Sender sits above the receiver rect (which starts one row below) -> EXCLUDE_SRC inferred.
+            dataflow_kernel_lib::Pipe<dataflow_kernel_lib::Staging::Flag, false> phase1_pipe(
+                noc,
+                dataflow_kernel_lib::McastRect{
+                    mcast_dest_noc_start_x,
+                    mcast_dest_noc_start_y,
+                    mcast_dest_noc_end_x,
+                    mcast_dest_noc_end_y},  // area() = num_blocks - 1 (the receiver rect)
+                num_blocks - 1,             // active-core count (send_signal does not consult it; kept meaningful)
+                reduce_sender_sem,
+                reduce_receiver_sem);
             reduce_receiver_sem.wait(num_blocks - 1);
             reduce_receiver_sem.set(0);
-            reduce_sender_sem.set_multicast(
-                noc,
-                mcast_dest_noc_start_x,
-                mcast_dest_noc_start_y,
-                mcast_dest_noc_end_x,
-                mcast_dest_noc_end_y,
-                num_blocks - 1);
+            phase1_pipe.send_signal(VALID);
         }
 
         // ============================================================================

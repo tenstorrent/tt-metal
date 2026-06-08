@@ -13,6 +13,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // READER
@@ -212,6 +213,21 @@ void kernel_main() {
     receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
+
+    // mcast_pipe: the in1 (and bias in3) block data-mcast + handshake is driven by a two-sided Pipe.
+    //   data_ready = receiver_sem (S->R level flag VALID/INVALID), consumed = sender_sem (R->S counter).
+    //   EXCLUDE_SRC, Flag, PRE_HANDSHAKE=true (receivers' reused CB slot), LINK=true (orig linked
+    //   data mcast + ARCH_BLACKHOLE flush; Pipe always flushes). Same rect/sems serve both send()s.
+    dataflow_kernel_lib::Pipe<> in1_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect{
+            in1_mcast_dest_noc_start_x,
+            in1_mcast_dest_noc_start_y,
+            in1_mcast_dest_noc_end_x,
+            in1_mcast_dest_noc_end_y},  // area() = in1_mcast_num_cores (the full mcast grid)
+        in1_mcast_num_dests,            // active-core ACK count (may be < num_cores when cores-without-work exist)
+        receiver_sem,                   // data ready (S->R level flag)
+        sender_sem);                    // consumed (R->S counter)
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = cb_in1.get_write_ptr();
@@ -418,47 +434,12 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
-                            in1_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                        // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
+                        // mcast_pipe: R->S consumed wait + reset, in1 block data mcast (linked),
+                        // flush, then the VALID data-ready flag mcast — all absorbed by send().
+                        in1_pipe.send(
+                            static_cast<uint32_t>(in1_start_address),
+                            static_cast<uint32_t>(in1_start_address),
+                            in1_block_size_bytes);
 #endif  // SKIP_MCAST
 
 #ifndef IN1_SHARDED
@@ -550,46 +531,11 @@ void kernel_main() {
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
 #ifndef SKIP_MCAST
-
-                        // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        sender_sem.wait(in1_mcast_num_dests);
-                        sender_sem.set(0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc.async_write_multicast(
-                            CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
-                            in3_block_size_bytes,
-                            in1_mcast_num_cores,
-                            {},
-                            {.noc_x_start = in1_mcast_dest_noc_start_x,
-                             .noc_y_start = in1_mcast_dest_noc_start_y,
-                             .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
-                            true);
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
-                        // latency which means data could be changed before write is issued.
-                        noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        receiver_sem.set_multicast(
-                            noc,
-                            in1_mcast_dest_noc_start_x,
-                            in1_mcast_dest_noc_start_y,
-                            in1_mcast_dest_noc_end_x,
-                            in1_mcast_dest_noc_end_y,
-                            in1_mcast_num_cores);
+                        // mcast_pipe: same channel as in1, now carrying the bias (in3) block.
+                        in1_pipe.send(
+                            static_cast<uint32_t>(in3_start_address),
+                            static_cast<uint32_t>(in3_start_address),
+                            in3_block_size_bytes);
 #endif  // SKIP_MCAST
 
                         cb_in3.push_back(in1_block_w);
