@@ -101,13 +101,18 @@ void test_h2d_socket(
     }
 }
 
+// Read: consume the stream with read() and verify the data. Discard: drop pages with
+// discard_pending_pages() without touching the data.
+enum class D2HConsumeMode { Read, Discard };
+
 void test_d2h_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
     std::size_t page_size,
     std::size_t data_size,
     const MeshCoreCoord& sender_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)},
-    uint32_t pages_per_read = 1) {
+    uint32_t pages_per_read = 1,
+    D2HConsumeMode consume_mode = D2HConsumeMode::Read) {
     auto output_socket = D2HSocket(mesh_device, sender_core, socket_fifo_size);
     output_socket.set_page_size(page_size);
 
@@ -151,6 +156,19 @@ void test_d2h_socket(
     mesh_workload.add_program(devices, std::move(send_program));
 
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+
+    if (consume_mode == D2HConsumeMode::Discard) {
+        // Drop every page without reading the data region. discard_pending_pages() must
+        // advance bytes_acked exactly as read()/pop_bytes does, including the FIFO wrap
+        // gap, otherwise host bytes_acked never reconciles with device bytes_sent and the
+        // barrier deadlocks.
+        uint32_t discarded = 0;
+        while (discarded < num_pages) {
+            discarded += output_socket.discard_pending_pages();
+        }
+        output_socket.barrier(/*timeout_ms=*/5000);
+        return;
+    }
 
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     for (uint32_t page = 0; page < num_pages; page += pages_per_read) {
@@ -374,6 +392,11 @@ TEST_F(HDSocketFixture, D2HSocket) {
         test_d2h_socket(mesh_device_, 16512, 1088, 156672, MeshCoreCoord(sender_coord, CoreCoord(0, 1)));
         // Multi-page read whose span straddles the FIFO wrap boundary, exercising the head/tail split.
         test_d2h_socket(mesh_device_, 4096, 1088, 79424, MeshCoreCoord(sender_coord, CoreCoord(0, 1)), 2);
+        // Drain a wrapping stream via discard_pending_pages() instead of reading. 4 pages
+        // through a 3-page FIFO forces one wrap; the discard path must credit the wrap gap
+        // or the closing barrier never reconciles with the device.
+        test_d2h_socket(
+            mesh_device_, 4096, 1088, 4352, MeshCoreCoord(sender_coord, CoreCoord(0, 1)), 1, D2HConsumeMode::Discard);
     }
 }
 
