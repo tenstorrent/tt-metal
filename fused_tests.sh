@@ -5,13 +5,13 @@
 # Resumable: every test file is recorded in $STATE once attempted, so ending the
 # run (Ctrl-C / kill) and re-running CONTINUES from where it stopped and APPENDS
 # to $LOG instead of restarting the whole suite.
-#   - Start over:        ./data_mov_tests.sh --fresh   (or FRESH=1 ./data_mov_tests.sh)
+#   - Start over:        ./fused_tests.sh --fresh   (or FRESH=1 ./fused_tests.sh)
 #   - Re-run one test:   remove its line from $STATE, then re-run.
 # A per-test timeout ($TEST_TIMEOUT secs, default 900) keeps a single hung test
 # from blocking the suite — it is killed, logged, and the loop moves on.
 set -uo pipefail
-LOG=dm_output.log
-STATE=dm_output.state
+LOG=fused_output.log
+STATE=fused_output.state
 TEST_TIMEOUT=${TEST_TIMEOUT:-900}
 
 type emule_preflight >/dev/null 2>&1 || { echo "Run 'source setup.sh' first."; exit 1; }
@@ -37,7 +37,7 @@ else
     echo "Resuming: $(wc -l < "$STATE") test(s) already attempted; appending to $LOG." | tee -a "$LOG"
 fi
 
-for file in tests/ttnn/unit_tests/operations/data_movement/test_*.py; do
+for file in tests/ttnn/unit_tests/operations/fused/test_*.py; do
     if grep -qxF "$file" "$STATE"; then
         echo "Skipping $file (already attempted)." | tee -a "$LOG"
         continue
