@@ -60,9 +60,7 @@ class TestNewModePhase1Phase2:
             return mock_result
 
         with patch.object(subprocess, "run", side_effect=mock_run):
-            run_phase1_generate_rank_bindings(
-                mgd_path, hosts, output_dir, subprocess_run=subprocess.run
-            )
+            run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=subprocess.run)
 
         # Verify Phase 1 command structure
         assert "--host" in captured_cmd
