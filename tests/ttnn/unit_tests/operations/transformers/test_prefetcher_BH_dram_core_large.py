@@ -49,7 +49,12 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up, bytes_per_tile as _bytes_per_tile
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    bytes_per_tile as _bytes_per_tile,
+    bank_receivers_strided as _bank_receivers_strided,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 # DRAM bank count is queried at runtime via `device.dram_grid_size().x`:
@@ -75,24 +80,6 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int)
     cores = []
     for k in range(recv_per_bank):
         ring_pos = bank_idx * recv_per_bank + k
-        col = ring_pos % ring_cols
-        row = ring_pos // ring_cols
-        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
-    return ttnn.CoreRangeSet(cores)
-
-
-def _bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
-    """Strided receivers matching BufferDistributionSpec round-robin placement:
-    bank b -> ring positions [b, b + num_dram_banks, b + 2*num_dram_banks, ...].
-
-    Under ROUND_ROBIN_1D shard distribution, shard s lands on bank
-    (s % num_dram_banks) at bank-local slab (s // num_dram_banks). Pairing
-    that with this GCB topology means shard index == ring position, so the
-    caller can store data in ring-position order without a permutation.
-    """
-    cores = []
-    for s in range(recv_per_bank):
-        ring_pos = bank_idx + s * num_dram_banks
         col = ring_pos % ring_cols
         row = ring_pos // ring_cols
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
@@ -587,36 +574,6 @@ def test_dram_core_prefetcher_multi_tensor(device, num_tensors, num_layers):
 # placement. Receiver is the discard consumer (smoke: no PCC check yet).
 
 
-def _make_recv_contig_weight(
-    device, pt_weight: torch.Tensor, num_dram_banks: int, num_recv_per_bank: int, dtype
-) -> ttnn.Tensor:
-    """Allocate ``pt_weight`` ((1, 1, K, N)) as a DRAM-sharded ND tensor with
-    ``num_shards = ring_size`` distributed round-robin across ``num_dram_banks``
-    DRAM cores. Tensor keeps its (K, N) logical shape; only the buffer's BDS
-    placement changes. Paired with the strided GCB topology
-    (`_bank_receivers_strided`), shard m's data (columns
-    [m*n_per_recv, (m+1)*n_per_recv)) lands on the matmul receiver assigned
-    ring position m without any host permutation.
-    """
-    K = pt_weight.shape[-2]
-    N = pt_weight.shape[-1]
-    ring_size = num_dram_banks * num_recv_per_bank
-    assert N % ring_size == 0, f"N={N} must divide ring_size={ring_size}"
-    n_per_recv = N // ring_size
-
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    nd_shard = ttnn.NdShardSpec(
-        ttnn.Shape([K, n_per_recv]),
-        dram_core_range_set,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
-    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
-
-
 @pytest.mark.parametrize("num_tensors,num_layers", [(1, 1), (2, 1), (2, 5)])
 def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
     num_dram_banks = device.dram_grid_size().x
@@ -632,15 +589,7 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
     for i in range(num_tensors):
         torch.manual_seed(0xC400 + i)
         pt = torch.randn(1, 1, K, N)
-        weights.append(
-            _make_recv_contig_weight(
-                device,
-                pt,
-                num_dram_banks=num_dram_banks,
-                num_recv_per_bank=num_recv_per_bank,
-                dtype=ttnn.bfloat8_b,
-            )
-        )
+        weights.append(_make_recv_contig_weight(device, pt, num_dram_banks, ring_size, ttnn.bfloat8_b))
 
     k_tiles = K // ttnn.TILE_SIZE
     k_block_w_tiles = (k_tiles + ring_size - 1) // ring_size

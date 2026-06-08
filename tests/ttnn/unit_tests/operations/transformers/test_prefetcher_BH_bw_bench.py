@@ -49,7 +49,10 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
@@ -175,18 +178,7 @@ def _build_weight_recv_contig(device, num_dram_banks: int) -> ttnn.Tensor:
     """
     torch.manual_seed(0xBED)
     pt_weight = torch.randn(1, 1, _K, _N)
-    n_per_recv = _N // _RING_SIZE
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    nd_shard = ttnn.NdShardSpec(
-        ttnn.Shape([_K, n_per_recv]),
-        dram_core_range_set,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
-    return ttnn.as_tensor(pt_weight, device=device, dtype=_DTYPE, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+    return _make_recv_contig_weight(device, pt_weight, num_dram_banks, _RING_SIZE, _DTYPE)
 
 
 def _build_dummy_addrs(device) -> ttnn.Tensor:

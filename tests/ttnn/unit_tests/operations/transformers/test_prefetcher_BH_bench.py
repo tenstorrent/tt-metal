@@ -50,7 +50,11 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    ring_grid_cols as _ring_grid_cols,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
 pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
@@ -274,7 +278,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
     num_receivers_per_bank = _select_num_receivers_per_bank(num_dram_banks)
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = max(c for c in range(min(_NUM_DRAM_BANKS, ring_size), 0, -1) if ring_size % c == 0)
+    ring_cols = _ring_grid_cols(_NUM_DRAM_BANKS, ring_size)
     ring_rows = ring_size // ring_cols
     k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
     if num_dram_banks != _NUM_DRAM_BANKS or num_receivers_per_bank != _NUM_RECV_PER_BANK:
@@ -501,7 +505,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
     num_receivers_per_bank = _select_num_receivers_per_bank(num_dram_banks)
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = max(c for c in range(min(_NUM_DRAM_BANKS, ring_size), 0, -1) if ring_size % c == 0)
+    ring_cols = _ring_grid_cols(_NUM_DRAM_BANKS, ring_size)
     ring_rows = ring_size // ring_cols
     k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
     if num_dram_banks != _NUM_DRAM_BANKS or num_receivers_per_bank != _NUM_RECV_PER_BANK:
@@ -546,21 +550,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     # Receiver-contiguous weight: NdShardSpec, num_shards = ring_size, each shard (K_padded, n_per_recv).
     n_per_recv = _N // ring_size
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.BufferType.DRAM,
-        ttnn.NdShardSpec(
-            ttnn.Shape([k_padded, n_per_recv]),
-            dram_core_range_set,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-        ),
-    )
-    tt_weight = ttnn.as_tensor(
-        pt_weight, device=device, dtype=_DTYPE, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
-    )
+    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, _DTYPE)
 
     K_per_shard = k_padded // ring_size
     act_mem_config = ttnn.create_sharded_memory_config(
