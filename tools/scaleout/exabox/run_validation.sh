@@ -25,7 +25,6 @@ Optional:
     --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
                                             /data/scaleout_configs is mounted by default; each host path
                                             is mounted at the same path inside the container
-    --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
@@ -48,7 +47,6 @@ ITERATIONS=50
 FACTORY_DESCRIPTOR_PATH=""
 OUTPUT_DIR="validation_output"
 EXTRA_VOLUMES=(/data/scaleout_configs)
-RERUN_ON_RETRAIN=false
 MPI_IF="ens5f0np0"
 MPI_EXTRA_ARGS=()
 
@@ -121,14 +119,6 @@ while [[ $# -gt 0 ]]; do
             fi
             EXTRA_VOLUMES+=("$2")
             shift 2
-            ;;
-        --rerun-on-retrain)
-            if [[ -n "$2" ]] && [[ "$2" != --* ]]; then
-                echo "Error: --rerun-on-retrain does not accept a value"
-                exit 1
-            fi
-            RERUN_ON_RETRAIN=true
-            shift
             ;;
         --mpi-if)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
@@ -342,36 +332,15 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
 
-    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
-        # Keep all retry artifacts (log + per-iteration retrain CSV) under the same base
-        # output directory so the end-of-run aggregation finds everything in one scan.
-        ITER_RETRY_DIR="$OUTPUT_DIR/iteration_${i}_retry"
-        mkdir -p "$ITER_RETRY_DIR"
-        LOG_FILE_RETRY="$ITER_RETRY_DIR/cluster_validation_iteration_${i}_retry.log"
-
-        {
-            echo "=========================================="
-            echo "Iteration: $i - retry due to retrained links"
-            echo "Timestamp: $(date)"
-            echo "=========================================="
-            echo ""
-
-            echo "Re-running cluster validation..."
-            run_cluster_validation "$ITER_RETRY_DIR"
-            echo "Iteration $i retry completed at $(date)"
-            echo "=========================================="
-        } 2>&1 | tee "$LOG_FILE_RETRY"
-    fi
-
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
 done
 
 # ----------------------------------------------------------------------------
 # End-of-run aggregation: produce a single CSV with one row per retrained link
-# and the total number of retrains observed across the entire run (all
-# iterations + retries). Per-iteration link_retrain_report.csv files are
-# written by the C++ tool inside each iteration's output directory.
+# and the total number of retrains observed across the entire run. Per-iteration
+# link_retrain_report.csv files are written by the C++ tool inside each iteration's
+# output directory.
 # ----------------------------------------------------------------------------
 RETRAIN_SUMMARY="$OUTPUT_DIR/link_retrain_summary.csv"
 
@@ -391,7 +360,7 @@ if [[ ${#retrain_csvs[@]} -eq 0 ]]; then
     exit 0
 fi
 
-echo "Iterations (incl. retries) with retraining: ${#retrain_csvs[@]}"
+echo "Iterations with retraining: ${#retrain_csvs[@]}"
 echo ""
 
 # Sum Retrain_Count per (Host,Tray,ASIC,Channel,Unique_ID) across all CSVs.
