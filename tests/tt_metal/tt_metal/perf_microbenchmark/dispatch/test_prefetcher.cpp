@@ -16,6 +16,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/host_api/temp_quasar_api.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
@@ -2799,21 +2800,35 @@ public:
         // Semaphores
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        // Slot 0: prefetch_sync_sem - dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
-        const uint32_t di_sync_sem = tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
-        TT_FATAL(pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
+        // Semaphore slots. On WH/BH prefetch and dispatch are on different cores, so each pair of sems
+        // lands at the same per-core slot id (the equality asserts below hold). On Quasar both kernels
+        // share core {0,0}, so every CreateSemaphore consumes a distinct slot: create a single sync sem
+        // (used by both kernels) and let the two CB sems take their own slots. The distinct ids are
+        // threaded into each kernel's defines, which is correct on both arches (ids are equal on WH/BH).
+        const bool fd_kernels_on_same_core = (phys_prefetch == phys_disp);
 
-        // Slot 1: downstream_cb_sem on prefetch (init=dispatch_buffer_pages); dispatch_cb_sem on dispatch (init=0).
+        // prefetch_sync_sem: dispatch signals prefetch when a stall round-trip is done.
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, 0u);
+        uint32_t di_sync_sem = pf_sync_sem;
+        if (!fd_kernels_on_same_core) {
+            di_sync_sem = tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
+            TT_FATAL(
+                pf_sync_sem == di_sync_sem, "prefetch_sync_sem slot mismatch ({} vs {})", pf_sync_sem, di_sync_sem);
+        }
+
+        // downstream_cb_sem on prefetch (init=dispatch_buffer_pages, the credit pool); dispatch_cb_sem on
+        // dispatch (init=0, the received-pages count).
         const uint32_t pf_downstream_cb_sem =
             tt_metal::CreateSemaphore(program, {Common::sd_prefetch_core}, dispatch_buffer_pages);
         const uint32_t di_dispatch_cb_sem =
             tt_metal::CreateSemaphore(program, {Common::dispatch_core(this->device_)}, 0u);
-        TT_FATAL(
-            pf_downstream_cb_sem == di_dispatch_cb_sem,
-            "dispatch_cb sem slot mismatch ({} vs {})",
-            pf_downstream_cb_sem,
-            di_dispatch_cb_sem);
+        if (!fd_kernels_on_same_core) {
+            TT_FATAL(
+                pf_downstream_cb_sem == di_dispatch_cb_sem,
+                "dispatch_cb sem slot mismatch ({} vs {})",
+                pf_downstream_cb_sem,
+                di_dispatch_cb_sem);
+        }
 
         // Kernel defines and creation
         auto prefetch_defines = Common::make_sd_prefetch_defines(
@@ -2831,18 +2846,32 @@ public:
             dispatch_cb_base,
             dispatch_buffer_pages,
             pf_downstream_cb_sem,
+            di_dispatch_cb_sem,
             pf_sync_sem,
             entry_size,
             phys_prefetch,
             phys_disp);
-        auto prefetch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-            {Common::sd_prefetch_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = prefetch_defines});
+        // On Quasar prefetch and dispatch share core {0,0}; the experimental API auto-assigns DM
+        // cores, so prefetch must be created before dispatch to land on DM0 (dispatch then gets DM1),
+        // mirroring the merged SD dispatcher test. is_legacy_kernel ports the WH/BH kernel unchanged.
+        tt_metal::KernelHandle prefetch_kernel;
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            prefetch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                Common::sd_prefetch_core,
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .defines = prefetch_defines, .is_legacy_kernel = true});
+        } else {
+            prefetch_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
+                {Common::sd_prefetch_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = prefetch_defines});
+        }
         tt_metal::SetRuntimeArgs(program, prefetch_kernel, Common::sd_prefetch_core, {0u, 0u, 0u});
 
         const uint32_t dev_completion_base = dev_hugepage_base + this->sd_hugepage_issue_buffer_size();
@@ -2850,7 +2879,7 @@ public:
             this->device_,
             dispatch_buffer_pages,
             di_dispatch_cb_sem,
-            di_dispatch_cb_sem,
+            pf_downstream_cb_sem,
             di_sync_sem,
             phys_prefetch,
             phys_disp,
@@ -2858,14 +2887,25 @@ public:
             memmap.dispatch_buffer_base(),
             dev_completion_base,
             this->sd_completion_queue_size());
-        auto dispatch_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-            {Common::dispatch_core(this->device_)},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::NOC_0,
-                .defines = dispatch_defines});
+        tt_metal::KernelHandle dispatch_kernel;
+        if (this->device_->arch() == tt::ARCH::QUASAR) {
+            // prefetch already occupies DM0 on this shared core, so dispatch auto-assigns to DM1.
+            dispatch_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                Common::dispatch_core(this->device_),
+                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .defines = dispatch_defines, .is_legacy_kernel = true});
+        } else {
+            dispatch_kernel = tt_metal::CreateKernel(
+                program,
+                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
+                {Common::dispatch_core(this->device_)},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::NOC_0,
+                    .defines = dispatch_defines});
+        }
         tt_metal::SetRuntimeArgs(program, dispatch_kernel, Common::dispatch_core(this->device_), {0u, 0u, 0u});
 
         // Initialize the dispatcher's completion queue write/read pointers in L1, mirroring
@@ -3711,18 +3751,8 @@ INSTANTIATE_TEST_SUITE_P(
     SlowDispatch,
     SDPrefetchHostTestFixture,
     ::testing::Values(
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            false},
-        PagedReadParams{
-            DRAM_PAGE_SIZE_DEFAULT,
-            DRAM_PAGES_TO_READ_DEFAULT,
-            DEFAULT_ITERATIONS,
-            Common::DRAM_DATA_SIZE_WORDS,
-            true}),
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" +

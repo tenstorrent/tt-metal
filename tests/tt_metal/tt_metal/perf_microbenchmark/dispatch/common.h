@@ -1377,6 +1377,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
     uint32_t dispatch_cb_base,
     uint32_t dispatch_cb_pages,
     uint32_t dispatch_cb_sem_id,
+    uint32_t downstream_cb_sem_id,
     uint32_t downstream_sync_sem_id,
     uint32_t entry_size,
     const CoreCoord& phys_prefetch,
@@ -1397,8 +1398,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},
+        // MY_DOWNSTREAM_CB_SEM_ID: prefetch's own downstream credit pool (waited on locally).
+        // DOWNSTREAM_CB_SEM_ID: the dispatcher's received-pages sem the prefetcher signals. On WH/BH
+        // these share a slot id; on Quasar (prefetch+dispatch same core) they are distinct slots.
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
-        {"DOWNSTREAM_CB_SEM_ID", std::to_string(dispatch_cb_sem_id)},
+        {"DOWNSTREAM_CB_SEM_ID", std::to_string(downstream_cb_sem_id)},
         {"IS_CQ_DRAM_BACKED", is_cq_dram_backed ? "1" : "0"},
         {"DRAM_BACKED_CQ_BANK_ID", "0"},
         {"PCIE_BASE", std::to_string(pcie_base)},
