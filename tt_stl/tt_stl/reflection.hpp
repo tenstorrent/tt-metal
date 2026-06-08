@@ -1428,7 +1428,26 @@ inline hash_t hash_object(const T& object) noexcept {
 
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    ([&seed](const auto& arg) { seed ^= hash_object(arg) + 0x9e3779b9 + (seed << 6) + (seed >> 2); }(args), ...);
+    // Fold each element into the running seed through a strong 64-bit bijective mixer.
+    //
+    // The previous combiner was the classic 32-bit boost::hash_combine
+    // (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the
+    // small, structured integers that dominate our keys (tensor shapes, dtypes), so distinct
+    // sequences collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1] hashed
+    // identically, producing wrong program-cache hits (issue #45821).
+    //
+    // We replace it with the splitmix64 finalizer (David Stafford's "variant 13" of the
+    // MurmurHash3 final mix); it is the same mixer boost (>=1.81) and abseil use internally,
+    // implemented here with only <cstdint> arithmetic so tt_stl pulls in no extra dependency.
+    // 0x9e3779b97f4a7c15 is the 64-bit golden-ratio increment (the 64-bit analog of the old
+    // 0x9e3779b9), which keeps the fold order-dependent and gives a non-trivial result for a
+    // zero seed / zero element.
+    ([&seed](const auto& arg) {
+        hash_t x = seed + 0x9e3779b97f4a7c15ULL + hash_object(arg);
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+        seed = x ^ (x >> 31);
+    }(args), ...);
     return seed;
 }
 
