@@ -23,6 +23,10 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, TTNNLayerStack
+from models.experimental.tt_symbiote.modules.linear import (
+    _mesh_ccl_all_gather,
+    _tp_requires_ccl,
+)
 from ttnn.operations.transformer import SDPAProgramConfig
 
 # Tracy (perf): vision Matmul/SDPA show HiFi4; use lower fidelity for ViT matmul/SDPA only.
@@ -99,6 +103,115 @@ def _largest_divisor_le(value: int, limit: int) -> int:
     return 1
 
 
+def _vision_tp_degree(device) -> int:
+    """Tensor-parallel width on the mesh (1 for single-device / pure DP)."""
+    if device is None or not hasattr(device, "get_num_devices"):
+        return 1
+    if not _tp_requires_ccl(device):
+        return 1
+    return max(1, int(device.get_num_devices()))
+
+
+def _vision_tp_head_shard_torch_qkv(
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    *,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    tp: int,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Build per-device fused QKV ``[Q_shard | K_shard | V_shard]`` stacked on dim 0.
+
+    Vision MHA (12 Q / 12 KV) uses head-sharded TP so each device runs SDPA with
+    ``num_q_heads == num_kv_heads`` (required by ``sdpa_device_operation``). The
+    text-decoder GQA path instead uses Q-shard + KV-replicate (see the create_heads
+    TP unit tests).
+    """
+    if tp <= 1:
+        return weight, bias
+    if num_q_heads % tp != 0 or num_kv_heads % tp != 0:
+        raise ValueError(f"heads not divisible by TP={tp}: q={num_q_heads} kv={num_kv_heads}")
+
+    q_w = num_q_heads * head_dim
+    kv_w = num_kv_heads * head_dim
+    q_part, k_part, v_part = torch.split(weight, [q_w, kv_w, kv_w], dim=0)
+    q_per = num_q_heads // tp
+    kv_per = num_kv_heads // tp
+    q_rows = q_per * head_dim
+    kv_rows = kv_per * head_dim
+
+    slabs_w = []
+    slabs_b = [] if bias is not None else None
+    for d in range(tp):
+        q_sl = q_part[d * q_rows : (d + 1) * q_rows]
+        k_sl = k_part[d * kv_rows : (d + 1) * kv_rows]
+        v_sl = v_part[d * kv_rows : (d + 1) * kv_rows]
+        slabs_w.append(torch.cat([q_sl, k_sl, v_sl], dim=0))
+        if bias is not None:
+            bq, bk, bv = torch.split(bias, [q_w, kv_w, kv_w], dim=0)
+            slabs_b.append(
+                torch.cat(
+                    [
+                        bq[d * q_rows : (d + 1) * q_rows],
+                        bk[d * kv_rows : (d + 1) * kv_rows],
+                        bv[d * kv_rows : (d + 1) * kv_rows],
+                    ],
+                    dim=0,
+                )
+            )
+
+    stacked_w = torch.stack(slabs_w, dim=0)
+    stacked_b = torch.stack(slabs_b, dim=0) if slabs_b is not None else None
+    return stacked_w, stacked_b
+
+
+def _vision_tp_upload_qkv_sharded(
+    weight: torch.Tensor,
+    bias: torch.Tensor | None,
+    device,
+    *,
+    num_q_heads: int,
+    num_kv_heads: int,
+    head_dim: int,
+    mem: ttnn.MemoryConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+    """Upload TP Q-sharded / KV-replicated QKV weights to the mesh (dim-0 device slabs)."""
+    tp = _vision_tp_degree(device)
+    stacked_w, stacked_b = _vision_tp_head_shard_torch_qkv(
+        weight,
+        bias,
+        num_q_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
+        tp=tp,
+    )
+    # Match ``preprocess_linear_weight`` (transpose to [in, out] for ``transpose_b=True``).
+    stacked_w = torch.stack([stacked_w[d].T.contiguous() for d in range(tp)], dim=0)
+    if stacked_b is not None:
+        stacked_b = torch.stack([stacked_b[d].reshape(1, -1).contiguous() for d in range(tp)], dim=0)
+    mapper = ttnn.ShardTensorToMesh(device, dim=0)
+    tt_w = ttnn.from_torch(
+        stacked_w,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem,
+        mesh_mapper=mapper,
+    )
+    tt_bias = None
+    if stacked_b is not None:
+        tt_bias = ttnn.from_torch(
+            stacked_b,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem,
+            mesh_mapper=mapper,
+        )
+    return tt_w, tt_bias
+
+
 # Cache program_config objects per (grid, m, k, n) so trace capture sees the
 # same Python object across calls. Recreating the config in the forward pass
 # every iteration breaks ttnn trace dedup and silently drops the entire
@@ -108,6 +221,10 @@ _VISION_MATMUL_PC_CACHE: dict = {}
 _VISION_MATMUL_BS_MEM_CACHE: dict = {}
 _VISION_O_PROJ_BS_PC_CACHE: dict = {}
 _VISION_MLP_DOWN_L1_PC_CACHE: dict = {}
+_VISION_MLP_UP_M_SHARD_L1_PC_CACHE: dict = {}
+
+# Vision prefill M per device under TP=4 sequence sharding (11264 / 4 = 2816 -> 88 M-tiles).
+_VISION_MLP_M_SHARD_M_TILES = 88
 _VISION_MERGER_FC1_BS_PC_CACHE: dict = {}
 _VISION_MERGER_FC2_BS_PC_CACHE: dict = {}
 
@@ -434,6 +551,35 @@ def _vision_mlp_down_l1_pc(device):
         fuse_batch=False,
     )
     _VISION_MLP_DOWN_L1_PC_CACHE[cache_key] = pc
+    return pc
+
+
+def _vision_mlp_up_m_shard_l1_pc(device):
+    """Up-projection (fc3) for M-sharded vision prefill (M=2816, K=1536, N=4224), L1 in0/out."""
+    if device is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    if grid_x < 8 or grid_y < 8:
+        _VISION_MLP_UP_M_SHARD_L1_PC_CACHE[(grid_x, grid_y)] = None
+        return None
+    cache_key = (grid_x, grid_y)
+    if cache_key in _VISION_MLP_UP_M_SHARD_L1_PC_CACHE:
+        return _VISION_MLP_UP_M_SHARD_L1_PC_CACHE[cache_key]
+    # Requested tiling (per_core_M=11, out_subblock 1x6, fuse_batch=True). Up shape needs
+    # in0_block_w | Kt=48 and num_blocks_x <= 8, so in0_block_w=6 and per_core_N=18 (not 11/6).
+    pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=6,
+        out_subblock_h=1,
+        out_subblock_w=6,
+        per_core_M=11,
+        per_core_N=18,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    _VISION_MLP_UP_M_SHARD_L1_PC_CACHE[cache_key] = pc
     return pc
 
 
@@ -961,10 +1107,6 @@ class TTNNDotsVisionMLP(TTNNModule):
                 return None
             return preprocess_linear_bias(b, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
 
-        # Unfused gate/up projections (two linears). Vision MLP uses DRAM linears without
-        # decoder-style CCL, so fusion only saved one matmul launch while forcing two
-        # SliceDeviceOperation per block on the fused [gate|up] output; unfused removes those slices.
-        self._intermediate_size = None
         self.tt_fused_gate_up_weight = None
         self.tt_fused_gate_up_bias = None
         self.tt_fc1_weight = pw(self._fc1_weight)
@@ -994,9 +1136,76 @@ class TTNNDotsVisionMLP(TTNNModule):
         self.tt_fc3_weight = _to_dev(getattr(self, "tt_fc3_weight", None))
         self.tt_fc3_bias = _to_dev(getattr(self, "tt_fc3_bias", None))
 
+    def _forward_m_shard_l1(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """M-shard prefill: unfused gate/up; up matmul uses tuned L1 in0/out program config."""
+        l1 = ttnn.L1_MEMORY_CONFIG
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if hidden_states.memory_config().buffer_type != ttnn.BufferType.L1:
+            hidden_states = ttnn.to_memory_config(hidden_states, l1)
+
+        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
+        k_dim = int(self.tt_fc1_weight.shape[-2])
+        n_dim = int(self.tt_fc1_weight.shape[-1])
+        gate_pc = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        up_pc = _vision_mlp_up_m_shard_l1_pc(self.device)
+
+        gate = ttnn.linear(
+            hidden_states,
+            self.tt_fc1_weight,
+            bias=self.tt_fc1_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=dram,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_pc,
+        )
+        up = ttnn.linear(
+            hidden_states,
+            self.tt_fc3_weight,
+            bias=self.tt_fc3_bias,
+            dtype=ttnn.bfloat4_b,
+            memory_config=l1,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=up_pc,
+        )
+        ttnn.deallocate(hidden_states)
+
+        gate_up_mul = ttnn.mul(
+            gate,
+            up,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            fast_and_approximate_mode=True,
+            dtype=ttnn.bfloat8_b,
+            memory_config=l1,
+        )
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+
+        down_m = int(gate_up_mul.shape[0]) * int(gate_up_mul.shape[1]) * int(gate_up_mul.shape[2])
+        down_k = int(self.tt_fc2_weight.shape[-2])
+        down_n = int(self.tt_fc2_weight.shape[-1])
+        down_pc = _vision_mlp_down_l1_pc(self.device) or _vision_matmul_program_config(
+            self.device, down_m, down_k, down_n
+        )
+        output = ttnn.linear(
+            gate_up_mul,
+            self.tt_fc2_weight,
+            bias=self.tt_fc2_bias,
+            dtype=ttnn.bfloat4_b,
+            memory_config=l1,
+            compute_kernel_config=self.compute_kernel_config,
+            program_config=down_pc,
+        )
+        ttnn.deallocate(gate_up_mul)
+        return output
+
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
+        m_tiles = m_dim // ttnn.TILE_SIZE
+        if m_tiles == _VISION_MLP_M_SHARD_M_TILES:
+            return self._forward_m_shard_l1(hidden_states)
 
         mem = ttnn.DRAM_MEMORY_CONFIG
 
@@ -1004,7 +1213,6 @@ class TTNNDotsVisionMLP(TTNNModule):
         # 27.7% LoFi TFLOPs / 13% DRAM with the auto-config (in0_block_w=1).
         # Setting a tuned in0_block_w + out_subblock_w increases L1 weight
         # reuse and matches the text-decoder linears' ``SLOW``->faster path.
-        m_dim = int(hidden_states.shape[0]) * int(hidden_states.shape[1]) * int(hidden_states.shape[2])
         k_dim = int(self.tt_fc1_weight.shape[-2])
         n_dim = int(self.tt_fc1_weight.shape[-1])
 
@@ -1389,9 +1597,17 @@ class TTNNDotsVisionAttention(TTNNModule):
         # preserves input dtype -- so Q/K can stay BFP8 the whole way from
         # the QKV matmul into SDPA, eliminating the 4 typecasts per layer
         # the llama kernel forced (~1.3 ms x 42 layers in vision prefill).
-        self.tt_qkv_weight = preprocess_linear_weight(self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-        if self._qkv_bias is not None:
-            self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self._tp_degree = 1
+        self._q_heads_per_device = self.num_heads
+        self._kv_heads_per_device = self.num_kv_heads
+        if self._qkv_weight is not None:
+            self.tt_qkv_weight = preprocess_linear_weight(
+                self._qkv_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+            )
+            if self._qkv_bias is not None:
+                self.tt_qkv_bias = preprocess_linear_bias(self._qkv_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+            else:
+                self.tt_qkv_bias = None
         self.tt_o_proj_weight = preprocess_linear_weight(
             self._o_proj_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
         )
@@ -1412,8 +1628,23 @@ class TTNNDotsVisionAttention(TTNNModule):
             self.device, math_fidelity=VISION_MATMUL_MATH_FIDELITY
         )
 
-        self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
-        self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
+        tp = _vision_tp_degree(self.device)
+        self._tp_degree = tp
+        self._q_heads_per_device = self.num_heads // tp if tp > 1 else self.num_heads
+        self._kv_heads_per_device = self.num_kv_heads // tp if tp > 1 else self.num_kv_heads
+        if tp > 1 and self._qkv_weight is not None:
+            self.tt_qkv_weight, self.tt_qkv_bias = _vision_tp_upload_qkv_sharded(
+                self._qkv_weight,
+                self._qkv_bias,
+                self.device,
+                num_q_heads=self.num_heads,
+                num_kv_heads=self.num_kv_heads,
+                head_dim=self.head_dim,
+                mem=mem,
+            )
+        else:
+            self.tt_qkv_weight = _to_dev(self.tt_qkv_weight)
+            self.tt_qkv_bias = _to_dev(self.tt_qkv_bias)
         self.tt_o_proj_weight = _to_dev(self.tt_o_proj_weight)
         self.tt_o_proj_bias = _to_dev(self.tt_o_proj_bias)
 
@@ -1427,6 +1658,18 @@ class TTNNDotsVisionAttention(TTNNModule):
         # either DRAM or L1. True sharding of V is not possible (sdpa_device_operation.cpp:44
         # forbids sharded Q/K/V), so L1 interleaved here is the closest option.
         return ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    def _tp_replicate_concat_for_o_proj(self, ctx: ttnn.Tensor) -> ttnn.Tensor:
+        """Gather head-sharded concat output onto every device for replicated o_proj."""
+        if self._tp_degree <= 1:
+            return ctx
+        return _mesh_ccl_all_gather(
+            self.device,
+            ctx,
+            getattr(self, "device_state", None),
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _get_sdpa_program_config(self, seq_len: int):
         """Chunked SDPA program config for the vision tower.
@@ -1542,7 +1785,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         if owns_attn_mask:
             ttnn.deallocate(attn_mask)
         if slice_to_logical and pad > 0:
-            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d), memory_config=ttnn.L1_MEMORY_CONFIG)
+            slice_mem = ttnn.DRAM_MEMORY_CONFIG if self._tp_degree > 1 else ttnn.L1_MEMORY_CONFIG
+            ctx = ttnn.slice(ctx, (0, 0, 0, 0), (1, h, logical_seq_len, d), memory_config=slice_mem)
         return ctx
 
     def forward(
@@ -1558,7 +1802,7 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         mem = ttnn.DRAM_MEMORY_CONFIG
         s = int(hidden_states.shape[2])
-        h = self.num_heads
+        h = self._q_heads_per_device
         hd = self.head_dim
 
         # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
@@ -1594,8 +1838,8 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
+            num_heads=h,
+            num_kv_heads=self._kv_heads_per_device,
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -1636,6 +1880,7 @@ class TTNNDotsVisionAttention(TTNNModule):
 
         def _run_o_proj(ctx: ttnn.Tensor) -> ttnn.Tensor:
             ctx = self._concat_heads(ctx)
+            ctx = self._tp_replicate_concat_for_o_proj(ctx)
             # BFP8 output keeps the post-attn residual on the BFP8 stream.
             if out_bs is not None and o_bs_pc is not None:
                 return ttnn.linear(
