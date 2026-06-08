@@ -25,6 +25,28 @@
 // #define GMG_DUMP_AFTER_STEP0 1
 // #define GMG_DIAG_TOPA 1
 // #define GMG_DIAG_TOPB 1
+// MULTI-BLOCK A1 diagnostic: with num_blocks>1, output ONLY this block's top-8 (run the full per-256
+// pipeline per block) so each block can be validated against its own 256-golden. Unset for A2 (combine).
+// #define GMG_DIAG_BLOCK 1
+// COMBINE ISOLATION: with num_blocks>1 (combine path), output ONLY run0 (block 0's top-8, global idx
+// 0-255) instead of the full combine — to validate merge16_to_run + run pack/unpack/place. Unset for
+// the real combine.
+// #define GMG_COMBINE_DIAG 1
+// 256-PATH ISOLATION: build the 256 top-8 via produce_run + relocate + normalize (the A2 blocks,
+// NO L1 stash). Validates merge16_to_run/relocate/normalize against the 256 golden.
+// #define GMG_TEST_PRODUCE_RUN 1
+// 256-PATH STASH ISOLATION: produce run -> pack to L1 run_cb -> unpack -> relocate + normalize.
+// Tests the pack/unpack stash round-trip without block1. Matches 256 golden => stash works.
+#define GMG_TEST_STASH 1
+// 256-PATH PARK ISOLATION: produce_run -> park to {32,34} -> restore to {0,4} -> normalize. Tests
+// whether copy_topk_run can address the free upper-half offsets (the in-DEST combine park location).
+// #define GMG_TEST_PARK 1
+// 256-PATH PARK2: produce run -> park {32,34} -> run pipeline AGAIN -> restore -> merge. Tests whether
+// a full pipeline pass between park and restore leaves the park (offset 32-63) intact.
+// #define GMG_TEST_PARK2 1
+// OCCUPANCY PROBE: indices region pre-filled with arange, run one pipeline, pack raw. Diff vs arange
+// shows which offsets the pipeline writes (occupied) vs leaves free -> safe park location.
+// #define GMG_DUMP_OCCUPANCY 1
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"
@@ -46,12 +68,14 @@ void kernel_main() {
     constexpr uint32_t input_cb = get_named_compile_time_arg_val("moe_gate_input_cb");
     constexpr uint32_t bias_cb = get_named_compile_time_arg_val("moe_gate_bias_cb");
     constexpr uint32_t input_indices_cb = get_named_compile_time_arg_val("moe_gate_input_indices_cb");
+    constexpr uint32_t num_blocks = get_named_compile_time_arg_val("moe_gate_num_blocks");
 
-    // Setup sharded persistent buffers (all tensor-backed)
+    // Setup sharded persistent buffers (all tensor-backed). input + bias each have num_blocks tiles/core
+    // (one 256-expert block per tile); indices is 1 tile (arange 0-255), reused for every block.
     if constexpr (Core::is_active_core) {
-        unified_kernels::setup_sharded_buffer(input_cb, 1);
-        unified_kernels::setup_sharded_buffer(bias_cb, 1);
-        unified_kernels::setup_sharded_buffer(input_indices_cb, 1);
+        unified_kernels::setup_sharded_buffer(input_cb, num_blocks);
+        unified_kernels::setup_sharded_buffer(bias_cb, num_blocks);
+        unified_kernels::setup_sharded_buffer(input_indices_cb, num_blocks);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -68,7 +92,13 @@ void kernel_main() {
         get_named_compile_time_arg_val("moe_gate_output_indices_cb"),
         get_named_compile_time_arg_val("moe_gate_eps"),
         get_named_compile_time_arg_val("moe_gate_scaling_factor"),
-        get_named_compile_time_arg_val("moe_gate_enable_sigmoid")>;
+        get_named_compile_time_arg_val("moe_gate_enable_sigmoid"),
+        get_named_compile_time_arg_val("moe_gate_num_blocks"),
+        get_named_compile_time_arg_val("moe_gate_run_scores_cb"),
+        get_named_compile_time_arg_val("moe_gate_run_idx_cb"),
+        get_named_compile_time_arg_val("moe_gate_run_bias_cb"),
+        get_named_compile_time_arg_val("moe_gate_cb_tilize"),
+        get_named_compile_time_arg_val("moe_gate_cb_tilize_idx")>;
     deepseek_compute_kernel_init();
 #endif
 

@@ -61,13 +61,16 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     const auto& out_idx_shape = output_indices_tensor.logical_shape();
 
     TT_FATAL(bias_shape == in_shape, "Bias and input tensors must have the same shape");
-    TT_FATAL(in_idx_shape == in_shape, "Input indices and input tensors must have the same shape");
     TT_FATAL(out_idx_shape == out_shape, "Output indices and output tensors must have the same shape");
 
     TT_FATAL(in_shape.size() >= 2, "input_tensor must have rank >= 2");
     uint32_t h = in_shape[in_shape.size() - 2];
     uint32_t w = in_shape[in_shape.size() - 1];
-    TT_FATAL(h * w == 256, "Input tensor must have 256 elements per shard (last two dims)");
+    TT_FATAL(h * w == 256, "Input tensor must have 256 elements per block (last two dims = one 256-block)");
+    // input_indices is one 256-block (arange 0-255), reused for every block (kernel adds b*256).
+    uint32_t idx_h = in_idx_shape[in_idx_shape.size() - 2];
+    uint32_t idx_w = in_idx_shape[in_idx_shape.size() - 1];
+    TT_FATAL(idx_h * idx_w == 256, "input_indices must have 256 elements (one block, last two dims)");
 
     const auto& input_shard = input_tensor.shard_spec().value();
     const auto& output_shard = output_tensor.shard_spec().value();
@@ -81,7 +84,9 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shard.orientation == bias_shard.orientation, "Input and bias shard orientations must match");
     TT_FATAL(bias_shard.grid.contains(all_cores), "Bias shard grid must contain input shard grid");
 
-    TT_FATAL(input_shard.shape == in_indices_shard.shape, "Input and input-indices shard shapes must match");
+    TT_FATAL(
+        in_indices_shard.shape[0] % 32 == 0 && in_indices_shard.shape[1] == 32,
+        "Input-indices shard must be tile-aligned (one 32x32 tile per block; block b holds global ids)");
     TT_FATAL(
         input_shard.orientation == in_indices_shard.orientation, "Input and input-indices orientations must match");
     TT_FATAL(in_indices_shard.grid.contains(all_cores), "Input-indices shard grid must contain input shard grid");
@@ -99,7 +104,10 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(in_tile.get_height() == 32 && in_tile.get_width() == 32, "Input tile must be 32x32");
     TT_FATAL(out_tile.get_height() == 32 && out_tile.get_width() == 32, "Output tile must be 32x32");
-    TT_FATAL(input_shard.shape[0] == 32 && input_shard.shape[1] == 32, "Input shard shape must be 32x32");
+    // input shard holds num_blocks 32x32 tiles (one 256-block per tile); just require tile-alignment.
+    TT_FATAL(
+        input_shard.shape[0] % 32 == 0 && input_shard.shape[1] % 32 == 0,
+        "Input shard must be 32x32 tile-aligned (num_blocks tiles per core)");
     TT_FATAL(output_shard.shape[0] == 32 && output_shard.shape[1] == 32, "Output shard shape must be 32x32");
 }
 

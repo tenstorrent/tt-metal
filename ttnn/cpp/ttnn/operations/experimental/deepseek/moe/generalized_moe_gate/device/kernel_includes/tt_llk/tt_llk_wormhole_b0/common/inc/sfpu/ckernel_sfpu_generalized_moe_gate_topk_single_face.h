@@ -580,6 +580,27 @@ inline void _gmg_copy_topk_run() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_hi);
 }
 
+// Multi-block combine: place ONE field of a run from the interm region {src_lo,src_hi} into its home
+// region (scores/indices/bias) {dst_lo,dst_hi}. The field-tile was unpacked (copy_tile) into interm
+// from the L1 run stash; this SFPU copy is row-selective so it writes only {dst_lo,dst_hi}, leaving
+// the other block's run (sitting at the complementary rows) intact. mode/region match the store
+// convention of _gmg_copy_topk_run/_gmg_merge4_top8 (field 0=bias mode 0; 1=idx LO16; 2=score HI16).
+template <uint32_t field, uint32_t src_lo, uint32_t src_hi, uint32_t dst_lo, uint32_t dst_hi>
+inline void _gmg_place_field_from_interm() {
+    constexpr uint32_t mode = (field == 0)   ? 0
+                              : (field == 1) ? (uint32_t)InstrModLoadStore::LO16_ONLY
+                                             : (uint32_t)InstrModLoadStore::HI16_ONLY;
+    constexpr uint32_t region = (field == 0) ? bias_offset : (field == 1) ? indices_offset : scores_offset;
+    // Reset Dst RWC: the copy_tile (FPU) that filled interm leaves it advanced; without this the
+    // SFPLOAD/SFPSTORE offsets below are biased and hit the wrong rows.
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPLOAD(p_sfpu::LREG0, mode, ADDR_MOD_3, interm_offset + src_lo);
+    TTI_SFPLOAD(p_sfpu::LREG1, mode, ADDR_MOD_3, interm_offset + src_hi);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, mode, ADDR_MOD_3, region + dst_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, mode, ADDR_MOD_3, region + dst_hi);
+}
+
 // DIAGNOSTIC: normalize a top-8 run already sitting at scores/indices {0,4} (the normalize tail of
 // _generalized_moe_gate_top8, factored out). Used by GMG_DIAG_TOPA to output a single half's run.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
@@ -623,13 +644,15 @@ inline void _gmg_normalize_run(uint32_t eps, uint32_t scale) {
 // bitonic-merge primitives (ph3 / merge4_runs_raw) mis-handle. Instead, load all 16 candidates as an
 // UNSORTED 16-vector (topA -> LREG0/1, topB -> LREG2/3; idx|score in LREG4-7) and run the FULL bitonic
 // sort. ph0_to_ph3 fully sorts 16 arbitrary values -> the global top-8, independent of run orientation.
+// merge16 CORE: load the 16 candidates at {0,2,4,6} (two sorted-8 runs at {0,2} and {4,6}) + concat
+// idx(LO16)|score(HI16), and FULL-sort -> global top-8 in LREG0/1 (bias) + LREG4/5 (concat idx|score).
+// Shared by the per-block merge (topA+topB) AND every level of the multi-block combine tree.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
+inline void _gmg_merge16_core() {
     constexpr bool idir = false;  // descending -> top-8
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPCONFIG(0x4, 0xF, 1);  // enable index tracking (idx|score in LREG4-7 follow the bias swaps)
 
-    // Load the 16 candidates from {0,2,4,6} (bias) + concat idx(LO16)|score(HI16) in LREG4-7.
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 2);
     TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 4);
@@ -644,6 +667,44 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 6);
 
     bitonic_top8_ph0_to_ph3<APPROXIMATION_MODE, is_fp32_dest_acc_en, idir>();
+}
+
+// merge16 -> re-mergeable RUN at {store_lo, store_hi} (bias mode0; idx LO16; score HI16), the same
+// store convention as _gmg_merge4_top8. Used for a block's top-8 and combine-tree intermediates so a
+// later _gmg_merge16_* (reading {0,2}+{4,6}) can consume it. No normalize.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    uint32_t store_lo,
+    uint32_t store_hi,
+    uint32_t idx_offset = 0>
+inline void _gmg_merge16_to_run() {
+    _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    // Add the block's expert-id base offset (b*256) to the run's indices so they become GLOBAL ids.
+    // idx lives in the LO16 of the LREG4/5 concat (score in HI16); idx+offset <= 511 never carries into
+    // bit 16, so an int add to the whole concat shifts only the index, leaving the score untouched.
+    if constexpr (idx_offset != 0) {
+        // Raw integer add of the 12-bit immediate to LREG4/5 (the idx|score concat). Must use TTI (not
+        // sfpi l_reg[]): sfpi's SSA register model doesn't write back to the physical LREG that the
+        // surrounding raw TTI_SFPSTOREs read, so an sfpi add here is a no-op. SFPIADD with ARG_IMM does
+        // lreg_dest = lreg_c + imm; idx (LO16) + offset <= 511 never carries into HI16 (score).
+        TTI_SFPIADD(idx_offset, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
+        TTI_SFPIADD(idx_offset, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_IMM);
+        TTI_SFPNOP;
+    }
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + store_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + store_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + store_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + store_hi);
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
+    // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8, then normalize. (For 256 the
+    // two runs are topA/topB; for >256 they are the last two block/subtree runs of the combine tree.)
+    _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
     bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----
