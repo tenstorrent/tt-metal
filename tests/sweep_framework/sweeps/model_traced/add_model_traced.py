@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from functools import partial
 
 import torch
@@ -15,9 +16,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     broadcast_torch_inputs_to_global,
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
@@ -57,23 +60,62 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
-def mesh_device_fixture():
-    import os as _os
+# Device opened per-vector (see _ensure_vector_device) so each vector gets the
+# dispatch axis its traced shard grids need. A single per-suite COL (or ROW)
+# axis can't serve both: most add configs run on COL, but a few have inputs /
+# outputs WIDTH_SHARDED across a full x=0..7 row, whose reshard lands a worker on
+# a dispatch core under COL (TT_FATAL "not on_dispatch_core") and silently
+# degrades to DRAM-interleaved — a memory_config mismatch vs the master trace.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+_CUR_SHAPE = None
 
-    mesh_shape = get_model_traced_mesh_shape()
-    # Prefer WORKER COL: every traced config of this op runs on COL, but the
-    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
-    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
-    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
-    _axis = (
-        None
-        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
-        else ttnn.DispatchCoreAxis.COL
-    )
-    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            # best-effort teardown — a failed close must not mask the real result
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+    _CUR_SHAPE = None
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
+    shape = get_model_traced_mesh_shape()
+    if _CUR_DEVICE is None or axis != _CUR_AXIS or shape != _CUR_SHAPE:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(shape, dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+        _CUR_SHAPE = shape
+    return _CUR_DEVICE
+
+
+def _add_dispatch_axis(*memory_configs):
+    """Dispatch axis this vector's sharded tensors need. A shard grid spanning a
+    full x=0..7 row needs ROW dispatch (else the reshard worker lands on a
+    dispatch core); otherwise default (COL). Derived from the union of the
+    input/output shard grids — add has no program_config to consult."""
+    mx = my = None
+    for mc in memory_configs:
+        gx, gy = shard_grid_bounds(mc)
+        if gx is not None:
+            mx = gx if mx is None else max(mx, gx)
+        if gy is not None:
+            my = gy if my is None else max(my, gy)
+    if mx is not None or my is not None:
+        return dispatch_axis_for_grid(mx, my)
+    return None
+
+
+def mesh_device_fixture():
+    # Device is opened per-vector in run() (see _ensure_vector_device).
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def run(
@@ -101,6 +143,27 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
+    # Reproduce THIS vector's traced mesh shape so a single main-process
+    # invocation that loads all per-mesh files still opens each vector on its
+    # own [4,8]/[8,4]/[1,32]/[1,1] mesh (else get_model_traced_mesh_shape()
+    # auto-detects one shape for all → mesh_device_shape placement mismatches).
+    # Some configs (e.g. tensor-scalar adds) carry no sharded placement, so fall
+    # back to the per-vector traced_machine_info, which every vector records.
+    import re as _re_mesh
+
+    _ti = kwargs.get("traced_machine_info") or {}
+    _mesh_sources = (
+        input_a_tensor_placement.get("mesh_device_shape") if isinstance(input_a_tensor_placement, dict) else None,
+        input_b_tensor_placement.get("mesh_device_shape") if isinstance(input_b_tensor_placement, dict) else None,
+        _ti.get("mesh_device_shape") if isinstance(_ti, dict) else None,
+    )
+    for _ms in _mesh_sources:
+        if _ms:
+            _dims = _re_mesh.findall(r"-?\d+", str(_ms))
+            if len(_dims) == 2:
+                os.environ["MESH_DEVICE_SHAPE"] = f"{int(_dims[0])}x{int(_dims[1])}"
+                break
+
     # Parse memory_config dicts from validation vectors into ttnn.MemoryConfig
     # objects. Without this, sharded mem-configs (WIDTH_SHARDED + L1) silently
     # degrade to DRAM_INTERLEAVED in create_tensor_on_mesh / from_torch, which
@@ -111,6 +174,19 @@ def run(
         input_b_memory_config = parse_dict_value("input_b_memory_config", input_b_memory_config)
     if isinstance(output_memory_config, dict):
         output_memory_config = parse_dict_value("output_memory_config", output_memory_config)
+
+    # Open this vector's device with the dispatch axis its sharded tensors need
+    # (the fixture yielded None; we own the device here). Consider every sharded
+    # input/output grid, incl. the pre-allocated output_tensor.
+    _ot_info_for_axis = extract_named_tensor_kwargs(kwargs, "output_tensor") or {}
+    device = _ensure_vector_device(
+        _add_dispatch_axis(
+            input_a_memory_config,
+            input_b_memory_config,
+            output_memory_config,
+            _ot_info_for_axis.get("memory_config"),
+        )
+    )
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method

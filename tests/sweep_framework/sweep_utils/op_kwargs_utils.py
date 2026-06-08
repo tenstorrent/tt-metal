@@ -119,8 +119,21 @@ def _is_named_tensor_kwarg(key: str, all_keys: Set[str]) -> bool:
 
 
 def _is_memory_config_dict(value: Any) -> bool:
-    """Check if a value looks like a memory config dict."""
-    return isinstance(value, dict) and ("memory_layout" in value or "buffer_type" in value)
+    """Check if a value looks like a memory config dict.
+
+    Handles the flat form ({"memory_layout": ..., "buffer_type": ...}) and the
+    serialized wrapper form ({"type": "...MemoryConfig", "data": {"memory_layout":
+    ...}}). Without the wrapper case, a sharded input_*_memory_config serialized
+    in wrapper form falls through parse_dict_value and is dropped to None, then
+    silently degrades to DRAM-interleaved (memory_config mismatch vs master)."""
+    if not isinstance(value, dict):
+        return False
+    if "memory_layout" in value or "buffer_type" in value:
+        return True
+    if "MemoryConfig" in str(value.get("type", "")):
+        return True
+    data = value.get("data")
+    return isinstance(data, dict) and ("memory_layout" in data or "buffer_type" in data)
 
 
 def _is_compute_kernel_config_dict(value: Any) -> bool:

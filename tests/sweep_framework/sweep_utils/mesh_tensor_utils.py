@@ -577,13 +577,22 @@ def replicate_with_topology(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        try:
-            tensor = ttnn.to_memory_config(tensor, memory_config)
-        except Exception:
-            # Best-effort upcast to the requested memory_config (e.g. L1
-            # sharded). On failure we keep the DRAM-resident tensor — sweeps
-            # tolerate the placement difference and the kernel still runs.
-            pass
+        # Upcast DRAM -> requested (often L1-sharded) memory_config. This reshard
+        # is sensitive to transient L1 pressure when one device is reused across
+        # many vectors (the worker alloc can momentarily land on a dispatch core
+        # -> "not on_dispatch_core"); a device sync + retry clears it. Without the
+        # retry the failure is silently swallowed, leaving the tensor DRAM-
+        # interleaved — a flaky memory_config mismatch vs the master trace.
+        for _attempt in range(4):
+            try:
+                tensor = ttnn.to_memory_config(tensor, memory_config)
+                break
+            except Exception:
+                try:
+                    ttnn.synchronize_device(mesh_device)
+                except Exception:
+                    pass
+            # last attempt failing leaves the DRAM-resident tensor (best-effort)
     else:
         tensor = ttnn.from_torch(
             torch_tensor,
