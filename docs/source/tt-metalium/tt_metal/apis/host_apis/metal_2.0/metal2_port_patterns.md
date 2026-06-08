@@ -24,6 +24,8 @@ Entry shape:
 - [Pass DFB handles directly to LLKs and kernel-lib helpers](#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers)
 - [Multi-variant factories](#pattern-multi-variant-factories)
 - [Unity-build hygiene for anonymous-namespace symbols](#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)
+- [Host-computed base-pointer offset → CTA offset + kernel-side addition](#pattern-host-computed-base-pointer-offset--cta-offset--kernel-side-addition)
+- [Removing pybound legacy factory entry points](#pattern-removing-pybound-legacy-factory-entry-points)
 
 ### Anti-patterns
 
@@ -276,7 +278,7 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 **Category**: Pattern (sanctioned kernel-side exception)
 
-**Recognition signal**: The legacy host code computes an offset from the op's attributes / shapes / strides, *adds it to a tensor's base pointer*, and threads the result through a runtime argument. The kernel reads the pre-shifted address and uses it directly. The hallmark expression on the host side is `tensor.buffer()->address() + compute_offset(attrs)` (or similar arithmetic). The audit's [Step 0.5](port_op_to_metal2_audit.md#step-05--per-binding-bypass-of-the-tensor-accessor-mechanism) catches this as a YELLOW (RTA bypass) — but it's the variant that *can't* be cleanly resolved by replacing the address-RTA with a `TensorBinding` alone, because the offset arithmetic lives on the host side of the legacy boundary.
+**Recognition signal**: The legacy host code computes an offset from the op's attributes / shapes / strides, *adds it to a tensor's base pointer*, and threads the result through a runtime argument. The kernel reads the pre-shifted address and uses it directly. The hallmark expression on the host side is `tensor.buffer()->address() + compute_offset(attrs)` (or similar arithmetic). The audit's [Step 0.5](port_op_to_metal2_audit.md#step-05--tensoraccessor-bypass) catches this as a YELLOW (RTA bypass) — but it's the variant that *can't* be cleanly resolved by replacing the address-RTA with a `TensorBinding` alone, because the offset arithmetic lives on the host side of the legacy boundary.
 
 In the wild: `ttnn/cpp/ttnn/operations/data_movement/slice/` (slice computes a per-region offset on the host, then composes it with the input buffer's base address before handing the result to the kernel).
 
