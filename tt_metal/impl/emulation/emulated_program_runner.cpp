@@ -9,6 +9,11 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <csignal>
+#if defined(__x86_64__) && defined(__linux__)
+#include <ucontext.h>
+#include <sys/ucontext.h>
+#endif
 
 #include <bit>
 #include <atomic>
@@ -1249,21 +1254,34 @@ static std::map<std::string, std::string> build_kernel_defines(
         auto first_core = core_range_set.ranges().begin()->start_coord;
         auto cb_impls = impl.circular_buffers_on_core(first_core);
         uint32_t tile_sizes[EMULE_NUM_CBS] = {};
+        // Per-CB data format → emule's analog of genfiles.cpp::compute_data_formats()
+        // (which bakes unpack_src_format[]/pack_dst_format[] into chlkc_descriptors.h).
+        // 255 == tt::DataFormat::Invalid marks unconfigured slots (mirrors the host's
+        // std::optional<DataFormat> empty state); consumers fall back to the page_size
+        // heuristic for those.
+        uint8_t cb_formats[EMULE_NUM_CBS];
+        for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
+            cb_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
+        }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     tile_sizes[idx] = cb_impl->page_size(idx);
+                    cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
                 }
             }
         }
-        std::ostringstream ts;
+        std::ostringstream ts, df;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
+                df << ',';
             }
             ts << tile_sizes[i];
+            df << static_cast<uint32_t>(cb_formats[i]);
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
+        defines["EMULE_CB_DATA_FORMATS"] = df.str();
     }
     return defines;
 }
@@ -1727,12 +1745,18 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
-    // Reset L1 bump allocator so DFB allocations don't accumulate across runs.
-    core->reset_l1_bump();
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
+        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
+        // so the L1 bump allocator never grows and there's nothing to reset.
+        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
+        // undisturbed for kernels that NOC-read the region.
         return {};
     }
+    // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar
+    // bring-up needs to protect MEM_ZEROS from bump-allocator overlap, dispatch
+    // its per-arch MEM_ZEROS_BASE here.
+    core->reset_l1_bump();
     if (!core->tile_counters()) {
         core->init_tile_counters(4);
     }
@@ -2297,11 +2321,157 @@ inline void sweep_program_dirty_cbs(
 // ---------------------------------------------------------------------------
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// RISC-V-faithful integer divide/modulo fault recovery on x86 hosts.
+//
+// The real Tensix cores are RISC-V, where integer div/rem faults are DEFINED and
+// non-trapping (RISC-V ISA M-extension):
+//   - divide by zero: `divu x,0 -> all-ones`, `div x,0 -> -1`, `rem(u) x,0 -> x`
+//   - signed overflow (`div INT_MIN,-1`): quotient = INT_MIN, remainder = 0
+// emule JIT-compiles each kernel to x86, where `div`/`idiv` raises #DE -> SIGFPE
+// (si_code FPE_INTDIV for /0, FPE_INTOVF for INT_MIN/-1) and aborts. Kernels
+// legitimately hit /0 on idle/degenerate cores: e.g. binary_ng's no_bcast reader
+// computes `start_tile_id % (D*N*C*Ht*Wt)` and the host hands idle cores all-zero
+// dims, so the divisor is 0 and the (dead) result is never used. To match silicon we
+// trap the SIGFPE, write RISC-V's defined result into the saved register image, and
+// step the saved RIP past the faulting instruction.
+//
+// Scope/caveats: (1) the handler is process-global for the lifetime of launch_cores,
+// so any host thread that faults in that window is also "recovered" — acceptable
+// because only kernel threads run div-heavy code then; (2) a *genuine* kernel div bug
+// becomes silent-wrong-output rather than a crash, but that is exactly what silicon
+// would do (no trap). See docs/riscv-intdiv-by-zero.md in the tt-emule repo.
+#if defined(__x86_64__) && defined(__linux__)
+namespace {
+
+// Length in bytes of the div/idiv at `p`, or 0 if it is not a *recoverable* one.
+// We recover only the 32-bit and 64-bit `F7 /6,/7` forms — the only integer-divide
+// widths a RISC-V-derived kernel compiled to x86 emits (RV32/RV64 have no 8/16-bit
+// divide; C integer promotion never yields one either). 8-bit (`F6`) and 16-bit
+// (`0x66`-prefixed) forms are declined (return 0 -> abort) rather than risk a wrong
+// partial-register write-back. Handles optional legacy + REX prefixes and
+// ModRM/SIB/disp for a memory operand. Sets *width to 32 or 64.
+size_t emule_decode_divlen(const uint8_t* p, int* width) {
+    size_t i = 0;
+    bool opsize16 = false, rexw = false;
+    while (p[i] == 0x67 || p[i] == 0x66 || p[i] == 0x2e || p[i] == 0x3e || p[i] == 0x26 || p[i] == 0x64 ||
+           p[i] == 0x65 || p[i] == 0x36 || p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3) {
+        if (p[i] == 0x66) {
+            opsize16 = true;  // operand-size override
+        }
+        ++i;
+    }
+    if ((p[i] & 0xf0) == 0x40) {  // REX
+        if (p[i] & 0x08) {
+            rexw = true;  // REX.W
+        }
+        ++i;
+    }
+    if (p[i] != 0xf7) {  // F7 = 16/32/64-bit DIV/IDIV; F6 (8-bit) is not a RISC-V width
+        return 0;
+    }
+    ++i;
+    uint8_t modrm = p[i];
+    uint8_t reg = (modrm >> 3) & 0x7;
+    if (reg != 6 && reg != 7) {  // /6 = DIV, /7 = IDIV
+        return 0;
+    }
+    uint8_t mod = modrm >> 6;
+    uint8_t rm = modrm & 0x7;
+    ++i;                // ModRM
+    if (mod != 3) {     // memory operand
+        if (rm == 4) {  // SIB present
+            uint8_t base = p[i] & 0x7;
+            ++i;
+            if (mod == 0 && base == 5) {
+                i += 4;  // disp32, no base
+            }
+        }
+        if (mod == 1) {
+            i += 1;  // disp8
+        } else if (mod == 2) {
+            i += 4;  // disp32
+        } else if (mod == 0 && rm == 5) {
+            i += 4;  // RIP-relative disp32
+        }
+    }
+    *width = rexw ? 64 : (opsize16 ? 16 : 32);
+    if (*width == 16) {
+        return 0;  // 16-bit div: not a RISC-V width; partial-register fix-up would be unsafe
+    }
+    return i;
+}
+
+void emule_sigfpe_handler(int sig, siginfo_t* info, void* uc_void) {
+    if (sig == SIGFPE && (info->si_code == FPE_INTDIV || info->si_code == FPE_INTOVF)) {
+        auto* uc = static_cast<ucontext_t*>(uc_void);
+        greg_t* regs = uc->uc_mcontext.gregs;
+        auto* rip = reinterpret_cast<const uint8_t*>(regs[REG_RIP]);
+        int width = 0;
+        size_t len = emule_decode_divlen(rip, &width);
+        if (len > 0) {
+            // x86 dividend low half is in (R|E)AX; quotient lands in (R|E)AX, rem in (R|E)DX.
+            const greg_t dividend = regs[REG_RAX];
+            if (info->si_code == FPE_INTDIV) {
+                // div/rem by zero — RISC-V: quotient = all-ones, remainder = dividend.
+                if (width == 64) {
+                    regs[REG_RAX] = static_cast<greg_t>(~0ULL);
+                    regs[REG_RDX] = dividend;
+                } else {  // 32-bit writes zero-extend the full 64-bit reg
+                    regs[REG_RAX] = static_cast<greg_t>(static_cast<uint32_t>(~0U));
+                    regs[REG_RDX] = static_cast<greg_t>(static_cast<uint32_t>(dividend));
+                }
+            } else {
+                // FPE_INTOVF: signed INT_MIN / -1 — RISC-V: quotient = dividend (INT_MIN), rem = 0.
+                if (width == 64) {
+                    regs[REG_RAX] = dividend;
+                    regs[REG_RDX] = 0;
+                } else {
+                    regs[REG_RAX] = static_cast<greg_t>(static_cast<uint32_t>(dividend));
+                    regs[REG_RDX] = 0;
+                }
+            }
+            regs[REG_RIP] = reinterpret_cast<greg_t>(rip + len);
+            return;
+        }
+    }
+    // Not a recoverable integer divide/overflow: fall back to default disposition.
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+// Installs the handler for the duration of kernel execution, restoring the
+// previous disposition afterward so emule does not permanently alter the host.
+struct EmuleSigfpeGuard {
+    struct sigaction prev_{};
+    bool installed_ = false;
+    EmuleSigfpeGuard() {
+        struct sigaction sa{};
+        sa.sa_sigaction = emule_sigfpe_handler;
+        sa.sa_flags = SA_SIGINFO;  // synchronous, thread-directed; handler never re-faults
+        sigemptyset(&sa.sa_mask);
+        installed_ = (sigaction(SIGFPE, &sa, &prev_) == 0);
+    }
+    ~EmuleSigfpeGuard() {
+        if (installed_) {
+            sigaction(SIGFPE, &prev_, nullptr);
+        }
+    }
+    EmuleSigfpeGuard(const EmuleSigfpeGuard&) = delete;
+    EmuleSigfpeGuard& operator=(const EmuleSigfpeGuard&) = delete;
+};
+
+}  // namespace
+#endif  // __x86_64__ && __linux__
+
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr,
     const EmuleOobTensorState& oob_state) {
+#if defined(__x86_64__) && defined(__linux__)
+    EmuleSigfpeGuard sigfpe_guard;
+#endif
     std::vector<std::thread> core_threads;
     std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
