@@ -160,7 +160,7 @@ jobs:
 
           if [[ ! -f "$XML_PATH" ]]; then
             echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"
-            for k in total passed failed errored skipped pass_pct; do
+            for k in total ran passed failed errored skipped pass_pct; do
               echo "${k}=0" >> "$GITHUB_OUTPUT"
             done
             echo "status=no-report" >> "$GITHUB_OUTPUT"
@@ -183,10 +183,12 @@ jobs:
               total   += int(s.attrib.get("tests",    0) or 0)
               failed  += int(s.attrib.get("failures", 0) or 0)
               skipped += int(s.attrib.get("skipped",  0) or 0)
-          passed = max(total - failed - skipped, 0)
-          pass_pct = (100.0 * passed / total) if total else 0.0
+          ran = max(total - skipped, 0)
+          passed = max(ran - failed, 0)
+          pass_pct = (100.0 * passed / ran) if ran else 0.0
 
           print(f"total={total}")
+          print(f"ran={ran}")
           print(f"passed={passed}")
           print(f"failed={failed}")
           print(f"skipped={skipped}")
@@ -208,6 +210,7 @@ jobs:
             echo "|---|---:|"
             echo "| 🏷️ ttsim version | v${TTSIM_VERSION} |"
             echo "| 🔢 Total | ${total} |"
+            echo "| ▶️ Ran | ${ran} |"
             echo "| ✅ Passed | ${passed} |"
             echo "| ❌ Failed | ${failed} |"
             echo "| ⏩ Skipped | ${skipped} |"
@@ -221,3 +224,101 @@ jobs:
     # nondeterministically), so downstream jobs that want per-arch counts
     # should download and parse the uploaded artifacts instead. The Slack
     # digest in `llk-ttsim-weekly.yaml` does exactly that.)
+
+  ttsim-summary:
+    name: "ttsim summary"
+    runs-on: ubuntu-latest
+    if: always()
+    needs: ttsim-regression
+    steps:
+      - name: Download blackhole report
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttsim-report-blackhole
+          path: reports/blackhole
+        continue-on-error: true
+
+      - name: Download wormhole report
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ttsim-report-wormhole
+          path: reports/wormhole
+        continue-on-error: true
+
+      - name: Write regression summary
+        if: always()
+        shell: bash
+        env:
+          REGRESSION_RESULT: ${{ needs.ttsim-regression.result }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          REG_RESULT = os.environ.get("REGRESSION_RESULT", "unknown")
+
+          def summarize(xml_path: Path):
+              if not xml_path.is_file():
+                  return None
+              root = ET.parse(xml_path).getroot()
+              suites = list(root.iter("testsuite")) if root.tag == "testsuites" else [root]
+              total = failed = skipped = 0
+              for suite in suites:
+                  total += int(suite.attrib.get("tests", 0) or 0)
+                  failed += int(suite.attrib.get("failures", 0) or 0)
+                  skipped += int(suite.attrib.get("skipped", 0) or 0)
+              ran = max(total - skipped, 0)
+              passed = max(ran - failed, 0)
+              pass_pct = (100.0 * passed / ran) if ran else 0.0
+              return dict(total=total, ran=ran, passed=passed, failed=failed,
+                          skipped=skipped, pass_pct=pass_pct)
+
+          def read_version():
+              for candidate in (
+                  Path("reports/blackhole/ttsim-version"),
+                  Path("reports/wormhole/ttsim-version"),
+              ):
+                  if not candidate.is_file():
+                      continue
+                  for line in candidate.read_text().splitlines():
+                      match = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      if match:
+                          return match.group(1)
+              return "unknown"
+
+          archs = [
+              ("blackhole", Path("reports/blackhole/ttsim-blackhole.xml")),
+              ("wormhole", Path("reports/wormhole/ttsim-wormhole.xml")),
+          ]
+
+          print("## LLK ttsim regression summary")
+          print("")
+          print(
+              "Informational run. ttsim is under active development; failures reflect "
+              "simulator gaps, not tt-metal regressions."
+          )
+          print("")
+          print(f"* ttsim version: v{read_version()}")
+          if REG_RESULT != "success":
+              print("* workflow status: regression workflow did not complete cleanly; see run logs")
+          print("")
+          print("| Architecture | Passed | Ran | Failed | Skipped | Pass rate | Artifact |")
+          print("|---|---:|---:|---:|---:|---:|---|")
+
+          for arch, xml_path in archs:
+              summary = summarize(xml_path)
+              artifact = f"`ttsim-report-{arch}`"
+              if summary is None:
+                  print(f"| {arch} | — | — | — | — | — | {artifact} (no report) |")
+                  continue
+              print(
+                  f"| {arch} | {summary['passed']} | {summary['ran']} | "
+                  f"{summary['failed']} | {summary['skipped']} | "
+                  f"{summary['pass_pct']:.1f}% | {artifact} |"
+              )
+          PY
