@@ -13,11 +13,6 @@
 #include "llk_memory_checks.h"
 #include "sfpu_stub.h"
 
-// Globals required by the test framework.
-std::uint32_t unp_cfg_context          = 0;
-std::uint32_t pack_sync_tile_dst_ptr   = 0;
-std::uint32_t math_sync_tile_dst_index = 0;
-
 // ============================================================================
 // Stage Definitions
 // ============================================================================
@@ -78,8 +73,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int tile_row_offset  = current_tile_row * params.FULL_CT_DIM;
                     const int tile_pair_offset = current_tile_pair_idx * (distance * NUM_TILES_PER_STAGE);
                     const int stage_offset     = stage_index * NUM_VALUE_TILES_PER_ROW;
-                    // The L1 base is stable; the value/index stages only select
-                    // different data formats. Tile offsets are passed to execute.
+                    // The L1 base is stable; tile offsets are passed to execute.
+                    // Keep unpack configuration per stage because values use
+                    // formats.unpack_A_* while indices use TOPK_INDEX_FORMAT
+                    // (Quasar Int16 transport for the uint16 index payload).
                     buffer_descriptor_u bd_val = {0};
                     bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
                     bd_val.f.format            = static_cast<std::uint8_t>(unpack_src_format);

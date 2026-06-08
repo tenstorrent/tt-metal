@@ -49,8 +49,10 @@ enum SortDir : bool
 };
 
 // Set the per-TRISC dest section base register for the math TRISC.
-// Quasar has separate SEC0..SEC3 registers (one per TRISC); SFPLOAD/SFPSTORE on the
-// math TRISC compute their effective dest address as SEC1 + dest_counter + dest_reg_addr.
+// Quasar has separate SEC0..SEC3 registers (one per TRISC); this implementation
+// runs the SFPU TopK network on the math TRISC, so SFPLOAD/SFPSTORE effective
+// addresses use SEC1 + dest_counter + dest_reg_addr. A future TRISC3 split would
+// need to program that TRISC's section base instead.
 inline void set_dst_write_addr(std::uint32_t addr)
 {
     std::uint32_t dst_index = addr + ckernel::trisc::_get_dest_buffer_base_();
@@ -86,6 +88,10 @@ inline void _init_topk()
     // swaps LREG[VC] <-> LREG[VD], it also swaps LREG[4 + (VC&3)] <-> LREG[4 + (VD&3)]
     // in lockstep — letting topk track input indices alongside the values being sorted.
     ckernel::math::_sfpu_load_config32_(0xF, 0x0, 0x4);
+    // SFPCONFIG is a 2-cycle op; per Quasar errata TEN-4581 ("any 2-cycle op
+    // followed by SFPSWAP") at least 1 SFPNOP must separate it from the first
+    // SFPSWAP in the TopK body. Keep two NOPs to match the other SFPCONFIG
+    // sites below and the Blackhole-style spacing used during bring-up.
     TTI_SFPNOP(0, 0, 0);
     TTI_SFPNOP(0, 0, 0);
 }
