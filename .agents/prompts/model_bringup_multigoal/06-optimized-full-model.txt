@@ -4,15 +4,17 @@ This goal creates the optimized-full-model state for the repo-local TTNN autopor
 
 Goal completion requirements:
 - The full model is parallelized appropriately across the target mesh, not merely built from a multichip decoder while embeddings, norms, LM head, logits, sampling, cache management, or generator boundaries remain accidental bottlenecks.
-- Full-model prefill, teacher-forcing decode, and autoregressive readiness still pass after optimization, with top-1/top-5/top-100 and qualitative generation evidence refreshed.
+- Full-model prefill, teacher-forcing decode, and autoregressive readiness still pass after optimization, with top-1/top-5/top-100 and qualitative generation evidence refreshed. For instruction/chat models, refresh the main readiness result against the DeepSeek AIME24 prompt rendered through the HF tokenizer chat template; raw Tale-of-Two-Cities book references are only supplemental or fallback evidence.
 - Warmed full-model prefill and decode performance are measured before and after this optimization pass.
 - tt-perf-report human-readable tables and CSV/provenance logs exist for the full-model path (with a minimal number of internal layers) where the profiler can capture it; any profiler limitation is documented with exact failure evidence and a fallback timing method.
 - The report audits and optimizes embeddings, all decoder layers, final norm, LM head/tied embeddings, logits movement, sampling, paged KV-cache allocation/update, trace capture/replay, collectives, residual layouts, and host boundaries.
+- It is not valid to leave potential optimizations untried to "functional risk". Optimziation opportunities MUST be tried and debugged using $autofix if they cause functional regressions.
 - Multichip and optimize guidance is applied to full-model-only pieces, including sharding/replication decisions, async CCLs, fused matmul-CCL opportunities, DRAM-sharded matmuls, program configs, compute-kernel configs, and precision/fidelity trials.
 - Runtime fallback audit is clean for the measured full-model/generator path, or every remaining host boundary is named as an explicit production compromise with evidence.
 - models/autoports/<model>/doc/optimized_full_model/README.md and work_log.md summarize commands, before/after accuracy and perf, mesh/optimization decisions, tt-perf-report conclusions, limitations, and exact artifacts.
 - The checklist in the $optimize skill has been completed with evidence
 - Fully-traced decode path from token in to token out including on-device sampling
-- run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
+- run_prefill_check and run_teacher_forcing report top-1, top-5, and top-100 for prefill and decode using the AIME24 chat-template reference; expected bar is top-5 >= 98% and top-100 = 100% unless a model-specific issue or evidence justifies otherwise.
+- Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
 
 Do not mark this goal blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE or other validation currently fails. Those failures are expected bringup work. Before marking blocked, isolate the failure to the smallest reproducible component, compare against the optimized single-chip baseline, try a concrete fix/refutation loop, and for subtle PCC, mesh/CCL, cache, or routed-expert bugs use $autofix or document why those skills could not be used. A blocked result requires evidence that continued debugging by the agent is no longer meaningful, not merely that a requirement is still failing.
