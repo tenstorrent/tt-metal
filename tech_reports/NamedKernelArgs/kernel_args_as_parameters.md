@@ -62,15 +62,21 @@ args**. No `get_arg`, no `kernel_main`, no L1, no indices.
 - **Function parameters → runtime args.** RTA vs CRTA is a pure host-schema choice with
   zero source impact (property *a*); the body can't tell and shouldn't have to.
 
-The entry is tagged with a `TT_KERNEL` marker (`#define TT_KERNEL [[tt::kernel_main]]`). At
-JIT time we parse its signature and generate a `kernel_main()` shim that fetches every arg
-by name and calls the user function — CTAs in the angle brackets, runtime args in the
-parens:
+The entry is tagged with a `TT_KERNEL` marker that expands to the attribute **plus**
+`FORCE_INLINE` (`#define TT_KERNEL [[tt::kernel_main]] FORCE_INLINE`). At JIT time we parse
+its signature and generate a `kernel_main()` shim that fetches every arg by name and calls
+the user function — CTAs in the angle brackets, runtime args in the parens:
 
 ```cpp
 my_kernel<get_arg(args::z)>(get_arg(args::x), get_arg(args::y));
 //       └ CTA: constexpr ┘ └ RTA/CRTA: runtime L1 reads ┘
 ```
+
+Because `TT_KERNEL` marks the user entry `FORCE_INLINE`
+(`inline __attribute__((always_inline))`, the house convention from `risc_attribs.h`), this
+call is **inlined into `kernel_main()`** — the shim is a zero-cost wrapper, not an extra
+function-call indirection. `kernel_main()` itself stays a real out-of-line symbol (the
+firmware calls it); only the user entry folds into it.
 
 This is the entire device-side mechanism. **No firmware change** (`brisck.cc` still calls a
 bare `kernel_main()`), **no host write-path change** — we reuse the accessors and codegen
@@ -208,9 +214,14 @@ Three things this makes concrete:
 All codegen lives in `tt_metal/jit_build/genfiles.cpp`, next to the existing
 `write_kernel_args_generated_header()` and `jit_build_genfiles_kernel_include()`.
 
-**Marker.** `#define TT_KERNEL [[tt::kernel_main]]` in a public kernel header. Used as
-`TT_KERNEL void my_kernel(...)`. The attribute is a vendor-namespaced no-op for the compiler
-(build with `-Wno-attributes` or register it); it exists purely as a reliable parse anchor.
+**Marker.** `#define TT_KERNEL [[tt::kernel_main]] FORCE_INLINE` in a public kernel header.
+Used as `TT_KERNEL void my_kernel(...)`. Two pieces:
+- `[[tt::kernel_main]]` — a vendor-namespaced no-op for the compiler (build with
+  `-Wno-attributes` or register it); it exists purely as a reliable parse anchor.
+- `FORCE_INLINE` (`inline __attribute__((always_inline))`, from `risc_attribs.h`) — forces
+  the user entry to inline into the generated `kernel_main()`, so the shim adds no
+  call indirection and the user function is never emitted as a standalone out-of-line symbol.
+
 Exactly one per TU — zero falls back to a hand-written `kernel_main()`, two is a JIT error.
 
 **Signature parser** — `parse_kernel_main_signature(source) -> {name, template_param_names,
@@ -222,7 +233,7 @@ types force a real parser; see §5.)
 The procedure runs over the raw, un-preprocessed kernel source. Traced on the §2 example:
 
 ```cpp
-#define TT_KERNEL [[tt::kernel_main]]      // (from an included header)
+#define TT_KERNEL [[tt::kernel_main]] FORCE_INLINE   // (from an included header)
 template <uint32_t block_h, uint32_t block_w, uint32_t untilize>
 TT_KERNEL void my_kernel(uint32_t src_addr, uint32_t dst_addr,
                          uint32_t num_tiles, uint32_t scaler, uint32_t sem_addr)
@@ -276,7 +287,10 @@ Two correctness notes:
 `my_kernel<get_arg(args::ct)…>(get_arg(args::rt)…)`, one `get_arg(args::<name>)` per param
 in declared order, omitting the `<…>` entirely when there are no template params. Because
 the `args::*` constants already exist and `get_arg` is overloaded on their type, that's the
-whole shim.
+whole shim. The user entry is `FORCE_INLINE` (via `TT_KERNEL`), so this call inlines into
+`kernel_main()` — the wrapper is zero-cost, with no extra function-call indirection and no
+out-of-line copy of the user kernel. `kernel_main()` itself remains the out-of-line symbol
+the firmware calls.
 
 **Include ordering** — append the shim *after* the user source in `kernel_includes.hpp`
 (the entry must be declared first): `kernel_bindings_generated.h` → `kernel_args_generated.h`
