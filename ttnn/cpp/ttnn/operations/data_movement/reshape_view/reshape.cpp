@@ -44,16 +44,6 @@ static uint32_t collapse_second_dim(const ttnn::Shape& shape) {
     return second_dim;
 }
 
-static ttnn::Tensor drop_rm_padding(const ttnn::Tensor& tensor) {
-    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || tensor.logical_shape() == tensor.padded_shape()) {
-        return tensor;
-    }
-    // Force compaction through a layout roundtrip:
-    // RM(padded) -> TILE -> RM(unpadded logical region).
-    auto tiled_tensor = ttnn::to_layout(tensor, ttnn::TILE_LAYOUT, std::nullopt, tensor.memory_config());
-    return ttnn::to_layout(tiled_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, tensor.memory_config());
-}
-
 // Largest n in [1, max_n] with dim % n == 0 and (dim / n) % align == 0, else 0.
 static uint32_t find_best_n_1d(uint32_t dim, uint32_t max_n, uint32_t align) {
     for (uint32_t n = max_n; n > 0; n--) {
@@ -303,18 +293,17 @@ ttnn::Tensor reshape_rm(
     TT_FATAL((tensor.logical_shape().rank() != 0), "Can't do reshape from rank 0 tensor");
     TT_FATAL(tensor.layout() == ttnn::ROW_MAJOR_LAYOUT, "Wrong layout in `reshape_rm` `");
 
-    auto rm_tensor = drop_rm_padding(tensor);
-    const auto& rm_tensor_logical_shape = rm_tensor.logical_shape();
-    const auto& rm_tensor_padded_shape = rm_tensor.padded_shape();
-    const uint32_t logical_second_dim = collapse_second_dim(rm_tensor_logical_shape);
-    const uint32_t padded_second_dim = collapse_second_dim(rm_tensor_padded_shape);
+    const auto& tensor_logical_shape = tensor.logical_shape();
+    const auto& tensor_padded_shape = tensor.padded_shape();
+    const uint32_t logical_second_dim = collapse_second_dim(tensor_logical_shape);
+    const uint32_t padded_second_dim = collapse_second_dim(tensor_padded_shape);
 
     // Call reshape with the equivalent data 2D Row Major input tensor
     return fix_shape_and_perform_reshape_on_2D_RM(
         PerformView(
-            rm_tensor,
-            Shape({logical_second_dim, rm_tensor_logical_shape[-1]}),
-            Shape({padded_second_dim, rm_tensor_padded_shape[-1]}),
+            tensor,
+            Shape({logical_second_dim, tensor_logical_shape[-1]}),
+            Shape({padded_second_dim, tensor_padded_shape[-1]}),
             tile_first_dim,
             tile_second_dim),
         logical_shape,
