@@ -141,7 +141,7 @@ void run_single_dfb_program(
         if (dfb_config.num_producers > 1 || dfb_config.num_consumers > 1) {
             GTEST_SKIP() << "WH/BH DFB supports only 1 DM producer (BRISC) and 1 DM consumer (NCRISC)";
         }
-        // Implicit sync (Noc::TxnIdMode::ENABLED) is declared only under #ifdef ARCH_QUASAR
+        // Implicit sync (NocOptions::TXN_ID) is declared only under #ifdef ARCH_QUASAR
         // in api/dataflow/noc.h. Force it off so the device-side kernel's
         // `if constexpr (implicit_sync)` branch is dead code on WH/BH.
         dfb_config.enable_producer_implicit_sync = false;

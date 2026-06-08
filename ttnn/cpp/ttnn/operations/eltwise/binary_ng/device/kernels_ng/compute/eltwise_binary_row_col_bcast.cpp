@@ -120,7 +120,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
