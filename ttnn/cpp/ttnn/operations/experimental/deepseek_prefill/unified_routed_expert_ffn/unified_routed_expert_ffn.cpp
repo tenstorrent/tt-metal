@@ -106,11 +106,23 @@ ttnn::Tensor unified_routed_expert_moe(
     // emb) tensor with rows starting at 0. The FFN kernel always reads/writes
     // from row 0 of its inputs; `ttnn::insert` handles placement into the
     // shared output at expert_region_offsets[global_expert_id].
-    auto expert_outputs = ttnn::empty(
-        dispatched_buffer.logical_shape(),
-        dispatched_buffer.dtype(),
-        ttnn::TILE_LAYOUT,
-        dispatched_buffer.device(),
+    // Zero-initialized (not ttnn::empty): only `insert` writes each expert's
+    // valid token rows, so padding rows — tile-aligned slack within a region,
+    // regions of zero-count experts, and the tail of the buffer — would
+    // otherwise keep uninitialized DRAM garbage (incl. NaN/Inf bit patterns).
+    // The torch reference zeros these, and a NaN in padding would corrupt any
+    // downstream masked reduction/combine, so the buffer is zeroed up front.
+    //
+    // zeros_like (not zeros): dispatched_buffer is a TILE device tensor in a
+    // device-fill-eligible dtype (bf8/bf16/fp32), so zeros_like takes the
+    // on-device ttnn::fill path — no host-side std::vector(volume) + H2D copy
+    // (which plain ttnn::zeros would incur for a large dispatch buffer) and no
+    // device-pointer deref here.
+    auto expert_outputs = ttnn::zeros_like(
+        dispatched_buffer,
+        /*dtype=*/std::nullopt,
+        /*layout=*/std::nullopt,
+        /*device=*/std::nullopt,
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
     for (uint32_t local_expert = 0; local_expert < experts_per_chip; ++local_expert) {
         auto tokens = ttnn::extract(

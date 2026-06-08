@@ -997,10 +997,11 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
 template <tt::tt_fabric::Topology Topology, uint32_t AxisSize>
 inline uint32_t calculate_hops_direction_enforced_1D(uint32_t src_coord, uint32_t dest_coord, Polarity polarity) {
     // Currently this function has only been tested for 1D Ring topology.
-    static_assert(
-        has_wrap_around<Topology>(),
-        "calculate_hops_direction_enforced_1D has only been tested for 1D topologies with wraparound links");
-    return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
+    if constexpr (has_wrap_around<Topology>()) {
+        return directional_wrap_distance<AxisSize>(src_coord, dest_coord, polarity);
+    } else {
+        return topological_distance<Topology>(src_coord, dest_coord, AxisSize);
+    }
 }
 
 // Given a list of destinations, generates a hop mask relative to the source chip

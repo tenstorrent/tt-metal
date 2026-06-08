@@ -22,11 +22,16 @@ inline void transpose_dest_configure_addrmod();
 template <bool transpose_of_faces, bool is_32bit>
 inline void transpose_dest_configure_mop();
 
-// Function to transpose a full tile at destination index 0, relative to current bank.
-// This function uses format switching to achieve transposition of full 32 bit datums.
-// Low bits are transposed and cached and written after high bits to avoid clobbering.
-// Template argument transpose_of_faces will determine if the arrangement of faces will be
-// subject to transposition also, not just the elements within the faces.
+/**
+ * @brief Transpose a full 32-bit tile in place at dest index 0 (relative to the current bank) via format switching.
+ *
+ * Because the FPU transposes 16-bit datums, each 32-bit datum is transposed as two halves: the high 16 bits are
+ * transposed and written first, then the cached low 16 bits, so the low bits don't clobber the high bits.
+ * transpose_of_faces additionally transposes the face arrangement, not just elements within each face.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @note Toggles DISABLE_IMPLIED_SRCA_FMT and the SrcA format/FP32/zero-flag config bits, restoring them on exit.
+ */
 template <bool transpose_of_faces>
 inline void transpose_dest_32b()
 {
@@ -146,6 +151,22 @@ inline void transpose_dest_32b()
 // We may want to revisit these template parameters, and perhaps the
 // transpose_dest API generally as it's not currently widely used:
 // https://github.com/tenstorrent/tt-llk/issues/290
+/**
+ * @brief Transpose a tile in place within the destination register.
+ *
+ * For 32-bit datums uses the format-switching path (low/high 16-bit halves transposed separately to avoid
+ * clobbering); otherwise runs the preconfigured transpose MOP. transpose_of_faces controls whether the face
+ * arrangement is transposed in addition to the elements within each face.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @tparam is_32bit: True for 32-bit datums (uses the format-switching transpose path).
+ * @param dst_index: Tile index into the destination register.
+ * @note Call @ref _llk_math_transpose_dest_init_ with matching template args before this
+ *       function, and @ref _llk_math_transpose_dest_uninit_ after it to restore modified state.
+ * @note On the unpack thread, the tile must already be in dest (via @ref _llk_unpack_A_ datacopy);
+ *       @ref _llk_unpack_set_srcb_dummy_valid_ marks SrcB valid so the MOVB2D/MOVD2B sequence can run.
+ * @note <transpose_of_faces=false, is_32bit=false> is not supported.
+ */
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 {
@@ -170,6 +191,11 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
+/**
+ * @brief Program the address-mod slots for a destination-register transpose.
+ *
+ * @tparam is_32bit: True for 32-bit datums (uses SrcA-stepping mods for the format-switching path).
+ */
 template <bool is_32bit>
 inline void transpose_dest_configure_addrmod()
 {
@@ -234,6 +260,15 @@ inline void transpose_dest_configure_addrmod()
     }
 }
 
+/**
+ * @brief Build the transpose MOP, recording the per-face MOVD2B/TRNSPSRCB/MOVB2D-MOVB2A sequence into the replay buffer.
+ *
+ * The 32-bit path records a 16-instruction replay buffer and drives it with a ckernel_template; the non-32-bit path
+ * records a 15-instruction replay buffer and assembles a ckernel_unpack_template that runs the seven per-face steps.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @tparam is_32bit: True for 32-bit datums (records the format-switching transpose sequence).
+ */
 template <bool transpose_of_faces, bool is_32bit>
 inline void transpose_dest_configure_mop()
 {
@@ -322,6 +357,13 @@ inline void transpose_dest_configure_mop()
     }
 }
 
+/**
+ * @brief Configure the math thread (address mods and MOP) for a destination-register transpose.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @tparam is_32bit: True for 32-bit datums (configures the format-switching transpose path).
+ * @note @ref _llk_math_transpose_dest_ runs the configured transpose with matching template args.
+ */
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_init_()
 {
@@ -331,6 +373,11 @@ inline void _llk_math_transpose_dest_init_()
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 }
 
+/**
+ * @brief Uninitialize/cleanup after a destination-register transpose, restoring modified state to defaults.
+ *
+ * @note Reverses @ref _llk_math_transpose_dest_init_; currently a no-op since all state is transient.
+ */
 inline void _llk_math_transpose_dest_uninit_()
 {
     // No state to restore - all states are transient or default
