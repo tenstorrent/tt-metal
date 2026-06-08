@@ -128,11 +128,11 @@ void kernel_main() {
     uint32_t output_init_complete_semaphore_address = get_semaphore(output_init_complete_semaphore_id);
     uint32_t output_init_barrier_address = get_semaphore(output_init_barrier_semaphore_id);
 
-    DPRINT_COMBINE(
-        "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
-        expert_start_idx,
-        expert_end_idx,
-        linearized_mesh_coord);
+    // DPRINT_COMBINE(
+    //     "Combine Reader: experts=[{}, {}) linearized_mesh_coord={}\n",
+    //     expert_start_idx,
+    //     expert_end_idx,
+    //     linearized_mesh_coord);
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
@@ -360,19 +360,19 @@ void kernel_main() {
                 }
 
                 uint32_t dst_chip = meta0;
-                uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
+                // uint32_t output_page_idx = meta1 * num_experts_per_tok + meta2;
 
                 if constexpr (is_1d_topology<topology>()) {
-                    uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                    uint32_t distance =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    // uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                    // uint32_t distance =
+                    //     manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
                     cb_reserve_back(cb_route_info_id, 1);
                     uint32_t cb_base = get_write_ptr(cb_route_info_id);
                     volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-                    route_info[0] = route;
-                    route_info[1] = distance;
-                    route_info[2] = output_page_idx;
+                    route_info[0] = dst_chip;  // route;
+                    route_info[1] = meta1;     // distance;
+                    route_info[2] = meta2;     // output_page_idx;
                     {
                         // DeviceZoneScopedN("sending-for-FABRIC-write");
                         uint32_t output_dst = cb_base + l1_alignment;
@@ -409,7 +409,7 @@ void kernel_main() {
         uint32_t end_page = start_page + expert_tokens;
         uint32_t num_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        DPRINT_COMBINE("Expert={} tokens={}\n", local_expert, expert_tokens);
+        // DPRINT_COMBINE("Expert={} tokens={}\n", local_expert, expert_tokens);
 
         uint32_t first_batch_end = (start_page + read_batch_size < end_page) ? start_page + read_batch_size : end_page;
         uint32_t first_batch_count = first_batch_end - start_page;
@@ -447,17 +447,17 @@ void kernel_main() {
                     batch_did_local_write = true;
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
-                        uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
-                        uint32_t distance =
-                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                        // uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+                        // uint32_t distance =
+                        //     manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
                         cb_reserve_back(cb_route_info_id, 1);
                         uint32_t cb_base = get_write_ptr(cb_route_info_id);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-                        route_info[0] = route;
-                        route_info[1] = distance;
-                        route_info[2] = output_page_idx;
+                        route_info[0] = dst_chip;         // route;
+                        route_info[1] = dst_token_idx;    // distance;
+                        route_info[2] = dst_topk_indice;  // output_page_idx;
                         route_info[3] = 0;
 
                         uint32_t output_dst = cb_base + l1_alignment;

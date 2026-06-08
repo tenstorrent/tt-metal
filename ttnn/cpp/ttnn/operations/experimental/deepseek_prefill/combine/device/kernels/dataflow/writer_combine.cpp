@@ -64,6 +64,29 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(25);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(26);
 
+    constexpr uint32_t chip_0[] = {6, 3, 7, 1, 5, 4, 2};
+    constexpr uint32_t chip_1[] = {2, 5, 7, 3, 6, 0, 4};
+    constexpr uint32_t chip_2[] = {1, 5, 6, 0, 4, 3, 7};
+    constexpr uint32_t chip_3[] = {5, 1, 7, 0, 4, 2, 6};
+    constexpr uint32_t chip_4[] = {6, 3, 7, 1, 5, 0, 2};
+    constexpr uint32_t chip_5[] = {2, 1, 7, 3, 6, 0, 4};
+    constexpr uint32_t chip_6[] = {0, 4, 2, 5, 1, 3, 7};
+    constexpr uint32_t chip_7[] = {1, 5, 3, 0, 4, 2, 6};
+    const uint32_t* schedule =
+        linearized_mesh_coord == 0
+            ? chip_0
+            : (linearized_mesh_coord == 1
+                   ? chip_1
+                   : (linearized_mesh_coord == 2
+                          ? chip_2
+                          : (linearized_mesh_coord == 3
+                                 ? chip_3
+                                 : (linearized_mesh_coord == 4
+                                        ? chip_4
+                                        : (linearized_mesh_coord == 5
+                                               ? chip_5
+                                               : (linearized_mesh_coord == 6 ? chip_6 : chip_7))))));
+
     // Fabric configuration (indices 27-30)
     constexpr uint32_t fabric_max_packet_size = get_compile_time_arg_val(27);
     constexpr uint32_t l1_alignment = get_compile_time_arg_val(28);
@@ -131,11 +154,11 @@ void kernel_main() {
     constexpr uint32_t combine_devices = num_chips;
 #endif
 
-    DPRINT_COMBINE(
-        "Combine Writer: experts=[{}, {}) linearized_mesh_coord={}\n",
-        expert_start_idx,
-        expert_end_idx,
-        linearized_mesh_coord);
+    // DPRINT_COMBINE(
+    //     "Combine Writer: experts=[{}, {}) linearized_mesh_coord={}\n",
+    //     expert_start_idx,
+    //     expert_end_idx,
+    //     linearized_mesh_coord);
 
 #if INIT_ZEROS
     // Wait for reader to complete output-zeroing
@@ -177,7 +200,7 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_COMBINE("Fabric setup complete\n");
+    // DPRINT_COMBINE("Fabric setup complete\n");
 #endif
 
 #if INIT_ZEROS
@@ -191,27 +214,33 @@ void kernel_main() {
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
-
+    uint32_t tokens_sent_cnt = 0;
     {
-        // DeviceZoneScopedN("combine-ethernet-flow");
+        DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
             uint32_t cb_base = get_read_ptr(cb_route_info_id);
             volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-            uint32_t route = route_info[0];
+            uint32_t dst_chip = route_info[0];
             {
                 // DeviceZoneScopedN("combine-waiting-for-route-info");
-                if (route == ROUTE_INFO_SENTINEL) {
+                if (dst_chip == ROUTE_INFO_SENTINEL) {
                     cb_pop_front(cb_route_info_id, 1);
                     break;
                 }
             }
-            uint32_t distance = route_info[1];
-            uint32_t output_page_idx = route_info[2];
+            dst_chip = schedule[tokens_sent_cnt++ % 7];
+            // uint32_t distance = route_info[1];
+            // uint32_t output_page_idx = route_info[2];
+            uint32_t dst_token_idx = route_info[1];
+            uint32_t dst_topk_indice = route_info[2];
+            uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+            uint32_t distance = manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
+            uint32_t output_page_idx = dst_token_idx * num_experts_per_tok + dst_topk_indice;
             uint32_t output_data_addr = cb_base + l1_alignment;
 
-            DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
+            // DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
 #ifdef DEST_CHIP_ID
             {
@@ -234,6 +263,7 @@ void kernel_main() {
             cb_pop_front(cb_route_info_id, 1);
         }
     }
+    DeviceTimestampedData("combine-tokens-sent", tokens_sent_cnt);
 
 #ifdef DEST_CHIP_ID
     // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
