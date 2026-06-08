@@ -249,10 +249,7 @@ bool decide_streaming_low_l1(
     uint32_t intermediate_tile_bytes,
     uint32_t output_tile_bytes,
     bool has_weight,
-    bool per_head_norm,
-    bool fuse_rope,
-    uint32_t rope_tiles_per_row,
-    uint32_t rope_tile_bytes) {
+    bool per_head_norm) {
     const uint32_t mode = streaming_force_mode();
     if (mode == 1u) {
         return true;
@@ -276,16 +273,9 @@ bool decide_streaming_low_l1(
     // Broadcast weight is num_tile_cols bf16 tiles (2048 B). Per-token is larger
     // but those shapes have small num_tile_cols and don't trigger streaming.
     const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;
-    // rope_cos_cb + rope_sin_cb are each chunk_size_rows * rope_tiles_per_row tiles
-    // (see CB allocation). Per-head RoPE makes rope_tiles_per_row == num_tile_cols,
-    // so at video-self-attn width (feat 1024 -> 32 cols, fp32) these two CBs alone
-    // are ~1 MB at chunk 4 — the dominant term, so they MUST be in the budget.
-    const uint64_t rope_bytes =
-        fuse_rope ? 2ull * static_cast<uint64_t>(chunk_size_rows) * rope_tiles_per_row * rope_tile_bytes : 0ull;
     constexpr uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
     constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
-    const uint64_t total =
-        input_bytes + intermediate_bytes + output_bytes + weight_bytes + rope_bytes + kFixedOverheadBytes;
+    const uint64_t total = input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes;
     return total > kResidentL1BudgetBytes;
 }
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
@@ -307,10 +297,7 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
-WanFusedDistributedRmsnormSizing compute_sizing(
-    const WanFusedDistributedRmsnormParams& args,
-    const Tensor& input,
-    const WanFusedDistributedRmsnormInputs& tensor_args) {
+WanFusedDistributedRmsnormSizing compute_sizing(const WanFusedDistributedRmsnormParams& args, const Tensor& input) {
     WanFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
@@ -329,61 +316,15 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // has few rows. Cap at kMaxChunkSizeRows for L1 budget (chunk-sized CBs:
     // input, stats_local, packed_gathered, stats_gathered all scale with
     // chunk_size).
-    // chunk_size_rows + the streaming-low-L1 decision live here (single source of
-    // truth) so the caller-allocated stats scratch buffer and the program agree.
     constexpr uint32_t kMaxChunkSizeRows = 8u;
-
-    const uint32_t num_tile_cols = std::max(1u, W / TILE_WIDTH);
-    const uint32_t head_dim_tiles = std::max(1u, (W / args.num_heads_per_device) / TILE_WIDTH);
-    const bool has_weight = tensor_args.weight.has_value();
-    const bool fuse_rope = tensor_args.transformation_mat.has_value() && tensor_args.rope_cos.has_value() &&
-                           tensor_args.rope_sin.has_value();
-    const bool per_head_rope =
-        fuse_rope && (tensor_args.rope_cos->logical_shape()[1] == args.num_heads_per_device);
-    const uint32_t rope_tiles_per_row = per_head_rope ? num_tile_cols : head_dim_tiles;
-
-    const auto [c_fidelity, c_approx, c_fp32_dest_acc, c_packer_l1_acc, c_dst_full_sync] =
-        get_compute_kernel_config_args(input.device()->arch(), args.compute_kernel_config);
-    const uint32_t block_size = get_dest_reg_count(args.compute_kernel_config);
-    const uint32_t in_tile_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
-    const uint32_t out_tile_bytes =
-        tt::tile_size(datatype_to_dataformat_converter(args.dtype.value_or(input.dtype())));
-    const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
-    const uint32_t interm_tile_bytes = c_fp32_dest_acc ? fp32_tile_bytes : tt::tile_size(tt::DataFormat::Float16_b);
-
-    if (per_head_rope) {
-        // Per-head RoPE cos/sin CBs are chunk_size_rows*num_tile_cols fp32 tiles —
-        // the dominant L1 term at video-self-attn width. Use chunk_size_rows==1
-        // RESIDENT: (a) it keeps the cos/sin CBs to one row so feat<=1024 fits L1;
-        // (b) the streamed path is fragile with per-head RoPE, and chunk>=2 + many
-        // rows + per-head RoPE deadlocks — chunk==1 resident avoids both. If even
-        // one row overflows (feat 2048), the CB allocation TT_FATALs (a clean
-        // compile error, not a hang); that case needs cos/sin streaming.
-        s.chunk_size_rows = 1u;
-        s.streaming_low_l1 = false;
-    } else {
-        // Broadcast / no-RoPE: nt-based chunk cap + the streaming fallback (proven
-        // for wide no-RoPE shards, e.g. feat 2048). Streaming requires chunk==1.
-        const uint32_t chunk_h_cap = std::max(1u, 128u / num_tile_cols);
-        s.chunk_size_rows =
-            std::min<uint32_t>(std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
-        s.streaming_low_l1 = decide_streaming_low_l1(
-            num_tile_cols,
-            block_size,
-            s.chunk_size_rows,
-            in_tile_bytes,
-            interm_tile_bytes,
-            out_tile_bytes,
-            has_weight,
-            args.per_head_norm,
-            fuse_rope,
-            rope_tiles_per_row,
-            fp32_tile_bytes);
-        if (s.streaming_low_l1) {
-            s.chunk_size_rows = 1u;
-        }
-    }
-
+    // L1 budget cap: input_cb is double-buffered 2 * chunk * num_tile_cols
+    // bf16 tiles = chunk * num_tile_cols * 4 KB per worker. Other CBs add
+    // ~150 KB. Keep input_cb ≤ 512 KB so total ≤ 750 KB (half of L1):
+    //   chunk * num_tile_cols ≤ 128.
+    const uint32_t num_tile_cols_for_chunk_cap = std::max(1u, W / TILE_WIDTH);
+    const uint32_t chunk_h_cap = std::max(1u, 128u / num_tile_cols_for_chunk_cap);
+    s.chunk_size_rows =
+        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
     s.window_size = s.chunk_size_rows;
     // Pages are addressed across the whole chip (not per-worker) so the
     // buffer shape doesn't depend on num_workers. Each chunk a worker
@@ -573,13 +514,12 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // N's compute and chunk N's output drain. When the worker has ≥2 rows, pick
     // ceil(rows/2) as the chunk size (capped at kMaxChunkSizeRows); when only
     // 1 row, chunk=1 (no overlap possible at all).
-    // chunk_size_rows + the streaming-low-L1 decision come from compute_sizing
-    // (single source of truth) so this program and the caller-allocated stats
-    // scratch buffer agree on chunk/window/page sizing. compute_sizing clamps
-    // chunk_size_rows to 1 when streaming (and counts the per-head RoPE cos/sin
-    // CBs in the L1 budget).
-    const auto sizing = compute_sizing(args, input_tensor, tensor_args);
-    const uint32_t chunk_size_rows = sizing.chunk_size_rows;
+    constexpr uint32_t kMaxChunkSizeRows = 8u;
+    // L1 budget cap (matches compute_sizing): chunk * num_tile_cols ≤ 128
+    // keeps input_cb under ~512 KB per worker.
+    const uint32_t chunk_h_cap = std::max(1u, 128u / std::max(1u, num_tile_cols));
+    const uint32_t chunk_size_rows =
+        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, num_tile_rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
     // Phase 9 packed-page AG: every chunk this chip processes maps to a
     // distinct DRAM page. Page index = my_device_index * num_chunks_per_device
     // + chunk_idx_on_device. Independent of num_workers per design.
@@ -614,7 +554,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // intermediate/rotated/output CBs would overflow L1, stream input_cb in
     // block_size chunks for PRE + a POST re-read pass instead. See
     // decide_streaming_low_l1() for the budget heuristic.
-    const bool streaming_low_l1 = sizing.streaming_low_l1;
+    const bool streaming_low_l1 = decide_streaming_low_l1(
+        num_tile_cols,
+        block_size,
+        chunk_size_rows,
+        input_tile_size,
+        intermediate_tile_size,
+        output_tile_size,
+        has_weight,
+        args.per_head_norm);
     // The streamed compute path handles only the whole-row reduce with one row
     // resident at a time. These invariants hold for every shape that actually
     // triggers streaming (wide shards have chunk_size_rows==1 via chunk_h_cap,
