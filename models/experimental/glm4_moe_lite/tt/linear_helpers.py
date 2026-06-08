@@ -411,6 +411,7 @@ def prefill_linear_ws_out(
     device: Any,
     compute_kernel_config: Any = None,
     memory_config: ttnn.MemoryConfig | None = None,
+    return_sharded: bool = False,
 ) -> ttnn.Tensor:
     """Prefill linear: 1D multicast program config + WIDTH_SHARDED L1 output.
 
@@ -419,6 +420,11 @@ def prefill_linear_ws_out(
     Only applied when the weight tensor has no batch dimension (b_batch == 1)
     and M > TILE_SIZE (prefill mode).  Safe to call from code that doesn't
     have access to Glm4RuntimeConfig.
+
+    When ``return_sharded=True`` the WIDTH_SHARDED L1 shard tensor is returned
+    directly without gathering.  The caller owns it and must deallocate when done.
+    Use this when the immediate consumer is an elementwise op (e.g. silu+mul)
+    whose two inputs share the same shard spec, so no gather is needed.
     """
     m_total = 1
     for i in range(len(a.shape) - 1):
@@ -430,6 +436,8 @@ def prefill_linear_ws_out(
     out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
     if _copied:
         ttnn.deallocate(a_l1, force=False)
+    if return_sharded:
+        return out_sharded
     downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.to_memory_config(out_sharded, downstream_mc)
     ttnn.deallocate(out_sharded, force=False)
