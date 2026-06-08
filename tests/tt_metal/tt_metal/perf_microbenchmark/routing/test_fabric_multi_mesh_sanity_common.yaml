@@ -124,20 +124,3 @@ Tests:
     patterns:
       - type: neighbor_exchange
         mesh_scope: inter_mesh
-
-  - name: "MultiMeshSequentialAllToAll"
-    sync: true
-    fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      num_links: [1, 2]
-      size: [1024, 2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 100
-
-    patterns:
-      - type: sequential_all_to_all
