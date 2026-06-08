@@ -343,7 +343,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
     // c_14: per-batch route plan (reader RISC → writer RISC, on same untilize core).
     // Layout (PlanHeader + PlanEntry[]) is defined in kernels/dataflow/dispatch_plan.hpp:
-    // [PlanHeader: 32B][PlanEntry: 48B each] (both alignas(16)). Sized straight from sizeof so the
+    // [PlanHeader: 16B][PlanEntry: 48B each] (both alignas(16)). Sized straight from sizeof so the
     // page size always tracks the structs.
     {
         uint32_t max_plan_entries = read_batch_size * operation_attributes.num_experts_per_tok;
