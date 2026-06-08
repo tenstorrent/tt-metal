@@ -23,24 +23,12 @@ add_library(TTNN::PCH ALIAS ttnn_pch)
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp CONTENT "/*dummy ttnn pch file*/\n")
 target_sources(ttnn_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp)
 
-target_precompile_headers(
-    ttnn_pch
-    PUBLIC
-        # Reuse common PCH headers
-        <fmt/core.h>
-        <fmt/format.h>
-        <nlohmann/json.hpp>
-        <algorithm>
-        <cstddef>
-        <cstdint>
-        <functional>
-        <map>
-        <memory>
-        <tuple>
-        <unordered_map>
-        <variant>
-        <vector>
-)
+# Reuse the stable PCH from TT::CommonPCH (STL + fmt + json) rather than
+# re-declaring an identical header list. TT::CommonPCH is compiled once;
+# ttnn_pch consumers share the same precompiled binary.
+# NOTE: REUSE_FROM requires compatible compile flags between the two targets.
+#       If CI reveals incompatibility, revert to declaring headers explicitly.
+target_precompile_headers(ttnn_pch REUSE_FROM TT::CommonPCH)
 
 target_link_libraries(
     ttnn_pch
@@ -51,9 +39,8 @@ target_link_libraries(
 )
 
 target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttnn_pch)
-endif()
+# tt_disable_ccache_for_pch is already applied to TT::CommonPCH (metal_common_pch)
+# in the root CMakeLists.txt; no need to apply it again here.
 
 ##################################################
 # Set options
