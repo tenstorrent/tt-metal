@@ -89,7 +89,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_expert_token_remap.html">ttnn.moe_expert_token_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.moe_routing_remap.html">ttnn.moe_routing_remap</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.move.html">ttnn.move</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.narrow.html">ttnn.narrow</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.nonzero.html">ttnn.nonzero</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.pad.html">ttnn.pad</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.permute.html">ttnn.permute</a></li>
@@ -204,7 +203,7 @@
 </ul>
 </dd>
 </dl>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor. Default is to match input tensor memory config. If <code class="docutils literal notranslate"><span class="pre">memory_config</span></code> specifies a sharded layout without <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code>, the input tensor’s <code class="docutils literal notranslate"><span class="pre">shard_spec</span></code> is used as the seed grid (layout should match the input).
+<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor. Default is to match input tensor memory config
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: Value to pad the output tensor. Default is 0
 :kwtype * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: number
 :keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>: Advanced option. Set to RECREATE to recompute and reallocate the mapping tensor. This may alleviate DRAM fragmentation but is slow. Default is CACHE. This keyword is named <code class="xref py py-attr docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code> on all overloads; the small-vector (tuple/list) shape overload previously used the name <code class="docutils literal notranslate"><span class="pre">recreate_mapping_tensor</span></code> for the same option—update callers to <code class="docutils literal notranslate"><span class="pre">reshape_tile_mode</span></code>.

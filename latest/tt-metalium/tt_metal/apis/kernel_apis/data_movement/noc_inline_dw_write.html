@@ -126,94 +126,94 @@
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Argument   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>addr  </p></td>
-<td><p>Encoding of the destination location (x,y)+address  </p></td>
-<td><p>uint64_t  </p></td>
-<td><p>Results of <em>get_noc_addr</em> calls  </p></td>
-<td><p>True  </p></td>
+<td><p>addr   </p></td>
+<td><p>Encoding of the destination location (x,y)+address   </p></td>
+<td><p>uint64_t   </p></td>
+<td><p>Results of <em>get_noc_addr</em> calls   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>val  </p></td>
-<td><p>The value to be written  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Any uint32_t value  </p></td>
-<td><p>True  </p></td>
+<td><p>val   </p></td>
+<td><p>The value to be written   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any uint32_t value   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>be  </p></td>
-<td><p>Byte-enable  </p></td>
-<td><p>uint8_t  </p></td>
-<td><p>0x1-0xF  </p></td>
-<td><p>False  </p></td>
+<td><p>be   </p></td>
+<td><p>Byte-enable   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0x1-0xF   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>noc  </p></td>
-<td><p>NOC to use for the transaction  </p></td>
-<td><p>uint8_t  </p></td>
-<td><p>0 or 1  </p></td>
-<td><p>False  </p></td>
+<td><p>noc   </p></td>
+<td><p>NOC to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0 or 1   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>vc  </p></td>
-<td><p>Virtual channel to use for the transaction  </p></td>
-<td><p>uint8_t  </p></td>
-<td><p>0-3 (Unicast VCs)  </p></td>
-<td><p>False  </p></td>
+<td><p>vc   </p></td>
+<td><p>Virtual channel to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0-3 (Unicast VCs)   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>customized_src_addr  </p></td>
-<td><p>Custom source address for storing the value to be written  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Any uint32_t value  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p></p></td>
-<td><p>(required when <code class="docutils literal notranslate"><span class="pre">flush</span></code> is false)  </p></td>
-<td><p></p></td>
-<td><p></p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd">
-<td><p>dst_type (template parameter)  </p></td>
-<td><p>Whether the write is targeting L1 or a Stream Register  </p></td>
-<td><p>InlineWriteDst  </p></td>
-<td><p>DEFAULT, L1, REG  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-even">
-<td><p>posted (template parameter)  </p></td>
-<td><p>Whether the call is posted (i.e. ack requirement)  </p></td>
-<td><p>bool  </p></td>
-<td><p>true or false  </p></td>
-<td><p>False  </p></td>
-</tr>
-<tr class="row-odd">
-<td><p>flush (template parameter)  </p></td>
-<td><p>Whether to flush the NOC transaction before issuing the  </p></td>
-<td><p>bool  </p></td>
-<td><p>true or false  </p></td>
-<td><p>False  </p></td>
+<td><p>customized_src_addr   </p></td>
+<td><p>Custom source address for storing the value to be written   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any uint32_t value   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-even">
 <td><p></p></td>
-<td><p>write (<code class="docutils literal notranslate"><span class="pre">false</span></code> callers must prevent races on the caller  </p></td>
+<td><p>(required when <code class="docutils literal notranslate"><span class="pre">flush</span></code> is false)   </p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dst_type (template parameter)   </p></td>
+<td><p>Whether the write is targeting L1 or a Stream Register   </p></td>
+<td><p>InlineWriteDst   </p></td>
+<td><p>DEFAULT, L1, REG   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>posted (template parameter)   </p></td>
+<td><p>Whether the call is posted (i.e. ack requirement)   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>flush (template parameter)   </p></td>
+<td><p>Whether to flush the NOC transaction before issuing the   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p></p></td>
+<td><p>write (<code class="docutils literal notranslate"><span class="pre">false</span></code> callers must prevent races on the caller   </p></td>
 <td><p></p></td>
 <td><p></p></td>
 <td><p></p></td>
 </tr>
 <tr class="row-odd">
 <td><p></p></td>
-<td><p>side)  </p></td>
+<td><p>side)   </p></td>
 <td><p></p></td>
 <td><p></p></td>
 <td><p></p></td>

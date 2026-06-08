@@ -137,41 +137,41 @@
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Template Parameter  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Default  </p></th>
+<th class="head"><p>Template Parameter   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Default    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>approx  </p></td>
-<td><p>Enable approximate mode.  </p></td>
-<td><p>bool  </p></td>
-<td><p>true, false  </p></td>
-<td><p>false  </p></td>
+<td><p>approx   </p></td>
+<td><p>Enable approximate mode.   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>false    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>scale_en  </p></td>
-<td><p>Enable input scaling by a constant factor in approximate or non-approximate mode  </p></td>
-<td><p>bool  </p></td>
-<td><p>true, false  </p></td>
-<td><p>false  </p></td>
+<td><p>scale_en   </p></td>
+<td><p>Enable input scaling by a constant factor in approximate or non-approximate mode   </p></td>
+<td><p>bool   </p></td>
+<td><p>true, false   </p></td>
+<td><p>false    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>input_clamping  </p></td>
-<td><p>If approx, controls whether very negative inputs are clamped to prevent incorrect outputs  </p></td>
-<td><p>InputClamping</p></td>
-<td><p>ClampToNegative, None  </p></td>
-<td><p>ClampToNegative  </p></td>
+<td><p>input_clamping   </p></td>
+<td><p>If approx, controls whether very negative inputs are clamped to prevent incorrect outputs   </p></td>
+<td><p>InputClamping   </p></td>
+<td><p>ClampToNegative, None   </p></td>
+<td><p>ClampToNegative    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>iterations  </p></td>
-<td><p>Number of iterations over 32-SFPU lanes to run  </p></td>
-<td><p>int  </p></td>
-<td><p>Positive integer  </p></td>
-<td><p>8  </p></td>
+<td><p>iterations   </p></td>
+<td><p>Number of iterations over 32-SFPU lanes to run   </p></td>
+<td><p>int   </p></td>
+<td><p>Positive integer   </p></td>
+<td><p>8   </p></td>
 </tr>
 </tbody>
 </table>
@@ -180,34 +180,34 @@
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Argument  </p></th>
-<th class="head"><p>Description  </p></th>
-<th class="head"><p>Type  </p></th>
-<th class="head"><p>Valid Range  </p></th>
-<th class="head"><p>Required  </p></th>
+<th class="head"><p>Argument   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>idst  </p></td>
-<td><p>The index of the tile in DST register buffer to perform the computation on  </p></td>
-<td><p>uint32_t  </p></td>
-<td><p>Must be less than the size of the DST register buffer  </p></td>
-<td><p>True  </p></td>
+<td><p>idst   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>vector_mode  </p></td>
-<td><p>Specifies the vector mode for computation (default: VectorMode::RC)  </p></td>
-<td><p>VectorMode  </p></td>
-<td><p>Subject to specific hardware/kernel limits  </p></td>
-<td><p>False  </p></td>
+<td><p>vector_mode   </p></td>
+<td><p>Specifies the vector mode for computation (default: VectorMode::RC)   </p></td>
+<td><p>VectorMode   </p></td>
+<td><p>Subject to specific hardware/kernel limits   </p></td>
+<td><p>False    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>scale  </p></td>
-<td><p>Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b)  </p></td>
-<td><p>uint16_t  </p></td>
-<td><p>Valid FP16b representation  </p></td>
-<td><p>False  </p></td>
+<td><p>scale   </p></td>
+<td><p>Scale factor to apply in approximate or non-approximate mode if scale_en is true (default: 0x3F80, 1.0f in FP16b)   </p></td>
+<td><p>uint16_t   </p></td>
+<td><p>Valid FP16b representation   </p></td>
+<td><p>False   </p></td>
 </tr>
 </tbody>
 </table>
