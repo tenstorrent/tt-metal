@@ -35,11 +35,6 @@ on:
         description: 'Enable kernel ccache for JIT compilation at runtime'
         default: false
         type: boolean
-      redis-ccache-storage:
-        description: 'Redis storage URL for kernel ccache. Format: redis://user:password@host:port|read-only=false'
-        required: false
-        type: string
-        default: ''
 
 jobs:
   smoke:
@@ -144,8 +139,23 @@ jobs:
           echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
           echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
           echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
-          echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
           mkdir -p /tmp/ccache
+          # Build Redis URL in bash so that the password is never embedded in a
+          # workflow input string (GHA does not pass secrets through string inputs
+          # to reusable workflows). This also ensures forks leave CCACHE_REMOTE_STORAGE
+          # unset — the step is guarded by the fork check above.
+          REDIS_USER="${{ vars.REDIS_CCACHE_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_CCACHE_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_CCACHE_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_CCACHE_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_CCACHE_IS_READONLY }}"
+          CCACHE_PARTS=(
+            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
+            "@${REDIS_HOST}:${REDIS_PORT}"
+            "|read-only=${REDIS_READONLY}"
+          )
+          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
 
       - name: Run a test
         id: test

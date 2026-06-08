@@ -213,7 +213,6 @@ jobs:
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
       enable-kernel-ccache: true
-      redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
 
   ttnn-smoke-tests:
     needs: [find-changes, resolve-docker-pull-refs-tsan, build-tsan, check-harbor]
@@ -238,7 +237,6 @@ jobs:
       per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
       enable-kernel-ccache: true
-      redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
