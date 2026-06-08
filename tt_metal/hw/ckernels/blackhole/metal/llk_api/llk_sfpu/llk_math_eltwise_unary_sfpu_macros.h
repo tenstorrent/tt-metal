@@ -182,28 +182,6 @@ inline __attribute__((always_inline)) void _sfpu_check_and_call_(
  * every consumer has been migrated.
  */
 
-// ----- compare-with-zero aliases --------------------------------------------
-//
-// SFPU_ZERO_KERNEL is retained because its body differs between Blackhole/
-// Wormhole and Quasar (Quasar appends an extra iterations argument), so the
-// shared compare-with-zero call sites dispatch on the macro name rather than
-// inlining one arch's expansion.
-
-#define SFPU_ZERO_KERNEL(OP, MODE, APPROXIMATE, DST_IDX) \
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROXIMATE, SfpuType::OP), MODE, DST_IDX)
-
-// ----- literal-mode invocation aliases --------------------------------------
-//
-// The *_FN_FLOAT / *_FN_INT aliases are retained because their pinned template
-// type (sfpi::vFloat / sfpi::vInt on BH/WH vs uint32_t on Quasar) is part of
-// the arch seam; inlining them at a shared call site would hard-code one arch.
-
-#define SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (sfpi::vFloat, APPROXIMATE, 8, uint32_t), MODE, DST_IDX, PARAM0)
-
-#define SFPU_UNARY_ONE_PARAM_KERNEL_FN_INT(FN, MODE, APPROXIMATE, DST_IDX, PARAM0) \
-    SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, FN, (sfpi::vInt, APPROXIMATE, 8, uint32_t), MODE, DST_IDX, PARAM0)
-
 /*
  * Complex multi-statement aliases
  *
