@@ -36,7 +36,6 @@ def load_flow_torch_modules(sd):
         kernel_size=5, dilation_rate=1, num_layers=3,
         gin_channels=256,
     )
-    # Load only flow.* keys
     flow_sd = {k.replace("flow.", "", 1): v for k, v in sd.items() if k.startswith("flow.")}
     flow.load_state_dict(flow_sd)
     flow.eval()
@@ -79,10 +78,9 @@ def build_torch_generator(sd):
         sr=48000,
         validation=True,
     )
-    # Load only dec.* keys
     dec_sd = {k.replace("dec.", "", 1): v for k, v in sd.items() if k.startswith("dec.")}
     result = gen.load_state_dict(dec_sd, strict=False)
-    # m_source/f0_upsamp keys are expected missing (SineGen not loaded here)
+    # m_source / f0_upsamp keys are expected missing — SineGen isn't loaded here.
     unexpected_missing = [k for k in result.missing_keys if "m_source" not in k and "f0_upsamp" not in k]
     assert not unexpected_missing, f"Unexpected missing keys: {unexpected_missing}"
     gen.eval()
@@ -102,10 +100,8 @@ def torch_generator_forward(z, har_source, g, gen_mods):
         audio: [1, 1, T*480] generated waveform in [-1, 1]
     """
     gen = gen_mods["gen"]
-    # GeneratorNSF.forward expects (x, f0, g) but internally
-    # generates har_source from f0. For PCC testing we need to
-    # bypass that and directly pass har_source.
-    # So we replicate the forward manually:
+    # GeneratorNSF.forward internally generates har_source from f0; we
+    # replicate the forward inline so PCC tests can pass har_source directly.
     import torch.nn.functional as F
     from models.demos.rvc.torch_impl.vc.synthesizer import linear_channel_first
 

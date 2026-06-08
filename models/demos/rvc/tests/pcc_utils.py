@@ -32,7 +32,6 @@ def compute_pcc(
     ref_flat = reference.detach().float().flatten()
     act_flat = actual.detach().float().flatten()
 
-    # Handle edge cases
     if ref_flat.numel() == 0 or act_flat.numel() == 0:
         return 0.0
 
@@ -41,7 +40,6 @@ def compute_pcc(
         ref_flat = ref_flat[:min_len]
         act_flat = act_flat[:min_len]
 
-    # Check for constant tensors (zero variance)
     if ref_flat.std() == 0 and act_flat.std() == 0:
         return 1.0
     if ref_flat.std() == 0 or act_flat.std() == 0:
@@ -50,8 +48,7 @@ def compute_pcc(
     corr_matrix = torch.corrcoef(torch.stack([ref_flat, act_flat]))
     pcc = corr_matrix[0, 1].item()
 
-    # Handle NaN from corrcoef (can happen with near-constant tensors)
-    if pcc != pcc:  # NaN check
+    if pcc != pcc:  # corrcoef can return NaN on near-constant tensors
         return 0.0
 
     return pcc
