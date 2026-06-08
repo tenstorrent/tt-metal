@@ -52,6 +52,12 @@ from models.experimental.pi0_5.tt.option_c.stages import build_shrunk_layout
 BENCH_ENABLED = os.environ.get("PI0_OC_BENCHMARK") == "1"
 pytestmark = pytest.mark.skipif(not BENCH_ENABLED, reason="set PI0_OC_BENCHMARK=1 to run Option C perf benchmarks")
 
+# PI0_NUM_CAMERAS: number of SigLIP image slots (production = 3 per openpi spec).
+# Stacked on the batch dim of pixel_values. Defaults to 1 to preserve the
+# pre-existing scaffold behaviour; set PI0_NUM_CAMERAS=3 (or source
+# _bench_runs/pi05_production.env) for production-parity runs.
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "1"))
+
 WARMUP = int(os.environ.get("PI0_OC_BENCH_WARMUP", "2"))
 ITERS = int(os.environ.get("PI0_OC_BENCH_ITERS", "5"))
 
@@ -85,13 +91,15 @@ def _format_ms(values: List[float], label: str) -> str:
 def _synthetic_inputs(cfg: PaliGemmaConfig, prefix_len: int = PREFIX_LEN):
     """Random torch inputs matching what stage 0 expects.
 
-    pixel_values [1, 3, 224, 224], language_token_ids [1, S_lang], and
-    noisy_actions [1, ACTION_HORIZON_PADDED, action_dim]. Mask Nones — the
-    pipeline builds all-unmasked masks from the prefix length.
+    pixel_values [NUM_CAMERAS, 3, 224, 224], language_token_ids [1, S_lang],
+    and noisy_actions [1, ACTION_HORIZON_PADDED, action_dim]. Cameras stack
+    on the batch dim (production = 3 per openpi spec; override with
+    PI0_NUM_CAMERAS). Mask Nones — pipeline builds all-unmasked masks from
+    the resulting prefix length.
     """
-    S_lang = max(0, prefix_len - 256)  # SigLIP gives 256 image tokens
+    S_lang = max(0, prefix_len - 256 * NUM_CAMERAS)  # SigLIP gives 256 image tokens per camera
     gen = torch.Generator().manual_seed(0xC0FFEE)
-    pixel_values = torch.randn(1, 3, 224, 224, generator=gen, dtype=torch.float32)
+    pixel_values = torch.randn(NUM_CAMERAS, 3, 224, 224, generator=gen, dtype=torch.float32)
     language_token_ids = torch.randint(0, 32000, (1, S_lang), generator=gen, dtype=torch.int32)
     noisy_actions = torch.randn(1, ACTION_HORIZON_PADDED, 32, generator=gen, dtype=torch.float32)
     return pixel_values, language_token_ids, noisy_actions
