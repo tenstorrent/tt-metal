@@ -66,8 +66,13 @@ _N_LAYERS = 64
 _DECODE_STEPS = int(os.environ.get("QWEN36_DECODE_STEPS", "128"))
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 
-_PAGED_BLOCK_SIZE = 32
-_PAGED_MAX_NUM_BLOCKS = max(32, (_T_PREFILL + _DECODE_STEPS + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4)
+_PAGED_BLOCK_SIZE = int(os.environ.get("QWEN36_PAGED_BLOCK_SIZE", "32"))
+_PAGED_MAX_NUM_BLOCKS = int(
+    os.environ.get(
+        "QWEN36_PAGED_MAX_NUM_BLOCKS",
+        str(max(32, (_T_PREFILL + _DECODE_STEPS + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4)),
+    )
+)
 
 
 @pytest.fixture(scope="module")
@@ -154,7 +159,11 @@ def _build_tt_model_paged(mesh, state_dict, pattern, n_layers, paged_attention_c
     from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
     from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
 
-    args = TtQwen36ModelArgs(mesh)
+    _msl = os.environ.get("QWEN36_MAX_SEQ_LEN")
+    if _msl is not None:
+        args = TtQwen36ModelArgs(mesh, max_seq_len=int(_msl))
+    else:
+        args = TtQwen36ModelArgs(mesh)
     args.n_layers = n_layers
     args.linear_attention_pattern = pattern
     weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
@@ -183,7 +192,11 @@ def _build_tt_model_paged_kv(mesh, state_dict, pattern, n_layers, paged_attentio
     # buffers (rope table, decode masks) and starves the ~4GB transient full-attn QK-norm activation
     # at 256k (OOM). The inline demo keeps max_seq_len=128k and builds the prefill RoPE for the ACTUAL
     # seq-len; the >128k generator path needs the same (build actual-len rope), TODO.
-    args = TtQwen36ModelArgs(mesh)
+    _msl = os.environ.get("QWEN36_MAX_SEQ_LEN")
+    if _msl is not None:
+        args = TtQwen36ModelArgs(mesh, max_seq_len=int(_msl))
+    else:
+        args = TtQwen36ModelArgs(mesh)
     args.n_layers = n_layers
     args.linear_attention_pattern = pattern
     weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
@@ -637,7 +650,8 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
         os.environ.setdefault(_k, _v)
 
     tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
-    prompt = _load_prompt_for_isl(_T_PREFILL)
+    _prompt_override = os.environ.get("QWEN36_PROMPT_OVERRIDE")
+    prompt = _prompt_override if _prompt_override is not None else _load_prompt_for_isl(_T_PREFILL)
     ids = tok(prompt, return_tensors="pt").input_ids
     T_prompt = int(ids.shape[-1])
     if T_prompt > _T_PREFILL:
@@ -997,3 +1011,152 @@ def test_qwen36_xreq_prefill_probe(bh_glx_mesh):
         for _i, _t in enumerate(req_text):
             _n_alpha = sum(c.isalpha() for c in _t)
             assert _n_alpha >= 5, f"req{_i} incoherent decode (cross-request contamination?): {_t!r}"
+
+
+def test_qwen36_isl_schedule_repro(bh_glx_mesh):
+    """BENCHMARK-CRASH reproducer — generator path, ONE persistent model, NO reset.
+
+    The `run.py --workflow benchmarks` sweep crashes the engine at the 3rd combo:
+    the first ISL>128 prefill AFTER ~12 prior ISL-128 decode-heavy requests, with a
+    dispatch fetch-queue timeout (system_memory_manager `fetch_on_timeout` -> "device
+    timeout in fetch queue wait, potential hang detected"). Every test that "worked"
+    either reset the device per ISL (qwen36_isl_sweep.sh) or hand-tested few requests
+    on one process, so the cumulative many-request path was NEVER exercised in
+    isolation.
+
+    This test runs an ISL SCHEDULE (default: 12x ISL-128 then ISL-4096) through the
+    SHARED generator path (prefill_forward_text + decode_forward, switch_mode cycling
+    each request) on ONE model build with NO reset -- mimicking the benchmark's request
+    sequence WITHOUT HTTP / vLLM / chat-template. Decisive split:
+
+      * If it HANGS at the first big request  -> bug is in the generator/model path
+        (cumulative mode-cycling / rebuild_prefill_persistent_buffers). vLLM & the chat
+        endpoint are NOT the cause. Iterate the fix against THIS test.
+      * If it runs CLEAN through all requests  -> bug is vLLM/chat-endpoint specific;
+        move to an HTTP hammer against /v1/chat/completions.
+
+    Knobs:
+      QWEN36_ISL_SCHEDULE      comma-sep ISLs (default "128,"x12 + "4096")
+      QWEN36_SCHED_DECODE_STEPS decode steps per request (default 16; bump to mirror
+                               benchmark osl 128/1024 if a short schedule won't repro)
+    """
+    import math
+
+    from transformers import AutoTokenizer
+
+    from models.common.sampling import SamplingParams
+    from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
+    from models.demos.qwen3_6_galaxy_v2.tt.generator import Generator
+    from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
+
+    for _k, _v in {
+        "QWEN36_FORCE_SWITCH_DECODE": "1",
+        "QWEN36_DECODE_L1_RESIDUAL": "1",
+        "QWEN36_RESIDUAL_BUF_BF16": "1",
+        "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+        "QWEN36_SEQ_CORES_PER_HEAD": "4",
+        "QWEN36_FULLATTN_WO_TUNED": "1",
+        "QWEN36_DELTA_OP_TUNED": "1",
+        "QWEN36_CCL_NUM_LINKS_DELTA": "2",
+    }.items():
+        os.environ.setdefault(_k, _v)
+
+    _default_sched = ",".join(["128"] * 12 + ["4096"])
+    schedule = [int(x) for x in os.environ.get("QWEN36_ISL_SCHEDULE", _default_sched).split(",") if x.strip()]
+    dec_steps = int(os.environ.get("QWEN36_SCHED_DECODE_STEPS", "16"))
+    max_isl = max(schedule)
+    print(f"[sched] schedule={schedule}  decode_steps/req={dec_steps}  max_isl={max_isl}")
+
+    tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
+
+    # Size paged KV for the LARGEST ISL in the schedule (+ decode + margin), rounded
+    # up to a multiple of max_batch_size (page_table reshape requires divisibility).
+    state_dict = _load_full_state_dict(_SNAPSHOT)
+    _blocks = max(32, (max_isl + dec_steps + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4)
+    paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_blocks)
+    model, args = _build_tt_model_paged_kv(bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_attention_config)
+
+    # round max_num_blocks up to a multiple of max_batch_size for the page_table reshape
+    if paged_attention_config.max_num_blocks % args.max_batch_size != 0:
+        _blocks = int(math.ceil(_blocks / args.max_batch_size) * args.max_batch_size)
+        paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_blocks)
+
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(
+        args.max_batch_size, paged_attention_config.max_num_blocks // args.max_batch_size
+    )
+    _kv_shape = (paged_attention_config.max_num_blocks, 1, paged_attention_config.block_size, args.head_dim)
+    tt_kv_cache = allocate_vllm_kv_cache(
+        _kv_shape, torch.bfloat16, args.n_layers, model, args.weight_cache_path(ttnn.bfloat8_b)
+    )
+
+    generator = Generator(model, args, bh_glx_mesh, tokenizer=tok)
+    generator._disable_prefill_tracing = True
+    generator.prefill_warmup_completed = True
+
+    sampling_params = SamplingParams(
+        temperature=float(os.environ.get("QWEN36_TEMP", "1.0")),
+        top_k=int(os.environ.get("QWEN36_TOP_K", "20")),
+        top_p=float(os.environ.get("QWEN36_TOP_P", "0.95")),
+    )
+
+    def _flush(msg):
+        print(msg, flush=True)
+
+    for _req, S in enumerate(schedule):
+        prompt = _load_prompt_for_isl(S)
+        ids = tok(prompt, return_tensors="pt").input_ids
+        if int(ids.shape[-1]) > S:
+            ids = ids[:, :S]
+        T_prompt = int(ids.shape[-1])
+        real_tokens = ids[:, :T_prompt].to(torch.long)
+
+        _flush("#" * 80)
+        _flush(f"[sched] >>> REQ {_req}/{len(schedule)-1}  ISL={S}  (tokens={T_prompt})  PREFILL ...")
+        try:
+            prefill_logits = generator.prefill_forward_text(
+                real_tokens,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=[T_prompt],
+                enable_trace=False,
+                sampling_params=None,
+            )
+        except Exception as e:  # noqa: BLE001 — localize the failing request/phase
+            _flush(f"[sched] !!! CRASH in REQ {_req} ISL={S} PREFILL: {type(e).__name__}: {e}")
+            raise
+        _logits = torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size]
+        amax = int(_logits.argmax().item())
+        _flush(f"[sched] REQ {_req} ISL={S} PREFILL ok  argmax={amax} ({tok.decode([amax])!r})  DECODE {dec_steps} ...")
+
+        out_tok = torch.tensor([amax], dtype=torch.long)
+        current_pos = torch.tensor([T_prompt], dtype=torch.long)
+        try:
+            for it in range(dec_steps):
+                tt_tok, read_event = generator.decode_forward(
+                    out_tok,
+                    current_pos,
+                    enable_trace=True,
+                    page_table=page_table,
+                    kv_cache=tt_kv_cache,
+                    read_from_device=True,
+                    async_read=True,
+                    sampling_params=sampling_params,
+                    reset_inputs=(it == 0),
+                )
+                ttnn.event_synchronize(read_event[0])
+                _t, _ = generator.process_decode_output_host(tt_tok)
+                nid = int(torch.as_tensor(_t).reshape(-1)[0].item())
+                out_tok = torch.tensor([nid], dtype=torch.long)
+                current_pos = current_pos + 1
+        except Exception as e:  # noqa: BLE001
+            _flush(f"[sched] !!! CRASH in REQ {_req} ISL={S} DECODE step={it}: {type(e).__name__}: {e}")
+            raise
+        _flush(f"[sched] REQ {_req} ISL={S} DECODE ok")
+
+    _flush("#" * 80)
+    _flush(
+        f"[sched] ALL {len(schedule)} REQUESTS COMPLETED CLEAN — generator path does NOT reproduce "
+        f"the benchmark hang; suspect vLLM/chat-endpoint path instead."
+    )
