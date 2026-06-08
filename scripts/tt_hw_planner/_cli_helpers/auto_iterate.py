@@ -3195,23 +3195,18 @@ def _run_auto_iterate_loop(
                 attempts_so_far=_iter_attempts_so_far,
                 consecutive_same_class=_iter_consec_same,
             )
-            if (model_light or model_heavy) and _iter_model_reason != "default":
-                _tier_line = (
+            if (
+                (model_light or model_heavy)
+                and _iter_model_reason != "default"
+                and os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
+            ):
+                # [auto:<provider>] status — screen only under TT_HW_PLANNER_VERBOSE.
+                print(
                     f"  [auto:{provider}] tiered model pick: {_iter_model} "
                     f"({_iter_model_reason}; complexity=+{_iter_complexity_bonus}, "
                     f"failure_class={failure_class or 'NONE'}, "
                     f"attempts={_iter_attempts_so_far})"
                 )
-                # Screen only under verbose; otherwise mirror to the full run log.
-                if os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False"):
-                    print(_tier_line)
-                else:
-                    try:
-                        from loguru import logger as _lg
-
-                        _lg.info(_tier_line)
-                    except Exception:
-                        pass
 
             _expected_targets: List[Path] = []
             _responses_dir = demo_dir / "_synth_responses"

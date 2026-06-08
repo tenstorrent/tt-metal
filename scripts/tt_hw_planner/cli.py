@@ -7950,26 +7950,7 @@ def _quiet_framework_logging() -> None:
         from loguru import logger as _loguru_logger
 
         _loguru_logger.remove()
-        # Screen: only WARNING+ (keeps the terminal clean).
         _loguru_logger.add(sys.stderr, level="WARNING")
-        # File: EVERYTHING at DEBUG — the ttnn.CONFIG / dispatch-core dumps, the
-        # tool's bringup_plan INFO, and the [auto:<provider>] status lines that
-        # agent.py / auto_iterate.py / runtime_repair.py route through
-        # logger.info when not verbose. So nothing is lost; it's just off-screen.
-        try:
-            _full_log = BRINGUP_ROOT() / "generated" / "tt_hw_planner_terminal.log"
-            _full_log.parent.mkdir(parents=True, exist_ok=True)
-            _loguru_logger.add(
-                str(_full_log),
-                level="DEBUG",
-                rotation="25 MB",
-                retention=5,
-                enqueue=True,
-                backtrace=False,
-                diagnose=False,
-            )
-        except Exception:
-            pass
     except Exception:
         pass
 

@@ -196,19 +196,8 @@ def _invoke_agent(
     # uses _bi.print for that reason), and it keeps the claude branch inside the
     # span that test_invoke_agent_uses_stream_json_for_claude delimits by "next def".
     def print(*a, **k):  # noqa: A001 - intentional local shadow to gate status output
-        # Genuine errors and verbose mode go straight to the terminal.
         if _verbose() or k.get("file") is sys.stderr:
             _bi.print(*a, **k)
-            return
-        # Otherwise the line stays off-screen but is mirrored to the full-detail
-        # run log (the loguru DEBUG file sink added by _quiet_framework_logging),
-        # so nothing is lost.
-        try:
-            from loguru import logger as _lg
-
-            _lg.opt(depth=1).info("".join(str(x) for x in a))
-        except Exception:
-            pass
 
     if effective_timeout_s != timeout_s:
         budget_str = (
