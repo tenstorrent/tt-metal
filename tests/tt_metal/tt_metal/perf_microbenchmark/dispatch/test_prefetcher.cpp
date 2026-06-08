@@ -427,6 +427,18 @@ protected:
     static constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_BASE_ADDR = 0x1f400000;  // Magic, half of dram
     static constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
 
+    // Exec buffer DRAM base: on the Quasar simulator, place it just above THIS test's bank-0 data
+    // (per-bank prepopulate + DRAM-result headroom) so it stays below the fixed SD issue queue;
+    // elsewhere keep the default. Tests whose data alone reaches the issue queue are skipped in
+    // SetUp, so any test that runs has room left for its (small) exec buffer.
+    uint32_t compute_exec_buf_base_addr() const {
+        if (!Common::is_quasar_sim()) {
+            return DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+        }
+        const uint32_t bank0_data_bytes = dram_data_size_words_ * sizeof(uint32_t) + DEVICE_DATA_SIZE;
+        return tt::align(dram_base_ + bank0_data_bytes, 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE);
+    }
+
     // Default values for inline data and flush prefetch for prefetcher tests
     static constexpr bool inline_data_ = false;
     static constexpr bool flush_prefetch_ = false;
@@ -668,7 +680,7 @@ public:
         exec_buf_data.insert(exec_buf_data.end(), tptr, tptr + exec_terminate.size_bytes());
 
         const uint32_t page_size = 1u << DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE;
-        const uint32_t exec_buf_base_addr = DRAM_EXEC_BUF_DEFAULT_BASE_ADDR;
+        const uint32_t exec_buf_base_addr = compute_exec_buf_base_addr();
         const size_t size_bytes = exec_buf_data.size();
         const size_t padded_size_bytes = tt::align(size_bytes, static_cast<size_t>(page_size));
         exec_buf_data.resize(padded_size_bytes, 0u);
@@ -716,7 +728,7 @@ private:
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
         HugepageDeviceCommand exec_cmd(cmd_buffer_base, cmd_size);
         exec_cmd.add_prefetch_exec_buf(
-            fixture.DRAM_EXEC_BUF_DEFAULT_BASE_ADDR, fixture.DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+            fixture.compute_exec_buf_base_addr(), fixture.DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
 
         // Verifies destination memory bounds
         device_data.overflow_check(device_);
@@ -2597,8 +2609,8 @@ public:
         // On Quasar, the SD issue queue is fixed at kSdQuasarIssueBase. If the exec_buf base
         // address (derived from the allocator) would overlap the issue queue, skip rather than
         // overrun the CQ region and produce spurious command data.
-        if (Common::is_quasar_sim() && this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR >= Common::kSdQuasarIssueBase) {
-            GTEST_SKIP() << "SD exec_buf base " << this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR
+        if (Common::is_quasar_sim() && this->compute_exec_buf_base_addr() >= Common::kSdQuasarIssueBase) {
+            GTEST_SKIP() << "SD exec_buf base " << this->compute_exec_buf_base_addr()
                          << " reaches the Quasar-sim SD issue queue at " << Common::kSdQuasarIssueBase;
         }
     }
@@ -2904,7 +2916,7 @@ private:
         exec_buf_calc.add_prefetch_exec_buf();
         HostMemDeviceCommand exec_cmd(exec_buf_calc.write_offset_bytes());
         exec_cmd.add_prefetch_exec_buf(
-            this->DRAM_EXEC_BUF_DEFAULT_BASE_ADDR, this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
+            this->compute_exec_buf_base_addr(), this->DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE, num_pages);
         write_cmd(exec_cmd, /*stall*/ true);
     }
 };
