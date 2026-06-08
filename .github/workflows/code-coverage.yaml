@@ -10,12 +10,18 @@ on:
     - cron: '0 3 * * *'  # 03:00 UTC nightly
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: CodeCoverage
       build-wheel: true
       tracy: true
@@ -24,24 +30,25 @@ jobs:
       enable-lto: false
 
   run-ttnn-tests:
-    needs: [build-artifact]
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     secrets: inherit
     with:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       merge-gate-call: false
       collect-coverage: true
 
   aggregate-coverage:
     name: "Aggregate & publish coverage"
-    needs: [build-artifact, run-ttnn-tests]
+    needs: [check-harbor, build-artifact, run-ttnn-tests]
     if: always()
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 60
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       volumes:
         - ${{ github.workspace }}:/work
       options: --tmpfs /tmp
