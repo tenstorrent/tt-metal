@@ -632,9 +632,9 @@ def run_decoder_layer_prefill_update_cache_tt(
             packer_l1_acc=False,
         )
 
-    fuse_shared_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP")
+    fuse_shared_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "1").strip() != "0"
 
-    def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    def _mlp_linear(a: ttnn.Tensor, b: ttnn.Tensor, memory_config: ttnn.MemoryConfig | None = None) -> ttnn.Tensor:
         m_total = 1
         for i in range(len(a.shape) - 1):
             m_total *= int(a.shape[i])
@@ -642,7 +642,9 @@ def run_decoder_layer_prefill_update_cache_tt(
         for i in range(len(b.shape) - 2):
             b_batch *= int(b.shape[i])
         if b_batch == 1 and m_total > ttnn.TILE_SIZE:
-            return prefill_linear_ws_out(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
+            return prefill_linear_ws_out(
+                a, b, device=device, compute_kernel_config=mlp_compute_kernel_config, memory_config=memory_config
+            )
         if b_batch > 1 and m_total > ttnn.TILE_SIZE:
             return prefill_per_head_linear(a, b, device=device, compute_kernel_config=mlp_compute_kernel_config)
         if mlp_compute_kernel_config is None:
@@ -695,9 +697,11 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(out, force=False)
         return out_reduced
 
+    x_embed = ttnn.to_memory_config(x_embed, ttnn.L1_MEMORY_CONFIG)
     residual = x_embed
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.input_layernorm(x_embed, mode="prefill")  # [1,1,S,hidden]
+    x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)  # x reused for q and kv projections
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- Q path ----
@@ -722,7 +726,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         if tp_enabled and not attn_dp:
             q_a = _tp_row_parallel_linear_from_replicated(x, w.w_q_a)  # [1,1,T,q_lora_rank]
         else:
-            q_a = _mlp_linear(x, w.w_q_a)  # [1,1,T,q_lora_rank]
+            q_a = _mlp_linear(x, w.w_q_a, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1,1,T,q_lora_rank]
     q_a = w.q_a_layernorm(q_a, mode="prefill")
     if tp_enabled and not attn_dp:
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
@@ -778,7 +782,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         if tp_enabled and not attn_dp:
             kv = _tp_row_parallel_linear_from_replicated(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
         else:
-            kv = _mlp_linear(x, w.w_kv_a)  # [1,1,B*S_pad,kvpe_dim]
+            kv = _mlp_linear(x, w.w_kv_a, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1,1,B*S_pad,kvpe_dim]
     ttnn.deallocate(x, force=False)
 
     # Reshape KV from flat [1,1,B*S_pad,...] to [B,1,S_pad,...] for per-request
@@ -789,7 +793,11 @@ def run_decoder_layer_prefill_update_cache_tt(
     kv_rope = ttnn.slice(kv, [0, 0, 0, int(hparams.kv_lora_rank)], [batch, 1, seq_len, kvpe_dim])
     ttnn.deallocate(kv, force=False)
 
-    kv_nope = w.kv_a_layernorm(kv_nope, mode="prefill")
+    _kv_nope_dram = kv_nope
+    _kv_nope_l1 = ttnn.to_memory_config(kv_nope, ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(_kv_nope_dram, force=False)
+    kv_nope = w.kv_a_layernorm(_kv_nope_l1, mode="prefill")
+    ttnn.deallocate(_kv_nope_l1, force=False)
 
     # RoPE ops require BF16.
     if q_rope.dtype != ttnn.bfloat16:
@@ -961,9 +969,11 @@ def run_decoder_layer_prefill_update_cache_tt(
     _profile_add(profile, "attn_out_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- MLP (dense or shared-expert-as-dense) ----
+    x_attn_out = ttnn.to_memory_config(x_attn_out, ttnn.L1_MEMORY_CONFIG)
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.post_attention_layernorm(x_attn_out, mode="prefill")
+    x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)  # x reused for gate and up projections
     _profile_add(profile, "mlp_norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     use_moe = moe_runtime is not None and getattr(w, "moe", None) is not None
