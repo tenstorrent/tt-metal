@@ -275,6 +275,8 @@ The host-side discipline divides cleanly along a line between *the program facto
 
 - **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
 
+The one *documented* exception to the off-limits rule: **pybind lines that reference legacy factory entry points the port causes to vanish** (`create_program_descriptor` is the canonical case). Leaving the pybind line in place would break the post-port build, so deletion is mandatory — but it's also a user-visible API surface change that downstream Python consumers may notice, so it must be recorded prominently in the port report. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points) for the full procedure. The exception is narrow: it applies *only* to the disappearing factory entry point, not to other pybind lines on the same op.
+
 Concrete example of what *not* to do, drawn from a prior porting attempt:
 
 ```cpp
@@ -557,6 +559,7 @@ Includes (not exhaustive):
 - **Boundary-rule assumption violations.** A call site outside the op directory that required `sem::name` or `ta::name` (per the [scope boundary](#read-this-first)). Cite the file:line, the callee, and the named handle that the call site demands. Tagged "API: requires implicit conversion / refactor."
 - **Kernel-lib gaps.** Cases where a shared kernel-lib helper or LLK is incompatible with Metal 2.0 binding semantics in a way the porter cannot work around. Cite the helper, the call site, the specific incompatibility.
 - **Framework gaps.** Audit-time entries that were YELLOW or UNSUPPORTED and that bit during the port. Cite the audit entry, what the port needed, and the workaround (if any) you adopted.
+- **Removed pybind surface.** Any pybind line(s) deleted because the port made a legacy factory entry point (e.g., `create_program_descriptor`) vanish. Cite the pybind file path, the function name(s) removed, and a one-line description of what the function was for. Tagged "API surface: removed entry point." This is a *user-visible* surface change — downstream Python consumers (tests, notebooks, internal tooling) need to find this entry to update their callers. See [Pattern: Removing pybound legacy factory entry points](metal2_port_patterns.md#pattern-removing-pybound-legacy-factory-entry-points).
 
 Each handoff entry should be writable as a standalone ticket. The porter is the original reporter; the listed team is the owner.
 

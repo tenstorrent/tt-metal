@@ -330,6 +330,23 @@ uint32_t base = in.get_bank_base_address(bank_id) + offset;
 
 ---
 
+## Pattern: Removing pybound legacy factory entry points
+
+**Category**: Pattern (sanctioned host-side exception)
+
+**Recognition signal**: A pybind file inside the op directory (typically `*_pybind.cpp` / `*_pybind.hpp`, or a `bindings/` subdirectory under the op) exposes a legacy host-API function that ceases to exist post-port. The canonical case is `create_program_descriptor` — once the op moves to a `ProgramSpecFactoryConcept` factory, that function is gone, and the pybind line that exposed it references a non-existent symbol. The rule generalizes: *any* pybind exposure of a legacy factory entry point that the port deletes falls under this entry.
+
+**Why this is a sanctioned host-side exception**: The [host-side scope discipline](port_op_to_metal2_recipe.md#host-side-stay-in-the-lane) keeps op-level host code outside the program factory body off-limits during the port. A pybind file is op-level host code outside the program factory body, so the blanket rule would forbid touching it — but a pybind line that references a vanished symbol is structurally untenable: leaving it as-is means the post-port code doesn't compile (or links against nothing). Deletion is mandatory; the rule's blanket prohibition is lifted *narrowly* for this case.
+
+**Decision**:
+
+1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_spec`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
+2. **Record the deletion prominently in the port report** under [Handoff points](port_op_to_metal2_recipe.md#handoff-points). Include: the pybind file path, the function name(s) deleted, and a one-line description of what the function was for (if you can tell from the surrounding code). This is a *user-visible API surface change* — downstream Python consumers (tests, notebooks, internal tooling) that called into the legacy entry point need to be findable by the people who maintain them. The prominent report entry is how they get found.
+
+**Constraint**: This exception applies *only* to pybind exposures of factory entry points that the Metal 2.0 port causes to disappear. Other op-level pybind lines — the user-facing op binding itself, attribute conversions, return-value handling — remain off-limits per the host-side scope discipline. If you're uncertain whether a given pybind line falls inside or outside the exception, the safe move is to leave it and write a finding in the report.
+
+---
+
 ## Anti-pattern: `.id` extraction or temp DFB wrappers at LLK call sites
 
 **Category**: Anti-pattern
