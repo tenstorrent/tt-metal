@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def run_mla_inference(
@@ -459,318 +459,191 @@ def test_kimi_mla(
     )
 
 
-# Each entry is a list of per-iteration valid token counts (sp=2, chunk_size_global=5120,
-# chunk_local=2560); the only requirement is tile-alignment and fitting the cache. The rope helper
-# + SDPA rotation are slab-aware, so kv_actual_isl may span multiple slabs.
+# ---------------------------------------------------------------------------------------------------
+# Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
+# parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
+# ---------------------------------------------------------------------------------------------------
+# Set DEEPSEEK_MLA_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
+# mla_io/ + kv_cache/). It enables the prefill>0 scenarios (load the prior KV + reference from the
+# real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
+DEEPSEEK_MLA_TRACE_DIR = os.environ.get("DEEPSEEK_MLA_TRACE_DIR")
+
+# Per-iteration valid-ISL patterns for the rotation/padding edge cases (chunk=5120). Partial values
+# (< chunk) exercise mid-slab rotation + causal pad masking; CPU-reference only (a dense GPU trace
+# has no partial chunks).
 ROTATED_VALID_LISTS = [
-    [2560, 5120],  # iter0partial — original 2-iter case (only iter 0 padded)
-    [5120, 5120],  # allfull — both chunks full, rotation degenerates (sanity)
-    [2560, 2560, 5120],  # iter1rotpartial — iter 1 is BOTH rotated AND partial
+    [2560, 5120],  # iter0partial — only iter 0 padded
+    [5120, 5120],  # allfull — rotation degenerates (sanity)
+    [2560, 2560, 5120],  # iter1rotpartial — iter 1 BOTH rotated AND partial
     [1280, 3840, 5120],  # iter1multichippad — iter 1 pad-fill spans both chips
-    [2560, 2560],  # lastpartial — final iter partial, exactly fills the OLD slab
-    [2592, 5120, 5120],  # padded_partial — whole-tile (1-tile) offset so the boundary chip's
-    # write straddles a slab, and kv_actual spans multiple slabs
+    [2560, 2560],  # lastpartial — final iter partial, fills the OLD slab
+    [2592, 5120, 5120],  # padded_partial — 1-tile offset so the boundary chip straddles a slab
 ]
 ROTATED_VALID_IDS = ["iter0partial", "allfull", "iter1rotpartial", "iter1multichippad", "lastpartial", "padded_partial"]
 
 
-def _run_chunked_prefill_scenario(request, mesh_device, valid_per_iter):
-    """Run an N-iteration chunked-prefill scenario end-to-end and PCC-check it.
+def _discover_traces(root, num_users):
+    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/."""
+    dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
+    assert dirs, f"no trace subdirs under {root}"
+    for d in dirs:
+        assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
+    return [dirs[u % len(dirs)] for u in range(num_users)]
 
-    Drives ttMLA.forward's chunked path: update_padded_kv_cache (per-chip write),
-    rotary_embedding_indexed (whole-cache cos/sin), and ring_mla (latent-V streaming) with
-    kv_actual_isl rotation; wkv_b2 is applied post-attention inside _chunked_attn. Each iteration's
-    valid token count drives which iterations are padded and whether the prefix lands mid-slab
-    (rotation). Output is un-rotated to natural order and compared per-iter + full-prefix to a torch
-    MLA reference (chunked flash attention, so it scales to production cache sizes).
-    """
-    config, weights = request.getfixturevalue("random_weights")
 
-    sp_axis = 0
-    tp_axis = 1
-    is_balanced = False
-    topology = ttnn.Topology.Linear
+def _load_trace(d):
+    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for layer 0, all bf16."""
+    mi = load_file(d / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
+    mo = load_file(d / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
+    kv = load_file(d / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
+    return mi.to(torch.bfloat16), mo.to(torch.bfloat16), kv.to(torch.bfloat16)
 
-    mesh_shape = list(mesh_device.shape)
-    sp = mesh_shape[sp_axis]
 
-    # Fixed scope for this rotation test.
-    chunk_size_global = 5120
-    chunk_local = chunk_size_global // sp  # 2560
-    tile = ttnn.TILE_SIZE
+def _partition_iters(iters_isl, num_users):
+    """Split iters_isl into num_users contiguous groups; the LAST user takes the remainder."""
+    assert len(iters_isl) >= num_users, f"need >= {num_users} iters to split across {num_users} users"
+    base = len(iters_isl) // num_users
+    groups, idx = [], 0
+    for u in range(num_users):
+        n = base if u < num_users - 1 else len(iters_isl) - base * (num_users - 1)
+        groups.append(list(iters_isl[idx : idx + n]))
+        idx += n
+    return groups
 
-    # Validate the parametrization against the rope helper's supported regime and
-    # derive the cumulative kv_actual_isl entering each iteration.
-    kv_actuals = []
-    prefix = 0
-    for v in valid_per_iter:
-        assert (
-            v % tile == 0 and 0 < v <= chunk_size_global
-        ), f"valid count {v} must be tile-aligned and <= {chunk_size_global}"
-        assert prefix % tile == 0, f"kv_actual {prefix} must be tile-aligned"
-        kv_actuals.append(prefix)
-        prefix += v
-    valid_total = sum(valid_per_iter)
-    # Cache must hold the highest (kv_actual + chunk_size_global) window; round up
-    # to slab granularity. At least 2 slabs (the documented MLA rotation scope).
-    needed = max(ka + chunk_size_global for ka in kv_actuals)
-    seq_len_cache = max(
-        chunk_size_global * 2, ((needed + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+
+def _cpu_mla_reference(config, weights, hidden_2d):
+    """torch MLA forward over [S, H] hidden; returns output [S, H] bf16. Bracketed host-attn logs."""
+    mla_ref = (
+        create_mla_reference(
+            config=config,
+            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
+            layer_idx=0,
+            module_path="model.layers.0.self_attn",
+        )
+        .eval()
+        .to(torch.bfloat16)
     )
-    config.max_seq_len = seq_len_cache
-
-    logger.info(
-        f"Rotated chunked prefill: sp={sp}, chunk_size_global={chunk_size_global}, "
-        f"valid_per_iter={valid_per_iter}, kv_actuals={kv_actuals}, valid_total={valid_total}, "
-        f"seq_len_cache={seq_len_cache}"
-    )
-
-    # Reference: torch MLA forward over the VALID cumulative prefix (length valid_total).
-    mla_ref = create_mla_reference(
-        config=config,
-        state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-        layer_idx=0,
-        module_path="model.layers.0.self_attn",
-    )
-    mla_ref = mla_ref.eval().to(torch.bfloat16)
-
-    torch.manual_seed(42)
-    hidden_states_valid = torch.randn(1, valid_total, config.hidden_size).to(torch.bfloat16)
-    position_ids = torch.arange(valid_total, dtype=torch.long).unsqueeze(0)
-
-    ref_cache = DynamicCache()
+    pos = torch.arange(hidden_2d.shape[0], dtype=torch.long).unsqueeze(0)
     logger.warning(
-        f"===== HOST ATTENTION START: torch MLA reference over {valid_total} tokens "
-        f"(CPU chunked-flash, {config.num_attention_heads} heads) -- this is the slow CPU phase ====="
+        f"===== HOST ATTENTION START: torch MLA reference over {hidden_2d.shape[0]} tokens "
+        f"(CPU chunked-flash, {config.num_attention_heads} heads) -- slow CPU phase ====="
     )
-    _host_attn_t0 = time.perf_counter()
+    t0 = time.perf_counter()
     with torch.no_grad():
-        ref_output, _, _ = mla_ref(
-            hidden_states=hidden_states_valid,
-            position_ids=position_ids,
-            past_key_value=ref_cache,
-            use_cache=True,
+        out, _, _ = mla_ref(
+            hidden_states=hidden_2d.unsqueeze(0), position_ids=pos, past_key_value=DynamicCache(), use_cache=True
         )
-    logger.warning(
-        f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - _host_attn_t0:.1f}s "
-        f"(ref_output {tuple(ref_output.shape)}) ====="
-    )
-    # ref_output: [1, valid_total, hidden_size]
-
-    mla_tt = ttMLA(
-        config,
-        weights,
-        mesh_device,
-        layer_idx=0,
-        seq_len=seq_len_cache,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_balanced=is_balanced,
-        topology=topology,
-        is_chunked=True,
-        slot_num=1,
-        layer_num=1,
-    )
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-
-    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
-        mesh_device=mesh_device,
-        seq_len=seq_len_cache,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
-    )
-
-    hidden_shard_dims = [None, None]
-    hidden_shard_dims[tp_axis] = -1
-    hidden_shard_dims[sp_axis] = -2
-
-    out_concat_dims = [None, None]
-    out_concat_dims[tp_axis] = -1
-    out_concat_dims[sp_axis] = -2
-
-    def _to_tt_hidden(host_tensor):
-        # host_tensor: [1, 1, chunk_size_global, hidden_size] in chip-concat order
-        # (first chunk_local rows → chip 0, next chunk_local rows → chip 1).
-        return ttnn.from_torch(
-            host_tensor,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
-            ),
-        )
-
-    # Indexed rotated path: build the whole-cache cos/sin ONCE (block-cyclic-reordered keyed by the
-    # per-chip chunk, then SP-sharded). MLA.forward's _apply_rope feeds these to
-    # rotary_embedding_indexed, which derives each chunk's per-chip shard offset on-device from
-    # kv_actual_global -- so the same tensors are reused for every iteration and only
-    # kv_actual_isl changes.
-    indexed_rope = rope_setup.get_rope_tensors_indexed(
-        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
-    )
-    mesh_device.enable_program_cache()
-
-    # Accumulated natural-order output across all iterations, filled per iter by
-    # un-rotating each chunk's valid rows back to their global positions.
-    full_out_natural = torch.zeros(1, 1, valid_total, config.hidden_size, dtype=torch.bfloat16)
-
-    logger.info(f"Starting DEVICE chunked prefill: {len(valid_per_iter)} iterations on {tuple(mesh_device.shape)}")
-    for it, (kv_actual, valid) in enumerate(zip(kv_actuals, valid_per_iter)):
-        valid_end = kv_actual + valid  # exclusive global position of last valid new token + 1
-        logger.info(
-            f"[device iter {it + 1}/{len(valid_per_iter)}] kv_actual={kv_actual} valid={valid} "
-            f"(ring_mla logical_n={kv_actual + chunk_size_global})..."
-        )
-
-        # Per chip-local row (chip-concat order: chip 0 rows then chip 1 rows),
-        # the global position it carries after the server rotation.
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
-        flat_positions = [positions[c][r] for c in range(sp) for r in range(chunk_local)]  # len chunk_size_global
-
-        # Input: gather each row's hidden state from its global position; rows whose
-        # position is >= valid_end are logical pad → zeros (don't-care, masked out).
-        gather_idx = torch.tensor([min(gp, valid_total - 1) for gp in flat_positions], dtype=torch.long)
-        chunk_in = hidden_states_valid[0, gather_idx, :].clone()  # [chunk_size_global, hidden]
-        pad_mask = torch.tensor([gp >= valid_end for gp in flat_positions])
-        chunk_in[pad_mask] = 0.0
-        iter_h = chunk_in.unsqueeze(0).unsqueeze(0)  # [1, 1, chunk_size_global, hidden]
-
-        tt_iter_h = _to_tt_hidden(iter_h)
-
-        tt_iter_out = mla_tt.forward(
-            hidden_states=tt_iter_h,
-            rope_tensors=indexed_rope,
-            kvpe_cache=tt_kvpe_cache,
-            kv_actual_isl=kv_actual,
-        )
-
-        out_host = ttnn.to_torch(
-            tt_iter_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
-        ).to(torch.bfloat16)
-
-        # Un-rotate: output row (c*chunk_local + r) holds global position flat_positions[row].
-        # Scatter the valid rows into natural order.
-        out_flat = out_host[0, 0]  # [chunk_size_global, hidden]
-        valid_pairs = [(row, gp) for row, gp in enumerate(flat_positions) if gp < valid_end]
-        src_rows = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
-        dst_pos = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
-        full_out_natural[0, 0, dst_pos, :] = out_flat[src_rows, :]
-
-        iter_natural = full_out_natural[:, :, kv_actual:valid_end, :]
-        _, msg = assert_with_pcc(
-            ref_output[:, kv_actual:valid_end, :].unsqueeze(0),
-            iter_natural,
-            0.98,
-        )
-        rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"  # mid-slab (any slab) => rotated
-        logger.info(f"  iter {it} (valid {kv_actual}..{valid_end - 1}, kv_actual={kv_actual}, {rot}): PCC {msg}")
-
-        ttnn.synchronize_device(mesh_device)
-        ttnn.distributed_context_barrier()
-
-    # Full assembled-prefix correctness across all iterations.
-    _, msg = assert_with_pcc(ref_output.unsqueeze(0), full_out_natural, 0.98)
-    logger.info(f"  full prefix (0..{valid_total - 1}) output PCC {msg}")
-    logger.success(f"✓ Chunked prefill scenario passed (valid_per_iter={valid_per_iter})")
+    logger.warning(f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - t0:.1f}s =====")
+    return out[0].to(torch.bfloat16)
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.parametrize("valid_per_iter", ROTATED_VALID_LISTS, ids=ROTATED_VALID_IDS)
-@pytest.mark.timeout(0)
-def test_mla_chunked_prefill_rotated_partial(request, mesh_device, valid_per_iter, device_params):
-    """N-iter KV-pad-aware rotation: per-iteration valid token counts drive which iteration(s) are
-    padded; rotation is exercised whenever a prefix lands mid-slab. Small-scale correctness sweep.
-    """
-    _run_chunked_prefill_scenario(request, mesh_device, valid_per_iter)
+def _run_chunked_prefill(
+    request,
+    mesh_device,
+    *,
+    iters_isl,
+    chunk_size_global=5120,
+    prefill_len=0,
+    num_users=1,
+    want_pcc=True,
+    use_pretrained=False,
+):
+    """Unified chunked-prefill scenario.
 
-
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.timeout(0)
-def test_mla_chunked_prefill_production(request, mesh_device, device_params):
-    """Production-scale chunked prefill on 8x4: a 50k-deep KV cache plus one 5k new chunk.
-
-    Ten full 5k chunks fill the cache to 50k (real KV written by ttMLA.forward, so the device cache
-    matches the torch reference), then the 11th chunk is the production step at kv_actual=51200 (50k).
-    All chunks are chunk-aligned (steady state). Exercises ring_mla's full ~56k-wide streaming
-    attention at production depth and PCC-checks every step (including the 50k+5k step) against the
-    chunked-flash torch reference. The torch reference is the slow CPU phase -- bracketed by
-    HOST ATTENTION START/END logs.
-    """
-    _run_chunked_prefill_scenario(request, mesh_device, [5120] * 11)
-
-
-# Layer-0 MLA traces from a 56320-token single-shot GPU prefill (deepseek_math). Set this env var to
-# the model dir, e.g. .../armla_sdpa_traces/deepseek_math_56320_sdpa_mla. We only need 3 tensors:
-#   mla_io/mla_input_layer_0.safetensors[mla_input_layer_0]    [56320, 7168]  -> new-chunk hidden in
-#   kv_cache/layer_0.safetensors[kv_post_transform_layer_0]    [56320, 576]   -> prior KV to preload
-#   mla_io/mla_output_layer_0.safetensors[mla_output_layer_0]  [56320, 7168]  -> reference output
-DEEPSEEK_MLA_TRACE_DIR = os.environ.get("DEEPSEEK_MLA_TRACE_DIR")
-
-
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.skipif(DEEPSEEK_MLA_TRACE_DIR is None, reason="set DEEPSEEK_MLA_TRACE_DIR to the layer-0 trace dir")
-@pytest.mark.timeout(0)
-def test_mla_chunked_prefill_trace_layer0(request, mesh_device, device_params, variant):
-    """Validate the 11th chunked-prefill step against real GPU traces on 8x4.
-
-    Loads layer-0 MLA traces from a 56320-token single-shot GPU prefill: preloads the first 50k of
-    the GPU KV cache onto the device (block-cyclic slab layout, host->device copy), then runs ONE
-    chunked-prefill forward over the last 5k of the GPU MLA input at kv_actual=51200 (chunk-aligned)
-    with the SAME pretrained weights test_ds_mla uses, and PCC-checks the output against the GPU MLA
-    output for those 5k tokens. No torch attention -- the reference is the GPU trace itself.
+    Reference / prefix source is keyed off prefill_len and the trace env:
+      * prefill_len == 0          -> build from scratch; CPU torch reference (if want_pcc).
+      * prefill_len > 0 + trace   -> load prior KV from the GPU trace; reference = trace.
+      * prefill_len > 0, no trace -> random prior fill; functional only (want_pcc must be False).
+    Multi-user partitions iters_isl across users (last gets the remainder); each user is independent
+    in its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
     """
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
+    tile = ttnn.TILE_SIZE
+    chunk_local = chunk_size_global // sp
 
-    chunk_size_global = 5120  # 5k new ISL
-    prior_len = 50 * 1024  # 50k already in the GPU cache
-    kv_actual_isl = prior_len  # chunk-aligned 11th step
-    seq_len_cache = prior_len + chunk_size_global  # 56320
-    assert kv_actual_isl % chunk_size_global == 0, "11th step must be chunk-aligned"
+    assert chunk_size_global % (tile * sp) == 0, f"chunk_size_global {chunk_size_global} % (TILE*sp={tile * sp}) != 0"
+    for v in iters_isl:
+        assert 0 < v <= chunk_size_global and v % tile == 0, f"iter isl {v}: tile-aligned and <= {chunk_size_global}"
+    assert prefill_len % tile == 0, f"prefill_len {prefill_len} must be tile-aligned"
 
-    trace = Path(DEEPSEEK_MLA_TRACE_DIR)
-    logger.info(f"[1/6] Loading layer-0 traces from {trace} ...")
-    mla_input = load_file(trace / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
-    mla_output = load_file(trace / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
-    kv_post = load_file(trace / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
-    logger.info(f"[1/6] mla_input {list(mla_input.shape)} mla_output {list(mla_output.shape)} kv {list(kv_post.shape)}")
-    assert mla_input.shape[0] >= seq_len_cache, f"trace seq {mla_input.shape[0]} < {seq_len_cache}"
+    use_trace = DEEPSEEK_MLA_TRACE_DIR is not None and prefill_len > 0
+    random_prefill = prefill_len > 0 and not use_trace
+    if random_prefill and want_pcc:
+        pytest.skip("non-zero prefill with PCC requires DEEPSEEK_MLA_TRACE_DIR (else set want_pcc=False)")
+    if use_trace:
+        assert all(v == chunk_size_global for v in iters_isl), "trace mode requires full-chunk iters"
+        assert prefill_len % chunk_size_global == 0, "trace prefill must be chunk-aligned"
 
-    logger.info("[2/6] Loading pretrained layer-0 weights (same path as test_ds_mla)...")
-    config, sd = request.getfixturevalue("pretrained_transformer_weights")
-    weights = sd["layers"][0]["mla_weights"]
+    groups = _partition_iters(iters_isl, num_users)
+    traces = _discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
+
+    # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
+    max_window = chunk_size_global * 2
+    for g in groups:
+        ka = prefill_len
+        for v in g:
+            max_window = max(max_window, ka + chunk_size_global)
+            ka += v
+    seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+
+    if use_trace:
+        use_pretrained = True  # the GPU trace was generated with the real checkpoint
+    if use_pretrained:
+        config, sd = request.getfixturevalue("pretrained_transformer_weights")
+        weights = sd["layers"][0]["mla_weights"]
+    else:
+        config, weights = request.getfixturevalue("random_weights")
     config.max_seq_len = seq_len_cache
     kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
     hidden_size = config.hidden_size
-    assert kv_post.shape[1] == kvpe_dim, f"kv_post kvpe {kv_post.shape[1]} != {kvpe_dim}"
 
-    logger.info("[3/6] Building ttMLA (is_chunked=True) + indexed RoPE...")
+    logger.info(
+        f"chunked prefill: mesh={tuple(mesh_device.shape)} chunk={chunk_size_global} prefill={prefill_len} "
+        f"iters={iters_isl} users={num_users} want_pcc={want_pcc} weights={'pretrained' if use_pretrained else 'random'} "
+        f"mode={'trace' if use_trace else ('random' if random_prefill else 'cpu')} seq_len_cache={seq_len_cache}"
+    )
+
+    # ---- per-user inputs + references ----
+    users = []  # each: {group, total_len, hidden[total_len,H], ref_out or None, kv_prior or None, kv_post or None}
+    for u in range(num_users):
+        g = groups[u]
+        total_len = prefill_len + sum(g)
+        if use_trace:
+            mi, mo, kv = _load_trace(traces[u])
+            assert total_len <= mi.shape[0], f"user {u}: prefill+iters {total_len} > trace len {mi.shape[0]}"
+            users.append(
+                dict(
+                    group=g,
+                    total_len=total_len,
+                    hidden=mi[:total_len],
+                    ref_out=mo[:total_len],
+                    kv_prior=kv[:prefill_len],
+                    kv_post=kv[:total_len],
+                )
+            )
+        elif random_prefill:
+            torch.manual_seed(100 + u)
+            users.append(
+                dict(
+                    group=g,
+                    total_len=total_len,
+                    hidden=torch.randn(total_len, hidden_size, dtype=torch.bfloat16),
+                    ref_out=None,
+                    kv_prior=torch.randn(prefill_len, kvpe_dim, dtype=torch.bfloat16),
+                    kv_post=None,
+                )
+            )
+        else:  # prefill_len == 0, CPU synthetic
+            torch.manual_seed(42 + u)
+            hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
+            ref_out = _cpu_mla_reference(config, weights, hidden) if want_pcc else None
+            users.append(
+                dict(group=g, total_len=total_len, hidden=hidden, ref_out=ref_out, kv_prior=None, kv_post=None)
+            )
+
+    # ---- device setup ----
     mla_tt = ttMLA(
         config,
         weights,
@@ -782,15 +655,13 @@ def test_mla_chunked_prefill_trace_layer0(request, mesh_device, device_params, v
         is_balanced=False,
         topology=ttnn.Topology.Linear,
         is_chunked=True,
-        slot_num=1,
+        slot_num=num_users,
         layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
         cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
     )
-
-    logger.info(f"[4/6] Preloading first {prior_len} GPU KV rows into the device cache (block-cyclic)...")
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -798,253 +669,60 @@ def test_mla_chunked_prefill_trace_layer0(request, mesh_device, device_params, v
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-    )
-    cache_host = blockcyclic_cache_host(
-        kv_post[:prior_len].to(torch.bfloat16), sp, chunk_size_global, seq_len_cache, kvpe_dim
-    )
-    cache_shard_dims = [None, None]
-    cache_shard_dims[sp_axis] = 2  # SP shards the global seq; TP replicated
-    cache_host_tt = ttnn.from_torch(
-        cache_host,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
-    )
-    # Init allocates the cache with the right (nd-sharded) layout; copy the trace data straight in.
-    # If copy rejects the spec, fall back to building the cache via from_torch(..., memory_config=kv_mem).
-    ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
-    ttnn.synchronize_device(mesh_device)
-    logger.info("[4/6] KV cache preloaded")
-
-    logger.info(
-        f"[5/6] Running chunked forward over the last {chunk_size_global} tokens at kv_actual={kv_actual_isl}..."
-    )
-    hidden_shard_dims = [None, None]
-    hidden_shard_dims[tp_axis] = -1
-    hidden_shard_dims[sp_axis] = -2
-    # Chunk-aligned step: chip-concat order == natural order, so the last 5k tokens map straight in.
-    new_hidden = mla_input[prior_len:seq_len_cache].reshape(1, 1, chunk_size_global, hidden_size).to(torch.bfloat16)
-    tt_new = ttnn.from_torch(
-        new_hidden,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims),
-    )
-    mesh_device.enable_program_cache()
-    tt_out = mla_tt.forward(
-        hidden_states=tt_new,
-        rope_tensors=indexed_rope,
-        kvpe_cache=tt_kvpe_cache,
-        kv_actual_isl=kv_actual_isl,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    # Check the KV the forward just wrote for the new chunk (slab 10) against the GPU cache, split
-    # into the latent (k_nope) and roped (k_pe) halves -- validates projection + rope + cache write
-    # independently of the attention output. Read the cache back (SP concat on seq, TP replica 0),
-    # undo the block-cyclic shuffle to natural order, then slice the last chunk.
-    logger.info("[6/6] Checking new-chunk KV cache (k_nope / k_pe) vs GPU, then comparing output...")
-    cache_sr = (
-        ttnn.to_torch(
-            tt_kvpe_cache,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        )
-        .to(torch.float32)[:, :1]  # pick TP replica 0
-        .reshape(seq_len_cache, kvpe_dim)
-    )  # block-cyclic shard-row order
-    p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
-    cache_natural = torch.empty_like(cache_sr)
-    cache_natural[p] = cache_sr  # shard row r -> global position p[r]
-
-    new_kv_dev = cache_natural[prior_len:seq_len_cache]
-    new_kv_ref = kv_post[prior_len:seq_len_cache].to(torch.float32)
-    kv_lora = config.kv_lora_rank
-
-    # k_nope is the latent half (rms_norm of compressed_kv) -- no rotation, so it must match the GPU
-    # exactly. Hard assert.
-    _, nope_msg = assert_with_pcc(new_kv_ref[:, :kv_lora], new_kv_dev[:, :kv_lora], 0.98)
-
-    # k_pe is rotated, and the device stores it in a different rope basis than the GPU trace: the TT
-    # model uses Meta-style cos/sin (get_cos_sin_matrix converts HF->Meta) and rotates adjacent dim
-    # pairs, while the GPU's kv_kpe_roped is HF half-split. So a raw comparison is NOT apples-to-apples
-    # (empirically ~0.44). Re-interleave the GPU k_pe to the Meta basis (meta[2i]=hf[i],
-    # meta[2i+1]=hf[i+d/2]) and assert that -- this lands at ~0.9999, confirming the device k_pe is
-    # correct, just stored in the interleaved basis. raw PCC is logged for context.
-    dev_pe = new_kv_dev[:, kv_lora:]
-    ref_pe_hf = new_kv_ref[:, kv_lora:]
-    d = ref_pe_hf.shape[-1]
-    ref_pe_meta = torch.stack([ref_pe_hf[:, : d // 2], ref_pe_hf[:, d // 2 :]], dim=-1).reshape(-1, d)
-    _, raw_msg = comp_pcc(ref_pe_hf, dev_pe, 0.98)
-    _, pe_msg = assert_with_pcc(ref_pe_meta, dev_pe, 0.98)
-    logger.info(
-        f"  new-chunk KV cache PCC -- k_nope: {nope_msg}  k_pe[Meta-aligned]: {pe_msg}  "
-        f"(k_pe raw HF basis: {raw_msg})"
-    )
-
-    out_concat_dims = [None, None]
-    out_concat_dims[tp_axis] = -1
-    out_concat_dims[sp_axis] = -2
-    out_host = ttnn.to_torch(
-        tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
-    ).to(torch.float32)
-    ref = mla_output[prior_len:seq_len_cache].reshape(1, 1, chunk_size_global, hidden_size).to(torch.float32)
-    _, msg = assert_with_pcc(ref, out_host, 0.98)
-    logger.success(f"✓ Trace layer-0 chunked step PCC vs GPU mla_output: {msg}")
-
-
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    ids=["line"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "seq_len", [8192, 10 * 1024, 25 * 1024, 50 * 1024], ids=["seq8k", "seq10k", "seq25k", "seq50k"]
-)
-@pytest.mark.parametrize("num_chunks", [2, 4, 5, 10], ids=lambda n: f"N{n}")
-@pytest.mark.parametrize("num_users", [2], ids=lambda u: f"U{u}")
-@pytest.mark.timeout(0)
-def test_mla_chunked_prefill_multi_user(
-    request,
-    mesh_device,
-    seq_len,
-    num_chunks,
-    num_users,
-    device_params,
-):
-    """
-    Multi-user chunked-prefill correctness for MLA.
-
-    Allocates one shared KVPE cache sized for N users (user-major layout:
-    slot = user_id * num_layers + layer_idx, num_layers=1 here). For each
-    chunk, interleaves a prefill call per user into its own slot via
-    cache_user_id + num_cache_layers, then asserts:
-      - per-user, per-chunk output PCC against that user's own reference
-      - each user's cache slot PCC against that user's reference KVPE
-
-    Cross-user contamination would show up as a PCC drop for one of the users.
-    Chunks are chunk-aligned, so the unified chunked path runs with
-    kv_actual_isl = chunk_start (the degenerate, non-rotated case of the rotation path).
-    """
-    config, weights = request.getfixturevalue("random_weights")
-
-    sp_axis = 0
-    tp_axis = 1
-    is_balanced = False
-    topology = ttnn.Topology.Linear
-    num_cache_layers = 1  # one layer in this test; cache batch dim = num_users * 1
-
-    mesh_shape = list(mesh_device.shape)
-    sp = mesh_shape[sp_axis]
-
-    chunk_size = seq_len // num_chunks
-    if seq_len % num_chunks != 0 or chunk_size % (ttnn.TILE_SIZE * sp) != 0:
-        pytest.skip(
-            f"chunked-prefill alignment: seq_len={seq_len}, num_chunks={num_chunks}, sp={sp} "
-            f"requires chunk_size % (TILE_SIZE*sp) == 0 (got chunk_size={chunk_size})"
-        )
-
-    config.max_seq_len = seq_len
-
-    logger.info(
-        f"Multi-user chunked prefill: num_users={num_users} seq_len={seq_len} "
-        f"num_chunks={num_chunks} chunk_size={chunk_size} sp={sp} tp={mesh_shape[tp_axis]}"
-    )
-
-    # Reference: one MLA module (weights are shared), run independently per user.
-    mla_ref = create_mla_reference(
-        config=config,
-        state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-        layer_idx=0,
-        module_path="model.layers.0.self_attn",
-    )
-    mla_ref = mla_ref.eval().to(torch.bfloat16)
-
-    torch.manual_seed(42)
-    hidden_states_per_user = [torch.randn(1, seq_len, config.hidden_size).to(torch.bfloat16) for _ in range(num_users)]
-    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
-
-    ref_outputs = []
-    ref_kvpes = []
-    for u in range(num_users):
-        ref_cache = DynamicCache()
-        with torch.no_grad():
-            ref_output, _, ref_cache = mla_ref(
-                hidden_states=hidden_states_per_user[u],
-                position_ids=position_ids,
-                past_key_value=ref_cache,
-                use_cache=True,
-            )
-        ref_outputs.append(ref_output)
-        ref_kvpes.append(ref_cache.key_cache[0])
-
-    # TT MLA + rope + shared multi-user cache.
-    mla_tt = ttMLA(
-        config,
-        weights,
-        mesh_device,
-        layer_idx=0,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tp_axis=tp_axis,
-        is_balanced=is_balanced,
-        topology=topology,
-        is_chunked=True,
-        slot_num=num_users,
-        layer_num=num_cache_layers,
-    )
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-
-    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=num_cache_layers,
         num_users=num_users,
     )
-    assert (
-        tt_kvpe_cache.shape[0] == num_users * num_cache_layers
-    ), f"expected cache batch dim {num_users * num_cache_layers}, got {tt_kvpe_cache.shape[0]}"
 
     hidden_shard_dims = [None, None]
     hidden_shard_dims[tp_axis] = -1
     hidden_shard_dims[sp_axis] = -2
-
     out_concat_dims = [None, None]
     out_concat_dims[tp_axis] = -1
     out_concat_dims[sp_axis] = -2
+    cache_shard_dims = [None, None]
+    cache_shard_dims[sp_axis] = 2
 
-    # Unified chunked path: build whole-cache indexed cos/sin ONCE; chunk-aligned chunks pass
-    # kv_actual_isl = chunk_start (rotation degenerates to natural order).
-    indexed_rope = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=chunk_size)
-    mesh_device.enable_program_cache()
-
-    # per_user_chunk_outputs[u] is the list of chunk outputs for user u.
-    per_user_chunk_outputs = [[] for _ in range(num_users)]
-
-    for c in range(num_chunks):
-        chunk_start = c * chunk_size
-        chunk_end = chunk_start + chunk_size
-
-        # Interleave users at the same chunk position. Each user reads/writes only
-        # its own slot via cache_user_id.
+    # ---- preload the prior prefix (trace or random) into each slot, block-cyclic ----
+    if prefill_len > 0:
+        logger.info(f"Preloading {prefill_len}-token prefix into {num_users} slot(s) (block-cyclic host->device)...")
+        cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
         for u in range(num_users):
-            chunk_h = hidden_states_per_user[u][:, chunk_start:chunk_end, :].unsqueeze(0)
-            tt_chunk_h = ttnn.from_torch(
-                chunk_h,
+            cache_host[u, 0] = blockcyclic_cache_host(
+                users[u]["kv_prior"], sp, chunk_size_global, seq_len_cache, kvpe_dim
+            )[0, 0]
+        cache_host_tt = ttnn.from_torch(
+            cache_host,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
+        )
+        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
+        ttnn.synchronize_device(mesh_device)
+
+    mesh_device.enable_program_cache()
+    # Accumulated natural-order output per user (only the measured region is filled).
+    out_accum = [torch.zeros(1, 1, users[u]["total_len"], hidden_size, dtype=torch.bfloat16) for u in range(num_users)]
+
+    # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
+    n_iters = max(len(u["group"]) for u in users)
+    logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
+    for i in range(n_iters):
+        for u in range(num_users):
+            g = users[u]["group"]
+            if i >= len(g):
+                continue
+            isl = g[i]
+            kv_actual = prefill_len + sum(g[:i])
+            valid_end = kv_actual + isl
+            total_len = users[u]["total_len"]
+
+            positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+            flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
+            gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
+            chunk_in = users[u]["hidden"][gather_idx].clone()
+            chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
+
+            tt_h = ttnn.from_torch(
+                chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1053,177 +731,104 @@ def test_mla_chunked_prefill_multi_user(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
                 ),
             )
-
-            tt_chunk_out = mla_tt.forward(
-                hidden_states=tt_chunk_h,
+            tt_out = mla_tt.forward(
+                hidden_states=tt_h,
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
-                kv_actual_isl=chunk_start,
+                kv_actual_isl=kv_actual,
                 cache_user_id=u,
             )
-
-            out_host = ttnn.to_torch(
-                tt_chunk_out,
+            out_flat = ttnn.to_torch(
+                tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
                 ),
-            ).to(torch.bfloat16)
-            per_user_chunk_outputs[u].append(out_host)
+            ).to(torch.bfloat16)[0, 0]
 
-            _, msg = assert_with_pcc(
-                ref_outputs[u][:, chunk_start:chunk_end, :].unsqueeze(0),
-                out_host,
-                0.98,
-            )
-            logger.info(f"  user {u} chunk {c}: per-chunk output PCC {msg}")
+            assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
+            valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
+            src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
+            dst = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
+            out_accum[u][0, 0, dst, :] = out_flat[src, :]
 
-    ttnn.synchronize_device(mesh_device)
-    ttnn.distributed_context_barrier()
+            if want_pcc and users[u]["ref_out"] is not None:
+                _, msg = assert_with_pcc(
+                    users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
+                    out_accum[u][:, :, kv_actual:valid_end, :],
+                    0.98,
+                )
+                rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"
+                logger.info(f"  user {u} iter {i} (kv_actual={kv_actual} isl={isl} {rot}): out PCC {msg}")
+        ttnn.synchronize_device(mesh_device)
+        ttnn.distributed_context_barrier()
 
-    # Concatenated per-user output PCC.
+    if not want_pcc:
+        logger.success(f"✓ Functional chunked prefill ran ({num_users} user(s), finite output)")
+        return
+
+    # ---- per-user full-measured-region output PCC ----
     for u in range(num_users):
-        full = torch.cat(per_user_chunk_outputs[u], dim=2)
-        _, pcc = assert_with_pcc(ref_outputs[u].unsqueeze(0), full, 0.98)
-        logger.info(f"User {u} full output PCC: {pcc}")
+        if users[u]["ref_out"] is None:
+            continue
+        meas = out_accum[u][:, :, prefill_len:, :]
+        ref_meas = users[u]["ref_out"][prefill_len:].reshape(1, 1, -1, hidden_size)
+        _, msg = assert_with_pcc(ref_meas, meas, 0.98)
+        logger.info(f"  user {u} full measured output PCC: {msg}")
 
-    # Gather the full cache once and slice per user.
-    cache_stacked = ttnn.to_torch(
-        tt_kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)
-    # cache_stacked: [num_users * num_layers, tp, sp * seq_len_local, kvpe_dim]; pick one TP replica.
-    cache_stacked = cache_stacked[:, :1, :, :]
+    # ---- trace mode: also check the freshly-written new-chunk KV cache (k_nope direct, k_pe Meta) ----
+    if use_trace:
+        cache_sr = ttnn.to_torch(
+            tt_kvpe_cache,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+        ).to(torch.float32)[
+            :, :1
+        ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
+        p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
+        kv_lora = config.kv_lora_rank
+        for u in range(num_users):
+            nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
+            nat[p] = cache_sr[u, 0]
+            new_dev = nat[prefill_len : users[u]["total_len"]]
+            new_ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
+            d = kvpe_dim - kv_lora
+            ref_pe_meta = torch.stack(
+                [new_ref[:, kv_lora : kv_lora + d // 2], new_ref[:, kv_lora + d // 2 :]], dim=-1
+            ).reshape(-1, d)
+            _, nope_msg = assert_with_pcc(new_ref[:, :kv_lora], new_dev[:, :kv_lora], 0.98)
+            _, pe_msg = assert_with_pcc(ref_pe_meta, new_dev[:, kv_lora:], 0.98)
+            logger.info(f"  user {u} new-chunk KV PCC -- k_nope: {nope_msg}  k_pe[Meta]: {pe_msg}")
 
-    chunk_local = chunk_size // sp
-    kv_lora_rank = config.kv_lora_rank
-    for u in range(num_users):
-        slot = cache_stacked[u : u + 1, :, :, :]  # [1, 1, sp*seq_len_local, kvpe_dim]
-        # Merge chunked-interleaved SP layout back to global token order.
-        merged = slot.reshape(1, 1, sp, num_chunks, chunk_local, kvpe_dim)
-        merged = merged.permute(0, 1, 3, 2, 4, 5).reshape(1, 1, seq_len, kvpe_dim)
-        _, kv_pcc = assert_with_pcc(ref_kvpes[u][:, :, :, :kv_lora_rank], merged[:, :, :, :kv_lora_rank], 0.99)
-        logger.info(f"User {u} cache KV part PCC: {kv_pcc}")
-        _, pe_pcc = assert_with_pcc(ref_kvpes[u][:, :, :, kv_lora_rank:], merged[:, :, :, kv_lora_rank:], 0.99)
-        logger.info(f"User {u} cache PE part PCC: {pe_pcc}")
-
-    logger.success(f"✓ Multi-user chunked prefill (U={num_users}, N={num_chunks}) test passed")
+    logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
 
 
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(2, 4)],
-    ids=["2x4"],
-    indirect=True,
+# Representative scenarios: (id, mesh, kwargs). Rotation edge cases (CPU), production depth (CPU),
+# multi-user isolation (CPU), GPU-trace ground truth + functional perf (prefill>0).
+_CHUNKED_SCENARIOS = (
+    [(f"rot-{rid}", (2, 2), dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
+    + [
+        (f"rot8x4-{rid}", (8, 4), dict(iters_isl=lst))
+        for rid, lst in [("iter1rotpartial", [2560, 2560, 5120]), ("padded_partial", [2592, 5120, 5120])]
+    ]
+    + [
+        ("production-50k+5k", (8, 4), dict(iters_isl=[5120] * 11)),
+        ("multiuser-U2", (2, 2), dict(iters_isl=[5120] * 4, num_users=2)),
+        ("trace-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024)),
+        ("trace-multiuser-U2", (8, 4), dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
+        ("functional-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, want_pcc=False)),
+    ]
 )
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-        },
-    ],
-    ids=["line"],
-    indirect=True,
+    "mesh_device, kwargs",
+    [(m, kw) for _, m, kw in _CHUNKED_SCENARIOS],
+    ids=[sid for sid, _, _ in _CHUNKED_SCENARIOS],
+    indirect=["mesh_device"],
 )
-def test_kvpe_cache_multi_user_slot_indexing(mesh_device, device_params):
-    """
-    Unit test for the user-major slot indexing of init_kvpe_cache +
-    ttnn.kv_cache.fill_cache_for_user_.
-
-    Writes a constant V = (layer_idx + 1) * (user_id + 1) into every slot
-    (batch_index = user_id * num_layers + layer_idx, the user-major layout),
-    plus a +0.5 offset on user 2's slots so each slot has a unique value (no
-    aliasing between (1,2) and (2,1) of the bare product). Then reads the
-    cache back to host and checks each slot contains its V.
-    Confirms:
-      - the flat slot index plumbs through fill_cache_for_user_ → cache buffer
-      - no slot bleeds into a neighbor (each (user, layer) lands on its own row)
-
-    Values (1-indexed in description, 0-indexed in code):
-      user 1, layer 1 → 1.0   user 2, layer 1 → 2.5
-      user 1, layer 2 → 2.0   user 2, layer 2 → 4.5
-      user 1, layer 3 → 3.0   user 2, layer 3 → 6.5
-    """
-    sp_axis = 0
-    tp_axis = 1
-    num_users = 2
-    num_layers = 3
-    seq_len = 512
-    kvpe_dim = 64 + 512  # qk_rope_head_dim + kv_lora_rank — both multiples of TILE_SIZE
-
-    mesh_shape = list(mesh_device.shape)
-    sp = mesh_shape[sp_axis]
-    seq_len_local = seq_len // sp
-    assert seq_len_local % ttnn.TILE_SIZE == 0, f"seq_len_local {seq_len_local} must be tile-aligned"
-
-    tt_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
-        mesh_device=mesh_device,
-        seq_len=seq_len,
-        mesh_shape=mesh_shape,
-        sp_axis=sp_axis,
-        num_kvpe_cache_layers=num_layers,
-        num_users=num_users,
-    )
-    assert (
-        tt_cache.shape[0] == num_users * num_layers
-    ), f"cache batch dim {tt_cache.shape[0]} != num_users*num_layers ({num_users * num_layers})"
-
-    # Write a constant per slot. User 2 (user_id == 1) gets a +0.5 offset so
-    # the otherwise-commutative product doesn't alias (u=0,l=1) with (u=1,l=0).
-    expected = {}
-    for user_id in range(num_users):
-        for layer_idx in range(num_layers):
-            slot_idx = user_id * num_layers + layer_idx
-            V = (layer_idx + 1) * (user_id + 1) + (0.5 if user_id == 1 else 0.0)
-            expected[slot_idx] = (user_id, layer_idx, V)
-
-            input_torch = torch.full((1, 1, seq_len_local, kvpe_dim), float(V), dtype=torch.bfloat16)
-            tt_input = ttnn.from_torch(
-                input_torch,
-                device=mesh_device,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            ttnn.kv_cache.fill_cache_for_user_(tt_cache, tt_input, slot_idx)
-            logger.info(f"  wrote slot {slot_idx} (user={user_id}, layer={layer_idx}) = {V}")
-
-    ttnn.synchronize_device(mesh_device)
-
-    # Read back. ConcatMesh2dToTensor concats SP along seq (dim=2) and TP along head (dim=1);
-    # cache is TP-replicated so all TP shards carry the same data — pick TP shard 0.
-    cache_host = ttnn.to_torch(
-        tt_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)
-    cache_host = cache_host[:, :1, :, :]
-    assert cache_host.shape == (
-        num_users * num_layers,
-        1,
-        seq_len,
-        kvpe_dim,
-    ), f"unexpected gathered cache shape {cache_host.shape}"
-
-    failures = []
-    for slot_idx, (user_id, layer_idx, V) in expected.items():
-        slot = cache_host[slot_idx]
-        slot_min = slot.min().item()
-        slot_max = slot.max().item()
-        slot_mean = slot.mean().item()
-        ok = abs(slot_min - V) < 1e-3 and abs(slot_max - V) < 1e-3
-        marker = "✓" if ok else "✗"
-        logger.info(
-            f"  {marker} slot {slot_idx} (user={user_id}, layer={layer_idx}): "
-            f"expected {V}, got min={slot_min} max={slot_max} mean={slot_mean:.4f}"
-        )
-        if not ok:
-            failures.append(
-                f"slot {slot_idx} (user={user_id}, layer={layer_idx}): expected {V}, "
-                f"got min={slot_min} max={slot_max}"
-            )
-
-    assert not failures, "Slot indexing mismatch:\n  " + "\n  ".join(failures)
-    logger.success(f"✓ Multi-user KVPE cache slot indexing verified (U={num_users}, L={num_layers})")
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.timeout(0)
+def test_mla_chunked_prefill(request, mesh_device, kwargs, device_params, variant):
+    """Unified chunked-prefill: rotation edges + production depth + multi-user (CPU ref), plus GPU
+    trace ground truth and functional perf when DEEPSEEK_MLA_TRACE_DIR is set. See _run_chunked_prefill."""
+    _run_chunked_prefill(request, mesh_device, **kwargs)

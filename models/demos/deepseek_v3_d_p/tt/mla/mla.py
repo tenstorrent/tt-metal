@@ -306,6 +306,10 @@ class ttMLA:
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
         # holding both would waste DRAM.
+        # TODO: these are scratch buffers reused across the whole ring op and don't hold per-layer
+        # state, so they should be allocated ONCE and shared by all layers. With the current per-layer
+        # ttMLA instance they are re-allocated for every layer -- wasted DRAM that scales with depth.
+        # Hoist them to a shared owner (or pass them in) when ttMLA instances are created per layer.
         if self.is_chunked:
             # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
             # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
