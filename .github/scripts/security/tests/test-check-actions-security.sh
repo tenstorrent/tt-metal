@@ -2329,6 +2329,116 @@ jobs:
       - run: make
 EOF
 
+# Check 71: git config --global safe.directory with wildcard
+assert_detects "check 71 flags git config safe.directory '*'" "71" "wildcard disables git" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global safe.directory '*'
+EOF
+
+assert_detects "check 71 flags git config safe.directory * (unquoted)" "71" "wildcard disables git" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global --add safe.directory *
+EOF
+
+assert_clean "check 71 accepts git config safe.directory with specific path" "71" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global safe.directory /github/workspace
+EOF
+
+assert_clean "check 71 accepts git config safe.directory /home/runner/work" "71" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: git config --global --add safe.directory /home/runner/work/repo
+EOF
+
+# Check 72: package install from insecure HTTP registry
+assert_detects "check 72 flags npm install with http registry" "72" "HTTP (non-HTTPS) registry" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: npm install --registry http://registry.npmjs.org
+EOF
+
+assert_detects "check 72 flags pip install with http index-url" "72" "HTTP (non-HTTPS) registry" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install --index-url http://pypi.corp.example.com/simple/ mypackage
+EOF
+
+assert_detects "check 72 flags pip3 install with -i http://" "72" "HTTP (non-HTTPS) registry" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip3 install -i http://internal.pypi.example.com/simple/ mypackage
+EOF
+
+assert_clean "check 72 accepts npm install with https registry" "72" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: npm install --registry https://registry.npmjs.org
+EOF
+
+assert_clean "check 72 accepts pip install without --index-url" "72" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install requests numpy
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 

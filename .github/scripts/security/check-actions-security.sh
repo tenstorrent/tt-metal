@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=70
+MAX_CHECK_NUM=72
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3692,6 +3692,63 @@ check_70() {
         return 1
     fi
 
+    return 0
+}
+
+# Check 71: git config --global safe.directory with wildcard (disables ownership check)
+check_71_description="git config --global safe.directory with wildcard"
+check_71_severity="MEDIUM"
+
+example_check_71() {
+    cat <<'EOF'
+    steps:
+      - run: git config --global safe.directory '*'
+EOF
+}
+
+check_71() {
+    local file="$1"
+    local hits
+    # Match: git config [--global] [--add] safe.directory with '*' or '.' or wildcard value
+    # The truly dangerous case is '*' which trusts ALL directories globally
+    hits=$(grep -nE \
+        "git[[:space:]]+config[[:space:]]+(--global[[:space:]]+|--add[[:space:]]+|--global[[:space:]]+--add[[:space:]]+|--add[[:space:]]+--global[[:space:]]+)?safe\.directory[[:space:]]+'?\*'?" \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" \
+            "Uses 'git config --global safe.directory *' - wildcard disables git's ownership protection for ALL directories; specify the exact path (e.g. /github/workspace) instead" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# Check 72: package install from insecure HTTP registry (npm/pip/pip3)
+check_72_description="package install from insecure HTTP (non-HTTPS) registry"
+check_72_severity="MEDIUM"
+
+example_check_72() {
+    cat <<'EOF'
+    steps:
+      - run: npm install --registry http://registry.npmjs.org
+      - run: pip install --index-url http://pypi.example.com/simple/ mypkg
+EOF
+}
+
+check_72() {
+    local file="$1"
+    local hits
+    # npm --registry http://...
+    # pip/pip3 --index-url http:// or -i http:// or --extra-index-url http://
+    hits=$(grep -nE \
+        '(npm[[:space:]]+(install|ci|i)[[:space:]].*--registry[[:space:]]+http://|pip[23]?[[:space:]]+(install|download)[[:space:]].*(-i|--index-url|--extra-index-url)[[:space:]]+http://)' \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" \
+            "Installs packages from an HTTP (non-HTTPS) registry - insecure transport allows MITM supply-chain attacks; use https:// URLs only" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
     return 0
 }
 
