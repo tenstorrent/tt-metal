@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import resolve_rope_parameters
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_rope_memcfg
 from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 
@@ -21,7 +22,8 @@ class TtPixtralRotaryEmbedding(LightweightModule):
         self.datatype = datatype
         self.is_mesh_device = isinstance(mesh_device, ttnn._ttnn.multi_device.MeshDevice)
 
-        rope_type = config.rope_parameters["rope_type"]
+        rope_parameters = resolve_rope_parameters(config)
+        rope_type = rope_parameters["rope_type"]
         if rope_type != "default":
             raise ValueError(f"TtPixtralRotaryEmbedding supports rope_type='default' only, got {rope_type!r}.")
 
@@ -30,7 +32,7 @@ class TtPixtralRotaryEmbedding(LightweightModule):
         max_patches_per_side = image_size // patch_size
 
         self.head_dim = int(getattr(config, "head_dim", None) or (config.hidden_size // config.num_attention_heads))
-        rope_theta = float(config.rope_parameters["rope_theta"])
+        rope_theta = float(rope_parameters["rope_theta"])
         cos_torch, sin_torch = precompute_mistral_vision_freqs(
             dim=self.head_dim,
             max_patches_per_side=int(max_patches_per_side),

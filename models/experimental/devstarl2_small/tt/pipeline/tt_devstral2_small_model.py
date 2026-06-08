@@ -9,6 +9,7 @@ import ttnn
 from transformers.models.ministral3.configuration_ministral3 import Ministral3Config
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import resolve_rope_parameters
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.experimental.devstarl2_small.tt.pipeline.tt_multimodal_projector import TTMistral3MultiModalProjector
 from models.experimental.devstarl2_small.tt.pipeline.tt_pixtral_vision_model import TtPixtralVisionModel
@@ -34,9 +35,7 @@ class TtDevstral2SmallModel(LightweightModule):
     ):
         super().__init__()
         text_cfg = model_args.hf_config.text_config
-        rope_params = getattr(text_cfg, "rope_parameters", None) or {}
-        if not isinstance(rope_params, dict):
-            rope_params = dict(rope_params)
+        rope_params = resolve_rope_parameters(text_cfg)
 
         self.mesh_device = mesh_device
         self.vision_tower = TtPixtralVisionModel(

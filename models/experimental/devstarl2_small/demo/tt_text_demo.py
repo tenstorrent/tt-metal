@@ -26,6 +26,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.devstarl2_small.devstral_utils import (
     DEFAULT_MODEL_ID,
     apply_devstral_hf_trust_patches,
+    resolve_rope_parameters,
     apply_fp8_dequantize_compat,
     close_devstral_demo_mesh,
     cpu_lm_head_logits_last_token,
@@ -389,9 +390,7 @@ def main():
         text_cfg = model_args.hf_config.text_config
         if not isinstance(text_cfg, Ministral3Config):
             raise TypeError(f"Demo expects Ministral3Config as text_config, got {type(text_cfg)!r}")
-        rope_params = getattr(text_cfg, "rope_parameters", None) or {}
-        if not isinstance(rope_params, dict):
-            rope_params = dict(rope_params)
+        rope_params = resolve_rope_parameters(text_cfg)
 
         shared_tt_ccl = TT_CCL(mesh_device)
 

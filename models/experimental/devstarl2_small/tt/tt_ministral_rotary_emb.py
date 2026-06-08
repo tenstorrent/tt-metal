@@ -11,15 +11,16 @@ import numpy as np
 import ttnn
 
 from models.common.utility_functions import nearest_32
+from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import resolve_rope_parameters
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 # HfRotarySetupOld API (get_rot_mats); legacy rotary_embedding in TtMinistralAttention.
 from models.tt_transformers.tt.rope import HfRotarySetupOld as HfRotarySetup
 
 
-def _compute_default_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
+def _compute_default_inv_freq_numpy(config: Any, rope_parameters: dict) -> Tuple[np.ndarray, float]:
     """Match ``Ministral3RotaryEmbedding.compute_default_rope_parameters`` (HF)."""
-    base = float(config.rope_parameters["rope_theta"])
+    base = float(rope_parameters["rope_theta"])
     dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
     dim = int(dim)
     idx = np.arange(0, dim, 2, dtype=np.float64)
@@ -27,10 +28,8 @@ def _compute_default_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
     return inv_freq.astype(np.float32), 1.0
 
 
-def _compute_yarn_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
+def _compute_yarn_inv_freq_numpy(config: Any, rope_parameters_dict: dict) -> Tuple[np.ndarray, float]:
     """Match ``transformers.modeling_rope_utils._compute_yarn_parameters`` (HF)."""
-    rope_parameters_dict = config.rope_parameters
-
     base = float(rope_parameters_dict["rope_theta"])
     partial_rotary_factor = float(rope_parameters_dict.get("partial_rotary_factor", 1.0))
     head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
@@ -84,7 +83,7 @@ def _compute_yarn_inv_freq_numpy(config: Any) -> Tuple[np.ndarray, float]:
     inv_freq_extrapolation = 1.0 / pos_freqs
     inv_freq_interpolation = 1.0 / (factor * pos_freqs)
 
-    truncate = bool(config.rope_parameters.get("truncate", True))
+    truncate = bool(rope_parameters_dict.get("truncate", True))
     low, high = find_correction_range(beta_fast, beta_slow, dim, base, original_max_position_embeddings, truncate)
 
     ramp = linear_ramp_factor(low, high, dim // 2)
@@ -102,14 +101,12 @@ def ministral3_inv_freq_and_attention_scaling(config: Any) -> Tuple[np.ndarray, 
     if not isinstance(config, Ministral3Config):
         raise TypeError(f"Expected Ministral3Config, got {type(config)!r}")
 
-    if hasattr(config, "standardize_rope_params"):
-        config.standardize_rope_params()
-
-    rope_type = config.rope_parameters["rope_type"]
+    rope_parameters = resolve_rope_parameters(config)
+    rope_type = rope_parameters["rope_type"]
     if rope_type == "default":
-        return _compute_default_inv_freq_numpy(config)
+        return _compute_default_inv_freq_numpy(config, rope_parameters)
     if rope_type == "yarn":
-        return _compute_yarn_inv_freq_numpy(config)
+        return _compute_yarn_inv_freq_numpy(config, rope_parameters)
     raise NotImplementedError(
         f"rope_type={rope_type!r} is not ported to NumPy in this module; extend tt_ministral_rotary_emb or use HF."
     )
@@ -229,7 +226,7 @@ class TtMinistral3RotaryEmbedding(HfRotarySetup):
     ) -> None:
         if use_qk_fused:
             raise NotImplementedError("use_qk_fused")
-        rope_theta = float(config.rope_parameters["rope_theta"])
+        rope_theta = float(resolve_rope_parameters(config)["rope_theta"])
         super().__init__(
             device=device,
             batch_size=batch_size,
