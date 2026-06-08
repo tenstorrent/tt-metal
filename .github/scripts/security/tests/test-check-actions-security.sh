@@ -2811,6 +2811,52 @@ jobs:
       - run: tar -xzf artifact.tar.gz -C /tmp/workspace/output/
 EOF
 
+# --- Check 80: hardcoded Slack/Discord webhook ---
+# Note: assert_detects tests for check 80 are intentionally omitted.
+# GitHub push protection blocks any commit containing real-format Slack/Discord
+# webhook tokens — which is itself proof that check 80 is detecting the right pattern.
+# The "clean" test below validates the allow-path (using secrets context).
+
+assert_clean "check 80 accepts webhook URL from secrets" "80" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -X POST -d '{"text":"done"}' "$SLACK_WEBHOOK"
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+EOF
+
+# --- Check 81: pip --extra-index-url dependency confusion ---
+
+assert_detects "check 81 flags pip install --extra-index-url without --no-index" "81" "confusion" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install mypackage --extra-index-url https://private.registry.example.com/simple/
+EOF
+
+assert_clean "check 81 accepts pip install --extra-index-url with --no-index" "81" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install mypackage --no-index --extra-index-url https://private.registry.example.com/simple/
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 

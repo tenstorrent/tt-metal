@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=79
+MAX_CHECK_NUM=81
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3999,6 +3999,80 @@ check_79() {
     if [[ -n "${hits}" ]]; then
         log_issue "HIGH" "${file}" \
             "Archive extracted to filesystem root or system directory - malicious archives can use path traversal (zip-slip) to overwrite system files; extract to a dedicated workspace subdirectory instead" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_80_description="hardcoded Slack or Discord webhook token in workflow"
+check_80_severity="HIGH"
+
+example_check_80() {
+    # Example omitted: hardcoded Slack/Discord webhook URLs match real secret patterns
+    # and trigger GitHub push protection. Store webhook URLs in secrets instead:
+    #   env:
+    #     WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    echo "# See check_80_description for details"
+}
+
+check_80() {
+    local file="$1"
+    local hits
+    # Slack incoming webhook: hooks.slack.com/services/T.../B.../...
+    hits=$(grep -nE \
+        'hooks\.slack\.com/services/T[A-Z0-9]{8,}/B[A-Z0-9]{8,}/[A-Za-z0-9]{24,}' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        # Discord webhook: discord.com/api/webhooks/{snowflake}/{token}
+        hits=$(grep -nE \
+            'discord\.com/api/webhooks/[0-9]{17,19}/[A-Za-z0-9_-]{60,}' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "Contains a hardcoded Slack or Discord webhook token - anyone with access to the workflow file can post to the channel; store the URL in secrets and reference with \${{ secrets.WEBHOOK_URL }}" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_81_description="pip install --extra-index-url without --no-index (dependency confusion risk)"
+check_81_severity="MEDIUM"
+
+example_check_81() {
+    cat <<'EOF'
+    steps:
+      # Risk: pip falls back to PyPI if package not found in private registry;
+      # attacker publishes same package name to PyPI at a higher version.
+      - run: pip install mypackage --extra-index-url https://private.registry.example.com/simple/
+EOF
+}
+
+check_81() {
+    local file="$1"
+    local hits
+    # pip install --extra-index-url without --no-index alongside it on the same command
+    # Note: grep can't check "not present on same line" — we detect all --extra-index-url
+    # uses and let the warning message guide the fix (use --no-index or --require-hashes)
+    hits=$(grep -nE \
+        'pip[23]?[[:space:]]+(install|download)[[:space:]].*--extra-index-url' \
+        "${file}" 2>/dev/null || true)
+    # Filter out lines that also have --no-index (safe usage)
+    if [[ -n "${hits}" ]]; then
+        local safe_hits
+        safe_hits=$(echo "${hits}" | grep -- '--no-index' || true)
+        # Remove safe lines from hits
+        while IFS= read -r line; do
+            if echo "${line}" | grep -q -- '--no-index'; then
+                hits=$(echo "${hits}" | grep -Fv "${line}" || true)
+            fi
+        done <<< "${hits}"
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" \
+            "pip install uses --extra-index-url without --no-index - PyPI is still searched first, enabling dependency confusion attacks (attacker publishes same package name to PyPI at a higher version); add --no-index or use --require-hashes" \
             "$(_extract_lines "${hits}")"
         return 1
     fi
