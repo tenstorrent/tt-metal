@@ -4553,23 +4553,11 @@ def _run_focused_pytest(
     captured_tail: collections.deque = collections.deque(maxlen=4000)
 
     _verbose = os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
-    _pytest_log_fh = None
-    try:
-        _pytest_log_path = BRINGUP_ROOT() / "generated" / "test_reports" / "last_pytest_stream.log"
-        _pytest_log_path.parent.mkdir(parents=True, exist_ok=True)
-        _pytest_log_fh = open(_pytest_log_path, "w", errors="ignore")
-    except Exception:
-        _pytest_log_fh = None
 
     def _pump():
         nonlocal current_test
         assert proc.stdout is not None
         for raw in proc.stdout:
-            if _pytest_log_fh is not None:
-                try:
-                    _pytest_log_fh.write(raw)
-                except Exception:
-                    pass
             captured_tail.append(raw)
             line = raw.rstrip("\n")
             m_test = re.match(r"(models/[^\s:]+::[^\s\[]+)", line)
@@ -4590,11 +4578,6 @@ def _run_focused_pytest(
             if _verbose or _pytest_line_interesting(line):
                 sys.stdout.write(raw)
                 sys.stdout.flush()
-        if _pytest_log_fh is not None:
-            try:
-                _pytest_log_fh.close()
-            except Exception:
-                pass
 
     pump_thread = threading.Thread(target=_pump, daemon=True)
     pump_thread.start()
@@ -7934,7 +7917,13 @@ def _quiet_framework_logging() -> None:
     The C++/UMD logger (TT_METAL_LOGGER_LEVEL) is left untouched on purpose:
     the stale-device recovery greps subprocess output for device-log markers,
     so silencing it could mask the very lines that trigger a tt-smi reset.
+
+    DEFAULT IS NOW FULL TERMINAL: unless TT_HW_PLANNER_VERBOSE is explicitly set
+    to 0/false, the screen shows everything (the original pre-cleanup behavior),
+    so a single `... > run.log 2>&1` redirect captures the whole run in one file.
+    Opt into the clean/quiet screen with TT_HW_PLANNER_VERBOSE=0.
     """
+    os.environ.setdefault("TT_HW_PLANNER_VERBOSE", "1")
     if os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False"):
         return
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
