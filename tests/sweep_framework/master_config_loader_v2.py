@@ -382,7 +382,13 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 # constructor defaults to True and the kernel asserts on the
                 # batch-shape requirement for any non-singleton-batch input_b.
                 fuse_batch=bool(cfg.get("fuse_batch", False)),
-                untilize_out=bool(cfg.get("untilize_out", False)),
+                # NOTE: the 2D MatmulMultiCoreReuseMultiCastProgramConfig C++
+                # constructor has no `untilize_out` parameter (only the 1D
+                # variant does). Passing it raises "incompatible function
+                # arguments", which made dict_to_program_config return None and
+                # silently dropped the program_config for linear's 2D-MultiCast
+                # configs — causing the matmul kernel to take the wrong path
+                # (WIDTH_SHARDED / on_dispatch_core TT_FATALs). Do not add it here.
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])

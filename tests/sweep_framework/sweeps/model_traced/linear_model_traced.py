@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -23,7 +25,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 
-def _linear_dispatch_axis(program_config, output_memory_config):
+def _linear_dispatch_axis(program_config, output_memory_config, input_a_memory_config=None):
     """Dispatch axis the matmul's program_config needs.
 
     For 1D ``gather_in0`` matmuls the nominal ``compute_with_storage_grid_size``
@@ -42,7 +44,20 @@ def _linear_dispatch_axis(program_config, output_memory_config):
         my = max([v for v in (sy, hy) if v is not None], default=None)
         if mx is not None or my is not None:
             return dispatch_axis_for_grid(mx, my)
-    return dispatch_axis_for_grid(*program_config_grid_bounds(program_config))
+    pcx, pcy = program_config_grid_bounds(program_config)
+    if pcx is None and pcy is None:
+        # No program_config grid to fix the axis (e.g. ttnn.linear with no
+        # explicit program_config). The op still resharded input_a / output to
+        # their traced L1 shard grids, so those grids decide the axis — a grid
+        # spanning x=0..7 (full row) needs ROW dispatch, else the reshard worker
+        # lands on a dispatch core (TT_FATAL "not on_dispatch_core").
+        ax, ay = shard_grid_bounds(input_a_memory_config)
+        ox, oy = shard_grid_bounds(output_memory_config)
+        mx = max([v for v in (ax, ox) if v is not None], default=None)
+        my = max([v for v in (ay, oy) if v is not None], default=None)
+        if mx is not None or my is not None:
+            return dispatch_axis_for_grid(mx, my)
+    return dispatch_axis_for_grid(pcx, pcy)
 
 
 # Device opened per-vector (see _ensure_vector_device) so each vector can use the
@@ -51,19 +66,22 @@ def _linear_dispatch_axis(program_config, output_memory_config):
 # serves both. Cached; only reopened when the required axis changes between vectors.
 _CUR_DEVICE = None
 _CUR_AXIS = "__uninit__"
+_CUR_SHAPE = None
 
 
 def _ensure_vector_device(axis):
-    global _CUR_DEVICE, _CUR_AXIS
-    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
+    shape = get_model_traced_mesh_shape()
+    if _CUR_DEVICE is None or axis != _CUR_AXIS or shape != _CUR_SHAPE:
         _close_vector_device()
-        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_DEVICE = create_mesh_device(shape, dispatch_core_axis=axis)
         _CUR_AXIS = axis
+        _CUR_SHAPE = shape
     return _CUR_DEVICE
 
 
 def _close_vector_device():
-    global _CUR_DEVICE, _CUR_AXIS
+    global _CUR_DEVICE, _CUR_AXIS, _CUR_SHAPE
     if _CUR_DEVICE is not None:
         try:
             ttnn.close_mesh_device(_CUR_DEVICE)
@@ -72,15 +90,22 @@ def _close_vector_device():
             pass
     _CUR_DEVICE = None
     _CUR_AXIS = "__uninit__"
+    _CUR_SHAPE = None
 
 
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 
-def _parse_2d_shard_dims(placement, ndim=4):
-    """[dim_on_mesh_rows, dim_on_mesh_cols] from a traced placement dict (Shard dims,
-    normalized to >=0; None for Replicate)."""
+def _parse_2d_shard_dims(placement, ndim=4, normalize=True):
+    """[dim_on_mesh_rows, dim_on_mesh_cols] from a traced placement dict (Shard dims;
+    None for Replicate).
+
+    ``normalize=True`` (default) maps negative dims to >=0 for K/N axis logic.
+    ``normalize=False`` preserves the original sign so a reconstructed mesh
+    mapper records the exact same ``PlacementShard(d)`` repr the master traced
+    (the model often shards on ``Shard(-2)/Shard(-1)``; normalizing to 2/3 is
+    the same placement but a different string the validator flags)."""
     import re
 
     s = str(placement.get("placement", "")) if isinstance(placement, dict) else str(placement)
@@ -90,7 +115,7 @@ def _parse_2d_shard_dims(placement, ndim=4):
             out.append(None)
         else:
             d = int(m.group(1))
-            out.append(d + ndim if d < 0 else d)
+            out.append((d + ndim if d < 0 else d) if normalize else d)
     return out
 
 
@@ -162,6 +187,9 @@ def _run_gather_in0_ring_matmul(
 
     # Weight placement -> mesh-axis for K (dim 2) and N (dim 3).
     b_dims = _parse_2d_shard_dims(input_b_placement, ndim=4)
+    # Sign-preserved dims for the mesh mapper, so the recorded PlacementShard
+    # repr matches the master's exact sign (e.g. Shard(-2)/Shard(-1)).
+    b_dims_signed = _parse_2d_shard_dims(input_b_placement, ndim=4, normalize=False)
     if len(b_dims) < 2 or 2 not in b_dims or 3 not in b_dims:
         raise ValueError(f"weight placement is not a 2D K/N mesh-shard: {input_b_placement}")
     k_axis = b_dims.index(2)  # 0=rows, 1=cols
@@ -256,7 +284,7 @@ def _run_gather_in0_ring_matmul(
         b_tt = ttnn.as_tensor(
             w_global.reshape(1, 1, global_K, global_N),
             device=dev,
-            mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(b_dims[0], b_dims[1]), mesh_shape=(rows, cols)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(b_dims_signed[0], b_dims_signed[1]), mesh_shape=(rows, cols)),
             layout=ttnn.TILE_LAYOUT,
             dtype=wt_dtype,
             memory_config=wt_mc,
@@ -778,6 +806,28 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Reproduce THIS vector's traced mesh shape. The runner groups vectors by
+    # mesh into per-mesh files, but a single main-process invocation loads all of
+    # them and opens one device, so without this every vector would be re-run on
+    # whatever shape get_model_traced_mesh_shape() auto-detects (e.g. all at
+    # [4, 8]) — mismatching the [8, 4]/[1, 32]/[1, 1] vectors' traced
+    # tensor_placement.mesh_device_shape. Pin MESH_DEVICE_SHAPE to the vector's
+    # own traced shape so both the device open AND every downstream
+    # get_model_traced_mesh_shape() call (gather_in0 / batched / standard paths)
+    # reproduce the master topology exactly.
+    for _plac in (
+        kwargs.get("input_a_tensor_placement"),
+        kwargs.get("input_b_tensor_placement"),
+        kwargs.get("input_tensor_b_tensor_placement"),
+    ):
+        if isinstance(_plac, dict) and _plac.get("mesh_device_shape"):
+            import re as _re_mesh
+
+            _dims = _re_mesh.findall(r"-?\d+", str(_plac["mesh_device_shape"]))
+            if len(_dims) == 2:
+                os.environ["MESH_DEVICE_SHAPE"] = f"{int(_dims[0])}x{int(_dims[1])}"
+                break
+
     # Capture the matmul program_config's fused activation (read from the RAW dict,
     # before it is parsed to an object). The model frequently carries the activation
     # (e.g. GELU) inside program_config.fused_activation rather than the separate
@@ -850,7 +900,9 @@ def run(
     # Open (or reuse) a mesh device whose dispatch axis matches this vector's
     # matmul program_config grid + the real shard-grid placement (read raw,
     # before parsing below). The fixture yielded None; we own the device here.
-    device = _ensure_vector_device(_linear_dispatch_axis(program_config, kwargs.get("output_memory_config")))
+    device = _ensure_vector_device(
+        _linear_dispatch_axis(program_config, kwargs.get("output_memory_config"), input_a_memory_config)
+    )
 
     # V2 vectors provide weight as input_tensor_b_* instead of input_b_*. Each
     # field can be present in either convention (or None when absent in master),
