@@ -218,6 +218,7 @@ class TTNNDistributedRMSNorm(TTNNModule):
         )
         # Single-device meshes cannot use fabric-backed all_gather in the distributed path.
         self.tt_weight_local = None
+        self.tt_weight_replicated = None
         if _mesh_num_devices(self.device) <= 1:
             self.tt_weight_local = ttnn.from_torch(
                 weight.unsqueeze(0).expand(32, -1),
@@ -225,6 +226,13 @@ class TTNNDistributedRMSNorm(TTNNModule):
                 layout=ttnn.TILE_LAYOUT,
             )
             self.tt_weight_local = ttnn.to_device(self.tt_weight_local, self.device)
+        else:
+            self.tt_weight_replicated = ttnn.from_torch(
+                weight.unsqueeze(0).expand(32, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self.tt_weight_replicated = ttnn.to_device(self.tt_weight_replicated, self.device)
 
     @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
     def forward(self, inp):
@@ -250,6 +258,16 @@ class TTNNDistributedRMSNorm(TTNNModule):
             inp = ttnn.unsqueeze(inp, 1)
         if inp.layout != ttnn.TILE_LAYOUT:
             inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.tt_weight_replicated is not None and int(inp.shape[-1]) == int(self.torch_layer.weight.shape[0]):
+            tt_out = ttnn.rms_norm(
+                inp,
+                weight=self.tt_weight_replicated,
+                epsilon=eps,
+                compute_kernel_config=self.compute_kernel_config,
+            )
+            if len(original_shape) == 3 and len(tt_out.shape) == 4:
+                tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+            return tt_out
         if getattr(self.device, "shape", [1, 1])[-1] == 1:
             tt_out = ttnn.rms_norm(
                 inp,

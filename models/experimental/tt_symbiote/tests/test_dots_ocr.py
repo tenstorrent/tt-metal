@@ -275,6 +275,8 @@ def test_dots_ocr_vision(mesh_device, image_link):
     ``DOTS_OCR_PARALLELISM=DP``, the fixture uses ``DOTS_OCR_DP_MESH_DEVICE_MAP``
     (N300 ``(2, 1)``). In DP mode the test sets ``batch_size == num_devices`` and
     repeats the same prompt on each stream so dual-stream sharding is exercised.
+    For TP decode scheme comparisons on a 1x4 mesh, set
+    ``DOTS_OCR_TP_DECODE_SCHEME=row`` (default) or ``col_parallel``.
     """
     pytest.importorskip("qwen_vl_utils")
     from qwen_vl_utils import process_vision_info

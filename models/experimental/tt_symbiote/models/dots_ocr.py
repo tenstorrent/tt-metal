@@ -34,6 +34,7 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
     TTNNDotsOCRDecoderLayer,
     TTNNDotsOCRLayerStack,
+    TTNNDotsOCRLocalShardRMSNorm,
 )
 from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
 from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
@@ -82,11 +83,28 @@ def _sync_profile_enabled() -> bool:
 
 
 def _defer_decode_readback_enabled() -> bool:
-    return os.environ.get("DOTS_OCR_DEFER_DECODE_READBACK", "1").lower() not in {"0", "false", "no", "off"}
+    return os.environ.get("DOTS_OCR_DEFER_DECODE_READBACK", "0").lower() in {"1", "true", "yes", "on"}
+
+
+def _pipeline_decode_readback_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_PIPELINE_DECODE_READBACK", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def _deep_sync_profile_enabled() -> bool:
     return os.environ.get("DOTS_OCR_PROFILE_DECODE_GRAPH", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _decode_tp_scheme_from_env() -> str:
+    """Tensor-parallel decode scheme for full dots.ocr pipeline construction.
+
+    ``row`` is the production/default hidden-sharded TP path. ``col_parallel``
+    is an opt-in comparison path using replicated full-hidden inputs with
+    column-parallel QKV and gate/up projections.
+    """
+    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "row").strip()
+    if scheme not in {"row", "col_parallel"}:
+        raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
+    return scheme
 
 
 def _dots_ocr_signpost(header: str) -> None:
@@ -619,16 +637,19 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower._unique_name = "vision_tower"
         vision_tower.override_children_module_names()
 
+        tp_decode_scheme = _decode_tp_scheme_from_env()
+        print(f"[dots_ocr] decoder TP decode scheme: {tp_decode_scheme}")
         decoder_layers = []
         for i, hf_layer in enumerate(hf_model.model.layers):
-            layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer)
+            layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
             layer._unique_name = f"model.layers.{i}"
             layer.override_children_module_names()
             decoder_layers.append(layer)
         decoder_stack = TTNNDotsOCRLayerStack(decoder_layers)
         decoder_stack._unique_name = "model.layer_stack"
 
-        final_norm = TTNNDistributedRMSNorm.from_torch(hf_model.model.norm)
+        final_norm_cls = TTNNDotsOCRLocalShardRMSNorm if tp_decode_scheme == "col_parallel" else TTNNDistributedRMSNorm
+        final_norm = final_norm_cls.from_torch(hf_model.model.norm)
         final_norm._unique_name = "model.norm"
 
         # ``TTNNDotsOCRDRAMShardedLMHead`` lays the lm_head weight out
@@ -1358,7 +1379,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
         #     the device tensor is reused.
         # EOS still early-exits; worst case we executed exactly 1 extra
         # decode iteration past the EOS token before discarding it.
-        if max_new_tokens > 1 and self._batch_input_mapper is None:
+        if _pipeline_decode_readback_enabled() and max_new_tokens > 1 and self._batch_input_mapper is None:
             prev_snapshot: Optional[ttnn.Tensor] = None
             for _ in range(max_new_tokens - 1):
                 cur_snapshot = self.decode_step(current_token, read_from_device=False)

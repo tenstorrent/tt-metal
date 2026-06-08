@@ -55,6 +55,21 @@ def _match_residual_width(tensor, residual, device):
     )
 
 
+def _gather_tp_hidden_if_needed(tensor, device, hidden_size: int):
+    if int(tensor.shape[-1]) == int(hidden_size):
+        return tensor
+    if not _tp_requires_ccl(device):
+        return tensor
+    return ttnn.all_gather(
+        tensor,
+        dim=len(tensor.shape) - 1,
+        num_links=_ccl_num_links(device),
+        cluster_axis=1,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        topology=ttnn.Topology.Linear,
+    )
+
+
 def _use_bfp8_decoder_weights(layer_idx) -> bool:
     if layer_idx is None:
         return False
@@ -215,6 +230,13 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             inp = ttnn.unsqueeze(inp, 1)
         if inp.layout != ttnn.TILE_LAYOUT:
             inp = ttnn.to_layout(inp, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if _tp_requires_ccl(self.device) and int(inp.shape[-1]) != hidden_size:
+            tt_out = super().forward(inp)
+            if tt_out.memory_config().buffer_type != ttnn.BufferType.L1:
+                tt_out = ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)
+            if len(original_shape) == 3 and len(tt_out.shape) == 4:
+                tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+            return tt_out
         eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
         print("Using RMSNorm")
         print("prefill inp.shape:", inp.shape)
@@ -253,13 +275,17 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         elif tp_decode_scheme == "col_parallel":
             # Optional comparison path for TP decode: replicated full-hidden in,
-            # column-parallel QKV/gate-up, replicated full-hidden out.
+            # column-parallel QKV/gate-up, replicated full-hidden out. Prefill
+            # still uses the row-parallel MLP/hidden-sharded contract.
             new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, qkv_n_parallel=True)
             new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=True)
+            new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:
             raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
         if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
             new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
+            if hasattr(new_layer, "mlp_prefill"):
+                new_layer.mlp_prefill.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):
@@ -287,6 +313,9 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         **kwargs,
     ):
         hs = _take_local_dp_batch(hidden_states, self.device)
+        input_is_decode = len(hs.shape) >= 2 and int(hs.shape[-2]) == 1
+        if getattr(self, "tp_decode_scheme", "row") == "col_parallel" and input_is_decode:
+            hs = _gather_tp_hidden_if_needed(hs, self.device, int(self.input_layernorm.torch_layer.weight.shape[0]))
 
         if hs.layout != ttnn.TILE_LAYOUT:
             hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -329,7 +358,8 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             # directly (block-sharded in0 -> DRAM out), so the LN->gate-up
             # reshard is gone. down_proj still emits interleaved, so op 22
             # reshards the H1 residual once to match mlp_out.
-            mlp_out = self.mlp(normed)
+            mlp = getattr(self, "mlp_prefill", self.mlp)
+            mlp_out = mlp(normed)
             ttnn.deallocate(normed)
 
             residual_il = ttnn.sharded_to_interleaved(residual, ttnn.DRAM_MEMORY_CONFIG)
@@ -350,7 +380,8 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         # MLP block
         residual = hs
         hs = self.post_attention_layernorm(hs)
-        mlp_out = self.mlp(hs)
+        mlp = self.mlp if is_decode else getattr(self, "mlp_prefill", self.mlp)
+        mlp_out = mlp(hs)
 
         hs = (
             ttnn.add(residual, mlp_out, memory_config=decode_l1_mc)
