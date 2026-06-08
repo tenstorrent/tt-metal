@@ -308,24 +308,65 @@ class TTConv1d:
         else:
             self.bias = None
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: [B, 1, T, in_ch] NHWC → [B, 1, T_out, out_ch]"""
+        # Streaming context cache: last `causal_pad` input columns [B, 1, causal_pad, in_ch].
+        # context_size == causal_pad == (K-1)*dilation - (stride-1) (reference SConv1d).
+        self._cache = None
+
+    def reset_cache(self) -> None:
+        self._cache = None
+
+    def _extra_right_pad(self, T: int) -> int:
+        """get_extra_padding_for_conv1d (only meaningful for stride > 1)."""
+        if self.stride <= 1:
+            return 0
+        n_frames = (T - self.K + self.causal_pad) / self.stride + 1
+        ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.K - self.causal_pad)
+        return max(0, ideal_length - T)
+
+    def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
+        """x: [B, 1, T, in_ch] NHWC → [B, 1, T_out, out_ch].
+
+        Streaming (use_cache=True): the left causal pad is replaced by the cached
+        tail of previous inputs; no extra right-pad except on the final chunk.
+        Mirrors SConv1d._forward_streaming.
+        """
         B, _, T, _ = x.shape
+        cp = self.causal_pad
 
-        # Compute extra right-pad (matches get_extra_padding_for_conv1d)
-        if self.stride > 1:
-            n_frames = (T - self.K + self.causal_pad) / self.stride + 1
-            ideal_length = (math.ceil(n_frames) - 1) * self.stride + (self.K - self.causal_pad)
-            extra_pad = max(0, ideal_length - T)
-        else:
-            extra_pad = 0
-
-        T_padded = T + self.causal_pad + extra_pad
-        if self.causal_pad > 0 or extra_pad > 0:
-            # ttnn.pad front padding requires ROW_MAJOR layout
+        if use_cache:
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.pad(x, [(0, 0), (0, 0), (self.causal_pad, extra_pad), (0, 0)], value=0.0)
+            if cp > 0:
+                if self._cache is None:
+                    cache = ttnn.zeros(
+                        [B, 1, cp, self.in_ch],
+                        dtype=self.compute_dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=self.device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                else:
+                    cache = self._cache
+                x_ctx = ttnn.concat([cache, x], dim=2)  # [B, 1, cp + T, in_ch]
+                # Update cache with the last `cp` input columns (pre right-pad).
+                self._cache = ttnn.slice(
+                    x_ctx, [0, 0, T, 0], [B, 1, cp + T, self.in_ch], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            else:
+                x_ctx = x
+            extra_pad = self._extra_right_pad(T) if is_final_chunk else 0
+            if extra_pad > 0:
+                x_ctx = ttnn.pad(x_ctx, [(0, 0), (0, 0), (0, extra_pad), (0, 0)], value=0.0)
+            x = x_ctx
+            T_padded = cp + T + extra_pad
+        else:
+            extra_pad = self._extra_right_pad(T)
+            T_padded = T + cp + extra_pad
+            if cp > 0 or extra_pad > 0:
+                # ttnn.pad front padding requires ROW_MAJOR layout
+                if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = ttnn.pad(x, [(0, 0), (0, 0), (cp, extra_pad), (0, 0)], value=0.0)
 
         x_out, [_, w_out], [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
@@ -404,14 +445,17 @@ class TTBlock1DDevice:
         self.gamma = _scale(bw.gamma)
         self.ffn_gamma = _scale(bw.ffn_gamma)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def reset_cache(self) -> None:
+        self.dw_conv.reset_cache()
+
+    def __call__(self, x: ttnn.Tensor, use_cache: bool = False, is_final_chunk: bool = False) -> ttnn.Tensor:
         """x: [B, 1, T, C] → [B, 1, T, C]"""
         # Mixer (depthwise conv) path
         residual = x
         x = ttnn.rms_norm(
             x, weight=self.norm_w, epsilon=self.eps, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        x = self.dw_conv(x)
+        x = self.dw_conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
         if self.gamma is not None:
             x = ttnn.mul(x, self.gamma, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.add(residual, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -519,13 +563,30 @@ class TTSemanticTokenizer:
 
         self._head_conv = TTConv1d(weights.head_conv, device)
 
-    def forward(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
+    def reset_cache(self) -> None:
+        """Clear all streaming caches (call before encoding a new segment)."""
+        for c in self._downsample_convs:
+            c.reset_cache()
+        for stage in self._stages:
+            for blk in stage:
+                blk.reset_cache()
+        self._head_conv.reset_cache()
+
+    def forward(
+        self,
+        audio: ttnn.Tensor,
+        golden: Optional[torch.Tensor] = None,
+        use_cache: bool = False,
+        is_final_chunk: bool = False,
+    ) -> ttnn.Tensor:
         """Encode audio to semantic latents (all ops on device).
 
         Args:
             audio:  [B, 1, 1, T] raw audio tensor on device.
             golden: optional [B, vae_dim, T_enc] torch reference tensor.
                     If provided, PCC between TTNN output and golden is printed.
+            use_cache: stream this chunk using the per-conv causal caches.
+            is_final_chunk: add ceil-alignment right-pad on the final chunk only.
         """
         B = audio.shape[0]
         T = audio.shape[-1]
@@ -536,9 +597,9 @@ class TTSemanticTokenizer:
             x = ttnn.typecast(x, ttnn.bfloat16)
 
         for i, stage_blocks in enumerate(self._stages):
-            x = self._downsample_convs[i](x)
+            x = self._downsample_convs[i](x, use_cache=use_cache, is_final_chunk=is_final_chunk)
             for blk in stage_blocks:
-                x = blk(x)
+                x = blk(x, use_cache=use_cache, is_final_chunk=is_final_chunk)
 
         if self._final_norm_w is not None:
             x = ttnn.rms_norm(
@@ -549,7 +610,7 @@ class TTSemanticTokenizer:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        x = self._head_conv(x)  # [B, 1, T_enc, vae_dim]
+        x = self._head_conv(x, use_cache=use_cache, is_final_chunk=is_final_chunk)  # [B, 1, T_enc, vae_dim]
 
         if golden is not None:
             # [B, 1, T_enc, vae_dim] NHWC → [B, vae_dim, T_enc] channels-first
@@ -559,5 +620,11 @@ class TTSemanticTokenizer:
 
         return x
 
-    def __call__(self, audio: ttnn.Tensor, golden: Optional[torch.Tensor] = None) -> ttnn.Tensor:
-        return self.forward(audio, golden)
+    def __call__(
+        self,
+        audio: ttnn.Tensor,
+        golden: Optional[torch.Tensor] = None,
+        use_cache: bool = False,
+        is_final_chunk: bool = False,
+    ) -> ttnn.Tensor:
+        return self.forward(audio, golden, use_cache=use_cache, is_final_chunk=is_final_chunk)
