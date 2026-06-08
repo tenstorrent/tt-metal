@@ -130,7 +130,11 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [4096, 2048, 1024, 128]
+            # qwen3.6: 1024 and 2048 are NOT valid prefill buckets (their matmul progcfg is broken:
+            # num_blocks_x=9 > num_cores_x=5). get_padded_prefill_len pads >128 -> 4096, so only the
+            # 128 and >=4096 buckets are ever used. Allocating buffers for the invalid 1024/2048 buckets
+            # is wasteful and shifts the persistent-buffer DRAM layout — drop them.
+            self.support_seqlens = [4096, 128] if self.is_qwen36 else [4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
