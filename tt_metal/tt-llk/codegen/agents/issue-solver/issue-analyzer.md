@@ -75,7 +75,13 @@ You are an LLK issue triage specialist. Your job is to turn raw GitHub issue tex
    - test harness
    - metal integration
 5. Search for relevant files/functions/tests.
-6. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
+6. Decide the **perf intent** of the fix (used by the perf stage):
+   - `optimize` — the issue asks the kernel to get *faster* (optimization, perf
+     recovery, "too slow", reduce cycles). The perf stage will require an
+     improvement.
+   - `maintain` — any other fix (bug fix, new behavior, test harness). The perf
+     stage will only guard against a regression.
+7. Decide whether architecture research is needed. It is needed for ISA semantics, register layout, instruction scheduling, cross-arch porting, or hardware contract questions. It is not needed for simple call-site fixes, typos, missing includes, or obvious test harness updates.
 
 ## Output Artifact
 
@@ -90,6 +96,7 @@ reason: ...
 
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|test_harness|unknown
+perf_intent: optimize|maintain
 
 ## Target
 arch: blackhole|wormhole|quasar|multi

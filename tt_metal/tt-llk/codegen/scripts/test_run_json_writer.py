@@ -51,6 +51,29 @@ def test_init_emits_dashboard_fields(tmp_path):
         "cost_usd": 0,
     }
     assert doc.get("solver_state") is None  # only set by finalize
+    # --version omitted -> null (backward compatible; Quasar codegen omits it).
+    assert doc.get("version") is None
+
+
+def test_init_records_version_when_passed(tmp_path):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "test_2026-04-17_issue_2_abcd1234",
+        "--kernel",
+        "issue_2",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "analyzer",
+        "--first-message",
+        "Analyzing",
+        "--version",
+        "1.2.3",
+    )
+    doc = json.loads((tmp_path / "run.json").read_text())
+    assert doc["version"] == "1.2.3"
 
 
 def test_issue_url_preserved(tmp_path):
