@@ -35,14 +35,18 @@ import ttnn
 
 from .tt_adain_resblk_1d import TTAdainResBlk1d, TTAdainResBlk1dParams, preprocess_tt_adain_resblk_1d
 from .tt_conv import TTConv1dParams, tt_conv1d_nlc, upload_conv1d_params_from_module
-from .tt_matmul_memory import l1_width_sharded_out_mc, matmul_dims_tile_aligned
+from .tt_matmul_memory import (
+    en_matmul_plan,
+    maybe_reshard_to_caller,
+    pick_l1_activation_mc,
+)
 from .tt_duration_encoder import (
     TTDurationEncoder,
     TTDurationEncoderParams,
     preprocess_tt_duration_encoder,
 )
 from .tt_linear_norm import TTLinearNorm, TTLinearNormParams, preprocess_tt_linear_norm
-from .tt_lstm import TTLSTMParams, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_lstm import TTLSTMParams, build_fused_recurrent_weight, preprocess_tt_lstm_1layer, tt_bilstm_nlc
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -59,9 +63,11 @@ class TTProsodyPredictorParams:
     text_encoder: TTDurationEncoderParams
     lstm_fwd: TTLSTMParams
     lstm_rev: TTLSTMParams
+    lstm_w_h_block: ttnn.Tensor | None
     duration_proj: TTLinearNormParams
     shared_fwd: TTLSTMParams
     shared_rev: TTLSTMParams
+    shared_w_h_block: ttnn.Tensor | None
     f0_blocks: tuple[TTAdainResBlk1dParams, ...]
     n_blocks: tuple[TTAdainResBlk1dParams, ...]
     f0_proj: TTConv1dParams
@@ -93,11 +99,17 @@ def preprocess_tt_prosody_predictor(
 
     lstm_fwd, lstm_rev = preprocess_tt_lstm_1layer(module.lstm, device, weights_dtype=weights_dtype)
     assert lstm_rev is not None, "ProsodyPredictor.lstm must be bidirectional"
+    lstm_w_h_block = build_fused_recurrent_weight(module.lstm, device, weights_dtype=weights_dtype)
 
     duration_proj = preprocess_tt_linear_norm(module.duration_proj, device, weights_dtype=weights_dtype)
 
     shared_fwd, shared_rev = preprocess_tt_lstm_1layer(module.shared, device, weights_dtype=weights_dtype)
     assert shared_rev is not None, "ProsodyPredictor.shared must be bidirectional"
+    # The shared (F0/N) BiLSTM runs fp32 state, so the direction-fused matmul's K=2H accumulation
+    # reordering (~1e-5) survives instead of being rounded away (as it is on the forward LSTM's bf16
+    # state) — and the vocoder amplifies F0 ~1885x, dropping end-to-end kmodel PCC below the 0.84
+    # floor (0.85->0.79). Keep this branch on the bit-exact per-direction loop (w_h_block=None).
+    shared_w_h_block = None
 
     f0_blocks = tuple(
         preprocess_tt_adain_resblk_1d(b, device, weights_dtype=weights_dtype, conv_weights_dtype=conv_weights_dtype)
@@ -118,9 +130,11 @@ def preprocess_tt_prosody_predictor(
         text_encoder=text_encoder,
         lstm_fwd=lstm_fwd,
         lstm_rev=lstm_rev,
+        lstm_w_h_block=lstm_w_h_block,
         duration_proj=duration_proj,
         shared_fwd=shared_fwd,
         shared_rev=shared_rev,
+        shared_w_h_block=shared_w_h_block,
         f0_blocks=f0_blocks,
         n_blocks=n_blocks,
         f0_proj=f0_proj,
@@ -176,10 +190,20 @@ def _tensor_nbytes(shape: tuple[int, ...] | list[int], dtype) -> int:
     return _tile_padded_volume(shape) * _dtype_nbytes(dtype)
 
 
-def _pick_activ_memory_config(caller_mc: ttnn.MemoryConfig, peak_nbytes: int) -> ttnn.MemoryConfig:
-    if caller_mc.buffer_type == ttnn.BufferType.DRAM and peak_nbytes <= _L1_ACTIV_BUDGET_BYTES:
-        return ttnn.L1_MEMORY_CONFIG
-    return caller_mc
+def _pick_activ_memory_config(
+    caller_mc: ttnn.MemoryConfig,
+    peak_nbytes: int,
+    *,
+    rows: int,
+    features: int,
+) -> ttnn.MemoryConfig:
+    return pick_l1_activation_mc(
+        caller_mc,
+        rows=rows,
+        features=features,
+        peak_nbytes=peak_nbytes,
+        budget_bytes=_L1_ACTIV_BUDGET_BYTES,
+    )
 
 
 def _maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> ttnn.Tensor:
@@ -190,39 +214,6 @@ def _maybe_to_memory_config(x: ttnn.Tensor, mc: ttnn.MemoryConfig) -> ttnn.Tenso
     if out is not x:
         ttnn.deallocate(x)
     return out
-
-
-def _en_matmul_plan(alignment_TaT: ttnn.Tensor, d_nlc: ttnn.Tensor):
-    """Pick (program_config, in0/out memory_config, reshard_back) for the en_nlc matmul.
-
-    ``program_config`` / memory configs are ``None`` to mean "use the ttnn defaults".
-    ``reshard_back`` is True when the output is produced sharded and must be converted
-    back to the caller's ``memory_config`` to preserve the return contract.
-    """
-    B = int(d_nlc.shape[0])
-    M = int(alignment_TaT.shape[-2])  # T_aligned
-    K = int(d_nlc.shape[1])  # T
-    N = int(d_nlc.shape[-1])  # d_hid + style_dim
-    if B != 1 or not matmul_dims_tile_aligned(M, K, N):
-        return None, None, False
-    if M <= _EN_M_CAP_SHARD:
-        # Output-only width shard: sweep fastest layout without in0 reshard tax.
-        return None, l1_width_sharded_out_mc(M, K, N), True
-    if M <= _EN_M_CAP_MCAST:
-        cores = N // _TILE
-        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(cores, 1),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=math.ceil(M / _TILE),
-            per_core_N=1,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=True,
-        )
-        return pc, None, False
-    return None, None, False
 
 
 class TTProsodyPredictor:
@@ -282,12 +273,15 @@ class TTProsodyPredictor:
             keeps it in NLC since :meth:`F0Ntrain` accepts NLC directly.
         """
         ck = self.compute_kernel_config
+        p = self.params
         b = int(texts_bct.shape[0])
         t_len = int(texts_bct.shape[-1])
         t_aligned = int(alignment_btTa.shape[-1])
         activ_mc = _pick_activ_memory_config(
             memory_config,
             self._forward_peak_nbytes(batch=b, seq_len=t_len, t_aligned=t_aligned, dtype=texts_bct.dtype),
+            rows=b * t_len,
+            features=p.d_hid + p.style_dim,
         )
 
         keep_mask = _keep_mask_btl(text_mask_bt, device=self.device)
@@ -312,6 +306,7 @@ class TTProsodyPredictor:
             compute_kernel_config=ck,
             memory_config=activ_mc,
             sequence_lengths=lengths_list,
+            w_h_block=self.params.lstm_w_h_block,
         )
         # x_lstm: [B, T, d_hid]
 
@@ -328,7 +323,12 @@ class TTProsodyPredictor:
         # L1-width-sharded / 1D-mcast path when feasible (B==1, bounded T_aligned), else the
         # default matmul. The sharded path reshards back to ``memory_config`` so downstream
         # (F0Ntrain) sees the same interleaved layout as before.
-        en_pc, en_out_mc, en_reshard = _en_matmul_plan(alignment_TaT, d_nlc)
+        en_pc, en_out_mc, en_reshard = en_matmul_plan(
+            alignment_TaT,
+            d_nlc,
+            m_cap_shard=_EN_M_CAP_SHARD,
+            m_cap_mcast=_EN_M_CAP_MCAST,
+        )
         en_matmul_mc = en_out_mc if en_out_mc is not None else activ_mc
         en_nlc = ttnn.matmul(
             alignment_TaT,
@@ -337,8 +337,10 @@ class TTProsodyPredictor:
             memory_config=en_matmul_mc,
             compute_kernel_config=ck,
         )
-        if en_reshard or en_matmul_mc.buffer_type != memory_config.buffer_type:
-            en_nlc = ttnn.to_memory_config(en_nlc, memory_config)
+        if en_reshard:
+            en_nlc = maybe_reshard_to_caller(en_nlc, memory_config)
+        elif en_matmul_mc.buffer_type != memory_config.buffer_type:
+            en_nlc = _maybe_to_memory_config(en_nlc, memory_config)
         ttnn.deallocate(alignment_TaT)
         ttnn.deallocate(d_nlc)
         # en_nlc: [B, T_aligned, d_hid + style_dim]
@@ -366,11 +368,14 @@ class TTProsodyPredictor:
             (the second F0/N block has ``upsample=True``).
         """
         ck = self.compute_kernel_config
+        p = self.params
         b = int(en_nlc.shape[0])
         t_aligned = int(en_nlc.shape[1])
         activ_mc = _pick_activ_memory_config(
             memory_config,
             self._f0n_peak_nbytes(batch=b, t_aligned=t_aligned),
+            rows=b * t_aligned,
+            features=p.d_hid + p.style_dim,
         )
 
         en_fp32, owns_en = _to_fp32_if_needed(en_nlc, activ_mc)
@@ -389,6 +394,7 @@ class TTProsodyPredictor:
             compute_kernel_config=ck,
             memory_config=activ_mc,
             fp32_state=True,
+            w_h_block=self.params.shared_w_h_block,
         )
         # BiLSTM states are bf16; keep F0/N branch activations in fp32 to avoid ~Hz-level F0 drift.
         x_fp32, owns_x = _to_fp32_if_needed(x_shared, activ_mc)

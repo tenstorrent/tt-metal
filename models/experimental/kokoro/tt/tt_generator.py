@@ -60,11 +60,18 @@ from .tt_source_module_hn_nsf import (
     TTSourceModuleHnNSF,
     preprocess_tt_source_module_hn_nsf,
 )
+from .tt_matmul_memory import (
+    is_l1_width_sharded,
+    maybe_reshard_to_caller,
+    pick_l1_activation_mc,
+)
 from .tt_torch_stft import (
     TTTorchSTFT,
     TTTorchSTFTParams,
     preprocess_tt_torch_stft,
 )
+
+_L1_ACTIV_BUDGET_BYTES = 768 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -473,13 +480,24 @@ class TTGenerator:
         """
         p = self.params
         ck = self.compute_kernel_config
+        B, T_x, C_in = (int(d) for d in x_nlc.shape)
+        picked_mc = pick_l1_activation_mc(
+            memory_config,
+            rows=B * T_x,
+            features=C_in,
+            peak_nbytes=4 * B * T_x * C_in * (4 if x_nlc.dtype == ttnn.float32 else 2),
+            budget_bytes=_L1_ACTIV_BUDGET_BYTES,
+        )
+        # Width-sharded activations need interleaved_to_sharded at every op boundary and
+        # a wide core grid; keep the generator hot path on L1 interleaved instead.
+        activ_mc = ttnn.L1_MEMORY_CONFIG if is_l1_width_sharded(picked_mc) else picked_mc
 
         har_nlc = self._harmonic_source_path(
             f0,
             sinegen_rand_ini=sinegen_rand_ini,
             sinegen_noise_raw=sinegen_noise_raw,
             source_noise_raw=source_noise_raw,
-            memory_config=memory_config,
+            memory_config=activ_mc,
         )
         # ``har_nlc`` shape: [B, F, 2K]
 
@@ -487,12 +505,12 @@ class TTGenerator:
         # downstream convs don't bf16-quantize the STFT outputs before noise_conv reads them.
         target_dtype = har_nlc.dtype
         if x_nlc.dtype != target_dtype:
-            x_cast = ttnn.typecast(x_nlc, target_dtype, memory_config=memory_config)
+            x_cast = ttnn.typecast(x_nlc, target_dtype, memory_config=activ_mc)
             x = x_cast
         else:
             x = x_nlc
         for i, stage in enumerate(p.stages):
-            x_act = ttnn.leaky_relu(x, negative_slope=0.1, memory_config=memory_config)
+            x_act = ttnn.leaky_relu(x, negative_slope=0.1, memory_config=activ_mc)
             if x_act is not x:
                 ttnn.deallocate(x)
             x = x_act
@@ -502,48 +520,48 @@ class TTGenerator:
                 params=stage.noise_conv,
                 device=self.device,
                 compute_config=ck,
-                memory_config=memory_config,
+                memory_config=activ_mc,
                 preserve_input_dtype=True,
             )
-            x_source = self._noise_res[i].forward(x_source, s_bs, memory_config=memory_config)
+            x_source = self._noise_res[i].forward(x_source, s_bs, memory_config=activ_mc)
 
             x_up = tt_conv_transpose1d_nlc(
                 x_nlc=x,
                 params=stage.ups,
                 device=self.device,
                 compute_config=ck,
-                memory_config=memory_config,
+                memory_config=activ_mc,
             )
             ttnn.deallocate(x)
             x = x_up
 
             if i == p.num_upsamples - 1:
-                x_padded = _reflection_pad_left_1_nlc(x, memory_config=memory_config)
+                x_padded = _reflection_pad_left_1_nlc(x, memory_config=activ_mc)
                 ttnn.deallocate(x)
                 x = x_padded
 
-            x_sum = ttnn.add(x, x_source, memory_config=memory_config)
+            x_sum = ttnn.add(x, x_source, memory_config=activ_mc)
             ttnn.deallocate(x)
             ttnn.deallocate(x_source)
             x = x_sum
 
             xs: Optional[ttnn.Tensor] = None
             for resblk in self._resblocks[i]:
-                r = resblk.forward(x, s_bs, memory_config=memory_config)
+                r = resblk.forward(x, s_bs, memory_config=activ_mc)
                 if xs is None:
                     xs = r
                 else:
-                    new_xs = ttnn.add(xs, r, memory_config=memory_config)
+                    new_xs = ttnn.add(xs, r, memory_config=activ_mc)
                     ttnn.deallocate(xs)
                     ttnn.deallocate(r)
                     xs = new_xs
             ttnn.deallocate(x)
-            x = ttnn.multiply(xs, 1.0 / p.num_kernels, memory_config=memory_config)
+            x = ttnn.multiply(xs, 1.0 / p.num_kernels, memory_config=activ_mc)
             ttnn.deallocate(xs)
 
         ttnn.deallocate(har_nlc)
 
-        x_act = ttnn.leaky_relu(x, negative_slope=0.01, memory_config=memory_config)
+        x_act = ttnn.leaky_relu(x, negative_slope=0.01, memory_config=activ_mc)
         ttnn.deallocate(x)
         x = x_act
 
@@ -553,7 +571,7 @@ class TTGenerator:
             params=p.conv_post,
             device=self.device,
             compute_config=ck,
-            memory_config=memory_config,
+            memory_config=activ_mc,
             preserve_input_dtype=True,
         )
         ttnn.deallocate(x)
@@ -562,28 +580,30 @@ class TTGenerator:
         K = p.post_n_fft // 2 + 1
         B = int(x_post.shape[0])
         T_post = int(x_post.shape[1])
-        spec_nlc = ttnn.slice(x_post, [0, 0, 0], [B, T_post, K], [1, 1, 1], memory_config=memory_config)
+        spec_nlc = ttnn.slice(x_post, [0, 0, 0], [B, T_post, K], [1, 1, 1], memory_config=activ_mc)
         phase_nlc = ttnn.slice(
             x_post,
             [0, 0, K],
             [B, T_post, 2 * K],
             [1, 1, 1],
-            memory_config=memory_config,
+            memory_config=activ_mc,
         )
         ttnn.deallocate(x_post)
 
-        spec_nlc = ttnn.exp(spec_nlc, memory_config=memory_config)
-        phase_nlc = ttnn.sin(phase_nlc, memory_config=memory_config)
+        spec_nlc = ttnn.exp(spec_nlc, memory_config=activ_mc)
+        phase_nlc = ttnn.sin(phase_nlc, memory_config=activ_mc)
 
         # iSTFT expects BCT-style ``[B, K, F]``; permute from NLC.
-        spec_bct = ttnn.permute(spec_nlc, (0, 2, 1), memory_config=memory_config)
-        phase_bct = ttnn.permute(phase_nlc, (0, 2, 1), memory_config=memory_config)
+        spec_bct = ttnn.permute(spec_nlc, (0, 2, 1), memory_config=activ_mc)
+        phase_bct = ttnn.permute(phase_nlc, (0, 2, 1), memory_config=activ_mc)
         ttnn.deallocate(spec_nlc)
         ttnn.deallocate(phase_nlc)
 
         audio = self._stft.inverse(spec_bct, phase_bct)  # [B, 1, audio_len]
         ttnn.deallocate(spec_bct)
         ttnn.deallocate(phase_bct)
+        if activ_mc.buffer_type != memory_config.buffer_type or activ_mc.memory_layout != memory_config.memory_layout:
+            audio = maybe_reshard_to_caller(audio, memory_config)
         return audio
 
     __call__ = forward

@@ -122,6 +122,47 @@ def preprocess_tt_lstm_1layer(
     return fwd, rev
 
 
+def build_fused_recurrent_weight(
+    lstm: torch.nn.LSTM,
+    mesh_device,
+    *,
+    weights_dtype=ttnn.bfloat16,
+) -> Optional[ttnn.Tensor]:
+    """Block-diagonal recurrent weight that fuses both BiLSTM directions into one matmul.
+
+    The forward and reverse passes share no recurrent state, so a single step that advances
+    both at once is exact: stack the two hidden states into ``h_comb = [h_f | h_r]`` ``[B, 2H]``
+    and multiply by a ``[2H, 8H]`` block-diagonal weight whose off-diagonal blocks are zero.
+    The zeros contribute exactly ``0.0`` to the fp32 matmul accumulation, so the fused gates are
+    bit-identical to two separate ``h @ W_h`` matmuls — but the loop runs one matmul / sigmoid /
+    add / set-of-slices per step instead of two (see :func:`tt_bilstm_nlc`).
+
+    Output columns are laid out **gate-major, direction-minor**:
+    ``[i_f i_r f_f f_r g_f g_r o_f o_r]`` (each ``H`` wide). This keeps the per-step gate slices
+    contiguous over both directions (``i = W[:, 0:2H]`` etc.), so the cell math runs once over
+    ``[B, 2H]`` tensors. ``gates_x`` must be interleaved into the same order (see ``tt_bilstm_nlc``).
+
+    Returns ``None`` for a unidirectional LSTM (nothing to fuse).
+    """
+    if not lstm.bidirectional:
+        return None
+    H = lstm.hidden_size
+    wf = getattr(lstm, "weight_hh_l0").detach().cpu().t().contiguous()  # [H, 4H], cols [i f g o]
+    wr = getattr(lstm, "weight_hh_l0_reverse").detach().cpu().t().contiguous()  # [H, 4H]
+    W = torch.zeros(2 * H, 8 * H, dtype=wf.dtype)
+    for gi in range(4):  # gate order i, f, g, o
+        # forward gate gi -> column group 2*gi (rows for h_f), reverse gate gi -> group 2*gi+1 (rows for h_r)
+        W[0:H, (2 * gi) * H : (2 * gi + 1) * H] = wf[:, gi * H : (gi + 1) * H]
+        W[H : 2 * H, (2 * gi + 1) * H : (2 * gi + 2) * H] = wr[:, gi * H : (gi + 1) * H]
+    return ttnn.from_torch(
+        W,
+        dtype=weights_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 def _lstm_step(
     gates_x: ttnn.Tensor,
     h: ttnn.Tensor,
@@ -168,6 +209,51 @@ def _lstm_step(
     # c_new = f*c + i*g. Kept as separate mul/mul/add: the fused addcmul (MAC) changes
     # the cell-state accumulation, which feeds the F0 curve (amplified ~1885x by the
     # vocoder) and dropped end-to-end PCC below the 0.84 floor (0.855 -> 0.825).
+    c_new = ttnn.add(
+        ttnn.multiply(f, c, memory_config=memory_config),
+        ttnn.multiply(i, g, memory_config=memory_config),
+        memory_config=memory_config,
+    )
+    h_new = ttnn.multiply(o, ttnn.tanh(c_new, memory_config=memory_config), memory_config=memory_config)
+    return h_new, c_new
+
+
+def _lstm_step_fused(
+    gates_x: ttnn.Tensor,
+    h: ttnn.Tensor,
+    c: ttnn.Tensor,
+    w_h_block: ttnn.Tensor,
+    H: int,
+    *,
+    compute_kernel_config=None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """One fused BiLSTM step advancing both directions at once.
+
+    ``h``/``c`` are the stacked states ``[h_f | h_r]`` / ``[c_f | c_r]`` shaped ``[B, 2H]``;
+    ``gates_x`` is the precomputed ``[B, 8H]`` input projection in gate-major direction-minor
+    order ``[i_f i_r f_f f_r g_f g_r o_f o_r]`` and ``w_h_block`` is the block-diagonal recurrent
+    weight from :func:`build_fused_recurrent_weight`. Identical cell math to :func:`_lstm_step`,
+    just run once over ``2H``-wide tensors instead of twice over ``H``-wide ones.
+    """
+    gates_h = ttnn.linear(
+        h,
+        w_h_block,
+        bias=None,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
+    ttnn.deallocate(gates_h)
+
+    H2 = 2 * H
+    sig = ttnn.sigmoid(gates, memory_config=memory_config)
+    i = ttnn.slice(sig, [0, 0], [sig.shape[0], H2], [1, 1])
+    f = ttnn.slice(sig, [0, H2], [sig.shape[0], 2 * H2], [1, 1])
+    o = ttnn.slice(sig, [0, 3 * H2], [sig.shape[0], 4 * H2], [1, 1])
+    ttnn.deallocate(sig)
+    g = ttnn.tanh(ttnn.slice(gates, [0, 2 * H2], [gates.shape[0], 3 * H2], [1, 1]), memory_config=memory_config)
+
     c_new = ttnn.add(
         ttnn.multiply(f, c, memory_config=memory_config),
         ttnn.multiply(i, g, memory_config=memory_config),
@@ -224,6 +310,7 @@ def tt_bilstm_nlc(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     sequence_lengths: Optional[Sequence[int]] = None,
     fp32_state: bool = False,
+    w_h_block: Optional[ttnn.Tensor] = None,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
@@ -233,6 +320,12 @@ def tt_bilstm_nlc(
 
     When ``fp32_state`` is True, hidden/cell states are accumulated in fp32 to avoid
     Hz-level drift in long F0/N decoder chains (shared BiLSTM in ``F0Ntrain``).
+
+    ``w_h_block`` (from :func:`build_fused_recurrent_weight`) enables the **direction-fused**
+    loop: a single step advances both passes at once over ``[B, 2H]`` state, halving the
+    per-timestep matmul / activation / elementwise op (and host-dispatch) count. It is bit-exact
+    and used only when no padding mask is needed (``min_len == L``); the padded path falls back
+    to the two separate per-direction loops below.
     """
     B, L, C_in = x_nlc.shape
     H = fwd.hidden_size
@@ -254,7 +347,7 @@ def tt_bilstm_nlc(
     # rows are independent). Permute to ``[L, B, 4H]`` so the per-timestep extraction is a
     # cheap leading-dim slice — this removes the per-step untilize+slice+tilize churn that
     # dominated the loop (slicing a single timestep out of the TILE-laid [B,L,C] sequence).
-    def _precompute_gates_x(p: TTLSTMParams) -> ttnn.Tensor:
+    def _precompute_gates_x_of(p: TTLSTMParams, x_in: ttnn.Tensor) -> ttnn.Tensor:
         # Fold the gate bias into the matmul epilogue here (once for the whole sequence)
         # instead of adding it per timestep — saves one elementwise add per step. The
         # stored bias is [1,1,1,4H] (rank 4); reshape to [1,1,4H] so the linear output
@@ -262,7 +355,7 @@ def tt_bilstm_nlc(
         # L1 in0 + DRAM out is valid (sweep: matmul reads L1 activations); gx buffer stays DRAM.
         bias = ttnn.reshape(p.b, [1, 1, H4], memory_config=gx_mc)
         gx = ttnn.linear(
-            x_nlc,
+            x_in,
             p.w_x,
             bias=bias,
             memory_config=gx_mc,
@@ -272,8 +365,8 @@ def tt_bilstm_nlc(
         ttnn.deallocate(gx)
         return gx_t
 
-    gx_fwd = _precompute_gates_x(fwd)
-    gx_rev = _precompute_gates_x(rev)
+    def _precompute_gates_x(p: TTLSTMParams) -> ttnn.Tensor:
+        return _precompute_gates_x_of(p, x_nlc)
 
     def _gates_x_at(gx_all: ttnn.Tensor, t: int) -> ttnn.Tensor:
         # Slice the timestep directly into the per-step memory config (L1 when small enough).
@@ -306,6 +399,89 @@ def tt_bilstm_nlc(
                 memory_config=step_mc,
                 dtype=state_dtype,
             )
+
+    # ---- Direction-fused fast path (no padding mask) ----------------------------------------
+    # Advance forward and reverse passes together: one [B,2H]@[2H,8H] matmul, one sigmoid, one
+    # set of slices and one cell-math chain per step instead of two. Bit-identical to the
+    # per-direction loops (the block-diagonal recurrent weight's zeros add 0.0 in fp32 accum).
+    if w_h_block is not None and valid_all is None:
+        H2 = 2 * H
+        H8 = 8 * H
+        # Reverse the sequence in time with an anti-identity matmul (each output row is exactly
+        # one input row * 1.0, so it is a bit-exact reordering). Then ``gx_rev`` computed from the
+        # reversed input is already indexed in the order the reverse pass consumes it, so combined
+        # step ``k`` pairs forward position ``k`` with reverse position ``L-1-k`` by a plain slice.
+        anti = torch.eye(L, dtype=torch.float32).flip(0).reshape(1, L, L).expand(B, L, L).contiguous()
+        anti_tt = ttnn.from_torch(
+            anti, dtype=x_nlc.dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=gx_mc
+        )
+        x_rev = ttnn.matmul(anti_tt, x_nlc, memory_config=gx_mc, compute_kernel_config=compute_kernel_config)
+        # anti_tt is kept alive — reused to re-order the reverse-pass outputs back into natural time.
+
+        gx_f = _precompute_gates_x(fwd)  # [L, B, 4H] from natural-order x
+        gx_r = _precompute_gates_x_of(rev, x_rev)  # [L, B, 4H] from reversed x (= reverse-pass order)
+        ttnn.deallocate(x_rev)
+
+        # Interleave into gate-major direction-minor order [i_f i_r f_f f_r g_f g_r o_f o_r] to
+        # match the fused recurrent weight's columns. Done once (not per step).
+        chunks = []
+        for gi in range(4):
+            chunks.append(ttnn.slice(gx_f, [0, 0, gi * H], [L, B, (gi + 1) * H], [1, 1, 1], memory_config=gx_mc))
+            chunks.append(ttnn.slice(gx_r, [0, 0, gi * H], [L, B, (gi + 1) * H], [1, 1, 1], memory_config=gx_mc))
+        gx_comb = ttnn.concat(chunks, dim=-1, memory_config=gx_mc)  # [L, B, 8H]
+        for ch in chunks:
+            ttnn.deallocate(ch)
+        ttnn.deallocate(gx_f)
+        ttnn.deallocate(gx_r)
+
+        def _gates_comb_at(t: int) -> ttnn.Tensor:
+            return ttnn.reshape(
+                ttnn.slice(gx_comb, [t, 0, 0], [t + 1, B, H8], [1, 1, 1], memory_config=step_mc),
+                [B, H8],
+                memory_config=step_mc,
+            )
+
+        hc = ttnn.zeros(
+            [B, H2], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc
+        )
+        cc = ttnn.zeros(
+            [B, H2], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc
+        )
+        ttnn.deallocate(h0)
+        ttnn.deallocate(c0)
+
+        outs_comb = []
+        for t in range(L):
+            gxt = _gates_comb_at(t)
+            hc, cc = _lstm_step_fused(
+                gxt, hc, cc, w_h_block, H, compute_kernel_config=compute_kernel_config, memory_config=step_mc
+            )
+            # hc = [h_f@pos t | h_r@pos L-1-t]: forward output for position t and reverse output for
+            # position L-1-t. Stash the whole [B,2H] state and split in bulk after the loop (avoids
+            # 2 per-step output slices).
+            outs_comb.append(hc)
+        ttnn.deallocate(cc)
+        ttnn.deallocate(gx_comb)
+
+        # Stack the L combined states -> [B, L, 2H], then split the two direction halves in one slice
+        # each. The reverse half is in reverse-pass order (row t holds position L-1-t); re-order it to
+        # natural time with the same anti-identity matmul used for the input (bit-exact 0/1 reorder).
+        cat = ttnn.concat(outs_comb, dim=-1)  # [B, L*2H]
+        for o in outs_comb:
+            ttnn.deallocate(o)
+        hcomb = ttnn.reshape(cat, [B, L, H2], memory_config=memory_config)  # [B, L, 2H]
+        ttnn.deallocate(cat)
+        hs_f = ttnn.slice(hcomb, [0, 0, 0], [B, L, H], [1, 1, 1], memory_config=memory_config)
+        hs_b_rev = ttnn.slice(hcomb, [0, 0, H], [B, L, H2], [1, 1, 1], memory_config=memory_config)
+        ttnn.deallocate(hcomb)
+        hs_b = ttnn.matmul(anti_tt, hs_b_rev, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+        ttnn.deallocate(hs_b_rev)
+        ttnn.deallocate(anti_tt)
+        return ttnn.concat([hs_f, hs_b], dim=2)
+    # ---- End fused fast path ----------------------------------------------------------------
+
+    gx_fwd = _precompute_gates_x(fwd)
+    gx_rev = _precompute_gates_x(rev)
 
     h_f = h0
     c_f = c0
