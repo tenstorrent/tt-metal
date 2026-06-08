@@ -45,7 +45,6 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(27);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(28);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(29) == 1;
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -207,7 +206,6 @@ void kernel_main() {
                 cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
@@ -216,7 +214,13 @@ void kernel_main() {
                 false,  // is_causal_sdpa
                 false,  // is_balanced_sdpa
                 false,  // chunked_enabled
-                local_padded_Nt>(
+                local_padded_Nt,
+                local_padded_Nt,  // q_local_padded_Nt
+                0,                // chunk_size_t
+                global_n_has_padding,
+                local_n_has_padding,
+                joint_has_padding,
+                false>(  // straddle_mask_enabled
                 global_q_start,
                 global_q_end,
                 num_kv_chunks,

@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/eltwise_unary/snake_beta.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);

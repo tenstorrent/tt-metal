@@ -54,6 +54,7 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_raw_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_raw_other, cb_llk_post);
 
         tile_regs_acquire();
@@ -120,7 +121,7 @@ void kernel_main() {
 #endif
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

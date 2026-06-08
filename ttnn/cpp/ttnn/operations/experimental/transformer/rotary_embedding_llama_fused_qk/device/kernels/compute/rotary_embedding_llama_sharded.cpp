@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -48,6 +49,15 @@ void kernel_main() {
     constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(11);
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(12);
 
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer out_cb_obj(out_cb);
+    CircularBuffer cos_cb_obj(cos_cb);
+    CircularBuffer sin_cb_obj(sin_cb);
+    CircularBuffer trans_mat_cb_obj(trans_mat_cb);
+    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
+    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
+    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
+
     mm_init(in_cb, trans_mat_cb, out_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
@@ -68,15 +78,15 @@ void kernel_main() {
     */
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
-        cb_reserve_back(rotated_in_interm_cb, Wt);
-        cb_reserve_back(sin_interm_cb, Wt);
-        cb_reserve_back(cos_interm_cb, Wt);
-        cb_reserve_back(out_cb, Wt);
+        rotated_in_interm_cb_obj.reserve_back(Wt);
+        sin_interm_cb_obj.reserve_back(Wt);
+        cos_interm_cb_obj.reserve_back(Wt);
+        out_cb_obj.reserve_back(Wt);
 
         // Get the input
-        cb_reserve_back(in_cb, Wt);
-        cb_push_back(in_cb, Wt);
-        cb_wait_front(in_cb, Wt);
+        in_cb_obj.reserve_back(Wt);
+        in_cb_obj.push_back(Wt);
+        in_cb_obj.wait_front(Wt);
 
         // Do the computation
 
@@ -88,8 +98,8 @@ void kernel_main() {
             pack_tile(j, rotated_in_interm_cb, j);
         }
         REL();
-        cb_push_back(rotated_in_interm_cb, Wt);
-        cb_wait_front(rotated_in_interm_cb, Wt);
+        rotated_in_interm_cb_obj.push_back(Wt);
+        rotated_in_interm_cb_obj.wait_front(Wt);
 
         mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
         ACQ();
@@ -99,8 +109,8 @@ void kernel_main() {
             pack_tile(j, sin_interm_cb, j);
         }
         REL();
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
+        sin_interm_cb_obj.push_back(Wt);
+        rotated_in_interm_cb_obj.pop_front(Wt);
 
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
@@ -109,11 +119,11 @@ void kernel_main() {
             pack_tile(j, cos_interm_cb, j);
         }
         REL();
-        cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(in_cb, Wt);  // Done with input
+        cos_interm_cb_obj.push_back(Wt);
+        in_cb_obj.pop_front(Wt);  // Done with input
 
-        cb_wait_front(sin_interm_cb, Wt);
-        cb_wait_front(cos_interm_cb, Wt);
+        sin_interm_cb_obj.wait_front(Wt);
+        cos_interm_cb_obj.wait_front(Wt);
         add_tiles_init(cos_interm_cb, sin_interm_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
@@ -122,9 +132,9 @@ void kernel_main() {
             pack_tile(j, out_cb, j);
         }
         REL();
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(sin_interm_cb, Wt);
-        cb_pop_front(cos_interm_cb, Wt);
+        out_cb_obj.push_back(Wt);
+        sin_interm_cb_obj.pop_front(Wt);
+        cos_interm_cb_obj.pop_front(Wt);
     }
 
     /* Unnecessary CB APIs (comment out for code size)

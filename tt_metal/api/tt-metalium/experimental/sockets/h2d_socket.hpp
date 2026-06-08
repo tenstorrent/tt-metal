@@ -6,7 +6,9 @@
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace tt::umd {
@@ -18,6 +20,7 @@ namespace tt::tt_metal::distributed {
 class NamedShm;
 class PCIeCoreWriter;
 struct HDSocketConnectorState;
+struct HDSocketDescriptor;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -69,6 +72,9 @@ public:
      * and sets up device-side config and data buffers. The socket can be exported
      * via export_descriptor() for cross-process attachment.
      *
+     * If `recv_core` is a claimed service core, the device-side buffers are allocated
+     * from that core's service-core L1 region instead of the worker-grid BankManager.
+     *
      * @param mesh_device The mesh device containing the target core.
      * @param recv_core The target core coordinate (device + core) to receive data.
      * @param buffer_type Memory type for the device-side FIFO buffer (currently only L1).
@@ -99,6 +105,17 @@ public:
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
+     * @brief Connects to an H2DSocket from a pre-loaded descriptor.
+     *
+     * Like `connect(socket_id, ...)` but takes the descriptor directly rather than reading
+     * it from `/dev/shm/`, for callers that aggregate descriptors in a higher-level container.
+     *
+     * @param desc A populated socket descriptor.
+     * @return A connected H2DSocket ready for data transfer.
+     */
+    static std::unique_ptr<H2DSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
      * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
@@ -109,6 +126,14 @@ public:
      * @return The full path to the written descriptor file.
      */
     std::string export_descriptor(const std::string& socket_id);
+
+    /**
+     * @brief Populate a descriptor for this socket without writing to disk.
+     *
+     * Returns the same HDSocketDescriptor `export_descriptor` would write, but does no
+     * file I/O. Only callable on the owner-side socket.
+     */
+    HDSocketDescriptor populate_descriptor() const;
 
     /**
      * @brief Destroys the H2DSocket.
@@ -184,6 +209,9 @@ private:
 
     std::shared_ptr<MeshBuffer> config_buffer_ = nullptr;
     std::shared_ptr<MeshBuffer> data_buffer_ = nullptr;
+    // Set only when recv_core_ is a claimed service core; the dtor releases them to the per-core allocator.
+    std::optional<DeviceAddr> svc_config_l1_addr_;
+    std::optional<DeviceAddr> svc_data_l1_addr_;
     MeshCoreCoord recv_core_;
     BufferType buffer_type_ = BufferType::L1;
     uint32_t fifo_size_ = 0;
@@ -206,7 +234,6 @@ private:
     MeshDevice* mesh_device_ = nullptr;
     bool is_owner_ = true;
     std::string descriptor_path_;
-    bool exported_ = false;
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;

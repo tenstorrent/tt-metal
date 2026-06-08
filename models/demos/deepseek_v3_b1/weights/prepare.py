@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dataclasses import replace as _dataclass_replace
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
+from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RoutedExpert
 from models.demos.deepseek_v3_b1.weights.cache import (
     BspmVariant,
     CacheConfig,
@@ -57,14 +58,18 @@ from models.demos.deepseek_v3_b1.weights.sram_slots import (
     _compute_sram_trim_budget,
     prepare_compressed_sram_slots,
 )
-from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
+from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
+    SramExpertCoreGrids,
+    SramHotExpertConfig,
+    make_sram_assignment_provider,
+)
 from models.demos.deepseek_v3_b1.weights.upload import UploadableMixin, eager_upload_l1_lockstep
 
 Q_AB_KV_A_SPEC = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 O_PROJ_GATE_MM_NORMS_SPEC = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 KV_B12_SPEC = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
 GATE_UP_SPEC = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC.fusion_group_spec()
-from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
+from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
 from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
 from models.demos.deepseek_v3_b1.weights.transforms.attention import preprocess_kv_b12, preprocess_q_ab_kv_a
 from models.demos.deepseek_v3_b1.weights.transforms.tp4_attention import (
@@ -249,6 +254,13 @@ class DeepSeekV3DenseLayerWeights(UploadableMixin):
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
 
+    # SRAM-resident routed-expert CompressedTensors, one per placed expert ID
+    # (slot ordering matches the encoding in create_gate_indices_tensor).
+    # Empty when no SRAM placement is configured for the layer.
+    sram_gate_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_up_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_down_proj: list[ttnn.Tensor] = field(default_factory=list)
+
 
 @dataclass
 class DeepSeekV3MoELayerWeights(UploadableMixin):
@@ -287,8 +299,15 @@ class DeepSeekV3MoELayerWeights(UploadableMixin):
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
 
-    # Optional SRAM hot expert slots (per-core CompressedTensor)
+    # Optional SRAM hot expert slots (per-core CompressedTensor, main's abstraction)
     sram_slots: SramCompressedExpertSlots | None = None
+    # SRAM-resident routed-expert CompressedTensors, one per placed expert ID
+    # (slot ordering matches the encoding in create_gate_indices_tensor).
+    # Consumed by the SRAM matmul kernels in moe_kernel.cpp / decoder_block_kernel.cpp.
+    # Empty when no SRAM placement is configured for the layer.
+    sram_gate_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_up_proj: list[ttnn.Tensor] = field(default_factory=list)
+    sram_down_proj: list[ttnn.Tensor] = field(default_factory=list)
 
 
 @dataclass
@@ -323,6 +342,10 @@ class DeepSeekV3SpecWeights(UploadableMixin):
     """Weights used only by the speculative verify LM-head stage."""
 
     lm_head: ttnn.Tensor  # LM head projection (with shared_head_norm folded into weight matrix)
+
+    def as_lm_head_weights(self) -> "DeepSeekV3LMHeadWeights":
+        """Convert to DeepSeekV3LMHeadWeights for use in intermediate BaseLMHeadStage instances."""
+        return DeepSeekV3LMHeadWeights(lm_head=self.lm_head)
 
 
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
@@ -655,15 +678,50 @@ def create_gate_indices_tensor(
     device: Any,
     sender_core_grid: ttnn.CoreRangeSet,
     *,
+    sram_expert_ids: list = (),
     mesh_mapper: Any = None,
 ) -> ttnn.Tensor:
     """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core.
 
     Same layout as gate_bias: (16, 16), HEIGHT_SHARDED, tile 16x16, uint16.
+
+    SRAM/DRAM placement encoding (separate-pipeline plan):
+        For each global expert ID e in 0..255:
+          * if e in sram_expert_ids: encoded[e] = (1 << 15) | slot
+            where slot = sram_expert_ids.index(e) (compact 0..T-1)
+          * else: encoded[e] = e (DRAM, bit-15 = 0)
+
+        Position in sram_expert_ids is the slot index — this list IS the
+        single source of truth for SRAM placement and must match the slab
+        ordering used by build_sram_routed_proj_cts. A mismatch means slot s
+        in the index points at some other slot's weights, silently producing
+        wrong outputs.
+
+        Default empty preserves Phase 1B behavior (identity arange).
+
+    Args:
+        device: TTNN mesh device.
+        sender_core_grid: 1-core CoreRangeSet for the sender core.
+        sram_expert_ids: list of global expert IDs (0..255) placed in SRAM,
+            in slot order. Empty → DRAM-only (default).
+        mesh_mapper: optional mesh mapper for multi-device replication.
     """
-    indices = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32).reshape(
-        _GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1]
-    )
+    if sram_expert_ids:
+        assert (
+            len(sram_expert_ids) <= _GATE_NUM_INDICES
+        ), f"len(sram_expert_ids)={len(sram_expert_ids)} exceeds expert count {_GATE_NUM_INDICES}"
+        assert (
+            max(sram_expert_ids) < _GATE_NUM_INDICES
+        ), f"sram_expert_ids contains out-of-range eid (max={max(sram_expert_ids)} >= {_GATE_NUM_INDICES})"
+        assert len(set(sram_expert_ids)) == len(sram_expert_ids), "sram_expert_ids contains duplicates"
+        # 15-bit slot field — comfortable headroom (32k slots vs 256 experts).
+        assert len(sram_expert_ids) <= 0x7FFF, "sram_expert_ids exceeds 15-bit slot capacity"
+
+    encoded = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32)  # default: DRAM, encoded == eid
+    for slot, eid in enumerate(sram_expert_ids):
+        encoded[eid] = (1 << 15) | slot
+
+    indices = encoded.reshape(_GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1])
     transposed = torch.transpose(indices, 0, 1).contiguous().to(torch.uint16)
     shard_spec = ttnn.ShardSpec(
         sender_core_grid,
@@ -1690,6 +1748,97 @@ def prepare_routed_expert_weights(
         )
 
 
+def _build_dense_sram_routed_weights(
+    device,
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    sram_expert_ids: list[int],
+) -> tuple[list, list, list]:
+    """Build SRAM-resident gate/up/down CompressedTensors for dense-MLP chunks.
+
+    Dense layers split their MLP into a shared portion (first MOE_INTERMEDIATE_SIZE
+    cols/rows) + 8 routed-equivalent chunks. ``sram_expert_ids`` selects which chunks
+    go to SRAM by chunk index [0..7]; each chunk has the same shape as a MoE routed
+    expert, so the SRAM weight layout matches the MoE SRAM path exactly.
+
+    Uniform BFP4 (no BSPM) — dense path uses the same uniform assignment as the
+    DRAM dense build (prepare_dense_routed_experts_compressed_tp8).
+    """
+    if not sram_expert_ids:
+        return [], [], []
+
+    from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
+    from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+    from models.demos.deepseek_v3_b1.model_dimensions import RoutedExpert as _RE
+    from models.demos.deepseek_v3_b1.weights.sram_slots import build_sram_routed_proj_cts
+
+    moe_tp = device.shape[0] * device.shape[1]
+    N_per_dev = _RE.GATE_PROJ_N // moe_tp
+    K_per_dev_down = _RE.GATE_PROJ_N // moe_tp
+    tile_w = _RE.TILE_W
+    _dn_shared = D.MOE_INTERMEDIATE_SIZE
+    _dn_expert_n = D.MOE_INTERMEDIATE_SIZE
+
+    a_cores, b_cores = SharedExpertOp.build_ab_grids()
+    sram_gate_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in a_cores])
+    sram_up_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in b_cores])
+    sram_down_core_grid = DownProj.build_matmul_core_grid()
+
+    _sram_per_core_N = (N_per_dev // tile_w) // 8
+    _sram_down_per_core_N = (_RE.K // tile_w) // DownProj.NUM_MATMUL_CORES
+
+    def _per_device_gate_up_dense(proj_name: str) -> dict[int, list[torch.Tensor]]:
+        full_kn = state_dict[_key(layer_idx, f"mlp.{proj_name}.weight")].T.contiguous()  # (K, N_full)
+        out: dict[int, list[torch.Tensor]] = {}
+        for chunk_idx in sram_expert_ids:
+            start = _dn_shared + chunk_idx * _dn_expert_n
+            end = start + _dn_expert_n
+            chunk_kn = full_kn[:, start:end].contiguous()  # (K, _dn_expert_n)
+            out[chunk_idx] = [chunk_kn[:, d * N_per_dev : (d + 1) * N_per_dev].contiguous() for d in range(moe_tp)]
+        return out
+
+    def _per_device_down_dense() -> dict[int, list[torch.Tensor]]:
+        full_kn = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()  # (K_full, N_HIDDEN)
+        out: dict[int, list[torch.Tensor]] = {}
+        for chunk_idx in sram_expert_ids:
+            start = _dn_shared + chunk_idx * _dn_expert_n
+            end = start + _dn_expert_n
+            chunk_kn = full_kn[start:end, :].contiguous()  # (_dn_expert_n, N_HIDDEN)
+            out[chunk_idx] = [
+                chunk_kn[d * K_per_dev_down : (d + 1) * K_per_dev_down, :].contiguous() for d in range(moe_tp)
+            ]
+        return out
+
+    sram_gate = build_sram_routed_proj_cts(
+        mesh_device=device,
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up_dense("gate_proj"),
+        core_grid=sram_gate_core_grid,
+        num_tiles_k=(_RE.K // tile_w) // 8,
+        n_parallel=8,
+        per_core_N=_sram_per_core_N,
+    )
+    sram_up = build_sram_routed_proj_cts(
+        mesh_device=device,
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_gate_up_dense("up_proj"),
+        core_grid=sram_up_core_grid,
+        num_tiles_k=(_RE.K // tile_w) // 8,
+        n_parallel=8,
+        per_core_N=_sram_per_core_N,
+    )
+    sram_down = build_sram_routed_proj_cts(
+        mesh_device=device,
+        sram_expert_ids=sram_expert_ids,
+        full_torch_weights_per_device=_per_device_down_dense(),
+        core_grid=sram_down_core_grid,
+        num_tiles_k=K_per_dev_down // tile_w,
+        n_parallel=DownProj.NUM_MATMUL_CORES,
+        per_core_N=_sram_down_per_core_N,
+    )
+    return sram_gate, sram_up, sram_down
+
+
 def prepare_dense_layer_weights(
     device,
     state_dict: dict[str, torch.Tensor],
@@ -1697,8 +1846,13 @@ def prepare_dense_layer_weights(
     *,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    sram_expert_ids: list = (),
 ) -> DeepSeekV3DenseLayerWeights:
-    """Prepare fused weights for a single dense decoder layer."""
+    """Prepare fused weights for a single dense decoder layer.
+
+    ``sram_expert_ids``: chunk indices [0..7] to place in SRAM. DRAM list stays
+    full regardless — kernel skips SRAM-flagged slots via num_dram_experts_pre_selected.
+    """
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
     attn = prepare_attention_weights(
@@ -1716,6 +1870,20 @@ def prepare_dense_layer_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
+    # Dense MLP has exactly 8 chunks along the routed-equivalent N dim. The kernel-side
+    # synthesis (op.py num_dram_experts_pre_selected) also assumes sram_expert_ids is the
+    # contiguous tail of [0..7]; mismatches produce silent wrong outputs.
+    _dense_ids = list(sram_expert_ids)
+    if _dense_ids:
+        assert len(_dense_ids) <= 8, f"dense sram_expert_ids over 8 chunks: {_dense_ids}"
+        assert all(0 <= eid < 8 for eid in _dense_ids), f"dense sram_expert_ids must be in [0..7]: {_dense_ids}"
+        assert len(set(_dense_ids)) == len(_dense_ids), f"dense sram_expert_ids has duplicates: {_dense_ids}"
+    sram_gate, sram_up, sram_down = _build_dense_sram_routed_weights(
+        device,
+        state_dict,
+        layer_idx,
+        _dense_ids,
+    )
     result = DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -1733,6 +1901,9 @@ def prepare_dense_layer_weights(
         routed_gate_proj=routed.routed_gate_proj,
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
+        sram_gate_proj=sram_gate,
+        sram_up_proj=sram_up,
+        sram_down_proj=sram_down,
     )
     logger.info("Dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result
@@ -1766,12 +1937,13 @@ def prepare_moe_layer_weights(
     bspm_dir: Path | None = None,
     bspm_variant: BspmVariant = BspmVariant.B,
     bspm_budget: float = 3.5,
+    enable_sram_bspm: bool = False,
     sram_hot_experts: SramHotExpertConfig | None = None,
     sram_core_grids: SramExpertCoreGrids | None = None,
-    sram_assigner: CompressedTensorAssigner | None = None,
     worker_l1_size: int | None = None,
     combined_attn_sram_cap_bytes: int = _COMBINED_ATTN_SRAM_CAP_BYTES,
     compressed_tp8: bool = False,
+    sram_expert_ids: list[int] = (),
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer.
 
@@ -1800,6 +1972,20 @@ def prepare_moe_layer_weights(
     its own tile-aligned grid via :class:`SramExpertCoreGrids`; a
     symmetric single-grid layout (e.g. for unit tests) can be built with
     :meth:`SramExpertCoreGrids.uniform`.
+
+    ``sram_expert_ids``: list of global routed-expert IDs (0..255) to place in L1
+    in slot order. Empty → DRAM-only. Must match the encoding in
+    create_gate_indices_tensor(sram_expert_ids=...). Drives the kernel-side SRAM
+    matmul pipeline (sram_gate_proj/up_proj/down_proj fields on the returned
+    weights object). Independent of ``sram_hot_experts`` — both paths can be
+    populated simultaneously to feed both abstractions.
+
+    ``enable_sram_bspm``: when True, SRAM-resident routed experts use the same
+    BSPM tile-format map as the DRAM path (sourced from ``bspm_dir``); requires
+    ``bspm_dir`` to be set.  When False (default), SRAM experts use uniform
+    BFP4 regardless of ``bspm_dir`` — this preserves the LLK plain custom_mm
+    fast path and per-device-uniform SRAM weight CB sizes assumed by the
+    replicated cb_config tensor.  Independent of DRAM BSPM enablement.
     """
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1827,6 +2013,30 @@ def prepare_moe_layer_weights(
         bspm_budget=bspm_budget,
         compressed_tp8=compressed_tp8,
     )
+    # SRAM BSPM is opt-in via enable_sram_bspm — independent of DRAM BSPM
+    # (which is always on when bspm_dir is set, resolved inside
+    # prepare_routed_expert_weights above).  When False (default), SRAM uses
+    # uniform BFP4 so L1 SRAM weight CBs stay deterministic per-device —
+    # needed by the replicated cb_config tensor (see
+    # project_reconfig_cb_per_device_addrs.md).  When True, the BSPM file
+    # is resolved the same way the DRAM path resolves it.
+    sram_bspm_path: Path | None = None
+    if enable_sram_bspm:
+        assert bspm_dir is not None, (
+            "enable_sram_bspm=True requires bspm_dir to be set (BSPM source). "
+            "Pass enable_sram_bspm=False to use uniform BFP4 for SRAM experts."
+        )
+        sram_bspm_path = (
+            Path(bspm_dir)
+            / f"layer_{layer_idx}"
+            / "precision_eval"
+            / f"precision_map_{bspm_variant}_{bspm_budget:.1f}.bspm"
+        )
+    # Explicit-list SRAM build is now ALSO handled via prepare_compressed_sram_slots
+    # below (unified path).  Starts empty here; populated post-sram_slots-call.
+    sram_gate: list = []
+    sram_up: list = []
+    sram_down: list = []
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
@@ -1851,13 +2061,31 @@ def prepare_moe_layer_weights(
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
         sram_slots=None,
+        sram_gate_proj=sram_gate,
+        sram_up_proj=sram_up,
+        sram_down_proj=sram_down,
     )
 
+    # Unified SRAM build path: BOTH explicit-list and auto-fit route through
+    # prepare_compressed_sram_slots.  Explicit list uses no-trim boundary
+    # (allocate all requested experts); auto-fit uses address-budget trim.
     sram_expert_indices = (sram_hot_experts or {}).get(layer_idx)
-    if sram_expert_indices:
-        assert sram_core_grids is not None, "sram_core_grids required when sram_hot_experts specifies this layer"
-        assert sram_assigner is not None, "sram_assigner required when sram_hot_experts specifies this layer"
-        assert worker_l1_size is not None, "worker_l1_size required when sram_hot_experts specifies this layer"
+    _explicit_sram_ids = list(sram_expert_ids) if sram_expert_ids else None
+    _should_run_sram_slots = (sram_expert_indices and not sram_expert_ids) or _explicit_sram_ids is not None
+    if _should_run_sram_slots:
+        # Fill missing kwargs with sensible defaults for the explicit-list case
+        # (callers like test_decoder_block's rigged_groupsN scenarios don't pass them).
+        if sram_core_grids is None:
+            from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids as _SECG
+
+            sram_core_grids = _SECG.shared_expert_mirror()
+        if worker_l1_size is None:
+            # Explicit-list scenarios may omit worker_l1_size since they use a
+            # no-trim boundary; derive from device for the trim-budget call.
+            assert (
+                _explicit_sram_ids is not None
+            ), "worker_l1_size required when running auto-fit (use explicit sram_expert_ids for no-trim)"
+            worker_l1_size = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
 
         # Attn-first regime: stage attention's L1 lockstep tensors on device
         # *now* so the SRAM trim sees real allocator addresses for them.
@@ -1913,13 +2141,32 @@ def prepare_moe_layer_weights(
             below_cap_reserve,
         )
 
+        # BSPM available → load .bspm and slice per (expert, projection).
+        # Otherwise → uniform BFP4.  Same allocator path either way.
+        _sram_bspm_assignment_provider = make_sram_assignment_provider(
+            bspm_path=sram_bspm_path,
+            num_banks=device.dram_grid_size().x,
+            layer_idx=layer_idx,
+            tile_w=_RoutedExpert.TILE_W,
+        )
+
+        # Explicit-list scenarios override `initial_expert_indices` and use a
+        # no-trim boundary (allocator's own floor) so every requested expert
+        # is allocated regardless of L1 fit prediction.
+        if _explicit_sram_ids is not None:
+            _slot_initial_indices = _explicit_sram_ids
+            _slot_boundary = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+        else:
+            _slot_initial_indices = sram_expert_indices
+            _slot_boundary = boundary_addr
+
         sram_slots = prepare_compressed_sram_slots(
             device=device,
             state_dict=state_dict,
             layer_idx=layer_idx,
-            initial_expert_indices=sram_expert_indices,
+            initial_expert_indices=_slot_initial_indices,
             core_grids=sram_core_grids,
-            assigner=sram_assigner,
+            assignment_provider=_sram_bspm_assignment_provider,
             # SRAM slots are per-core L1 CompressedTensors and must be
             # allocated directly on device; there is no host-stage path
             # (two_phase_upload carries them through unchanged via the
@@ -1927,12 +2174,25 @@ def prepare_moe_layer_weights(
             # independent of `move_to_device`, which controls the DRAM
             # weight path.
             move_to_device=True,
-            boundary_addr=boundary_addr,
+            boundary_addr=_slot_boundary,
             initial_lowest_addr=attn_lowest_addr,
             l1_top_addr=l1_top_addr,
             cache_config=cache_config,
         )
         result = _dataclass_replace(result, sram_slots=sram_slots)
+
+        # Alias the kernel-pipeline weight fields directly to the per-core L1
+        # CTs that `prepare_compressed_sram_slots` already allocated.  Layout:
+        # gate/up HEIGHT_SHARDED (K/k_par, N/n_par) on 64 cores;
+        # down WIDTH_SHARDED (K, N_full/num_cores) on 112 cores.  Single-
+        # allocation: kernel reads `sram_slots.*_proj` directly.
+        if sram_slots.num_slots > 0:
+            result = _dataclass_replace(
+                result,
+                sram_gate_proj=sram_slots.gate_proj,
+                sram_up_proj=sram_slots.up_proj,
+                sram_down_proj=sram_slots.down_proj,
+            )
 
     logger.info("MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return result

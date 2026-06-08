@@ -46,7 +46,12 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.prefill_mlp_config(hf_config, mesh_device, fabric_config),
+            "mlp": cls.prefill_mlp_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
@@ -137,6 +142,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLP component of the decoder layer.

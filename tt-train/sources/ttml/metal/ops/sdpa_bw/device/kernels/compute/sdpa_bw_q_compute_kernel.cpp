@@ -161,12 +161,14 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         tile_regs_commit();
         tile_regs_wait();
         cb_reserve_back(cb_attention_weights, onetile);
-        pack_reconfig_data_format(cb_attention_weights);
+        // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
+        pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
         pack_tile(matmul_accum_reg, cb_attention_weights);
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
 
-        compute_grad_attn_weights(cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, scaler_bits);
+        compute_grad_attn_weights(
+            cb_grad_output, cb_value, v_tiles, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
 
         compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 

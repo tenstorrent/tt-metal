@@ -46,16 +46,13 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& input_tensor{tensor_args.input_tensor};
-    auto& output_tensor{tensor_return_value};
+    const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
+    const auto& output_tensor{tensor_return_value.mesh_tensor()};
     const auto& input_shape{input_tensor.padded_shape()};
 
     ProgramDescriptor desc;
 
-    IDevice* device{input_tensor.device()};
-
-    auto* src_buffer{input_tensor.buffer()};
-    auto* dst_buffer{output_tensor.buffer()};
+    IDevice* device{&input_tensor.mutable_device()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
 
@@ -87,7 +84,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         "Accumulation (cumsum/cumprod) requires at least one worker core; num_rows_total={}",
         num_rows_total);
 
-    validate_reduce_op_program_grid("Accumulation", all_cores, grid, nullptr, true, {{&output_tensor, "output"}});
+    validate_reduce_op_program_grid("Accumulation", all_cores, grid, nullptr, true, {{&tensor_return_value, "output"}});
 
     constexpr uint32_t in_tiles = 4;
     constexpr uint32_t acc_tiles = 1;
@@ -166,10 +163,10 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
         (is_wormhole && output_tensor.dtype() == DataType::FLOAT32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = AccumulationProgramFactory::KERNEL_PATHS[0];
@@ -233,7 +230,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
 
         reader_desc.emplace_runtime_args(
             core,
-            {src_buffer,
+            {input_tensor,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
@@ -244,7 +241,7 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
 
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {output_tensor,
              num_tiles_per_core,
              tiles_per_row,
              input_tile_offset,
