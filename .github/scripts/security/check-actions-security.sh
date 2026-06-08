@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=69
+MAX_CHECK_NUM=70
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3645,6 +3645,53 @@ check_69() {
         log_issue "LOW" "${file}" "One or more jobs are missing timeout-minutes - default is 360 min (6h) for hosted runners, infinite for self-hosted; set explicit timeouts to fail fast" "$(_extract_lines "${missing_timeout}")"
         return 1
     fi
+    return 0
+}
+
+# Check 70: workflow_run trigger with write permissions (confused-deputy / pwn-requests)
+check_70_description="workflow_run trigger with elevated write permissions (confused-deputy risk)"
+check_70_severity="HIGH"
+
+example_check_70() {
+    cat <<'EOF'
+name: Comment on PR
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Post comment"
+EOF
+}
+
+check_70() {
+    local file="$1"
+
+    # Only relevant if the workflow is triggered by workflow_run
+    if ! grep -qE '^  workflow_run[[:space:]]*:' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    # Detect any write-capable permission at the workflow or job level.
+    # write permissions of interest: contents, pull-requests, issues, packages, deployments
+    local write_perms
+    write_perms=$(grep -nE \
+        '^\s*(contents|pull-requests|issues|packages|deployments|id-token)[[:space:]]*:[[:space:]]*write' \
+        "${file}" 2>/dev/null || true)
+
+    if [[ -n "${write_perms}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "workflow_run trigger with write permissions (contents/pull-requests/issues) - workflow_run runs in base-branch context with repo write access but receives untrusted PR artifacts; verify github.event.workflow_run.head_sha before acting" \
+            "$(_extract_lines "${write_perms}")"
+        return 1
+    fi
+
     return 0
 }
 

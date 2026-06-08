@@ -2247,6 +2247,88 @@ jobs:
       - run: make build
 EOF
 
+# Check 70: workflow_run trigger with write permissions (confused-deputy)
+assert_detects "check 70 flags workflow_run with contents: write" "70" "workflow_run trigger with write permissions" << 'EOF'
+name: test
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
+assert_detects "check 70 flags workflow_run with pull-requests: write only" "70" "workflow_run trigger with write permissions" << 'EOF'
+name: test
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - run: echo "label PR"
+EOF
+
+assert_detects "check 70 flags workflow_run with id-token: write" "70" "workflow_run trigger with write permissions" << 'EOF'
+name: test
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - run: echo "deploy"
+EOF
+
+assert_clean "check 70 accepts workflow_run with read-only permissions" "70" << 'EOF'
+name: test
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+permissions:
+  contents: read
+  checks: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: echo "report"
+EOF
+
+assert_clean "check 70 ignores push trigger with write permissions" "70" << 'EOF'
+name: test
+on: push
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: make
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
