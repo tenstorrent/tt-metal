@@ -97,10 +97,17 @@ def get_generic_stage_size_loopback_topology_config() -> PhysicalTopologyConfig:
 # skip every single-box run regardless of shape (a (4,2) loudbox would otherwise pass the shape
 # check below and run). The build is also at import time because the parametrize decorators read its
 # attributes during collection; skip the whole module rather than let it become a collection ERROR.
-if int(ttnn.distributed_context_get_size()) <= 1:
+try:
+    _num_procs = int(ttnn.distributed_context_get_size())
+except RuntimeError:
+    # distributed_context_get_size() raises RuntimeError when no distributed context is
+    # initialized (plain pytest, not launched via tt-run). That alone means this isn't the
+    # multi-rank galaxy deployment, so treat it as a single process and skip below.
+    _num_procs = 1
+if _num_procs <= 1:
     pytest.skip(
         "stage-size loopback smoke requires a multi-rank (tt-run) pipeline launch on galaxy "
-        "stage-size HW; single-process run detected",
+        "stage-size HW; single-process / no distributed context detected",
         allow_module_level=True,
     )
 try:
