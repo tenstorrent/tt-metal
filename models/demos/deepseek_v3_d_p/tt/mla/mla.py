@@ -223,12 +223,22 @@ class ttMLA:
         is_balanced: bool = False,
         topology=ttnn.Topology.Linear,
         weight_cache_path: Optional[Path] = None,
+        is_chunked: bool = False,
+        slot_num: int = 1,
+        layer_num: int = 61,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
         self.weight_cache_path = weight_cache_path
+        self.is_chunked = is_chunked
+        self.slot_num = slot_num
+        self.layer_num = layer_num
+
+        # The RoPE op is fixed by the configured mode: chunked prefill uses the indexed op,
+        # single-shot uses rotary_embedding_llama. Bind once here so forward doesn't re-decide.
+        self._apply_rope = self._apply_rope_padded if is_chunked else self._apply_rope_one_shot
 
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -293,71 +303,97 @@ class ttMLA:
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ccl_topology = topology
 
-        # ring attention setup
-        persistent_v_shard_dims = [None, None]
-        persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
-        persistent_k_shard_dims = [None, None]
+        # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
+        # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
+        # holding both would waste DRAM.
+        if self.is_chunked:
+            # Single combined gathered-KV buffer for ring_mla: K and V both come from the latent
+            # kvpe cache, so one (cache_batch, 1, seq_len, kvpe_dim) buffer replaces the separate
+            # per-K/per-V ring-SDPA buffers (and the dummy joint tensors) used in the other mode.
+            #
+            # TODO: reduce DRAM pressure -- ring_mla only ever gathers into the single
+            # kv_cache_batch_idx slot, but the op's TT_FATAL forces gathered-KV batch == cache
+            # batch (slot_num * layer_num). Allocating the full batch wastes DRAM for all but one
+            # slot; relaxing the op to index the gathered buffer independently (always slot 0)
+            # would let this be a batch-1 buffer.
+            cache_batch = self.slot_num * self.layer_num
+            kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+            self._chunked_kv_buf = ttnn.from_torch(
+                torch.zeros(cache_batch, 1, seq_len, kvpe_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=[None, None]
+                ),
+            )
+        else:
+            # ring attention setup
+            persistent_v_shard_dims = [None, None]
+            persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
+            persistent_k_shard_dims = [None, None]
 
-        ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
-        ag_output_shape_v = (1, self.num_heads, seq_len, self.v_head_dim)
+            ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
+            ag_output_shape_v = (1, self.num_heads, seq_len, self.v_head_dim)
 
-        self.persistent_k_output_buffer = ttnn.from_torch(
-            torch.zeros(ag_output_shape_k),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,  # hardcoded for now
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_k_shard_dims
-            ),
-        )
+            self.persistent_k_output_buffer = ttnn.from_torch(
+                torch.zeros(ag_output_shape_k),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,  # hardcoded for now
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_k_shard_dims
+                ),
+            )
 
-        self.persistent_v_output_buffer = ttnn.from_torch(
-            torch.zeros(ag_output_shape_v),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,  # hardcoded for now
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_v_shard_dims
-            ),
-        )
+            self.persistent_v_output_buffer = ttnn.from_torch(
+                torch.zeros(ag_output_shape_v),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,  # hardcoded for now
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=persistent_v_shard_dims
+                ),
+            )
 
-        # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
-        num_heads_local = self.num_heads // self.tp_factor
-        joint_shard_dims = [None, None]
-        joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
+            # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
+            num_heads_local = self.num_heads // self.tp_factor
+            joint_shard_dims = [None, None]
+            joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
 
-        self.joint_q = ttnn.from_torch(
-            torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
-            ),
-        )
+            self.joint_q = ttnn.from_torch(
+                torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
+                ),
+            )
 
-        self.joint_kv = ttnn.from_torch(
-            torch.zeros(1, 1, 0, self.kv_lora_rank + self.qk_rope_head_dim),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
+            self.joint_kv = ttnn.from_torch(
+                torch.zeros(1, 1, 0, self.kv_lora_rank + self.qk_rope_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
 
-        self.joint_v = ttnn.from_torch(
-            torch.zeros(1, num_heads_local, 0, self.v_head_dim),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
-            ),
-        )
+            self.joint_v = ttnn.from_torch(
+                torch.zeros(1, num_heads_local, 0, self.v_head_dim),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
+                ),
+            )
 
         # Load weights to TT device
         weights = self._convert_and_cache_weights(
@@ -496,6 +532,114 @@ class ttMLA:
             exp_approx_mode=False,
         )
 
+    def _apply_rope_padded(self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: int) -> ttnn.Tensor:
+        """Chunked rotated RoPE via the indexed op. rope_tensors carry the whole-cache,
+        block-cyclic-sharded cos/sin (built once via RotarySetup.get_rope_tensors_indexed); the op
+        derives this chunk's per-chip shard offset on-device from kv_actual_global -- the same
+        update_idxt math the KV-cache writer uses, keeping rotation and cache write consistent.
+        """
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            t,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            kv_actual_global=kv_actual_isl,
+            cluster_axis=self.sp_axis,
+        )
+
+    def _apply_rope_one_shot(
+        self, t: ttnn.Tensor, rope_tensors: dict, kv_actual_isl: Optional[int] = None
+    ) -> ttnn.Tensor:
+        """Single-shot RoPE: natural-order rope_tensors + rotary_embedding_llama."""
+        return ttnn.experimental.rotary_embedding_llama(
+            t,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            is_decode_mode=False,
+        )
+
+    def _chunked_attn(
+        self,
+        *,
+        tt_q: ttnn.Tensor,
+        tt_kvpe: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        kv_actual_isl: int,
+        cache_batch_idx: int,
+        cache_layer_idx: int,
+        cache_user_id: int,
+        num_cache_layers: Optional[int],
+        seq_len_local: int,
+        on_layer_complete: Optional[Callable[[int], None]],
+    ) -> ttnn.Tensor:
+        """Chunked-prefill attention via update_padded_kv_cache + ring_mla.
+
+        Unified path for both rotated (kv_actual_isl mid-slab) and chunk-aligned prefill: the
+        chunk-aligned case is the degenerate kv_actual_isl = n * chunk_size_global, where
+        update_padded_kv_cache reduces to a uniform per-chip write and the indexed rope/SDPA reduce
+        to natural order. K and V both come from the single latent kvpe cache -- ring_mla reads V as
+        the first kv_lora_rank columns of KV and materializes it in-op, so wkv_b2 is applied to the
+        compact (kv_lora_rank-wide) attention output afterwards. Returns attn_out in v_head_dim space.
+        """
+        assert not self.is_balanced, "chunked prefill currently requires is_balanced=False"
+        assert on_layer_complete is None, "on_layer_complete not yet supported in chunked prefill"
+
+        tile_size = ttnn.TILE_SIZE
+        chunk_size_global = seq_len_local * self.sp_factor
+        assert chunk_size_global % (tile_size * self.sp_factor) == 0, (
+            f"chunk_size_global ({chunk_size_global}) must be a multiple of "
+            f"TILE_SIZE * sp_factor ({tile_size * self.sp_factor})"
+        )
+        assert kv_actual_isl % tile_size == 0, f"kv_actual_isl ({kv_actual_isl}) must be tile-aligned"
+
+        # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
+        # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            kvpe_cache,
+            tt_kvpe,
+            slot_idx=cache_user_id,
+            layer_idx=cache_layer_idx,
+            num_layers=num_cache_layers if num_cache_layers is not None else 1,
+            kv_actual_global=kv_actual_isl,
+            cluster_axis=self.sp_axis,
+        )
+
+        # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
+        # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
+        # user/layer's slot; kv_actual_isl drives the on-device rotation/causality offset.
+        attn_out, _ = ttnn.transformer.ring_mla(
+            tt_q,
+            kvpe_cache,
+            persistent_output_buffer_kv=self._chunked_kv_buf,
+            head_dim_v=self.kv_lora_rank,
+            logical_n=kv_actual_isl + chunk_size_global,
+            program_config=self._get_sdpa_program_config(seq_len_local),
+            scale=self.scale,
+            compute_kernel_config=self.default_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.sp_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_topology,
+            subdevice_id=self.tt_ccl.worker_sub_device_id,
+            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+            use_column_major_ccl=True,
+            is_balanced=self.is_balanced,
+            kv_cache_batch_idx=cache_batch_idx,
+            kv_actual_isl=kv_actual_isl,
+        )
+
+        # ring_mla output is in kv_lora_rank (latent V) space; expand to v_head_dim per head.
+        attn_out = ttnn.linear(
+            attn_out,
+            self.wkv_b2_weight,
+            compute_kernel_config=self.default_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return attn_out
+
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(
@@ -506,10 +650,35 @@ class ttMLA:
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
+        kv_actual_isl: Optional[int] = None,
+        cache_user_id: int = 0,
+        num_cache_layers: Optional[int] = None,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
+
+        # Chunked-prefill mode is selected by passing kv_actual_isl (the cumulative count of valid
+        # KV tokens already in the cache before this chunk; 0 for the first chunk). When None we run
+        # the original single-shot path. The two paths share the Q/KV projection + rope prologue and
+        # the nlp_concat_heads + o_proj epilogue; they differ only in cache write, attention op, and
+        # where wkv_b2 is applied. See _chunked_attn for the unified chunked implementation.
+        is_chunked = kv_actual_isl is not None
+        # Buffers are pre-allocated per-mode in __init__, so the per-call mode must match how this
+        # ttMLA was constructed (chunked -> _chunked_kv_buf; non-chunked -> persistent_k/v + joint).
+        assert is_chunked == self.is_chunked, (
+            f"forward mode (is_chunked={is_chunked}, from kv_actual_isl) does not match construction "
+            f"(self.is_chunked={self.is_chunked}); the required ring buffers are not allocated"
+        )
+
+        # Cache batch dim is user-major: each user reserves num_cache_layers contiguous slots. For
+        # single-user callers (default) cache_user_id == 0 and num_cache_layers may be left None,
+        # preserving the original cache_layer_idx indexing.
+        if num_cache_layers is None:
+            assert cache_user_id == 0, "num_cache_layers must be set when cache_user_id != 0"
+            cache_batch_idx = cache_layer_idx
+        else:
+            cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
 
         # q_projection
         tt_q = ttnn.linear(
@@ -582,13 +751,7 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
-        tt_q_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_q_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
-        )
+        tt_q_rope = self._apply_rope(tt_q_rope, rope_tensors, kv_actual_isl)
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
@@ -634,74 +797,88 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
-        tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
-            tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
-            rope_tensors["trans_matrix"],
-            is_decode_mode=False,
-        )
+        tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl)
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
-        # Zero the padding region of THIS layer's slot before fill so migration
-        # streams clean zeros (not residual data from a prior request) for the
-        # decode side. Slice the cache to batch=cache_layer_idx so the page math
-        # in zero_cache_range hits this layer's slot, not layer 0.
-        if on_layer_complete is not None:
-            assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
-            seq_len_local = kvpe_cache.shape[2]
-            seq_len_total = seq_len_local * self.sp_factor
-            zero_cache_padding_zigzag(
-                kvpe_cache=kvpe_cache[cache_layer_idx],
-                global_end_token=actual_isl,
-                sp_factor=self.sp_factor,
-                seq_len=seq_len_total,
-                decode_chunk_align=DECODE_CHUNK_ALIGN,
-                tp_factor=self.tp_factor,
+        if not is_chunked:
+            # === single-shot prefill: fill the whole local slot, run on-device ring SDPA with a
+            # materialized V (wkv_b2 applied before attention). Unchanged from the original path. ===
+
+            # Zero the padding region of THIS layer's slot before fill so migration
+            # streams clean zeros (not residual data from a prior request) for the
+            # decode side. Slice the cache to batch=cache_layer_idx so the page math
+            # in zero_cache_range hits this layer's slot, not layer 0.
+            if on_layer_complete is not None:
+                assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
+                seq_len_local = kvpe_cache.shape[2]
+                seq_len_total = seq_len_local * self.sp_factor
+                zero_cache_padding_zigzag(
+                    kvpe_cache=kvpe_cache[cache_layer_idx],
+                    global_end_token=actual_isl,
+                    sp_factor=self.sp_factor,
+                    seq_len=seq_len_total,
+                    decode_chunk_align=DECODE_CHUNK_ALIGN,
+                    tp_factor=self.tp_factor,
+                )
+
+            ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
+
+            if on_layer_complete is not None:
+                on_layer_complete(self.layer_idx)
+
+            tt_v_embedding = ttnn.linear(
+                tt_kv_nope,
+                self.wkv_b2_weight,
+                compute_kernel_config=self.default_compute_kernel_config,
+                **self._get_mm_kwargs("wkv_b2", seq_len_local),
             )
 
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
-
-        if on_layer_complete is not None:
-            on_layer_complete(self.layer_idx)
-
-        tt_v_embedding = ttnn.linear(
-            tt_kv_nope,
-            self.wkv_b2_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
-        )
-
-        attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            tt_q,
-            tt_kvpe,
-            tt_v_embedding,
-            self.joint_q,
-            self.joint_kv,
-            self.joint_v,
-            persistent_output_buffer_k=self.persistent_k_output_buffer,
-            persistent_output_buffer_v=self.persistent_v_output_buffer,
-            joint_strategy="rear",
-            logical_n=seq_len_local * self.sp_factor,
-            program_config=self._get_sdpa_program_config(seq_len_local),
-            compute_kernel_config=self.default_compute_kernel_config,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
-            num_links=self.ccl_num_links,
-            cluster_axis=self.sp_axis,
-            mesh_device=self.mesh_device,
-            topology=self.ccl_topology,
-            subdevice_id=self.tt_ccl.worker_sub_device_id,
-            ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            scale=self.scale,
-            is_balanced=self.is_balanced,
-        )
+            attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                tt_q,
+                tt_kvpe,
+                tt_v_embedding,
+                self.joint_q,
+                self.joint_kv,
+                self.joint_v,
+                persistent_output_buffer_k=self.persistent_k_output_buffer,
+                persistent_output_buffer_v=self.persistent_v_output_buffer,
+                joint_strategy="rear",
+                logical_n=seq_len_local * self.sp_factor,
+                program_config=self._get_sdpa_program_config(seq_len_local),
+                compute_kernel_config=self.default_compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
+                num_links=self.ccl_num_links,
+                cluster_axis=self.sp_axis,
+                mesh_device=self.mesh_device,
+                topology=self.ccl_topology,
+                subdevice_id=self.tt_ccl.worker_sub_device_id,
+                ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
+                use_column_major_ccl=True,
+                is_causal=True,
+                scale=self.scale,
+                is_balanced=self.is_balanced,
+            )
+        else:
+            # === chunked prefill: write this chunk into the cache at its per-chip offset, then run
+            # ring_mla over the populated prefix with V materialized in-op from the latent KV. wkv_b2
+            # is applied to the compact attention output afterwards (see _chunked_attn). ===
+            attn_out = self._chunked_attn(
+                tt_q=tt_q,
+                tt_kvpe=tt_kvpe,
+                kvpe_cache=kvpe_cache,
+                kv_actual_isl=kv_actual_isl,
+                cache_batch_idx=cache_batch_idx,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                num_cache_layers=num_cache_layers,
+                seq_len_local=seq_len_local,
+                on_layer_complete=on_layer_complete,
+            )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
