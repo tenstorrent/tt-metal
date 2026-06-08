@@ -14,7 +14,7 @@
 - **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). It's a **bundled prereq** to Metal 2.0 — the audit checks that ops are already on it — not part of Metal 2.0 itself.
 - **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
 
-For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md). The recipe below assumes you've at least skimmed it.
+For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`metal2_migration_guide.md`](metal2_migration_guide.md). The recipe below assumes you've at least skimmed it.
 
 **Precondition — non-negotiable**: You may only invoke this document if:
 
@@ -35,7 +35,7 @@ The legacy host API hurt the project for years in concrete, structural ways. Pos
 
 **Your port is one link in a chain.** Metal 2.0 is pulling adjacent migrations through with it under a Gen2-customer-driven schedule: Device 2.0 and TensorAccessor adoption are bundled prereqs the audit gates on, and TTNN's ProgramDescriptor migration — a parallel TTNN-side effort, coupled to Metal 2.0 by design — is racing to finish under the same pressure. The API you're learning here is the same API that will target Gen2 (Quasar) hardware; there aren't two APIs to learn. Landing your port unblocks the next op, which unblocks its consumers, which unblock framework features the runtime team has planned. The cumulative effect, once the push lands, is a meaningfully cleaner way to specify what runs on a Tenstorrent accelerator.
 
-**The "why" as a judgment heuristic.** When the recipe doesn't quite fit your op and you're tempted to improvise: the test is whether what you're about to do preserves typed bindings, the host-aware binding model, and the spec/run-params separation that the verification step audits. If yes, you're probably on a supported path. If no — if you're packing data into varargs, threading a buffer address through an RTA, or hand-rolling a synchronization primitive — you're recreating the legacy problems Metal 2.0 was built to fix. Stop and ask.
+**The "why" as a judgment heuristic.** When the recipe doesn't quite fit your op and you're tempted to improvise: the test is whether what you're about to do preserves typed bindings, the host-aware binding model, and the spec/run-args separation that the verification step audits. If yes, you're probably on a supported path. If no — if you're packing data into varargs, threading a buffer address through an RTA, or hand-rolling a synchronization primitive — you're recreating the legacy problems Metal 2.0 was built to fix. Stop and ask.
 
 **Posture for the bulk-port effort.** This is one of many ports happening in parallel against actively-evolving docs. Read the following before you start; they shape how you should approach the work.
 
@@ -76,14 +76,14 @@ All three are committed alongside the port.
 
 1. [**Legacy inventory**](#legacy-inventory) — Consume the audit; record the legacy structure to `METAL2_PORT_PLAN.md`.
 2. [**Plan the spec**](#plan-the-spec) — Apply host-side specialization principles; identify legacy plumbing that should evaporate. Externalize all structural decisions to the plan.
-3. [**Construct paired spec + run-params**](#construct-paired-spec--run-params) — Construct the spec and run-params, paired by resource. Mechanical translation per the plan.
+3. [**Construct paired spec + run-args**](#construct-paired-spec--run-args) — Construct the spec and run-args, paired by resource. Mechanical translation per the plan.
 4. [**Verification**](#verification) — Build, run tests, run anti-pattern self-audit against the [patterns catalog](metal2_port_patterns.md).
 5. [**Capture the port report**](#capture-the-port-report) — Write `METAL2_PORT_REPORT.md` recording handoff points, successes, friction, and open items for downstream.
 
 **Reference material** the recipe relies on, loaded on demand:
 
 - [Migration guide — Design Principles](metal2_migration_guide.md#design-principles): why certain legacy plumbing should evaporate during port.
-- [Migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration): cache lifecycle and `ProgramSpecFactoryConcept` shape.
+- [Migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration): the `Metal2FactoryConcept` family, factory skeleton, cache lifecycle.
 - [Patterns catalog](metal2_port_patterns.md): recognition signals + decisions for structural patterns and anti-patterns.
 
 ---
@@ -96,7 +96,7 @@ Before starting, confirm you have the following. If any is missing or unclear, a
 
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
 - **Tests directory** — the path under `tests/ttnn/unit_tests/operations/<op-family-slug>/` where the op's pytests live. Note that the directory uses the **op-family slug**, not always the literal op name (e.g., reduction's tests live at `tests/ttnn/unit_tests/operations/reduce/`, not `reduction/`). If the invoker didn't supply this, discover it with `find tests/ttnn -path '*operations*' -name 'test_*.py' | grep -i <op>`.
-- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above).
+- **`METAL2_PREPORT_AUDIT.md`** — present in the op directory with overall GREEN status (precondition above). The audit includes a **TTNN ProgramFactory** section recording the Metal 2.0 factory concept the port targets; that decision is inherited, not re-derived. See [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md) for the underlying decision tree.
 - **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker.
 
 ### Workspace bootstrap
@@ -148,7 +148,7 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 **Output**: write the **Legacy Inventory** section of `METAL2_PORT_PLAN.md` to the op's directory. Record:
 
-- **Factory shape**: which `ttnn::device_operation` concept the factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately.
+- **Legacy factory shape**: which `ttnn::device_operation` concept the legacy factory currently satisfies (`ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MeshWorkloadFactoryConcept`). For each variant (if the device-operation is multi-variant), record separately. *(The Metal 2.0 factory concept the port lands on was chosen during the audit — see the audit report's TTNN ProgramFactory section. The recipe inherits that decision; carry it forward to the [TTNN ProgramFactory port-plan section](#ttnn-programfactory) below.)*
 - **Custom `compute_program_hash`**: does the device-operation define a custom `compute_program_hash` (overriding the default reflection-based hash)? If yes, record file:line. **This matters at verification time:** custom hashes that don't fold `TensorSpec` into the key will trigger `UpdateTensorArgs` legality failures on fast-path cache hits. The fix when that happens is to revert the op to the default hash — see [Verification → Run tests](#run-tests) and the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 - **Kernels**: every `KernelDescriptor` (one row per descriptor):
   - `kernel_source` (file path; flag any path outside the op's own directory — cross-op kernels are a Caution case).
@@ -181,12 +181,22 @@ If the build or test hangs (>15 min with no log progress), kill it, return TIMEO
 
 **Inputs**:
 - The Legacy Inventory written in the previous step.
+- **The audit report's TTNN ProgramFactory section** — the Metal 2.0 factory concept your port targets was chosen during the audit. Plan against it; do not re-walk the decision tree.
 - The [migration guide — Design Principles](metal2_migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
 - The [migration guide — TTNN Framework Integration](metal2_migration_guide.md#ttnn-framework-integration) for the factory concept the ported op will satisfy.
 - The [patterns catalog](metal2_port_patterns.md).
 - Any yellow-tier items from the audit (apply per the catalog's override guidance for each).
 
 **Output**: extend `METAL2_PORT_PLAN.md` with the following sections (see [Appendix A](#appendix-a--metal2_port_planmd-template) for the template). Each section may say "none" with a one-line justification when no items apply.
+
+### TTNN ProgramFactory
+
+Carry forward the audit's factory decision. This section is brief — the audit walked the decision tree and the recipe inherits the result; the recipe is *not* the place to re-derive the choice.
+
+- **Concept (inherited from audit)**: copy the concept name + caching strategy from the audit report's TTNN ProgramFactory section.
+- **Implementation notes** (optional): anything specific to how this op will realize the chosen concept that's worth surfacing before construction. Most ports don't need this.
+
+If you find yourself disagreeing with the audit's choice, **stop and surface the disagreement to the invoker** — do not unilaterally override. The audit is the source of truth for the chosen concept; an in-port revision is a signal the audit was incomplete and the invoker needs to know. See [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md) for the decision tree the audit walked.
 
 ### Planned Spec Shape
 
@@ -230,7 +240,7 @@ For each non-trivial pattern from the [catalog](metal2_port_patterns.md) invoked
 
 - "[Self-loop DFB binding](metal2_port_patterns.md#pattern-self-loop-dfb-binding): ACC_DFB on compute KernelSpec (both PRODUCER and CONSUMER)."
 - "[Conditional optional binding](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings): SCALED_DFB on compute KernelSpec, gated by `do_scale` CTA."
-- "[Multi-variant factory](metal2_port_patterns.md#pattern-multi-variant-factories): `reduce_dim` variant selection inside `create_program_spec`."
+- "[Multi-variant factory](metal2_port_patterns.md#pattern-multi-variant-factories): `reduce_dim` variant selection inside `create_program_artifacts`."
 
 ### Deferred / Flagged
 
@@ -271,7 +281,7 @@ If at any point during the port you find yourself reaching past the rules below,
 
 The host-side discipline divides cleanly along a line between *the program factory body* and *everything around it*:
 
-- **The program factory body is the port.** The `create_program_spec` function (and any helpers it calls) is where Metal 2.0's host API is constructed — this code will be heavily rewritten by the port, and that's the work. Stay inside the Metal 2.0 transformation patterns documented in [§Construct paired spec + run-params](#construct-paired-spec--run-params) and [migration guide](metal2_migration_guide.md). Don't refactor adjacent code in the factory while you're there. Don't tighten or loosen a `TT_FATAL` that lives inside the factory. Don't reorder, rename, or "clean up" variables beyond the API renames documented (e.g., `cb_*` → `dfb_*`). The legacy CB API (`CBDescriptor`, `.cbs`, etc.) is replaced by `DataflowBufferSpec` and its companions — no CB references should survive in the post-port factory code (see also Kernel-side whitelist rule 1 for the symmetric kernel-side statement).
+- **The program factory body is the port.** The `create_program_artifacts` function (and any helpers it calls) is where Metal 2.0's host API is constructed — this code will be heavily rewritten by the port, and that's the work. Stay inside the Metal 2.0 transformation patterns documented in [§Construct paired spec + run-args](#construct-paired-spec--run-args) and [migration guide](metal2_migration_guide.md). Don't refactor adjacent code in the factory while you're there. Don't tighten or loosen a `TT_FATAL` that lives inside the factory. Don't reorder, rename, or "clean up" variables beyond the API renames documented (e.g., `cb_*` → `dfb_*`). The legacy CB API (`CBDescriptor`, `.cbs`, etc.) is replaced by `DataflowBufferSpec` and its companions — no CB references should survive in the post-port factory code (see also Kernel-side whitelist rule 1 for the symmetric kernel-side statement).
 
 - **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
 
@@ -298,7 +308,7 @@ The following are the *only* changes you should be making to kernel code during 
 
 **1. CircularBuffer → DataflowBuffer.** The object type swap, methods unchanged. Variable name updates limited to following the API rename (`cb_*` → `dfb_*`) — to keep the kernel readable. Don't rename for any other reason.
 
-This transition is **total**. Post-port, *no* `CircularBuffer` references survive — neither on the kernel side (the rule above) nor on the host side (where `CBDescriptor`, `.cbs`, and any other legacy CB-API references are replaced by `DataflowBufferSpec` and friends per [§Construct paired spec + run-params](#construct-paired-spec--run-params)). Sweep both sides: stale comments referencing CB, unused `#include`s, helper functions named `MakeCB*`, dead-code paths still building `CBDescriptor` — all gone. A grep for `CircularBuffer` and `CBDescriptor` across the op directory at the end of the port should return zero hits in code (only legacy-comparison artifacts in the port report, if any).
+This transition is **total**. Post-port, *no* `CircularBuffer` references survive — neither on the kernel side (the rule above) nor on the host side (where `CBDescriptor`, `.cbs`, and any other legacy CB-API references are replaced by `DataflowBufferSpec` and friends per [§Construct paired spec + run-args](#construct-paired-spec--run-args)). Sweep both sides: stale comments referencing CB, unused `#include`s, helper functions named `MakeCB*`, dead-code paths still building `CBDescriptor` — all gone. A grep for `CircularBuffer` and `CBDescriptor` across the op directory at the end of the port should return zero hits in code (only legacy-comparison artifacts in the port report, if any).
 
 ```cpp
 // Legacy:
@@ -444,21 +454,21 @@ Record in the port report's *Successful failure* section:
 
 ---
 
-## Construct paired spec + run-params
+## Construct paired spec + run-args
 
-*Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together. Every edit in this step — host-side and kernel-side — is governed by the [§Scope discipline](#scope-discipline) section above.*
+*Mechanical translation from the plan. Build each resource's spec entry and its run-args entry together. Every edit in this step — host-side and kernel-side — is governed by the [§Scope discipline](#scope-discipline) section above.*
 
 **Operating principle**: prefer designated initializers. Metal 2.0 was designed to support them and the spec reads as data, not as procedure.
 
-For each resource type, construct the spec entry and its run-params entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
+For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
-- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config`); alongside, build the corresponding `KernelRunArgs` entry (per-node `runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-params entry may be omitted entirely.
+- **`KernelSpec` ↔ `KernelRunArgs`.** For each planned `KernelSpec`, build the schema (`compile_time_args`, `runtime_arg_schema`, `dfb_bindings`, `tensor_bindings`, `semaphore_bindings`, `hw_config`); alongside, build the corresponding `KernelRunArgs` entry (per-node `runtime_arg_values` and `common_runtime_arg_values`). If the kernel has no RTAs, the run-args entry may be omitted entirely.
 - **`DataflowBufferSpec`.** Build with `entry_size`, `num_entries`, `data_format_metadata`, and `tile_format_metadata` **copied from the legacy CB's `format_descriptors[i].tile`** when that field was set (see [migration guide for the rationale](metal2_migration_guide.md#dataflowbufferspec)). No placement field — placement is derived from the kernel bindings. **`entry_size` and `num_entries` are set once at spec construction** — compute them from anything the spec construction has access to (input tensor shapes / shard specs, fields on `operation_attributes`). The `dfb_run_overrides` size-override fields exist in the API but are not supported on the `ProgramSpecFactoryConcept` fast path today; do not use them. (Ops that historically mutated CB sizes between executions are caught at audit time by the [Per-execution CircularBuffer size updates](port_op_to_metal2_audit.md#per-execution-circularbuffer-size-updates-updatecircularbuffertotalsize-updatecircularbufferpagesize--unsupported) UNSUPPORTED entry.) For borrowed-memory DFBs, set `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB; the backing L1 address resolves at runtime from the corresponding `TensorArgument`, so no `dfb_run_overrides` entry is needed for the backing memory. For aliased DFBs (legacy aliased CBs), set each spec's `advanced_options.alias_with` to mutually name the other members of the alias group — see [Pattern: Aliased DFBs](metal2_port_patterns.md#pattern-aliased-dfbs-legacy-aliased-cbs).
 - **`SemaphoreSpec`.** Build with `target_nodes`. (Semaphores have no per-execution counterpart on `ProgramRunArgs`.)
 - **`TensorParameter` ↔ `TensorArgument`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArgument` to `ProgramRunArgs::tensor_args`. Here `<tensor>` is the `MeshTensor` extracted from the input `ttnn::Tensor` at the top of the factory — see the [migration guide's tensor-types callout](metal2_migration_guide.md#ttnn-framework-integration) for the extraction convention.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_params)}` — note that `ProgramArtifacts`'s field is named `run_params` even though the type it holds is `ProgramRunArgs`.
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_args = std::move(run_args)}`.
 
 **Hardware-config shortcuts.** Two helpers worth knowing for the `hw_config` field on `KernelSpec`:
 
@@ -497,7 +507,7 @@ cmake --build build_Release --target ttnncpp unit_tests_ttnn -j 8
 
 The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
-- `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_spec`). Audit for missed deletions in the header.
+- `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_artifacts`). Audit for missed deletions in the header.
 - Unresolved symbol for `override_runtime_arguments` → some code path still calls it. Should only happen for the framework adapter, which doesn't for `ProgramSpecFactoryConcept` factories. Re-audit.
 - Error referencing `metal2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
@@ -519,7 +529,7 @@ Recommended order: gtests first (faster, exercises the C++ op directly), then py
 
 All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `MakeProgramFromSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
 
-If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_args.cpp`, the [patterns catalog](metal2_port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-params entries, etc.). Cross-reference the error message against the catalog.
+If compilation passes but the test fails with a `TT_FATAL` from `program_spec.cpp` or `program_run_args.cpp`, the [patterns catalog](metal2_port_patterns.md) has entries for the most common failure modes (DFB binding multiplicity mismatches, missing kernel run-args entries, etc.). Cross-reference the error message against the catalog.
 
 For symptom-organized lookup (errors whose fix isn't obvious from the message text), see the [migration guide's troubleshooting table](metal2_migration_guide.md#cryptic-error--likely-cause).
 
@@ -551,6 +561,21 @@ The final report is committed when the port reaches its stopping point — wheth
 The report is read by the kernel-lib / API owners (for handoff points), by the doc maintainers (for friction-driven evolution of the audit / recipe / catalog / migration guide), and by future porters of related ops.
 
 Structure the report with the following sections. Each section may be empty (write "none" with a one-line note); do not omit sections.
+
+### TTNN ProgramFactory
+
+Confirms the realized factory shape against the audit's decision. The audit chose; the port reports what actually happened.
+
+- **Concept realized**: confirm it matches the audit's choice. If the realized concept changed, explain why and confirm the discrepancy was surfaced with the invoker before re-deciding (do not silently override).
+- **Escalations applied**: for each non-default axis the realized port reached for:
+  - "Op-owned MeshTensors: <which tensors, why>"
+  - "Op-owned GlobalSemaphores (workload only): <why>"
+  - "Multi-program: <why per-coord program shapes differ>"
+  - "MinimizeCacheHitCost caching strategy: <required because op-owned resources>"
+  - If the port stayed entirely on the default, write "None — default `ProgramSpecFactoryConcept`, no op-owned resources, strict tensor matching, default `MaximizeCacheReuse` caching."
+- **Open items**: relaxation candidates (kernels that would tolerate relaxed tensor matching but were not opted in during port), reasons the port would benefit from an Advanced concept if available, anything the decision tree didn't anticipate, friction with the concept selection process itself.
+
+If the port stayed on the default and the audit's choice held cleanly, this section is short — that's the success case.
 
 ### Handoff points
 
@@ -611,10 +636,12 @@ Written during the inventory and planning steps; committed alongside the port fo
 
 *Filled in during the inventory step.*
 
-### Factory shape
-- Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept>
+### Legacy factory shape
+- Concept: <ProgramFactoryConcept | ProgramDescriptorFactoryConcept | MeshWorkloadFactoryConcept>
 - Variants: <list, or "single">
 - Custom `compute_program_hash`: <yes — file:line | no, uses default reflection-based hash>
+
+*(The Metal 2.0 factory concept the port targets was chosen during the audit — see the audit report's TTNN ProgramFactory section. Carried forward in the [TTNN ProgramFactory](#ttnn-programfactory) section below.)*
 
 > **Multi-variant ops** (e.g., Welford W/H/HW; Reduce W/H/HW): repeat the Kernels / CBs / Semaphores / Tensor accessors / Work split sub-sections **per variant**. Nest the per-variant blocks under a `### Variant: <name>` heading and downshift the per-resource headings to `####`. Cross-op kernels and Flags stay top-level — they typically apply across variants. The single-variant skeleton below is the inner shape of each variant block.
 
@@ -659,6 +686,16 @@ List any kernel `source` path outside the op's directory. Each one is a Caution 
 Anything the inventory step noticed but didn't classify — unreferenced kernel files, unusual descriptors, etc.
 
 (or "none")
+
+## TTNN ProgramFactory
+
+*Filled in during the planning step. The concept itself was chosen in the audit; this section carries it forward.*
+
+- **Concept (inherited from audit)**: <ProgramSpecFactoryConcept | WorkloadSpecFactoryConcept>
+- **Caching strategy (inherited from audit)**: <MaximizeCacheReuse (default) | MinimizeCacheHitCost>
+- **Implementation notes** (optional): <anything specific to how this op will realize the chosen concept that's worth surfacing before construction>
+
+(If you find yourself disagreeing with the audit's choice, stop and surface to the invoker — do not override.)
 
 ## Planned Spec Shape
 

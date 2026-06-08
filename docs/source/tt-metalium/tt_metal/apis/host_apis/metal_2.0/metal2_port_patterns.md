@@ -181,17 +181,19 @@ No `.id` extraction, no temporary `DataflowBuffer` constructed just to retrieve 
 
 **Recognition signal**: One program factory builds multiple `ProgramSpec`s depending on a variant attribute — e.g. Welford reduction's `reduce_dim` selecting among W/H/HW variants, each with its own kernels, its own DFB set, and its own RTA schema.
 
-**Decision**: Branch on the variant inside `create_program_spec`. No class hierarchy is needed; the variant is a configuration, not a factory subclass. Per-variant DFB unique ids and KernelSpec sources are local to each branch.
+**Decision**: Branch on the variant inside `create_program_artifacts`. No class hierarchy is needed; the variant is a configuration, not a factory subclass. Per-variant DFB unique ids and KernelSpec sources are local to each branch.
 
 **Correct port**:
 
 ```cpp
-ttnn::device_operation::ProgramArtifacts MyFactory::create_program_spec(
-    const OpParams& attrs, const OpInputs& inputs, Tensor& output) {
+ttnn::device_operation::ProgramArtifacts MyFactory::create_program_artifacts(
+    const operation_attributes_t& attrs,
+    const tensor_args_t&           inputs,
+    tensor_return_value_t&         output) {
     switch (attrs.variant) {
-        case Variant::W:   return build_w_spec(attrs, inputs, output);
-        case Variant::H:   return build_h_spec(attrs, inputs, output);
-        case Variant::HW:  return build_hw_spec(attrs, inputs, output);
+        case Variant::W:   return build_w_artifacts(attrs, inputs, output);
+        case Variant::H:   return build_h_artifacts(attrs, inputs, output);
+        case Variant::HW:  return build_hw_artifacts(attrs, inputs, output);
     }
 }
 ```
@@ -342,7 +344,7 @@ uint32_t base = in.get_bank_base_address(bank_id) + offset;
 
 **Decision**:
 
-1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_spec`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
+1. **Delete** the pybind line(s) that expose the vanished function. Do not attempt to "update" the binding to point at the new factory's entry point (e.g., `create_program_artifacts`) — the two functions have different signatures and use patterns, and the Python-side callers (if any) need to be addressed separately, not silently retargeted. Make the smallest change that restores compilation: just remove the line(s).
 2. **Record the deletion prominently in the port report** under [Handoff points](port_op_to_metal2_recipe.md#handoff-points). Include: the pybind file path, the function name(s) deleted, and a one-line description of what the function was for (if you can tell from the surrounding code). This is a *user-visible API surface change* — downstream Python consumers (tests, notebooks, internal tooling) that called into the legacy entry point need to be findable by the people who maintain them. The prominent report entry is how they get found.
 
 **Constraint**: This exception applies *only* to pybind exposures of factory entry points that the Metal 2.0 port causes to disappear. Other op-level pybind lines — the user-facing op binding itself, attribute conversions, return-value handling — remain off-limits per the host-side scope discipline. If you're uncertain whether a given pybind line falls inside or outside the exception, the safe move is to leave it and write a finding in the report.

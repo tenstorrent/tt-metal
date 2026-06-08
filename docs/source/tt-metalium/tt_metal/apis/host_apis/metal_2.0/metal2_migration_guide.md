@@ -29,7 +29,7 @@ Things to remember:
    - [TensorAccessor](#tensoraccessor)
    - [Kernel Argument Retrieval Syntax](#kernel-argument-retrieval-syntax)
 6. [Design Principles](#design-principles)
-   - [Principle 1: Immutable spec, mutable run-params](#principle-1-immutable-spec-mutable-run-params)
+   - [Principle 1: Immutable spec, mutable run-args](#principle-1-immutable-spec-mutable-run-args)
    - [Principle 2: First-class named resource bindings](#principle-2-first-class-named-resource-bindings)
    - [Principle 3: Named arguments throughout](#principle-3-named-arguments-throughout)
 7. [TTNN Framework Integration](#ttnn-framework-integration)
@@ -732,7 +732,7 @@ Vararg indices are stable across schema changes: promoting a named RTA to a CRTA
 
 The sections above describe the Metal 2.0 API surface piece by piece. This section steps back and presents the design intent that ties those pieces together. Reading these principles helps you recognize when a port is *faithful* (preserves intent and reaps the ergonomic improvement Metal 2.0 promises) versus when it merely *translates syntax* (carrying forward workarounds that should evaporate).
 
-### Principle 1: Immutable spec, mutable run-params
+### Principle 1: Immutable spec, mutable run-args
 
 Metal 2.0 splits a Program's description into two parts:
 
@@ -746,7 +746,7 @@ The separation enables two performance optimizations the legacy API couldn't exp
 1. **Caching**: a `Program` built once from a `ProgramSpec` can be executed many times with fresh `ProgramRunArgs` — the compile/build cost is paid once.
 2. **Partial updates**: for ops whose mutable surface is small (typically just the tensor identities), the framework can apply a partial update on cache hit instead of re-issuing the full `ProgramRunArgs`.
 
-For the op author, the practical implication is that **the schema and the values are conceptually paired** even though they live in different structures. When you add a named RTA to a `KernelSpec`'s schema, you simultaneously add its per-node value to `ProgramRunArgs::kernel_run_args`. When you declare a `TensorParameter`, you simultaneously add its `TensorArgument`. The spec/run-params separation is most visible to the framework and tooling; during construction, the two are built together.
+For the op author, the practical implication is that **the schema and the values are conceptually paired** even though they live in different structures. When you add a named RTA to a `KernelSpec`'s schema, you simultaneously add its per-node value to `ProgramRunArgs::kernel_run_args`. When you declare a `TensorParameter`, you simultaneously add its `TensorArgument`. The spec/run-args separation is most visible to the framework and tooling; during construction, the two are built together.
 
 ### Principle 2: First-class named resource bindings
 
@@ -855,59 +855,78 @@ Legacy `ProgramDescriptor` offered a hybrid model: `KernelDescriptor::compile_ti
 
 ## TTNN Framework Integration
 
-TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operation` framework. The framework provides three factory *concepts*; an op's program factory satisfies whichever concept matches its construction model:
+TTNN ops integrate with the Metal 2.0 host API through the `ttnn::device_operation` framework. The framework recognizes factories satisfying a family of concepts; an op's program factory satisfies exactly one of them.
+
+### Legacy concepts (pre-Metal 2.0)
 
 - **`ProgramFactoryConcept`** — the oldest concept; legacy `host_api.hpp` builder-style factories. Returns a `CachedProgram<shared_variables_t>` from `create()`; updates per-execution state via `override_runtime_arguments()`.
 - **`ProgramDescriptorFactoryConcept`** — the intermediate concept; legacy `ProgramDescriptor`-based factories. Returns a `tt::tt_metal::ProgramDescriptor` from `create_descriptor()`.
-- **`ProgramSpecFactoryConcept`** — the Metal 2.0 concept. Returns a `ttnn::device_operation::ProgramArtifacts` (a pair of `ProgramSpec` and `ProgramRunArgs`) from `create_program_spec()`.
 
-A new Metal 2.0 program factory has the following shape:
+### Metal 2.0 concepts — `Metal2FactoryConcept` family
+
+Metal 2.0 factories satisfy `Metal2FactoryConcept`, an umbrella over a 2 × 2 design space — *factory shape* {Basic, Advanced} × *workload scope* {single-program, multi-program} — yielding four leaf concepts:
+
+- **`ProgramSpecFactoryConcept`** — Basic, single-program. Single combined method `create_program_artifacts()` returns a `ProgramArtifacts` (the `ProgramSpec` + `ProgramRunArgs` + optional op-owned MeshTensors bundle). **Most ops use this.**
+- **`WorkloadSpecFactoryConcept`** — Basic, multi-program. Single combined method `create_workload_artifacts()` returns `MeshWorkloadArtifacts` (per-coord programs + optional op-owned MeshTensors + optional op-owned GlobalSemaphores at the workload level).
+- **`AdvancedProgramSpecFactoryConcept`** / **`AdvancedWorkloadSpecFactoryConcept`** — Advanced variants that split the factory into separate immutable-extraction / spec-construction / run-args-construction methods. **Stubbed in the framework today** — concepts compile but the adapter `static_assert`s "not yet supported." A port that genuinely needs one of these is blocked on framework implementation.
+
+The umbrella also exposes a separate orthogonal choice via `static constexpr` on the factory: **`ProgramCachingStrategy`** with values `MaximizeCacheReuse` (default — re-runs the factory on every dispatch, broad cache equivalence) and `MinimizeCacheHitCost` (opt-in — skips the factory on hit, narrower cache, required when the factory carries op-owned resources). And a **tensor-arg relaxations** axis on individual `TensorParameter`s lets the author admit dimension variability that the kernel tolerates.
+
+The four axes — shape, workload scope, caching strategy, tensor relaxations — combine into a 16-cell design space with safe defaults on each axis and a forbidden cell (basic + op-owned resources + `MaximizeCacheReuse`) enforced at runtime. For the full design and the decision tree porters and op authors use to pick a concept, see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md).
+
+### Factory skeleton — basic single-program
+
+The most common Metal 2.0 factory shape — what porters reach for first — satisfies `ProgramSpecFactoryConcept`:
 
 ```cpp
 // In your factory header:
 struct MyProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_spec(
-        const OpParams& operation_attributes,
-        const OpInputs& tensor_args,
-        Tensor& tensor_return_value);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const operation_attributes_t& attributes,
+        const tensor_args_t&           tensor_args,
+        tensor_return_value_t&         tensor_return_value);
 };
 
 // In your factory implementation:
-ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
-    const OpParams& operation_attributes,
-    const OpInputs& tensor_args,
-    Tensor& tensor_return_value) {
+ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifacts(
+    const operation_attributes_t& attributes,
+    const tensor_args_t&           tensor_args,
+    tensor_return_value_t&         tensor_return_value) {
 
-    // ... build the spec and run-params ...
+    // ... build the spec and run-args ...
 
-    metal2_host_api::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = "my_program",
         // ...
     };
-    metal2_host_api::ProgramRunArgs run_params;
-    // ... populate run_params ...
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
+    // ... populate run_args ...
 
     return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = std::move(run_params),
+        .spec     = std::move(spec),
+        .run_args = std::move(run_args),
+        // .op_owned_tensors = {},  // default-empty; populate only when the factory
+        //                          // needs to allocate device-side resources whose
+        //                          // lifetime tracks the cached entry — see the
+        //                          // factory selection doc Decision 2.
     };
 }
 ```
 
-> **`OpParams` and `OpInputs` are placeholders.** Each real device-op anchors to its own `operation_attributes_t` and `tensor_args_t` aliases — use those.
->
+`ProgramArtifacts` has three fields: `spec`, `run_args`, and `op_owned_tensors` (default-empty). Most ports leave `op_owned_tensors` defaulted.
+
 > **Tensor types in a ProgramFactory.** A factory sits between two tensor-type universes; you'll see three names but only two real types:
-> - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_spec`.
+> - **`ttnn::Tensor`** — TTNN's PyTorch-like tensor wrapper. Can in general represent either a host-resident or device-resident tensor, but **is always device-resident in a ProgramFactory.** This is what `tensor_args` and `tensor_return_value` carry into `create_program_artifacts`.
 > - **`tt::tt_metal::MeshTensor`** — Metalium's native device-tensor type. RAII handle with unique ownership over a (mesh) device allocation. Metal 2.0's `TensorArgument` (the entries you populate in `ProgramRunArgs::tensor_args`) takes a `const MeshTensor&` — this is the type the rest of the Metal 2.0 API speaks.
 > - **`tt::tt_metal::Tensor`** — a deprecated alias for `ttnn::Tensor`, not a third type. The class is declared in the `tt::tt_metal` namespace despite its header living under `ttnn/` — a refactoring artifact. If you encounter `tt_metal::Tensor` in legacy code, mentally substitute `ttnn::Tensor`.
 >
 > **Extract `MeshTensor` from each input at the top of the factory.** `ttnn::Tensor::mesh_tensor()` returns `const MeshTensor&` (the rvalue overload is `= delete`'d to prevent dangling references on temporaries). Recommended style — extract once at factory entry, work with `MeshTensor` references throughout:
 >
 > ```cpp
-> ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_spec(
->     const OpParams& attributes,
->     const OpInputs& tensor_args,
->     Tensor& tensor_return_value) {
+> ttnn::device_operation::ProgramArtifacts MyProgramFactory::create_program_artifacts(
+>     const operation_attributes_t& attributes,
+>     const tensor_args_t&           tensor_args,
+>     tensor_return_value_t&         tensor_return_value) {
 >
 >     const auto& input  = tensor_args.input.mesh_tensor();
 >     const auto& output = tensor_return_value.mesh_tensor();
@@ -922,18 +941,25 @@ A Metal 2.0 factory **does not** construct the `Program` itself, nor does it cal
 
 ### Cache-miss vs cache-hit lifecycle
 
-The framework manages two distinct execution paths:
+The framework manages two distinct execution paths. The lifecycle depends on the factory's caching strategy:
 
-- **Cache miss** (first execution, or stale cache): the framework calls `create_program_spec`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunArgs(program, run_params)` to apply the per-execution values. The full spec is realized exactly once.
-- **Cache hit** (subsequent executions with a still-valid cached `Program`): the framework calls `create_program_spec` again to get the fresh `ProgramArtifacts`, then internally calls `UpdateTensorArgs(program, run_params)` (or, where unavailable, a full re-call of `SetProgramRunArgs`) to apply just the changed pieces. The build cost is skipped.
+**Default — `MaximizeCacheReuse`:**
 
-The framework dispatches based on which concept the factory satisfies — there is no per-op opt-in. A factory satisfying `ProgramSpecFactoryConcept` is routed through `ProgramSpecMeshWorkloadFactoryAdapter`, which handles both paths.
+- **Cache miss** (first execution with a given `ProgramSpec`): the framework calls `create_program_artifacts`, then internally calls `MakeProgramFromSpec(*device, spec)` to build the `Program`, then calls `SetProgramRunArgs(program, run_args)` to apply the per-execution values. The cache key is the `ProgramSpec` itself.
+- **Cache hit** (subsequent executions whose factories produce equal specs): the framework calls `create_program_artifacts` again to get fresh artifacts, then internally calls `SetProgramRunArgs(program, run_args)` to re-apply the full `ProgramRunArgs`. The factory pays its full cost every dispatch in exchange for broad cache equivalence — different op-args that produce the same spec share a cache entry, and every mutable field is rebuilt fresh so nothing can carry stale state.
+
+**Opt-in — `MinimizeCacheHitCost`** (factory carries `static constexpr auto caching_strategy = ProgramCachingStrategy::MinimizeCacheHitCost;`):
+
+- **Cache miss**: as above (the factory runs and the Program is built).
+- **Cache hit**: the framework **skips the factory entirely** and refreshes only `TensorArgument`s via `UpdateTensorArgs` against stored index bindings. The cache key is the op-args auto-hash. Cheap per-hit, but the author must live within the restrictions — per-node RTAs only (no CRTAs, no DFB size overrides), enforced by the adapter.
+
+The framework dispatches based on which concept the factory satisfies — there is no per-op opt-in beyond the concept choice plus the optional `caching_strategy` declaration. For the choice between strategies, and for the structural constraints each imposes, see the [factory selection doc](port_op_to_metal2_ttnn_factory.md).
 
 ### TTNN's immutability convention
 
 A practical consequence of TTNN's caching: **most parameters that *could* vary between calls are treated as if they were immutable, and the cache is invalidated when they change**. The actually-mutable surface across calls is small — typically just the tensor identities (`tensor_args` in `ProgramRunArgs`).
 
-This means an op author specifying a Metal 2.0 factory does not directly experience the spec/run-params separation as a per-call distinction. The two are constructed together in `create_program_spec`; the framework's cache machinery converts that single construction call into either a full realization (cache miss) or a partial update (cache hit). Designing your factory to construct paired resources and values together — `TensorParameter` and its `TensorArgument`, RTA schema and its values — reflects the actual authoring flow.
+Under the default `MaximizeCacheReuse` strategy, an op author specifying a Metal 2.0 factory does not directly experience the spec/run-args separation as a per-call distinction. The two are constructed together in `create_program_artifacts`; the framework's cache machinery converts that single construction call into either a full realization (cache miss) or a re-application of the full `ProgramRunArgs` (cache hit). Designing your factory to construct paired resources and values together — `TensorParameter` and its `TensorArgument`, RTA schema and its values — reflects the actual authoring flow.
 
 ---
 

@@ -19,7 +19,7 @@
 - **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. [Step 0.1 Check 1](#step-01--porting-prerequisites) gates on it.
 - **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
 
-For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md).
+For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`metal2_migration_guide.md`](metal2_migration_guide.md).
 
 **Scope**: This guide is for **TTNN ops that target Gen1 architectures** (Wormhole / WH, Blackhole / BH), to assess Metal 2.0 portability and gather findings about what the port will require.
 
@@ -70,7 +70,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals, Step 0.4 out-of-directory call surface, Step 0.5 TensorAccessor bypass). Each step's checks have three possible outcomes:
+For the op in scope, run through six steps (Step 0.1 prereqs, Step 0.2 feature compatibility, Step 0.3 port complexity signals, Step 0.4 out-of-directory call surface, Step 0.5 TensorAccessor bypass, Step 0.6 TTNN ProgramFactory selection). Each step's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
@@ -83,13 +83,13 @@ For the op in scope, run through five steps (Step 0.1 prereqs, Step 0.2 feature 
 - **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
 - **Routine runtime-arg setup is not a general audit signal — Step 0.5 handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. Step 0.5 catches and reports buffer-address RTAs specifically; routine runtime-arg setup outside that pattern remains non-signal.
 
-Gating semantics across the five steps:
+Gating semantics across the six steps:
 
-- **Step 0.1 Check 1 (ProgramDescriptor API) and Step 0.2 (feature compatibility)** produce port-gating RED findings — an unmet prereq or UNSUPPORTED feature blocks this op's Metal 2.0 port until the missing piece lands.
+- **Step 0.1 Check 1 (ProgramDescriptor API), Step 0.2 (feature compatibility), and Step 0.6 (TTNN ProgramFactory selection)** produce port-gating RED findings — an unmet prereq, an UNSUPPORTED feature, or a port that requires a not-yet-implemented Advanced factory concept each block this op's Metal 2.0 port until the missing piece lands.
 - **Step 0.1 Check 3 (TensorAccessor usage) and Step 0.5 (TensorAccessor bypass)** produce YELLOW findings — port-time work items, not port blockers. With `TensorAccessor::get_bank_base_address` (landed 2026-05-24 via PR #45091) providing a sanctioned bridge for genuinely-exotic cases, every TensorAccessor concern has a port-time resolution path. The two checks roll up to a single TensorAccessor-concerns bullet in the Result section when both fire (see Output section).
 - **Step 0.1 Check 2 (Device 2.0 DM), Steps 0.3, and Step 0.4** are informational only. Check 2 in particular captures NoC-API-style cleanup (`Noc` wrapper coverage, method-form CB ops) that is **orthogonal to the Metal 2.0 binding-token mechanism** — binding-mechanism issues are caught by Check 3 and by Step 0.4's ⭐ markers, not by Check 2. **Check 2 status — YELLOW or RED — must not propagate to the Result-section Overall tier**; surface findings in side-issues as informational ("op-team cleanup pending").
 
-Do not attempt to port an op with Step 0.1 Check 1 or Step 0.2 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 2 (YELLOW or RED), Step 0.1 Check 3 YELLOW, and Step 0.5 YELLOW do not gate the port — they describe op-team-owned cleanup or port-time work respectively.
+Do not attempt to port an op with Step 0.1 Check 1, Step 0.2, or Step 0.6 RED (modulo the scoped-subset case described in the report-output section). Step 0.1 Check 2 (YELLOW or RED), Step 0.1 Check 3 YELLOW, and Step 0.5 YELLOW do not gate the port — they describe op-team-owned cleanup or port-time work respectively.
 
 ### Step 0.1 — Porting prerequisites
 
@@ -293,6 +293,31 @@ TensorParameter "output":   clean — borrowed-memory CB (causal-link).
 
 **Op-level roll-up:** `✓ clean` (no bypassing bindings) / `⚠ YELLOW` (one or more bindings bypass).
 
+### Step 0.6 — TTNN ProgramFactory selection
+
+Run this step **last** — after Steps 0.1 through 0.5 have produced their findings, before writing the audit report. This step decides which Metal 2.0 factory concept the port will land on. The decision is made here so the porter inherits a complete package (feasibility cleared + factory shape determined) rather than re-deriving the decision at port time.
+
+**Walk the decision tree in [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md).** That document is the authoritative reference for the decision; this section sets the audit-facing context and gating semantics, then defers to it for the substance.
+
+**Inputs:**
+
+- The legacy op's TTNN factory class (file paths already recorded in the identifying section of your report).
+- Step 0.5's per-binding inventory (informs Decision 2's op-owned-resource recognition).
+- The factory-selection document itself.
+
+**Output:**
+
+- The "TTNN ProgramFactory" section of `METAL2_PREPORT_AUDIT.md` (template in the [Output: the audit report](#output-the-audit-report) section below). Records the chosen concept, the path through the decision tree, and any stop signals.
+
+**Op-level roll-up:**
+
+- **`✓ GREEN`** — decision tree completes; chosen concept is one of `ProgramSpecFactoryConcept` or `WorkloadSpecFactoryConcept` (both implemented).
+- **`✗ RED`** — Decision 4 fires: the legacy op's structure requires an `Advanced*` concept (extract-immutable-info / spec / run-args split), which is stubbed-only today. Port blocked on framework implementation.
+
+**Don't reach for Advanced opportunistically.** Decision 4 should fire only when the basic shape genuinely cannot serve — substantial immutable-extraction work that re-running every dispatch is unacceptable for. "It would be nice to have" is not the bar; "this op cannot be ported correctly without it" is. When in doubt, assume basic suffices and surface the question in the report's Questions for the user section.
+
+**Branch-independence note.** The decision walks the legacy code, so the audit can run on `main` even though the chosen concept will only exist in `ttnn/api/ttnn/operation_concepts.hpp` after `akertesz/ttnn-metal2concept-improvements` merges. The factory-selection doc covers branch-side details for the downstream port.
+
 ### Output: the audit report
 
 The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.md` in the **op's root directory** — one level above `device/`, alongside the op's host-facing `.cpp` / `.hpp` files (e.g. `ttnn/cpp/ttnn/operations/<family>/<op>/METAL2_PREPORT_AUDIT.md`), **not** inside the `device/` subdir even though the program-factory `.cpp` files live there. This file is the audit's deliverable and is committed alongside the port — it sits next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (both written by the port recipe), so all generated docs for the port land in one spot.
@@ -308,7 +333,7 @@ The audit produces a written report. Write the report as `METAL2_PREPORT_AUDIT.m
 Markdown formatting is required, not optional — the headers, tables, and inline-code spans are what make a sizeable report skim-friendly for a human reviewer. Use:
 
 - H1 for the audit's title.
-- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Out-of-directory call surface, TensorAccessor bypass, Path forward, Questions for the user).
+- H2 for major sections (Result, Porting prerequisites, Feature compatibility check, Port complexity signals, Out-of-directory call surface, TensorAccessor bypass, TTNN ProgramFactory, Path forward, Questions for the user).
 - H3 for sub-sections (per-prereq-check headings; per-feature detail sections).
 - **Tables** for the Device 2.0 DM holdover list (when present) and the Feature compatibility check summary. These are non-negotiable — flat bullet lists at this scale lose readability fast.
 - Inline `code formatting` for file paths, function names, type names, identifiers throughout.
@@ -333,9 +358,9 @@ The conclusion appears at the top so a colleague glancing at the report sees the
 
 **GREEN | YELLOW | RED** — <one-line summary>.
 
-- For **RED**: state the **primary blocker(s)** in plain language. If blockers are localized to specific code paths, name a clean subset that could be ported as a scoped subset.
+- For **RED**: state the **primary blocker(s)** in plain language. If blockers are localized to specific code paths, name a clean subset that could be ported as a scoped subset. RED can come from Step 0.1 Check 1 (ProgramDescriptor prereq), Step 0.2 (UNSUPPORTED feature), or Step 0.6 (Advanced factory concept required) — call out which.
 - For **YELLOW**: state the count of open questions and reference the Questions for the user section.
-- For **GREEN**: note that handoff to the recipe doc is appropriate after explicit user go-ahead.
+- For **GREEN**: include the chosen Metal 2.0 factory concept inline (e.g. "GREEN — ports to `ProgramSpecFactoryConcept`."), then note that handoff to the recipe doc is appropriate after explicit user go-ahead.
 
 **TensorAccessor rollup rule.** When Step 0.1 Check 3 and Step 0.5 both fire (the common case — a kernel without `TensorAccessor` has all its bindings as bypass), merge them into a **single TensorAccessor-concerns bullet** in this Result section. The body sections (`TensorAccessor usage` and `TensorAccessor bypass`) still produce separate detail per check, but the Result-level rollup is one line — both findings describe port-time work on the same kernel surface, so two bullets inflate the apparent severity.
 
@@ -458,6 +483,37 @@ Findings from Step 0.5.
 
 - **`<binding_name>`:** clean (mechanism) | ⚠ YELLOW — bypass (host:file:line + kernel:file:line + call)
 
+## TTNN ProgramFactory
+
+Findings from Step 0.6. The chosen Metal 2.0 factory concept that the port will implement against.
+
+**Op-level roll-up:** `✓ GREEN — <concept-name>` / `✗ RED — Advanced concept required, not yet implemented`.
+
+### Concept chosen
+
+<One of: `ProgramSpecFactoryConcept` / `WorkloadSpecFactoryConcept` / `AdvancedProgramSpecFactoryConcept` / `AdvancedWorkloadSpecFactoryConcept`.>
+
+### Path through the decision tree
+
+<Per [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md):>
+
+- Decision 1 (single vs multi-program): <answer; what observable in legacy made this clear>
+- Decision 2 (op-owned resources): <answer; what resources, if any>
+- Decision 3 (tensor-arg relaxations): strict <default; deviation from this requires a paragraph explaining why>
+- Decision 4 (advanced shape): not needed | **STOP — Advanced required, audit RED**
+
+### Caching strategy
+
+<`MaximizeCacheReuse` (default) — or — `MinimizeCacheHitCost` (required because op-owned resources are present)>
+
+### Legacy-to-Metal-2.0 shape change
+
+<Does the chosen concept match the legacy factory shape, or does it unwind a legacy workaround? Common case: "1:1 with legacy." Special case (record explicitly): "legacy was `MeshWorkload` only to carry op-owned tensors; port should target single-program `ProgramSpecFactoryConcept` with `op_owned_tensors` per the [TTNN factory doc's single-program-with-resources heads-up](port_op_to_metal2_ttnn_factory.md#1-single-program-or-multi-program).">
+
+### Stop signals
+
+<If Decision 4 fired: explain which extraction work, why the basic-shape per-dispatch re-run is unacceptable, and confirm the overall audit Result has been downgraded to RED. Otherwise: "None.">
+
 ## Path forward
 
 <Omit for GREEN. For RED, name the resolutions for each RED entry — typically "wait for Metal 2.0 feature(s) X, Y to land," but see individual entry Status fields for cases that need redesign discussions instead. If blockers are localized to specific code paths, describe the scoped-port option and any hybrid-file consequences. For YELLOW, restate the open questions and what proceeding under each likely answer would entail.>
@@ -485,9 +541,9 @@ Save the report file and surface its path to the user along with the Result line
 
 ### After the audit: what happens next
 
-- **On RED**: this op cannot be ported in its current state. Surface the file path and Result; stop. Do not load the recipe document.
+- **On RED**: this op cannot be ported in its current state. Surface the file path and Result; stop. Do not load the recipe document. (RED on Step 0.6 — Advanced factory concept required — is the same outcome: port blocked, no recipe handoff.)
 - **On YELLOW**: surface the file path, the Result, and the open questions. Wait for the user's decisions. On override, re-run the affected checks, update the report file in place, and confirm GREEN before any handoff.
-- **On GREEN + explicit user go-ahead**: load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port. Pass the audit report file as context to the next session — the port recipe needs to know which features and decisions cleared. Do not load the recipe document on your own initiative; the user must explicitly approve.
+- **On GREEN + explicit user go-ahead**: load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port. Pass the audit report file as context to the next session — the port recipe needs to know which features and decisions cleared, *including the chosen factory concept from the TTNN ProgramFactory section*. Do not load the recipe document on your own initiative; the user must explicitly approve.
 
 ---
 
