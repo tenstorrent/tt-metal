@@ -119,21 +119,29 @@ setup_worktree() {
   ln -sf "${LLK_ROOT}/.mcp.json"   "${wt_llk}/.mcp.json"
   [[ -d "${LLK_ROOT}/.claude" ]] && ln -snf "${LLK_ROOT}/.claude" "${wt_llk}/.claude"
 
-  # ── Hide symlinks from git ──
-  # Files that existed on main were replaced with symlinks — git sees a typechange.
-  # Mark them assume-unchanged so git status stays clean.
-  git -C "$WORKTREE_DIR" update-index --assume-unchanged "${LLK_REL}/CLAUDE.md"
-
-  # Append to .gitignore then mark it assume-unchanged so
-  # the .gitignore change itself is invisible to git status/add/commit.
+  # ── Hide symlinked-over files from git ──
+  # First, make the symlink artifacts invisible via .gitignore. This only helps for
+  # the genuinely untracked symlinks (codegen/, .claude/, and CLAUDE.md when the
+  # base commit does not track it).
   cat >> "${wt_llk}/.gitignore" <<'GITIGNORE'
 
 # Codegen infrastructure (symlinked from feature branch, do not commit)
 codegen/
 .claude/
+CLAUDE.md
 .mcp.json
 GITIGNORE
-  git -C "$WORKTREE_DIR" update-index --assume-unchanged "${LLK_REL}/.gitignore"
+
+  # .gitignore doesn't hide files already tracked on the base commit (e.g. .mcp.json
+  # on origin/main): the symlink shows up as a typechange. Mark such tracked paths
+  # --skip-worktree so git ignores the worktree symlink. (.gitignore is included so
+  # its own appended lines stay hidden too.)
+  for rel in CLAUDE.md .mcp.json .gitignore; do
+    p="${LLK_REL}/${rel}"
+    if git -C "$WORKTREE_DIR" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+      git -C "$WORKTREE_DIR" update-index --skip-worktree -- "$p" 2>/dev/null || true
+    fi
+  done
 
   echo "[worktree] Ready: $WORKTREE_DIR"
   echo "[worktree] Branch: $WORKTREE_BRANCH"
