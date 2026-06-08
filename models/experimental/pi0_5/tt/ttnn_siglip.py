@@ -243,6 +243,45 @@ class PatchEmbeddingTTNN:
         else:
             self._linear_bias = None
 
+        # === Opt-in: ttnn.fold-based patch extraction (PI0_SIGLIP_USE_FOLD=1) ===
+        # Mirrors the SmolVLA/ViT pattern: replaces permute+reshape+permute+reshape
+        # with a single ttnn.fold op. Requires NHWC input (channel-last) padded to
+        # C=4 (power-of-2 align). Validated by test_patch_fold_pcc.py (PCC=0.99998).
+        import os as _os
+
+        self._use_fold = _os.environ.get("PI0_SIGLIP_USE_FOLD", "").lower() in ("1", "true", "yes", "on")
+        if self._use_fold:
+            # ttnn.fold supports C=3 natively (verified by test_fold_c3_smoke.py) — no
+            # padding-to-4 needed. Keep C=3 so the downstream matmul stays at the
+            # original (588 padded to 608) × 1152 size; skip the C-pad inflation.
+            self._fold_in_channels = in_channels  # 3
+            self._fold_in_features = self.patch_size * self.patch_size * in_channels  # 14*14*3=588
+            # Build fold weight: (out, in, kh, kw)=(1152, 3, 14, 14) → linear (kH*kW*C, out)=(588, 1152)
+            # Reuse the same shape as the linear path: (588, 1152), padded to (608, 1152) on device.
+            w_fold = conv_weight.permute(2, 3, 1, 0).contiguous()  # (14, 14, 3, 1152)
+            w_fold = w_fold.reshape(-1, out_channels)  # (588, 1152)
+            w_ttnn = ttnn.from_torch(
+                w_fold,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # Pad in_features 588 → 608 to tile-align
+            pad_f = self.in_features_padded - self._fold_in_features
+            if pad_f > 0:
+                w_ttnn = ttnn.pad(w_ttnn, padding=((0, pad_f), (0, 0)), value=0.0)
+            self._fold_weight = w_ttnn
+            if conv_bias is not None:
+                self._fold_bias = ttnn.from_torch(
+                    conv_bias.reshape(1, -1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                )
+            else:
+                self._fold_bias = None
+
         # Query device grid to use all available cores
         device_grid = device.compute_with_storage_grid_size()
         self.grid_size = (device_grid.x, device_grid.y)
@@ -291,6 +330,67 @@ class PatchEmbeddingTTNN:
 
         return x
 
+    def _forward_fold(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """ttnn.fold-based patch extraction (PI0_SIGLIP_USE_FOLD=1).
+
+        Replaces the 4-op permute+unfold+pad+linear chain with: pre-reshape (metadata)
+        + ttnn.fold + linear. ttnn.fold supports C=3 natively (no C-padding needed),
+        so the downstream matmul stays at the same (588 padded to 608) × 1152 size.
+
+        Two input formats supported (auto-detected by shape):
+          (a) (B, H, W, 3) ROW_MAJOR — already-permuted host upload (the fast path)
+          (b) (B, 3, H, W) TILE BCHW — inline-converts via permute (slower)
+
+        Output: (B, num_patches, hidden_size).
+        """
+        last_dim = int(x.shape[-1])
+        if last_dim == self._fold_in_channels:
+            # NHWC ROW_MAJOR (host pre-permute, no C-pad) — need to do reshape on device.
+            B = int(x.shape[0])
+            H = int(x.shape[1])
+            W = int(x.shape[2])
+            # Pre-reshape (B, H, W, C) → (B, H, W/patch, C*patch). Costs ~0.29 ms in TTNN.
+            x = ttnn.reshape(x, (B, H, W // self.patch_size, self._fold_in_channels * self.patch_size))
+        elif last_dim == self._fold_in_channels * self.patch_size:
+            # Pre-reshaped on host: (B, H, W/patch, C*patch) — skip the device reshape.
+            # This is the FAST PATH (saves ~0.29 ms vs the device reshape).
+            B = int(x.shape[0])
+            H = int(x.shape[1])
+            W = int(x.shape[2]) * self.patch_size
+        else:
+            # BCHW TILE — inline convert (slow path)
+            B = int(x.shape[0])
+            H = int(x.shape[2])
+            W = int(x.shape[3])
+            x = ttnn.permute(x, (0, 2, 3, 1))  # BCHW → BHWC
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.reshape(x, (B, H, W // self.patch_size, self._fold_in_channels * self.patch_size))
+
+        # fold(stride_h=patch_size, stride_w=1): (B, P_h, P_w, kH*kW*C) = (B, 16, 16, 588)
+        x = ttnn.fold(x, self.patch_size, 1)
+
+        P_h = H // self.patch_size
+        P_w = W // self.patch_size
+        x = ttnn.reshape(x, (B, P_h * P_w, self._fold_in_features))  # (B, 256, 588)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        # Pad in_features 588 → 608 (tile align) for the matmul
+        pad_amount = self.in_features_padded - self._fold_in_features
+        if pad_amount > 0:
+            x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_amount)], value=0.0)
+
+        out = ttnn.linear(
+            x,
+            self._fold_weight,
+            bias=self._fold_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+            core_grid=self.core_grid,
+        )
+        ttnn.deallocate(x)
+        return out
+
     def forward(self, pixel_values) -> ttnn.Tensor:
         """
         OPTIMIZED: Extract patch embeddings entirely on device using TILE layout.
@@ -304,6 +404,9 @@ class PatchEmbeddingTTNN:
         """
 
         x = pixel_values
+
+        if self._use_fold:
+            return self._forward_fold(x)
 
         # Step 2: Permute to channel-last: (B, C, H, W) -> (B, H, W, C)
         # Note: This uses generic kernel since last 2 dims move, but unavoidable

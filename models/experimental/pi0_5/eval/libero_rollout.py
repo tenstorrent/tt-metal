@@ -386,17 +386,34 @@ class Pi0_5LiberoAdapter:
             self.model._precompute_bs1_timestep_tensors()
             self.model._precompute_bs1_adarms_cond()
             # Build TTNN inputs
-            images_ttnn = []
-            for img in images:
-                images_ttnn.append(
+            # PI0_SIGLIP_USE_FOLD=1: pre-stack all cameras on host into a single
+            # (N, H, W, 3) NHWC ROW_MAJOR tensor and pass a list of length 1.
+            # The model side (ttnn_prefix.py) detects the pre-stacked case and
+            # skips the device-side ROW_MAJOR concat (~0.5 ms savings at bs=3).
+            _use_fold = os.environ.get("PI0_SIGLIP_USE_FOLD", "").lower() in ("1", "true", "yes", "on")
+            if _use_fold:
+                stacked_host = torch.cat([im.permute(0, 2, 3, 1).contiguous() for im in images], dim=0)
+                images_ttnn = [
                     ttnn.from_torch(
-                        img,
+                        stacked_host,
                         dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
                         device=device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                )
+                ]
+            else:
+                images_ttnn = []
+                for img in images:
+                    images_ttnn.append(
+                        ttnn.from_torch(
+                            img,
+                            dtype=ttnn.bfloat16,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    )
             img_masks_ttnn = []
             for m in img_masks:
                 img_masks_ttnn.append(
