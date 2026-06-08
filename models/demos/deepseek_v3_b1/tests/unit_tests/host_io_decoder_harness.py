@@ -24,7 +24,7 @@ prompt and torn down once after the last prompt.
 Validation gates (every gate is independently toggleable in the config)
 -----------------------------------------------------------------------
 1. ``validate_metadata_roundtrip`` — per-iteration assertions that the H2D
-   page's slot_id / position_id / token_id / token_0_type are preserved on the
+   page's slot_id / position_id / token_id are preserved on the
    D2H tail (catches socket / multi-upstream-D2H corruption).
 2. ``validate_hidden_states_cross_slot`` — per-prompt ``torch.equal`` of every
    replicated slot's collected output against slot 0 (catches slot-dependent
@@ -92,7 +92,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
-from models.demos.deepseek_v3_b1.model import Field, TokenType, parse_output_page
+from models.demos.deepseek_v3_b1.model import Field, parse_output_page
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
 from models.demos.deepseek_v3_b1.tests.unit_tests.debug_trace_io import load_reference_kv, load_reference_trace
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
@@ -328,25 +328,34 @@ class _SinglePipelineStage:
 # ---------------------------------------------------------------------------
 
 
+# Number of MTP prefill-token slots in the DeepseekMetadata header
+# (Field.PREFILL_TOKENS occupies words 9..12, i.e. TEMPERATURE - PREFILL_TOKENS).
+_NUM_PREFILL_TOKEN_SLOTS = Field.TEMPERATURE - Field.PREFILL_TOKENS
+
+
 def _to_hidden_state_input(
     hidden_state: torch.Tensor,
     *,
     token_id: int,
-    prefill_token_id: int,
-    user_id: int,
+    slot_id: int,
     position_id: int,
-    token_type: int,
     temperature: float,
     top_k: int,
-    probability_mass_threshold: float,
+    top_p: float,
+    lane_id: int = 0,
+    prefill_token_ids: list[int] | None = None,
 ) -> ttnn.Tensor:
     """Build an H2D passthrough page = ``hidden_state || DeepseekMetadata`` (uint32-typed).
 
     Used with ``HostIoDecoderStage(inject_hidden_states=True)``. The activation
     half is the bf16 hidden state reinterpreted as int32 words; the metadata
-    half mirrors ``model.to_spec_input``'s field placement so the decoder +
-    multi-upstream D2H tail round-trip the input metadata fields the same way
-    as the embedding-driven path.
+    half mirrors ``model.to_spec_input``'s field placement (see ``Field`` in
+    model.py) so the decoder + multi-upstream D2H tail round-trip the input
+    metadata fields the same way as the embedding-driven path.
+
+    ``prefill_token_ids`` supplies ground-truth next tokens per MTP level; any
+    unfilled slot is set to the ``-1`` ("no ground truth") sentinel, matching
+    ``model.to_spec_input``.
     """
     assert hidden_state.dtype == torch.bfloat16, f"hidden_state must be bf16, got {hidden_state.dtype}"
     assert (
@@ -356,15 +365,18 @@ def _to_hidden_state_input(
     hidden_int32 = hidden_state.contiguous().view(torch.int32)  # (HIDDEN_SIZE / 2,) int32
 
     metadata_words = torch.zeros(DeepseekMetadata.aligned_size_bytes() // 4, dtype=torch.int32)
+    metadata_words[Field.LANE_ID] = lane_id
+    metadata_words[Field.SLOT_ID] = slot_id
     metadata_words[Field.TOKEN_ID] = token_id
-    metadata_words[Field.PREFILL_TOKEN_ID] = prefill_token_id
-    metadata_words[Field.TOKEN_TYPE] = token_type
-    metadata_words[Field.USER_ID] = user_id
     metadata_words[Field.POSITION_ID] = position_id
-    metadata_words[Field.TOKEN0_POSITION_ID] = position_id
+    for i in range(_NUM_PREFILL_TOKEN_SLOTS):
+        metadata_words[Field.PREFILL_TOKENS + i] = -1
+    if prefill_token_ids:
+        for i, ptid in enumerate(prefill_token_ids[:_NUM_PREFILL_TOKEN_SLOTS]):
+            metadata_words[Field.PREFILL_TOKENS + i] = ptid
     metadata_words[Field.TEMPERATURE] = float_to_uint32(temperature)
     metadata_words[Field.TOP_K] = top_k
-    metadata_words[Field.PROBABILITY_MASS_THRESHOLD] = float_to_uint32(probability_mass_threshold)
+    metadata_words[Field.TOP_P] = float_to_uint32(top_p)
 
     combined = torch.cat([hidden_int32, metadata_words]).reshape(1, -1)
     return ttnn.from_torch(combined, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -380,24 +392,22 @@ def _build_per_iteration_input(
 
     Thin wrapper over :func:`_to_hidden_state_input` that fixes the canonical
     decode-step defaults (matching ``demo/model_pipeline.py:_write_spec_pair``):
-    ``prefill_token_id=-1``, ``token_type=TokenType.BASE``, ``temperature=0.6``,
-    ``top_k=1``, ``probability_mass_threshold=1.0``.
+    decode mode (no prefill ground-truth tokens), ``temperature=0.6``,
+    ``top_k=1``, ``top_p=1.0``.
 
-    In multi-turn mode the same ``global_pos`` is written to ``token_id``,
-    ``position_id`` (which also propagates to ``token0_pos``). This keeps the
-    metadata round-trip assertions a single source of truth: the global
-    position is the only "address" the decoder sees, no trace-local indices.
+    In multi-turn mode the same ``global_pos`` is written to both ``token_id``
+    and ``position_id``. This keeps the metadata round-trip assertions a single
+    source of truth: the global position is the only "address" the decoder
+    sees, no trace-local indices.
     """
     return _to_hidden_state_input(
         hidden_state,
         token_id=global_pos,
-        prefill_token_id=-1,
-        user_id=slot_id,
+        slot_id=slot_id,
         position_id=global_pos,
-        token_type=TokenType.BASE,
         temperature=0.6,
         top_k=1,
-        probability_mass_threshold=1.0,
+        top_p=1.0,
     )
 
 
@@ -405,8 +415,8 @@ def _extract_activation_from_d2h(output_tensor: ttnn.Tensor) -> torch.Tensor:
     """Return the activation half (first HIDDEN_SIZE bf16 elements) of a D2H page.
 
     The D2H page layout is ``activation (HIDDEN_SIZE bf16) || DeepseekMetadata
-    (256 bytes)``. The leading slice IS the decoder's output hidden state for
-    the corresponding ``(slot, global_pos)``.
+    (DeepseekMetadata.aligned_size_bytes() == 512 bytes)``. The leading slice IS
+    the decoder's output hidden state for the corresponding ``(slot, global_pos)``.
     """
     return ttnn.to_torch(output_tensor).flatten()[: D.HIDDEN_SIZE]
 
@@ -414,20 +424,20 @@ def _extract_activation_from_d2h(output_tensor: ttnn.Tensor) -> torch.Tensor:
 def _extract_metadata_from_d2h(output_tensor: ttnn.Tensor):
     """Extract and parse the trailing DeepseekMetadata tail of a D2H page.
 
-    Slices the last ``DeepseekMetadata.aligned_size_bytes()`` bytes off the
-    bf16 receive buffer, reinterprets them bitwise as ``(64,) int32`` words,
-    and parses via ``model.parse_output_page``.
+    Slices the last ``DeepseekMetadata.aligned_size_bytes()`` (512) bytes off
+    the bf16 receive buffer, reinterprets them bitwise as ``(128,) int32``
+    words, and parses via ``model.parse_output_page``.
 
     Returns:
-        metadata_flat: torch.Tensor of shape ``(64,)`` int32 — raw idx reads
-            (e.g. ``metadata_flat[Field.POSITION_ID]`` for the input-side
-            position_id field, which ``parse_output_page`` does not expose).
-        parsed: ``DecodeResult`` — convenience accessors for ``slot_id`` and
-            the ``token_0_*`` output fields.
+        metadata_flat: torch.Tensor of shape ``(128,)`` int32 — raw idx reads
+            (e.g. ``metadata_flat[Field.TOKEN_ID]`` for the input-side token_id
+            field, which ``DecodeResult`` does not expose).
+        parsed: ``DecodeResult`` — convenience accessors for ``slot_id``,
+            ``position_id``, and the ``output_tokens`` fields.
     """
-    metadata_bytes = DeepseekMetadata.aligned_size_bytes()  # 256
-    metadata_uint32_count = metadata_bytes // 4  # 64
-    metadata_bf16_count = metadata_bytes // dtype_size(ttnn.bfloat16)  # 128
+    metadata_bytes = DeepseekMetadata.aligned_size_bytes()  # 512
+    metadata_uint32_count = metadata_bytes // 4  # 128
+    metadata_bf16_count = metadata_bytes // dtype_size(ttnn.bfloat16)  # 256
 
     torch_full = ttnn.to_torch(output_tensor).flatten()
     metadata_words = torch_full[-metadata_bf16_count:].contiguous().view(torch.int32).reshape(1, metadata_uint32_count)
@@ -578,9 +588,11 @@ def _run_prompt_sweep(
                     f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
                     f"token_id round-trip mismatch (got {actual_token_id})"
                 )
-                assert parsed.token_0_type == TokenType.BASE, (
+                # parse_output_page's position_id accessor must agree with the
+                # raw field read above (validates the DecodeResult parse path).
+                assert parsed.position_id == global_pos, (
                     f"prompt={prompt_name!r} slot={slot_id} global_pos={global_pos}: "
-                    f"token_0_type round-trip mismatch (got {parsed.token_0_type})"
+                    f"parsed position_id round-trip mismatch (got {parsed.position_id})"
                 )
 
             collected_for_prompt[slot_id][p_local, :] = _extract_activation_from_d2h(output_tensor)
@@ -797,13 +809,11 @@ def _run_decoder_layer_pass(
     termination_dummy = _to_hidden_state_input(
         zero_hidden_state,
         token_id=0,
-        prefill_token_id=-1,
-        user_id=config.num_slots - 1,
+        slot_id=config.num_slots - 1,
         position_id=config.max_seq_len - 1,
-        token_type=TokenType.BASE,
         temperature=0.6,
         top_k=1,
-        probability_mass_threshold=1.0,
+        top_p=1.0,
     )
     logger.info(
         f"{layer_prefix}: pushing termination dummy " f"at slot={config.num_slots - 1} pos={config.max_seq_len - 1}"
