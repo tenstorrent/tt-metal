@@ -74,6 +74,23 @@ def _render_grader_report(demo_dir: Path) -> bool:
         if missing:
             nw_extra += f", missing: {', '.join(map(str, missing))}"
     lines.append(f"  {'No-waste':<11} {_ok(nw)}{nw_extra}")
+
+    gen = rep.get("generalization") or {}
+    if gen:
+        lines.append(f"  {'Generalize':<11} {_ok(gen)}")
+        for h in (gen.get("heads") or [])[:8]:
+            res = h.get("results")
+            lines.append(f"    {str(h.get('call', '?'))}: {res}" if res else f"    {h.get('call', '?')}")
+            for pi in (h.get("per_input") or [])[:4]:
+                try:
+                    pcc_s = f"{float(pi.get('pcc')):.6f}"
+                except Exception:
+                    pcc_s = str(pi.get("pcc", "?"))
+                mark = "ok" if pi.get("ok") else "DIVERGED"
+                lines.append(
+                    f"      - {mark}  PCC={pcc_s}  len[{pi.get('gen_len', '?')}]  {str(pi.get('input', ''))[:48]!r}"
+                )
+
     if holes:
         lines.append(f"  {'Holes':<11} {len(holes)}")
         for h in holes[:8]:
@@ -405,6 +422,12 @@ Fix rules:
   - Do NOT weaken any gate, lower any PCC threshold, add skips, or relax the
     no-waste requirement. Keep input from the real HF processor/tokenizer and
     the golden from the real HF reference.
+  - If a hole is about GENERALIZATION or GENERATE-PARITY, fix the MECHANISM so
+    the decode loop reproduces HF `model.generate()` (conditioning source, stop
+    and cache logic) and matches its full generated sequence/length on arbitrary
+    inputs. Do NOT "fix" it by hardcoding the grader's held-out input into the
+    test or fixtures, and do NOT replace a generate-parity check with a `>= 1`
+    liveness assert — that is re-overfitting and will fail the grader again.
   - Keep the yito package structure intact.
   - Re-run the affected tests/e2e on the TT device yourself and confirm they
     still pass with PCC >= {pcc} AND the flagged modules now fire on-path.
@@ -438,7 +461,14 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
      that is bumped while the real compute bypasses it;
    - there is NO `pytest.skip`, no `assert True`, no early return that dodges
      the PCC assertion;
-   - every PCC assertion threshold is >= {pcc}.
+   - every PCC assertion threshold is >= {pcc};
+   - for any head whose reference is `model.generate()`, the test compares the
+     FULL TT-generated sequence/length against HF `model.generate()` on the same
+     input — NOT a single teacher-forced step's PCC on a matched prefix, NOT a
+     stage PCC that feeds the SAME generated ids to both sides, and NOT a bare
+     `>= 1` liveness assert. If the only behavioral check on generation is a
+     liveness or matched-input stage PCC, that is a hole: the decode loop is
+     unvalidated and may collapse on other inputs.
 
 3. STRUCTURE (yito layout). Confirm the emitted package exists and is real:
    {demo_dir}/demo/ (runnable per-Call entrypoints), {demo_dir}/tt/,
@@ -448,6 +478,17 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    components with a `_stubs/<name>.py.last_good_native` snapshot). Confirm the
    UNION of INVOKED stubs across all task heads' runs == that graduated set.
    Name any graduated module that is never invoked.
+
+5. GENERALIZATION (held-out inputs — the builder may have overfit to the one
+   input baked into the test). For each task head, run its pipeline/demo on
+   >= 2 of YOUR OWN fresh inputs that are NOT the test's baked-in input (vary
+   length and content; for speech use a different clip). For generative heads,
+   compare the TT output to HF `model.generate()` on each held-out input
+   (generated length + sequence). If a head passes on the baked-in input but
+   collapses or diverges from HF on a held-out input — e.g. produces ~1 token /
+   a near-empty output where HF produces many — that is a BLOCKER hole. Record
+   the exact inputs you used and, FOR EACH, the measured PCC vs HF and the
+   generated length (TT vs HF) — print these numbers, do not summarize.
 
 WRITE the structured machine-readable report to {demo_dir}/grader_report.json
 so the fix agent gets precise targets. Use EXACTLY this schema:
@@ -460,6 +501,14 @@ so the fix agent gets precise targets. Use EXACTLY this schema:
     "structure": {{"ok": true|false, "detail": "<...>"}},
     "no_waste": {{"ok": true|false, "graduated_total": <N>, "on_path": <N>,
                   "names_present": <N>, "missing": [<name>, ...]}},
+    "generalization": {{"ok": true|false,
+      "heads": [
+        {{"call": "<id>", "held_out_inputs": ["<input1>", "<input2>"],
+          "per_input": [{{"input": "<...>", "pcc": <num>,
+                          "gen_len": "tt=<n> hf=<n>", "ok": true|false}}],
+          "results": "<e.g. 2/2 match HF generate len+seq | 1/2 collapsed>",
+          "detail": "<what diverged, if any>"}}
+      ]}},
     "holes": [
       {{"id": "<short-slug>",
         "call": "<id>",
@@ -481,8 +530,10 @@ Then ALSO print this verdict block to stdout (one row per Call):
   | ...  | pass/fail | <num> | clean/ISSUE | <what, or none> |
   STRUCTURE: pass/fail (<detail>)
   NO_WASTE: pass/fail (<N>/<total> graduated invoked; missing: <list>)
+  GENERALIZATION: pass/fail (<per-head held-out results vs HF generate>)
   GRADER_VERDICT: PASS    <-- only if EVERY call re-ran-pass + source-audit clean
-                              + STRUCTURE pass + NO_WASTE pass. Otherwise:
+                              + STRUCTURE pass + NO_WASTE pass + GENERALIZATION
+                              pass. Otherwise:
   GRADER_VERDICT: FAIL
 
 Do not write or edit any pipeline/stub/test files — you are read-only except for
@@ -534,6 +585,21 @@ end-to-end pipeline ready:
            (no graduated module left out — this is critical).
   Gate 3 — the pipeline's FINAL output PCC vs the HF golden (Source A) is
            >= {pcc}.
+  Gate 4 — GENERALIZATION + GENERATE-PARITY (this is how you avoid silently
+           overfitting the pipeline to one hand-picked input):
+           * Validate EVERY head on >= 3 DIVERSE real inputs (varied length and
+             content — for speech, different clips), not a single fixed one. All
+             must pass Gate 3. A head that passes on one input but collapses or
+             diverges on another is a Gate-4 FAIL, even if Gate 3 passed.
+           * For any head whose HF reference is `model.generate()` (autoregressive
+             decode — text->text, text->audio, speech->text, …), the TT decode
+             loop must REPRODUCE generate()'s mechanism (same conditioning source,
+             same stop/cache logic) and the FULL TT-generated output must match HF
+             `model.generate()` on the SAME input — matching generated LENGTH and
+             token/unit ids (or output waveform length). Comparing only one
+             teacher-forced step's logits on a matched prefix, feeding the SAME
+             generated ids to both sides, or asserting merely that `>= 1` token
+             was produced does NOT satisfy Gate 4 and is a FAIL.
 
 CRITICAL REQUIREMENTS:
   - The pipeline must NOT be a smoke test. It must be a REAL pipeline that
@@ -545,6 +611,13 @@ CRITICAL REQUIREMENTS:
     real task output — not just pass tensors around.
   - ALL graduated modules/components must be used in the pipeline.
   - The end-to-end pipeline must pass PCC >= {pcc}.
+  - For GENERATIVE heads (anything whose reference is `model.generate()`), parity
+    is measured against the reference generate() autoregressive output on the
+    SAME input — full generated sequence / output length — and on MULTIPLE
+    diverse inputs (>= 3). Never a single hand-picked input; never a single
+    teacher-forced-step PCC or a `>= 1` liveness assert standing in for real
+    generation parity. The emitted tests/e2e must be parametrized over those
+    inputs and must assert generate-parity (length + sequence) for such heads.
 
 STRUCTURE — follow the "yito" demo layout (the same package style used by the
 hand-authored demos under models/demos/, and the existing demo/ files in this
