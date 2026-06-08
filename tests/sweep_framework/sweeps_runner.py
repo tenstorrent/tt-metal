@@ -279,12 +279,15 @@ def device_context(test_module, output_queue):
 
 
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
-    # Enable operation tracing if --trace-params is set
+    # Enable operation tracing if --trace-params is set. Capture arguments BEFORE
+    # each op runs (not after), so in-place output buffers — e.g. all_gather_async's
+    # persistent_output_buffer — are recorded with their input topology, matching
+    # how the master was traced. See framework/preop_arg_capture.py.
     if config.trace_params:
         try:
-            import ttnn.operation_tracer
+            from tests.sweep_framework.framework.preop_arg_capture import enable_preop_capture
 
-            ttnn.operation_tracer.enable_tracing(True)
+            enable_preop_capture()
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
@@ -342,12 +345,13 @@ def _create_main_proc_runner(module_name, input_queue, output_queue, config):
     The runner_function executes a single test vector.
     The cleanup_context must be exited to close the device.
     """
-    # Enable operation tracing if --trace-params is set
+    # Enable operation tracing if --trace-params is set (pre-op argument capture;
+    # see framework/preop_arg_capture.py and the note in run()).
     if config.trace_params:
         try:
-            import ttnn.operation_tracer
+            from tests.sweep_framework.framework.preop_arg_capture import enable_preop_capture
 
-            ttnn.operation_tracer.enable_tracing(True)
+            enable_preop_capture()
             logger.info("Operation tracing enabled in main process mode")
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
