@@ -577,6 +577,7 @@ def _run_auto_iterate_loop(
 ) -> int:
     from ..cli import (
         REPO_ROOT,
+        _LAST_PYTEST_PCC,
         _LAST_PYTEST_STAGES,
         _TORCH_WRAPPER_PATTERNS,
         _agent_complexity_timeout,
@@ -4062,8 +4063,10 @@ def _run_auto_iterate_loop(
                 # Even if we don't graduate this round (primary, or still
                 # a torch wrapper), the brain needs a PCC value to make
                 # cap-extend trajectory decisions later.
-                last_pcc_per_component[_pass_comp] = _PASS_FLOOR_PCC
-                pcc_history_per_component.setdefault(_pass_comp, []).append(1.0 - _PASS_FLOOR_PCC)
+                _real = _LAST_PYTEST_PCC.get(_pass_comp)
+                _rec = _real if (_real is not None and _real >= _PASS_FLOOR_PCC) else _PASS_FLOOR_PCC
+                last_pcc_per_component[_pass_comp] = _rec
+                pcc_history_per_component.setdefault(_pass_comp, []).append(1.0 - _rec)
 
                 if _pass_comp == iter_target_component:
                     continue

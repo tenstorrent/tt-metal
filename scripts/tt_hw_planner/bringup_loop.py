@@ -769,6 +769,7 @@ def test_{component_safe}(device_params, device):
         torch_out = torch_out.to(torch.float32)
 
     ok, pcc = comp_pcc(torch_out, ttnn_out_torch, PCC_TARGET)
+    print(f"[bringup] achieved PCC={{pcc}} target={{PCC_TARGET}} component={{COMPONENT_NAME}}", flush=True)
     assert ok, (
         f"PCC {{pcc}} below target {{PCC_TARGET}} for {{COMPONENT_NAME}} of "
         f"{{HF_MODEL_ID}} (primary arg `{{primary_name}}`)"

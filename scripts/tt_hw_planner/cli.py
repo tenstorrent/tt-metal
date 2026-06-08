@@ -4492,6 +4492,7 @@ def _clear_responses_dir(demo_dir: Path) -> None:
 
 
 _LAST_PYTEST_STAGES: Dict[str, str] = {}
+_LAST_PYTEST_PCC: Dict[str, float] = {}
 
 
 def _run_focused_pytest(
@@ -4548,6 +4549,7 @@ def _run_focused_pytest(
     )
 
     _LAST_PYTEST_STAGES.clear()
+    _LAST_PYTEST_PCC.clear()
     current_test: Optional[str] = None
     lock_wait_state: Dict[str, object] = {"since": None, "blocker_pid": None, "abort": False}
     captured_tail: collections.deque = collections.deque(maxlen=4000)
@@ -4569,6 +4571,13 @@ def _run_focused_pytest(
                 _LAST_PYTEST_STAGES[key] = stage
                 lock_wait_state["since"] = None
                 lock_wait_state["blocker_pid"] = None
+            if line.lstrip().startswith("[bringup] achieved PCC="):
+                m_pcc = re.search(r"achieved\s+PCC=(-?\d+\.\d+).*?component=(\S+)", line)
+                if m_pcc:
+                    try:
+                        _LAST_PYTEST_PCC[m_pcc.group(2)] = float(m_pcc.group(1))
+                    except ValueError:
+                        pass
             if "Waiting for lock 'CHIP_IN_USE" in line:
                 if lock_wait_state["since"] is None:
                     lock_wait_state["since"] = _time.monotonic()
@@ -5055,9 +5064,11 @@ def _extract_pcc_from_failure(summary: str, details: str) -> Optional[float]:
       "AssertionError: PCC 0.9877806828998408 below target 0.99"
       "PCC -0.0006025997490610422 below target 0.99"
       "pcc achieved      : 0.8845  (target >= 0.99)"
+      "[bringup] achieved PCC=0.9991 target=0.99 component=g_l_u"
     """
     text = f"{summary}\n{details}"
     patterns = [
+        r"\[bringup\]\s+achieved\s+PCC=(-?\d+\.\d+)",
         r"PCC\s+(-?\d+\.\d+)\s+below\s+target",
         r"pcc\s+achieved\s*:\s*(-?\d+\.\d+)",
         r"comp_pcc.*?\s(-?\d+\.\d+)\s*<\s*0\.99",
@@ -7888,7 +7899,12 @@ def _pytest_line_interesting(s: str) -> bool:
     # Match the real progress marker (a line that STARTS with the marker), not
     # pytest's failure-traceback echo of the test source, where lines like
     # `print("[bringup] stage=...", flush=True)` merely CONTAIN the literal.
-    if s.startswith("[bringup] stage=") or "FINAL_PCC" in s or "Waiting for lock" in s:
+    if (
+        s.startswith("[bringup] stage=")
+        or s.startswith("[bringup] achieved PCC=")
+        or "FINAL_PCC" in s
+        or "Waiting for lock" in s
+    ):
         return True
     if s.startswith("models/") and "::" in s:
         return True
