@@ -75,14 +75,7 @@ if(COMMAND tt_disable_ccache_for_pch)
     tt_disable_ccache_for_pch(ttnn_pch_full)
 endif()
 
-# ── Legacy alias (kept for any consumers not yet migrated) ─────────────────────
-add_library(ttnn_pch STATIC)
-add_library(TTNN::PCH ALIAS ttnn_pch)
-file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp CONTENT "/*dummy ttnn pch file*/\n")
-target_sources(ttnn_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp)
-target_precompile_headers(ttnn_pch REUSE_FROM TT::CommonPCH)
-target_link_libraries(ttnn_pch PUBLIC TT::Metalium nlohmann_json::nlohmann_json fmt::fmt-header-only)
-target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+# NOTE: Legacy TTNN::PCH alias removed — all consumers migrated to PCHLean or PCHFull.
 
 ##################################################
 # Set options
