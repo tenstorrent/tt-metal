@@ -17,12 +17,20 @@
 //   cb_q   = 2*Th   cb_out = 2*Th        (whole head rows, double-buffered)
 //   cb_cos = 2*Tr   cb_sin = 2*Tr        (one sequence-tile of trig, double-buffered)
 //   cb_trans = 1                          (constant rotation matrix)
-//   c_24 + c_25 + c_26 = 3*Tr             (rope intermediates, single-buffered)
+//   c_24 + c_25 + c_26 = 3*Tr             (rope intermediates)
 //   => total = 4*Th + 7*Tr + 1 tiles.
-// Validation pins Th <= 16 and Tr <= 7 (see device op), so worst case is
-//   4*16 + 7*7 + 1 = 114 tiles. At a BF16 that is ~228 KB.
+//
+// DST strategy: Tr <= 8 always (qk_rope_dim <= 256). When Tn <= 8, batch all nope tiles in DST;
+// when Tn > 8, compile with Q_ROPE_CHUNKED_NOPE and copy nope in fp32-dependent chunks
+// (4 tiles when fp32 dest acc is on, 8 when off).
 
 namespace {
+
+// Max nope tiles per copy/pack acquire block. Matches usable half-sync Dst capacity with
+// dst_full_sync_en=false (default): 8 tiles (bf16 dest) or 4 tiles (fp32 dest acc). Batching
+// more copy_tile + pack_tile ops in one acquire crosses the half-sync boundary and corrupts output.
+constexpr uint32_t kMaxNopeDstTilesBf16 = 8U;
+constexpr uint32_t kMaxNopeDstTilesFp32 = 4U;
 
 constexpr auto kReaderKernelPath =
     "tt-train/sources/ttml/metal/ops/q_rope_fw/device/kernels/dataflow/reader_q_rope_fw.cpp";
@@ -141,16 +149,15 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
 
     const uint32_t num_blocks = B * Ts;
 
-    // Match rotary_embedding_llama: fp32 dest acc only when qk_rope_dim <= 128 (DST has 8 fp32 tiles).
+    // Match rotary_embedding_llama: fp32 dest acc only when qk_rope_dim <= 128.
     const bool fp32_dest_acc_en = args.qk_rope_dim <= 128U;
-    if (fp32_dest_acc_en) {
-        TT_FATAL(
-            Tr + 1U <= 8U,
-            "QRopeFw: qk_rope_dim ({}) / TILE_W = {} too large for compute DST (max Tr=7 with fp32 dest acc).",
-            args.qk_rope_dim,
-            Tr);
-    }
-    TT_FATAL(Th <= 16U, "QRopeFw: total head tiles Th={} (nope+rope) exceeds DST limit 16.", Th);
+    const uint32_t max_nope_dst_tiles = fp32_dest_acc_en ? kMaxNopeDstTilesFp32 : kMaxNopeDstTilesBf16;
+    const bool use_chunked_nope = (Tn > max_nope_dst_tiles);
+    TT_FATAL(
+        Tr <= 8U,
+        "QRopeFw: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (8, head_dim 256).",
+        args.qk_rope_dim,
+        Tr);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -209,7 +216,11 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         H,
     };
 
-    const std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines;
+    if (use_chunked_nope) {
+        defines["Q_ROPE_CHUNKED_NOPE"] = "1";
+        defines["Q_ROPE_NOPE_CHUNK_TILES"] = std::to_string(max_nope_dst_tiles);
+    }
 
     QRopeFwKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);

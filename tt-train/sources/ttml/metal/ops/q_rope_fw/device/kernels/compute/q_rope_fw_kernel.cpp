@@ -22,6 +22,10 @@
 //             rotate(q_pe) is a matmul of q_pe with the constant trans_mat (the "swap/negate halves"
 //             matrix) and cos/sin are the per-sequence-tile caches (Tr tiles each, shared by all heads).
 //
+// When Tn exceeds the fp32/bf16 nope DST limit, compile with Q_ROPE_CHUNKED_NOPE and copy nope in
+// Q_ROPE_NOPE_CHUNK_TILES batches (4 when fp32 dest acc is on, 8 when off). Tr is always <= 8
+// (qk_rope_dim <= 256), so q_pe is always processed in one DST batch.
+//
 // cos/sin are read once per block by the reader and reused across heads; trans_mat is loaded once for
 // the whole kernel. Intermediate products use scratch CBs (rotated_in / sin_interm / cos_interm).
 void kernel_main() {
@@ -57,7 +61,24 @@ void kernel_main() {
             cb_reserve_back(cos_interm_cb, Tr);
             cb_reserve_back(out_cb, Th);
 
-            // q_nope: pass through unchanged (pack configured for datacopy, not matmul).
+#ifdef Q_ROPE_CHUNKED_NOPE
+            constexpr uint32_t kNopeChunkTiles = Q_ROPE_NOPE_CHUNK_TILES;
+            for (uint32_t tile = 0U; tile < Tn; tile += kNopeChunkTiles) {
+                const uint32_t chunk = (tile + kNopeChunkTiles <= Tn) ? kNopeChunkTiles : (Tn - tile);
+                copy_tile_to_dst_init_short(in_cb);
+                tile_regs_acquire();
+                for (uint32_t j = 0U; j < chunk; ++j) {
+                    copy_tile(in_cb, tile + j, j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(out_cb);
+                for (uint32_t j = 0U; j < chunk; ++j) {
+                    pack_tile(j, out_cb, tile + j);
+                }
+                tile_regs_release();
+            }
+#else
             copy_tile_to_dst_init_short(in_cb);
             tile_regs_acquire();
             for (uint32_t j = 0U; j < Tn; ++j) {
@@ -70,8 +91,9 @@ void kernel_main() {
                 pack_tile(j, out_cb, j);
             }
             tile_regs_release();
+#endif
 
-            // q_pe: rotate via matmul with trans_mat -> rotated_in_interm_cb.
+            // q_pe: rotate via matmul with trans_mat -> rotated_in_interm_cb (Tr <= 8, single DST batch).
             mm_init_short(in_cb, trans_mat_cb);
             tile_regs_acquire();
             for (uint32_t j = 0U; j < Tr; ++j) {

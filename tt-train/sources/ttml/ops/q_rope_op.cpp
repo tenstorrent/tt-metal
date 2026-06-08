@@ -32,8 +32,7 @@ bool can_use_fused_q_rope(uint32_t qk_nope_dim, uint32_t qk_rope_dim, uint32_t s
     if (Tr + 1U > 8U) {
         return false;
     }
-    const uint32_t Th = qk_nope_dim / TILE_WIDTH + Tr;
-    return Th <= 16U;
+    return true;
 }
 
 ttnn::Tensor composite_q_rope_bw(

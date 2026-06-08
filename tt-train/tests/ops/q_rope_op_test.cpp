@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
@@ -38,6 +39,18 @@ ttnn::Tensor make_bf16_4d(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, ui
 
 ttml::ops::RotaryEmbeddingParams build_params(uint32_t seq_len, uint32_t qk_rope_dim) {
     return ttml::ops::build_rope_params(seq_len, qk_rope_dim, /*theta=*/10000.0F);
+}
+
+// Rotary_embedding_llama allows to pass compute kernel config to enable fp32 dest acc for qk_rope_dim <= 128.
+// Q-RoPE by default enable fp32 dest acc for qk_rope_dim <= 128.
+bool fp32_dest_acc_en_for_rope_dim(uint32_t qk_rope_dim) {
+    return qk_rope_dim <= 128U;
+}
+
+ttnn::WormholeComputeKernelConfig rotary_compute_kernel_config(uint32_t qk_rope_dim) {
+    auto config = ttml::core::ComputeKernelConfig::precise();
+    config.fp32_dest_acc_en = fp32_dest_acc_en_for_rope_dim(qk_rope_dim);
+    return config;
 }
 
 void expect_allclose(
@@ -79,7 +92,9 @@ ttnn::Tensor reference_q_rope(
         params.cos_cache,
         params.sin_cache,
         params.trans_mat,
-        /*is_decode_mode=*/false);
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        rotary_compute_kernel_config(qk_rope_dim));
 
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }
@@ -122,8 +137,8 @@ TEST_P(QRopeParamTest, FusedMatchesReference) {
     expect_allclose(
         ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, shape.qk_nope_dim, qk_head)),
         ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, shape.qk_nope_dim, qk_head)),
-        1e-2,
-        1e-2,
+        1e-4,
+        1e-4,
         shape.name + " q_pe");
 }
 
@@ -161,6 +176,22 @@ INSTANTIATE_TEST_SUITE_P(
             .n_heads = 2,
             .qk_nope_dim = 256,
             .qk_rope_dim = 224},  // Tn = 8, Tr = 7, Th = 15
+        // Tn > 4 (fp32 on): chunked nope in 4-tile DST batches.
+        QRopeShape{
+            .name = "chunked_nope_tn35",
+            .batch = 1,
+            .seq_len = 32,
+            .n_heads = 2,
+            .qk_nope_dim = 1120,
+            .qk_rope_dim = 64},  // Tn = 35, Tr = 2, fp32 on
+        // Tn > 8 (fp32 off): chunked nope in 8-tile DST batches.
+        QRopeShape{
+            .name = "chunked_nope_tn35_fp32_off",
+            .batch = 1,
+            .seq_len = 32,
+            .n_heads = 2,
+            .qk_nope_dim = 1120,
+            .qk_rope_dim = 160},  // Tn = 35, Tr = 5, fp32 off
         // B * Ts = 8 blocks: exercises multi-core split and repeated batch-boundary jumps.
         QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),

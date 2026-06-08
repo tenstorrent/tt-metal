@@ -22,6 +22,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "benchmark_utils.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
@@ -76,8 +77,7 @@ bool can_benchmark_fused(const ModelShape& shape, uint32_t seq_len) {
     if (Tr + 1U > 8U) {
         return false;
     }
-    const uint32_t Th = shape.qk_nope_dim / 32U + Tr;
-    return Th <= 16U;
+    return true;
 }
 
 SweepConfig load_sweep_config() {
@@ -100,6 +100,18 @@ std::vector<BenchmarkCase> make_benchmark_cases(const SweepConfig& cfg) {
         }
     }
     return cases;
+}
+
+// Rotary_embedding_llama allows to pass compute kernel config to enable fp32 dest acc for qk_rope_dim <= 128.
+// Q-RoPE by default enable fp32 dest acc for qk_rope_dim <= 128.
+bool fp32_dest_acc_en_for_rope_dim(uint32_t qk_rope_dim) {
+    return qk_rope_dim <= 128U;
+}
+
+ttnn::WormholeComputeKernelConfig rotary_compute_kernel_config(uint32_t qk_rope_dim) {
+    auto config = ttml::core::ComputeKernelConfig::precise();
+    config.fp32_dest_acc_en = fp32_dest_acc_en_for_rope_dim(qk_rope_dim);
+    return config;
 }
 
 ttnn::Tensor make_q_input(uint32_t batch, uint32_t n_heads, uint32_t seq_len, uint32_t qk_head, uint32_t seed) {
@@ -128,7 +140,13 @@ ttnn::Tensor composite_q_rope_fw(
         q_in, ttsl::SmallVector<uint32_t>{0, 0, 0, qk_nope_dim}, ttsl::SmallVector<uint32_t>{B, H, S, qk_head}, step);
 
     auto q_pe_rot = ttnn::experimental::rotary_embedding_llama(
-        q_pe, params.cos_cache, params.sin_cache, params.trans_mat, /*is_decode_mode=*/false);
+        q_pe,
+        params.cos_cache,
+        params.sin_cache,
+        params.trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        rotary_compute_kernel_config(qk_rope_dim));
 
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }
@@ -277,7 +295,7 @@ int main(int argc, char** argv) {
             "measure={}\n",
             g_sweep_cfg.num_warmup,
             g_sweep_cfg.num_measure);
-        fmt::print("Composite: slice + rotary_embedding_llama + concat.\n");
+        fmt::print("Composite: slice + rotary_embedding_llama (fp32 dest acc when qk_rope_dim <= 128) + concat.\n");
 
         benchmark::RegisterBenchmark("QRope", BM_QRope)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)
