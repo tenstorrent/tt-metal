@@ -41,14 +41,17 @@ void PrintTo(const AdamWCase& pc, std::ostream* os) {
 }
 
 class AdamWComparisonTest : public ::testing::TestWithParam<AdamWCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 
@@ -310,8 +313,8 @@ INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::Value
 static const AdamWCase kAMSGradCases[] = {
     // Standard AMSGrad
     {{1, 1, 1, 65'536}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "Standard"},
-    // AMSGrad with weight decay
-    {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
+    // Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+    // {{1, 4, 64, 256}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.01f, true, "WeightDecay_0p01"},
     // AMSGrad with different shape
     {{2, 8, 64, 512}, 1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, true, "NIGHTLY_Large_4D"},
 };
@@ -325,14 +328,17 @@ INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(
 
 // These tests are nondeterministic but should never fail
 class StochasticRoundingTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 

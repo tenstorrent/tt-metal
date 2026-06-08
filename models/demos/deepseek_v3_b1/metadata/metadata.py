@@ -9,22 +9,19 @@ import torch
 
 import ttnn
 
-# Full size of the on-device DeepseekMetadata struct (header + p_indices + p_scores).
-# MUST match `sizeof(deepseek_b1_ops::DeepseekMetadata)` in `metadata.hpp`. Used to
-# size the LM-head sampling source/destination metadata buffers (the source unicasts
-# the whole struct, and the destination has 192 B of trailing space that sampling.hpp
-# fills with the post-top-P p_indices / p_scores arrays).
-#
-# This is intentionally separate from `aligned_size_bytes()` (which describes the
-# header-only socket page used by the upstream pipeline) and from
-# `TOKEN_META_PAGE_SIZE_BYTES` (which describes the deferred output socket page).
-METADATA_TENSOR_BYTES = 256
+# Must match sizeof(deepseek_b1_ops::DeepseekMetadata) in metadata.hpp.
+METADATA_TENSOR_BYTES = 512
 METADATA_TENSOR_NUM_BF16 = METADATA_TENSOR_BYTES // 2
 METADATA_TENSOR_NUM_UINT32 = METADATA_TENSOR_BYTES // 4
 
-# On-device DeepseekMetadata array capacities (must match metadata.hpp).
-METADATA_P_INDICES_CAPACITY = 32  # uint32 each → 32 words = 128 B
-METADATA_P_SCORES_CAPACITY = 32  # bf16  each → 16 words = 64 B (2 bf16 packed per uint32)
+MAX_MTP_LEVELS = 4
+NUM_OUTPUT_TOKENS = 1 + MAX_MTP_LEVELS  # 1 base + up to 4 speculative
+
+# Array capacities — must match metadata.hpp.
+METADATA_P_INDICES_CAPACITY = 32
+METADATA_P_SCORES_CAPACITY = 32
+METADATA_Q_INDICES_CAPACITY = 32
+METADATA_Q_SCORES_CAPACITY = 32
 
 
 def _f32_bits(value: float) -> int:
@@ -39,88 +36,90 @@ def _bf16_bits(value: float) -> int:
 
 @dataclass
 class DeepseekMetadata:
-    FIELD_SIZE_BYTES = 4  # Each field is uint32_t
+    """Python mirror of deepseek_b1_ops::DeepseekMetadata (metadata.hpp).
 
-    tok0_id: int = 0
-    tok0_type: int = 0
-    tok0_pos: int = 0
-    tok1_id: int = 0
-    tok1_type: int = 0
-    tok1_pos: int = 0
+    Header layout (16 uint32 words = 64 bytes):
+        word  0    : lane_id   (0 = base, 1..4 = MTP level)
+        word  1    : slot_id
+        word  2    : token_id
+        word  3    : position_id
+        words 4-8  : output_token_ids[5]   (base + 4 spec)
+        words 9-12 : prefill_token_ids[4]  (one per MTP level)
+        word 13    : temperature  (float)
+        word 14    : k            (uint32)
+        word 15    : p            (float)
+
+    Followed by:
+        words 16-47   : p_indices[32]   (uint32)
+        words 48-63   : p_scores[32]    (bf16, two packed per uint32)
+        words 64-95   : q_indices[32]   (uint32)
+        words 96-111  : q_scores[32]    (bf16, two packed per uint32)
+        words 112-127 : padding[16]
+    """
+
+    FIELD_SIZE_BYTES = 4
+    lane_id: int = 0
     slot_id: int = 0
     token_id: int = 0
     position_id: int = 0
-    prefill_token_id: int = 0
+    output_token_ids: list[int] = field(default_factory=list)
+    prefill_token_ids: list[int] = field(default_factory=list)
     temperature: float = 0.0
     k: int = 0
-    probability_mass_threshold: float = 0.0
-    _pad0: int = 0
-    _pad1: int = 0
-    _pad2: int = 0
+    p: float = 0.0
     p_indices: list[int] = field(default_factory=list)
     p_scores: list[float] = field(default_factory=list)
+    q_indices: list[int] = field(default_factory=list)
+    q_scores: list[float] = field(default_factory=list)
 
     @classmethod
     def aligned_size_bytes(cls) -> int:
-        # Returns the full on-device struct size (header + p_indices + p_scores).
-        # Pipeline stages that forward metadata reserve this many bytes per shard
-        # so that the LM-head sampling stage can write `p_indices` / `p_scores`
-        # in place. The Python dataclass above only mirrors the header fields;
-        # the trailing arrays exist solely on device and are filled by sampling.hpp.
         return METADATA_TENSOR_BYTES
 
     def to_list(self) -> list[int]:
-        # Serialize the dataclass into a list of `uint32` words that mirrors the
-        # on-device DeepseekMetadata struct layout from metadata.hpp:
-        #
-        #   words  0..15 : header
-        #     0..12  → 13 scalar fields (floats bit-cast as uint32)
-        #     13..15 → _pad0 / _pad1 / _pad2
-        #   words 16..47 : p_indices[32]  — one uint32 per index
-        #   words 48..63 : p_scores[32]   — 32 bf16 packed two-per-uint32
-        #                                  (low halfword → even index, high → odd,
-        #                                   matches LE access of uint16_t[32] as uint32_t[16])
-        #
-        # Total: 64 uint32 words = METADATA_TENSOR_BYTES (256 B).
+        """Serialize into uint32 words matching the on-device struct layout."""
+        out_tok = list(self.output_token_ids) + [0] * (NUM_OUTPUT_TOKENS - len(self.output_token_ids))
+        prefill = list(self.prefill_token_ids) + [0] * (MAX_MTP_LEVELS - len(self.prefill_token_ids))
+
         words: list[int] = [
-            self.tok0_id & 0xFFFFFFFF,
-            self.tok0_type & 0xFFFFFFFF,
-            self.tok0_pos & 0xFFFFFFFF,
-            self.tok1_id & 0xFFFFFFFF,
-            self.tok1_type & 0xFFFFFFFF,
-            self.tok1_pos & 0xFFFFFFFF,
+            self.lane_id & 0xFFFFFFFF,
             self.slot_id & 0xFFFFFFFF,
             self.token_id & 0xFFFFFFFF,
             self.position_id & 0xFFFFFFFF,
-            self.prefill_token_id & 0xFFFFFFFF,
-            _f32_bits(self.temperature),
-            self.k & 0xFFFFFFFF,
-            _f32_bits(self.probability_mass_threshold),
-            self._pad0 & 0xFFFFFFFF,
-            self._pad1 & 0xFFFFFFFF,
-            self._pad2 & 0xFFFFFFFF,
         ]
-        assert len(words) == 16, "header must occupy exactly 16 uint32 words (64 B)"
+        words.extend(v & 0xFFFFFFFF for v in out_tok[:NUM_OUTPUT_TOKENS])
+        words.extend(v & 0xFFFFFFFF for v in prefill[:MAX_MTP_LEVELS])
+        words.append(_f32_bits(self.temperature))
+        words.append(self.k & 0xFFFFFFFF)
+        words.append(_f32_bits(self.p))
+        assert len(words) == 16, f"header must be 16 words, got {len(words)}"
 
-        if len(self.p_indices) > METADATA_P_INDICES_CAPACITY:
-            raise ValueError(
-                f"p_indices length {len(self.p_indices)} exceeds capacity " f"{METADATA_P_INDICES_CAPACITY}"
-            )
-        p_idx = list(self.p_indices) + [0] * (METADATA_P_INDICES_CAPACITY - len(self.p_indices))
-        words.extend(int(v) & 0xFFFFFFFF for v in p_idx)
+        def _pack_u32_array(values: list[int], capacity: int) -> None:
+            padded = list(values) + [0] * (capacity - len(values))
+            if len(values) > capacity:
+                raise ValueError(f"array length {len(values)} exceeds capacity {capacity}")
+            words.extend(int(v) & 0xFFFFFFFF for v in padded[:capacity])
 
-        if len(self.p_scores) > METADATA_P_SCORES_CAPACITY:
-            raise ValueError(f"p_scores length {len(self.p_scores)} exceeds capacity " f"{METADATA_P_SCORES_CAPACITY}")
+        def _pack_bf16_array(values: list[float], capacity: int) -> None:
+            padded = list(values) + [0.0] * (capacity - len(values))
+            if len(values) > capacity:
+                raise ValueError(f"array length {len(values)} exceeds capacity {capacity}")
+            for i in range(0, capacity, 2):
+                lo = _bf16_bits(padded[i])
+                hi = _bf16_bits(padded[i + 1])
+                words.append(((hi & 0xFFFF) << 16) | (lo & 0xFFFF))
 
-        p_sc = list(self.p_scores) + [0.0] * (METADATA_P_SCORES_CAPACITY - len(self.p_scores))
-        for i in range(0, METADATA_P_SCORES_CAPACITY, 2):
-            lo = _bf16_bits(p_sc[i])
-            hi = _bf16_bits(p_sc[i + 1])
-            words.append(((hi & 0xFFFF) << 16) | (lo & 0xFFFF))
+        _pack_u32_array(self.p_indices, METADATA_P_INDICES_CAPACITY)
+        _pack_bf16_array(self.p_scores, METADATA_P_SCORES_CAPACITY)
+        _pack_u32_array(self.q_indices, METADATA_Q_INDICES_CAPACITY)
+        _pack_bf16_array(self.q_scores, METADATA_Q_SCORES_CAPACITY)
 
-        assert len(words) == METADATA_TENSOR_NUM_UINT32, (
-            f"expected {METADATA_TENSOR_NUM_UINT32} uint32 words " f"({METADATA_TENSOR_BYTES} B), got {len(words)}"
-        )
+        # Padding to reach 512 bytes = 128 uint32 words.
+        words.extend([0] * 16)
+
+        assert (
+            len(words) == METADATA_TENSOR_NUM_UINT32
+        ), f"expected {METADATA_TENSOR_NUM_UINT32} words ({METADATA_TENSOR_BYTES} B), got {len(words)}"
         return words
 
 
@@ -171,10 +170,6 @@ def append_metadata_tail(tensor: torch.Tensor, metadata: DeepseekMetadata) -> to
 def create_metadata_tensor(
     mesh_device: ttnn.MeshDevice, grid: ttnn.CoreRangeSet, metadata: DeepseekMetadata
 ) -> ttnn.Tensor:
-    # Each shard holds the full on-device DeepseekMetadata struct
-    # (METADATA_TENSOR_BYTES = 256 B = METADATA_TENSOR_NUM_UINT32 = 64 uint32 words).
-    # `metadata.to_list()` returns exactly that many words, packed to mirror the
-    # C++ struct layout (header + p_indices + p_scores).
     words = metadata.to_list()
     torch_metadata = torch.tensor(words, dtype=torch.uint32).repeat(grid.num_cores(), 1)
     assert torch_metadata.shape == (grid.num_cores(), METADATA_TENSOR_NUM_UINT32), (

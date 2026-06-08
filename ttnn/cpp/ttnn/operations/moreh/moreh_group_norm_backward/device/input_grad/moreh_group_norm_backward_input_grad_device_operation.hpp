@@ -7,6 +7,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 struct MorehGroupNormBackwardInputGradOperation {
@@ -28,22 +29,7 @@ struct MorehGroupNormBackwardInputGradOperation {
     using tensor_return_value_t = Tensor;
 
     struct MorehGroupNormBackwardInputGradFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernels_id;
-            tt::tt_metal::KernelHandle writer_kernels_id;
-            uint32_t num_cores_to_be_used;
-            std::size_t num_cores_y;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& outputs);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& outputs);

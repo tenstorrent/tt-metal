@@ -241,7 +241,8 @@ class ModelOptimizations:
             + self._names["OpFidelity"]
             + "}"
         )
-        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        # NOTE: self.__name__ is used by test/demo flows to distinguish performance vs accuracy
+        # mode when selecting centralized targets from models/model_targets.yaml.
         self.__name__ = self._full_name
 
         # TODO: maybe we could warn about some unwanted settings here

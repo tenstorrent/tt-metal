@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_b1.metadata.metadata import METADATA_TENSOR_BYTES
 from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul.op import get_max_page_size_and_num_pages
 from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_device_role as get_reduce_device_role
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_one_b1.op import get_root3_row as get_reduce_root3_row
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -306,6 +307,7 @@ class LMHeadSampling:
         broadcast_topology_override=None,
         is_mtp_base_stage=False,
         is_mtp_verify_stage=False,
+        mtp_level=0,
         metadata_tensor=None,
         eh_subblock_k=None,
         reduce_semaphores=None,
@@ -635,8 +637,9 @@ class LMHeadSampling:
         sampling_max_cb = 28
         sampling_sum_cb = 29
         sampling_scaler_cb = 31
-        sampling_temp_cb = 32
+        sampling_probs_out_cb = 32
         sampling_rand_cb = 33
+        sampling_mask_cb = sampling_scaler_cb
         # Mesh-stage scratch CBs (live on stage-1 / stage-2 receiver = final core):
         sampling_mesh_stage_scores_cb = 34
         sampling_mesh_stage_indices_cb = 35
@@ -688,6 +691,9 @@ class LMHeadSampling:
         reduce_gate_semaphore_id = 11
         # [MTP] Semaphore IDs for singalling metadata unicast in spec stage
         metadata_ready_semaphore_id = 12
+        # [MTP] Gates MTP token Broadcast::Op after main sampling (worker core L1); separate from
+        # fabric_gate_bcast_turn (activation CCL) to avoid dual use of one semaphore.
+        token_bcast_turn_semaphore_id = 13
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -1020,18 +1026,25 @@ class LMHeadSampling:
                         sampling_stage2_num_slots * sampling_topk_min_alignment + 1023
                     ) // 1024
                     # Per-stage CT-arg values:
-                    #   * BaseLMHeadStage (default + MTP base): k=32, enable_metadata=1,
-                    #     copy_probabilities=1; k/p/temperature actually consumed at
-                    #     runtime from the metadata packet.
-                    #   * SpecLMHeadStage (is_mtp_verify_stage): k=1, no metadata copy.
-                    if is_mtp_verify_stage:
-                        sampling_topk_k_value = 1
-                        sampling_enable_metadata_value = 0
-                        sampling_copy_probabilities_value = 0
-                    else:
+                    #   * BaseLMHeadStage (mtp_level==0): k=32, enable_metadata=1,
+                    #     copy_probabilities=1 → writes p_indices/p_scores.
+                    #   * SpecLMHeadStage (is_mtp_verify_stage): k=32, enable_metadata=1,
+                    #     copy_probabilities=1, copy_to_q=1 → writes q_indices/q_scores.
+                    #   * MTP intermediate stages (mtp_level > 0): k=1, no metadata copy.
+                    sampling_copy_probabilities_to_q_value = 0
+                    if not is_mtp_verify_stage and mtp_level == 0:
                         sampling_topk_k_value = sampling_topk_k
                         sampling_enable_metadata_value = 1
                         sampling_copy_probabilities_value = 1
+                    elif is_mtp_verify_stage:
+                        sampling_topk_k_value = sampling_topk_k
+                        sampling_enable_metadata_value = 1
+                        sampling_copy_probabilities_value = 1
+                        sampling_copy_probabilities_to_q_value = 1
+                    else:
+                        sampling_topk_k_value = 1
+                        sampling_enable_metadata_value = 0
+                        sampling_copy_probabilities_value = 0
                     # Canonical packings, matching micro_ops/sampling/op.py:
                     #   * inv_temp_bf16: two copies of bf16(1/temp) packed into uint32
                     #     (the LLK softmax recip helper consumes both halves).
@@ -1234,22 +1247,46 @@ class LMHeadSampling:
                 reduce_dest_fabric_node_id = None
                 reduce_output_core_phys_x = 0
                 reduce_output_core_phys_y = 0
+                reduce_num_hops = 1
                 if enable_reduce_to_one:
                     reduce_root_row = int(reduce_params["root_coord"][0])
-                    reduce_use_torus = reduce_root_row in [0, 3]
+                    # Always use linear mode. Torus auto-enable was the source of the
+                    # corner-root hang: when root_row in {0,3}, the reduce was wiring
+                    # ROOT3→ROOT2 across 3 rows expecting fabric wrap, but fabric_2D is
+                    # not a torus, so packets sent with num_hops=1 never landed.
+                    reduce_use_torus = False
+                    reduce_root3_row = get_reduce_root3_row(reduce_root_row, reduce_use_torus)
                     reduce_device_role = get_reduce_device_role(coord, reduce_params["root_coord"], reduce_use_torus)
                     if reduce_device_role == MESH_LEAF:
-                        if reduce_use_torus:
-                            reduce_dest_coord = ttnn.MeshCoordinate(row - 1 if row == 1 else row + 1, col)
+                        # LEAVES live on the 2 rows that are not root_row/root3_row.
+                        # Send to whichever round-1 receiver is on the SAME column and
+                        # NOT separated from the leaf by the other receiver. This keeps
+                        # every LEAF→receiver hop exactly 1 row.
+                        lo = min(reduce_root_row, reduce_root3_row)
+                        hi = max(reduce_root_row, reduce_root3_row)
+                        if lo < row < hi:
+                            # Leaf sits between root and root3 → send to root row.
+                            leaf_dest_row = reduce_root_row
+                        elif abs(row - reduce_root3_row) < abs(row - reduce_root_row):
+                            leaf_dest_row = reduce_root3_row
                         else:
-                            reduce_dest_coord = ttnn.MeshCoordinate(row + 1 if row == 0 else row - 1, col)
+                            leaf_dest_row = reduce_root_row
+                        reduce_dest_coord = ttnn.MeshCoordinate(leaf_dest_row, col)
                     elif reduce_device_role == MESH_ROOT3:
-                        reduce_dest_coord = ttnn.MeshCoordinate(int(reduce_params["root_coord"][0]), col)
+                        reduce_dest_coord = ttnn.MeshCoordinate(reduce_root_row, col)
                     elif reduce_device_role == MESH_ROOT2:
                         reduce_dest_coord = reduce_params["root_coord"]
                     else:
                         reduce_dest_coord = reduce_params["root_coord"]
                     reduce_dest_fabric_node_id = mesh_device.get_fabric_node_id(reduce_dest_coord)
+                    # Multi-hop routing: when root is at a corner row, ROOT3→ROOT_ROW
+                    # spans 2 rows (e.g. root_row=3 → root3_row=1, dist=2). Fabric_2D
+                    # routes multi-hop transparently iff the kernel's fabric send
+                    # advertises the correct hop count; num_hops=1 silently truncates.
+                    reduce_num_hops = max(
+                        1,
+                        abs(int(coord[0]) - int(reduce_dest_coord[0])) + abs(int(coord[1]) - int(reduce_dest_coord[1])),
+                    )
                     roc_phys = device.worker_core_from_logical_core(reduce_params["output_core"])
                     reduce_output_core_phys_x = int(roc_phys.x)
                     reduce_output_core_phys_y = int(roc_phys.y)
@@ -1321,7 +1358,7 @@ class LMHeadSampling:
                     ("sampling_softmax_out_cb", sampling_softmax_out_cb),
                     ("sampling_softmax_exp_cb", sampling_softmax_exp_cb),
                     ("sampling_scaler_cb", sampling_scaler_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_topk_in_scores_cb", sampling_topk_in_scores_cb),
                     ("sampling_topk_in_indices_cb", sampling_topk_in_indices_cb),
@@ -1339,6 +1376,10 @@ class LMHeadSampling:
                     ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    (
+                        "token_bcast_turn_semaphore_id",
+                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                    ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
                     ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
@@ -1467,6 +1508,7 @@ class LMHeadSampling:
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_softmax_out_cb", sampling_softmax_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_mask_cb", sampling_scaler_cb),
                     ("sampling_winner_cb", sampling_winner_cb),
                     ("sampling_p_bf16", sampling_p_bf16),
                     ("sampling_topk_scores_slot_bytes", sampling_topk_scores_slot_bytes),
@@ -1476,13 +1518,20 @@ class LMHeadSampling:
                     ("sampling_rand_output_addr", 0),
                     ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                     ("sampling_softmax_in_cb", sampling_softmax_in_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_p_bcast_cb", sampling_softmax_sub_cb),
+                    ("sampling_rand_bcast_cb", sampling_sum_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_enable_metadata", sampling_enable_metadata_value),
                     ("sampling_copy_probabilities", sampling_copy_probabilities_value),
+                    ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    (
+                        "token_bcast_turn_semaphore_id",
+                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                    ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
                     ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
@@ -1521,6 +1570,7 @@ class LMHeadSampling:
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
+                    ("gather_output_tile_size", eh_output_tile_size if enable_mtp_on_device else 1),
                     ("metadata_output_l1_addr", metadata_output_l1_addr),
                     ("is_e_norm_device", 1 if is_e_norm_device else 0),
                     ("eh_norm_slice_offset_bytes", eh_norm_slice_offset_bytes),
@@ -1531,7 +1581,7 @@ class LMHeadSampling:
                     ("reduce_local_cb", reduce_local_cb),
                     ("reduce_scratch_cb", reduce_scratch_cb),
                     ("reduce_packet_cb", reduce_packet_cb),
-                    ("reduce_num_hops", 1),
+                    ("reduce_num_hops", reduce_num_hops if enable_reduce_to_one else 1),
                     (
                         "reduce_dst_fabric_node_chip_id",
                         int(reduce_dest_fabric_node_id.chip_id) if enable_reduce_to_one else 0,
@@ -1591,6 +1641,10 @@ class LMHeadSampling:
                     ("termination_semaphore_addr", termination_global_sem_addr),
                     ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
                     ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    (
+                        "token_bcast_turn_semaphore_id",
+                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                    ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
                     ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
@@ -1638,8 +1692,10 @@ class LMHeadSampling:
                     ("sampling_max_cb", sampling_max_cb),
                     ("sampling_sum_cb", sampling_sum_cb),
                     ("sampling_scaler_cb", sampling_scaler_cb),
-                    ("sampling_temp_cb", sampling_temp_cb),
+                    ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
+                    ("sampling_mask_cb", sampling_mask_cb),
+                    ("sampling_mask_aliases_scaler", 1 if sampling_mask_cb == sampling_scaler_cb else 0),
                     ("sampling_seed", int(seed) & 0xFFFFFFFF),
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_mesh_mode", argmax_mesh_mode),
@@ -1657,6 +1713,9 @@ class LMHeadSampling:
                     ("sampling_stage1_num_input_tiles", sampling_stage1_mesh_tiles),
                     ("sampling_stage2_row_elements", sampling_stage2_num_slots * sampling_topk_min_alignment),
                     ("sampling_stage2_num_input_tiles", sampling_stage2_mesh_tiles),
+                    ("sampling_enable_metadata", sampling_enable_metadata_value),
+                    ("metadata_output_l1_addr", metadata_output_l1_addr),
+                    ("sampling_inv_temp_bf16", sampling_inv_temp_bf16),
                 ]
 
                 # ================================================================
@@ -1882,7 +1941,10 @@ class LMHeadSampling:
                     eh_gather_cb_descriptor.core_ranges = ttnn.CoreRangeSet(
                         [ttnn.CoreRange(argmax_final_core, argmax_final_core)]
                     )
-                    eh_gather_cb_descriptor.total_size = (eh_gather_dst_num_pages + 4) * eh_output_tile_size
+                    metadata_num_tiles = socket_page_size_bytes // eh_output_tile_size
+                    eh_gather_cb_descriptor.total_size = (
+                        eh_gather_dst_num_pages + metadata_num_tiles
+                    ) * eh_output_tile_size
 
                     # CB 37: Sync CB for h_rmsnorm and lm head norm on TRISC
                     hnorm_ready_cb_format = ttnn.CBFormatDescriptor(
@@ -2093,7 +2155,7 @@ class LMHeadSampling:
                         sampling_max_cb,
                         sampling_sum_cb,
                         sampling_scaler_cb,
-                        sampling_temp_cb,
+                        sampling_probs_out_cb,
                         sampling_rand_cb,
                     ):
                         cbs_list.append(
@@ -2303,6 +2365,11 @@ class LMHeadSampling:
                     semaphore_descriptors.extend(
                         [
                             ttnn.SemaphoreDescriptor(
+                                id=token_bcast_turn_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
+                                initial_value=1,
+                            ),
+                            ttnn.SemaphoreDescriptor(
                                 id=mtp_ready_semaphore_id,
                                 core_ranges=mcast_sender_core_grid,
                                 initial_value=0,
@@ -2447,6 +2514,12 @@ class LMHeadSampling:
                             named_compile_time_arg="is_mtp_verify_stage",
                             core_range=all_cores,
                             value=1 if is_mtp_verify_stage else 0,
+                            other_value=0,
+                        ),
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="mtp_level",
+                            core_range=all_cores,
+                            value=mtp_level,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(

@@ -28,34 +28,54 @@ inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        // Transpose 32-bit data in dest by splitting into hi16 and lo16.
+        // TRNSPSRCB only operates on SrcB rows 16-31, so data goes through SRC_ROW16_OFFSET.
+        // SrcA_val=Tf32 addresses hi16 (DEST_NORM), SrcA_val=Float32 addresses lo16 (DEST_32B_LOW).
+        // Writing hi16 via MOVB2D(Tf32) clobbers lo16, so we cache lo16 in SrcA first.
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Enable SrcA format override to control MOVB2D hi16/lo16 addressing,
+        // and Zero_Flag_disabled_src to prevent mantissa flushing during MOV operations.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+
+        // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_32B_LOW reads the lo16 half of 32-bit dest.
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
         // note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
         // move row D2B again for cases of reducing across multiple tiles
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // Step 2: Cache the transposed lo16 data from SrcB rows 16-31 into SrcA rows 0-15.
+        // This preserves lo16 before hi16 MOVB2D(Tf32) clobbers it in dest.
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+        // Step 3: Read hi16 from dest into SrcB rows 16-31 and transpose.
+        // DEST_NORM reads the hi16 half of 32-bit dest.
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
+        // Step 4: Write transposed hi16 back to dest. SrcA_val=Tf32 makes MOVB2D target
+        // the hi16 (DEST_NORM) address space. This clobbers lo16 and that's why we cached it.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Step 5: Write cached lo16 from SrcA back to dest. SrcA_val=Float32 makes MOVA2D
+        // target the lo16 (DEST_32B_LOW) address space, restoring the mantissa bits.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
 
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        // Restore: disable SrcA format override and re-enable zero flag.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
     else
     {
@@ -305,9 +325,6 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-        // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -315,14 +332,6 @@ inline void _llk_math_reduce_init_()
 }
 
 template <bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
+inline void _llk_math_reduce_uninit_([[maybe_unused]] const std::uint32_t srca_data_format)
 {
-    if constexpr (enforce_fp32_accumulation)
-    {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
-        // Uses helper from llk_math_common.h which includes tensix_sync()
-        _llk_math_dbg_feature_enable_();
-        // Restore SrcA format (init changes it to Float32 for MOVB2D/D2B Hi/Lo16 workaround on WH)
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
-    }
 }

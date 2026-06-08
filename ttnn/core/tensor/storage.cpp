@@ -218,7 +218,7 @@ distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() con
     return std::visit(
         ttsl::overloaded{
             [](const MeshTensorHolder::Allocated& allocated) -> distributed::MeshDevice* {
-                return &allocated.mesh_tensor_.device_mut();
+                return &allocated.mesh_tensor_.mutable_device();
             },
             [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> distributed::MeshDevice* {
                 return tombstone.mesh_buffer_->device();

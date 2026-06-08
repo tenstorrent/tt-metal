@@ -108,7 +108,7 @@ void kernel_main() {
         src_data_format,
         src_cb_addr);
 
-    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements, keepdim);
+    OutputContext output_ctx((uint32_t*)accumulated_arg_max, tile_height, dst_cb_addr, output_page_elements);
 
     // Iterate over the initial dimensions combined together
     for (uint32_t outer_index = 0; outer_index < outer_dim_size; outer_index++) {
@@ -149,68 +149,6 @@ void kernel_main() {
 
             if (output_ctx.collected_count >= output_page_elements) {
                 write_to_output<dst_accessor_type, keepdim>(noc, s_dst, output_ctx);
-            }
-        }
-    }
-}
-
-void get_face_data_range(
-    uint32_t& data_rows,
-    uint32_t& data_cols,
-    uint32_t tile_x,
-    uint32_t tile_y,
-    uint32_t face_id,
-    const InputContext& ctx) {
-    const bool is_bottom_tile = tile_y == (ctx.input_height - 1);
-    const bool is_right_most_tile = tile_x == (ctx.input_width - 1);
-
-    // Initialize the range as full face
-    data_rows = face_height;
-    data_cols = face_width;
-
-    if (!ctx.has_padding) {
-        return;
-    }
-
-    if (!is_bottom_tile && !is_right_most_tile) {
-        // Only marginal tiles may contain the padding
-        return;
-    }
-
-    const bool is_right_face = (face_id == 1 || face_id == 3);
-    const bool is_bottom_face = (face_id == 2 || face_id == 3);
-
-    const uint32_t height_rem = ctx.tile_h_rem;
-    if (is_bottom_tile && height_rem != 0) {
-        if (is_bottom_face) {
-            const bool skip_bottom_face = height_rem < face_height;
-            if (skip_bottom_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_rows = ctx.face_h_rem;
-        } else {
-            // One of the upper faces
-            if (height_rem < face_height) {
-                data_rows = height_rem;
-            }
-        }
-    }
-
-    const uint32_t width_rem = ctx.tile_w_rem;
-    if (is_right_most_tile && width_rem != 0) {
-        if (is_right_face) {
-            const bool skip_right_face = width_rem < face_width;
-            if (skip_right_face) {
-                data_rows = 0;
-                data_cols = 0;
-                return;
-            }
-            data_cols = ctx.face_w_rem;
-        } else {
-            if (width_rem < face_width) {
-                data_cols = width_rem;
             }
         }
     }

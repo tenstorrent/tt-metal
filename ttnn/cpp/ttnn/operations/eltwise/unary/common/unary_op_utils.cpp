@@ -103,6 +103,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
+        case UnaryOpType::MISH: return "SFPU_OP_MISH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -596,8 +597,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
-        case UnaryOpType::MISH:
-            return {};// MISH uses dedicated mish_kernel.cpp;
+        case UnaryOpType::MISH: {
+            return {
+                fmt::format("mish_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("mish_tile<{1}u>({0});", idst, (uint32_t)param0)};
+        }
         case UnaryOpType::RSQRT: {
             return {"rsqrt_tile_init<false>();", fmt::format("rsqrt_tile<false, {1}>({0});", idst, param0_raw)};
         }
@@ -1020,7 +1024,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
                 return "lgamma_fast_kernel.cpp";
             }
             return "lgamma_kernel.cpp";
-        case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK: return "tanhshrink_kernel.cpp";
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";

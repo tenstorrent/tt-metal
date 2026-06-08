@@ -23,7 +23,12 @@ Tensor reduce(
     const std::optional<tt::tt_metal::DataType>& output_dtype = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool negate = false);
+    bool negate = false,
+    // When true, eligible mean/sum reduces consume ROW_MAJOR input directly via the dense
+    // row-major fast path. When false (default), the op always tilizes and uses the classic
+    // tile-reduce kernels. Default-off pending fixes to the dense RM path (perf regression +
+    // multi-H-tile hang); see reduce_op.cpp for the eligibility constraints.
+    bool use_row_major_support = false);
 
 }  // namespace ttnn::operations::reduction::generic::detail
 

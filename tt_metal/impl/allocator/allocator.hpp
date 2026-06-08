@@ -28,7 +28,7 @@ public:
     // See: #29569
     explicit AllocatorImpl(const AllocatorConfig& alloc_config);
 
-    ~AllocatorImpl();
+    virtual ~AllocatorImpl();
 
     DeviceAddr allocate_buffer(Buffer* buffer);
 

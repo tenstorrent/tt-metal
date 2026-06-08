@@ -3,7 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t input0_cb_id = get_compile_time_arg_val(0);
@@ -34,6 +39,7 @@ void kernel_main() {
 #endif
     constexpr uint32_t group_stride = input0_stride + input1_stride;
 
+    Noc noc;
     CircularBuffer input0_cb(input0_cb_id);
     CircularBuffer input1_cb(input1_cb_id);
     CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
@@ -43,12 +49,6 @@ void kernel_main() {
     const uint32_t base_l1_read_addr_0 = input0_transpose_cb.get_read_ptr();
     const uint32_t base_l1_read_addr_1 = input1_transpose_cb.get_read_ptr();
     const uint32_t base_l1_write_addr = concat_cb.get_write_ptr();
-
-#ifdef USE_SINGLE_PACKET_READ
-    // Pre-compute NOC addresses for single-packet reads
-    const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
-    const uint64_t noc_addr_1 = get_noc_addr(base_l1_read_addr_1);
-#endif
 
     input0_cb.push_back(input0_num_tiles_height * input0_num_tiles_width);
     input1_cb.push_back(input1_num_tiles_height * input1_num_tiles_width);
@@ -62,23 +62,42 @@ void kernel_main() {
         uint32_t l1_write_addr = base_l1_write_addr;
 
 #ifdef USE_SINGLE_PACKET_READ
-        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
-        noc_async_read_one_packet_set_state(noc_addr_0, input0_stride);
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            input0_stride,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = base_l1_read_addr_0});
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                input0_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input0_stride;
             l1_write_addr += group_stride;
         }
 #else
-        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input0_stride);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                input0_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input0_stride;
             l1_write_addr += group_stride;
         }
 #endif
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         input0_transpose_cb.pop_front(input0_num_tiles_width);
 
         input1_transpose_cb.wait_front(input1_num_tiles_width);
@@ -87,23 +106,42 @@ void kernel_main() {
         l1_write_addr = base_l1_write_addr + input0_stride;
 
 #ifdef USE_SINGLE_PACKET_READ
-        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
-        noc_async_read_one_packet_set_state(noc_addr_1, input1_stride);
+        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            UnicastEndpoint{},
+            input1_stride,
+            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+             .addr = base_l1_read_addr_1});
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                UnicastEndpoint{},
+                dst,
+                input1_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input1_stride;
             l1_write_addr += group_stride;
         }
 #else
-        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
         for (uint32_t j = 0; j < groups; j++) {
-            noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input1_stride);
+            CoreLocalMem<uint32_t> dst(l1_write_addr);
+            noc.async_read(
+                UnicastEndpoint{},
+                dst,
+                input1_stride,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = l1_read_addr},
+                {.offset_bytes = 0});
             l1_read_addr += input1_stride;
             l1_write_addr += group_stride;
         }
 #endif
 
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         input1_transpose_cb.pop_front(input1_num_tiles_width);
 
         concat_cb.push_back(output_num_tiles_width);

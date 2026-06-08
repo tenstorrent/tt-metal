@@ -228,7 +228,8 @@ using namespace ckernel;
 // This must be done BEFORE including the TopK LLK API header.
 #define DST_SYNC_MODE  dest_sync
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_topk.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
