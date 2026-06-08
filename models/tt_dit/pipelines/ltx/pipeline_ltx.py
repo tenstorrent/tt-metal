@@ -15,7 +15,6 @@ import hashlib
 import json
 import math
 import os
-import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -54,7 +53,7 @@ from ...utils.patchifiers import (
 )
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import Tracer
-from ...utils.video import Audio, export_video_audio
+from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -167,8 +166,12 @@ class LTXPipeline:
     """
     LTX-2 text-to-audio-video generation pipeline.
 
+    Shared base for the concrete LTX variants (one-stage / distilled / two-stages); it owns
+    the device machinery (loaders, ``call_av``, encode/decode) but not ``generate`` /
+    ``warmup_buffers`` — those live on the concrete subclasses.
+
     Usage:
-        pipeline = LTXPipeline.create_pipeline(
+        pipeline = LTXOneStagePipeline.create_pipeline(
             mesh_device,
             checkpoint_name="Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors",
             gemma_path="google/gemma-3-12b-it-qat-q4_0-unquantized",
@@ -345,8 +348,9 @@ class LTXPipeline:
         logger.info(f"Resolving HuggingFace checkpoint {repo_id}:{filename} (auto-download if missing)")
         return hf_hub_download(repo_id=repo_id, filename=filename)
 
-    @staticmethod
+    @classmethod
     def create_pipeline(
+        cls,
         mesh_device: ttnn.MeshDevice,
         *,
         checkpoint_name: str | None = None,
@@ -437,7 +441,7 @@ class LTXPipeline:
         )
         ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
 
-        pipeline_cls = pipeline_class or LTXPipeline
+        pipeline_cls = pipeline_class or cls
         if run_warmup and not (num_frames > 0 and height > 0 and width > 0):
             logger.warning(f"run_warmup=True but invalid shape ({num_frames=}, {height=}, {width=}); skipping warmup")
 
@@ -882,132 +886,6 @@ class LTXPipeline:
         elif prompt.shape[-1] > self.cross_attention_dim:
             prompt = prompt[..., : self.cross_attention_dim]
         return bf16_tensor(prompt, device=self.mesh_device)
-
-    def warmup_buffers(
-        self,
-        *,
-        num_frames: int,
-        height: int,
-        width: int,
-        num_inference_steps: int = 2,
-    ) -> None:
-        """Compile every device program full-guidance ``call_av`` will exercise
-        (4 transformer passes/step: cond/uncond/ptb/iso) plus VAE decode.
-        ``ge_gamma=0`` skips the GE branch (pure host math)."""
-        t0 = time.time()
-        logger.info(f"warmup (AV): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
-
-        # Dummy zero embeddings at the real shapes — warmup only needs to compile the
-        # (shape-driven) call_av kernels, not real prompt content. This avoids loading
-        # the encoder here, which would coresident-evict the DiT; the encoder kernels
-        # compile on the first generate().
-        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
-        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
-        v_n, a_n = v_p, a_p
-
-        self.call_av(
-            video_prompt_embeds=v_p,
-            audio_prompt_embeds=a_p,
-            neg_video_prompt_embeds=v_n,
-            neg_audio_prompt_embeds=a_n,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            seed=0,
-            ge_gamma=0.0,
-        )
-
-        self._warmup_decode(num_frames, height, width)
-        self._prepare_transformer(0)
-        logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
-
-    def generate(
-        self,
-        prompt: str,
-        *,
-        output_path: str,
-        negative_prompt: str | None = None,
-        num_frames: int = 121,
-        height: int = 512,
-        width: int = 768,
-        num_inference_steps: int = 30,
-        video_cfg_scale: float = 3.0,
-        audio_cfg_scale: float = 7.0,
-        video_stg_scale: float = 1.0,
-        audio_stg_scale: float = 1.0,
-        video_modality_scale: float = 3.0,
-        audio_modality_scale: float = 3.0,
-        rescale_scale: float = 0.7,
-        stg_block: int = 28,
-        seed: int = 10,
-        ge_gamma: float = 0.0,
-        fps: int = 24,
-    ) -> str:
-        """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4.
-
-        Guidance defaults match the reference ``LTX_2_3_PARAMS``. ``ge_gamma`` enables
-        gradient-estimation sampling (off by default, as in the reference); pass a
-        non-zero value (the reference uses 2.0) to turn it on.
-        """
-        neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
-
-        total_t0 = time.time()
-
-        t0 = time.time()
-        # On-device Gemma encode; coresident-excluded with the DiT/VAE, so loading it auto-evicts
-        # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
-        # a cached prompt skips the encoder entirely.
-        cached = os.path.exists(self._device_embed_cache_path([prompt, neg]))
-        if not cached:
-            self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt, neg])
-        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
-        neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
-        logger.info(f"Encoding ({'cache' if cached else 'device'}): {time.time() - t0:.1f}s")
-
-        self._prepare_transformer(0)
-
-        t0 = time.time()
-        video_latent, audio_latent = self.call_av(
-            video_prompt_embeds=v_embeds,
-            audio_prompt_embeds=a_embeds,
-            neg_video_prompt_embeds=neg_v,
-            neg_audio_prompt_embeds=neg_a,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            video_cfg_scale=video_cfg_scale,
-            audio_cfg_scale=audio_cfg_scale,
-            video_stg_scale=video_stg_scale,
-            audio_stg_scale=audio_stg_scale,
-            video_modality_scale=video_modality_scale,
-            audio_modality_scale=audio_modality_scale,
-            rescale_scale=rescale_scale,
-            stg_block=stg_block,
-            seed=seed,
-            ge_gamma=ge_gamma,
-        )
-        denoise_time = time.time() - t0
-        logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
-
-        t0 = time.time()
-        self._prepare_vae()
-        logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
-
-        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
-
-        t0 = time.time()
-        video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
-        logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
-
-        audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
-        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
-
-        total_time = time.time() - total_t0
-        logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")
-        return output_path
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Compute audio RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""

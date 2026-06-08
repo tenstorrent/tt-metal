@@ -121,7 +121,7 @@ python -m pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -v
 python -m pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -v
 python -m pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -v
 python -m pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -v
-python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx.py -v
+python -m pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_one_stage.py -v
 ```
 
 ## Key Features
