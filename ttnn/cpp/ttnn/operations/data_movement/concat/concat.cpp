@@ -352,12 +352,24 @@ ttnn::Tensor concat(
         if (has_tile_padding_on_concat_dim) {
             const uint64_t second_last_dim = first_tensor.logical_shape()[rank - 2];
             const uint64_t elem_size = first_tensor.element_size();
+            const uint64_t buf_align = first_tensor.buffer()->alignment();
             tt::tt_metal::IDevice* device = first_tensor.device();
             const uint64_t l1_capacity =
                 device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-            const uint64_t estimated_page_size = elem_size * second_last_dim;
 
-            if (estimated_page_size > l1_capacity) {
+            // Only chunk if the transpose fallback will actually fire: after
+            // untilize the RM last dim must be non-aligned for transpose to trigger.
+            bool would_transpose =
+                std::any_of(input_tensors.begin(), input_tensors.end(), [dim, buf_align](const ttnn::Tensor& tensor) {
+                    return (static_cast<uint64_t>(tensor.logical_shape()[dim]) * tensor.element_size()) % buf_align !=
+                           0;
+                });
+
+            // Account for buffer alignment when estimating the post-transpose page size.
+            const uint64_t raw_page = elem_size * second_last_dim;
+            const uint64_t estimated_page_size = ((raw_page + buf_align - 1) / buf_align) * buf_align;
+
+            if (would_transpose && estimated_page_size > l1_capacity) {
                 constexpr uint32_t TILE_H = 32;
                 const uint32_t max_chunk_rows = static_cast<uint32_t>(l1_capacity / (2 * elem_size));
                 const uint32_t chunk_rows = (max_chunk_rows / TILE_H) * TILE_H;
