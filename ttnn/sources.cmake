@@ -84,8 +84,6 @@ set(TTNN_SRC_PYBIND
     core/distributed/distributed_nanobind.cpp
     core/graph/graph_nanobind.cpp
     cpp/ttnn/operations/bernoulli/bernoulli_nanobind.cpp
-    cpp/ttnn/operations/conv/conv_nanobind.cpp
-    cpp/ttnn/operations/conv/conv2d/conv2d_nanobind.cpp
     cpp/ttnn/operations/creation/creation_nanobind.cpp
     cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
     cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
@@ -98,7 +96,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/expand/expand_nanobind.cpp
     cpp/ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.cpp
     cpp/ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.cpp
-    cpp/ttnn/operations/data_movement/fold/fold_nanobind.cpp
     cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.cpp
     cpp/ttnn/operations/data_movement/narrow/narrow_nanobind.cpp
     cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
@@ -149,9 +146,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.cpp
     cpp/ttnn/operations/examples/examples_nanobind.cpp
     cpp/ttnn/operations/experimental/bcast_to/bcast_to_nanobind.cpp
-    cpp/ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.cpp
-    cpp/ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.cpp
-    cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
@@ -167,7 +161,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
-    cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
@@ -184,8 +177,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
-    cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
-    cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.cpp
@@ -252,10 +243,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.cpp
     cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp
     cpp/ttnn/operations/normalization/normalization_nanobind.cpp
-    cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
-    cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
-    cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
-    cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
     cpp/ttnn/operations/reduction/reduction_nanobind.cpp
@@ -270,7 +257,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/reduction/topk/topk_nanobind.cpp
     cpp/ttnn/operations/reduction/manual_seed/manual_seed_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
-    cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
     cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/transformer_nanobind.cpp

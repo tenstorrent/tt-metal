@@ -488,35 +488,12 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
-from ttnn.operations.conv2d import (
-    Conv2dConfig,
-    PaddingMode,
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
-
-from ttnn.operations.pool import (
-    prepare_grid_sample_grid,
-)
-
-from ttnn._ttnn.operations.experimental import Conv3dConfig
+# TODO(nuked-op conv2d/pool/conv3d): conv2d/pool/conv3d imports removed with the nuked ops.
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
-
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 # NOTE: SDPAProgramConfig removed with the nuked sdpa op (agent-regen baseline).
 
