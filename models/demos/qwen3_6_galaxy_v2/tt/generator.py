@@ -37,8 +37,12 @@ def get_padded_prefill_len(seq_len: int) -> int:
     """
     if seq_len <= 128:
         return 128
-    if seq_len <= 1024:
-        return 1024
+    # qwen3.6: the 1024 and 2048 prefill buckets have a broken matmul program-config
+    # (num_blocks_x=9 > num_cores_x=5 on the 5-column compute grid) -> TT_FATAL at
+    # matmul_multicore_reuse_mcast_2d. Only the 128 and >=4096 buckets are valid, so
+    # pad anything in (128, 4096] up to 4096 (the bucket the demo verifies coherent).
+    if seq_len <= 4096:
+        return 4096
     else:
         # return next power of 2 greater than seq_len
         return 2 ** (seq_len - 1).bit_length()
