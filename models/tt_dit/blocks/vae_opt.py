@@ -354,7 +354,7 @@ class VaeConv2d(Module):
                 axes.append(self._ctx.w_mesh_axis)
                 sems.append(ccl.get_np_ping_pong_semaphore(self._ctx.w_mesh_axis))
                 links.append(_get_neighbor_pad_num_links(ccl, x, 1))
-            x = ccl.neighbor_pad_persistent_buffer(
+            x = ccl.neighbor_pad(
                 x,
                 dims=dims,
                 pad_left=pad_left,
