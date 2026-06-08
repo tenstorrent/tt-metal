@@ -88,7 +88,7 @@ _POST_COMBINE_TILIZE_SHARD_WIDTH_MULTIPLE = (
 # N pre-split outputs from fast_reduce_nc_fused). Any other size falls through to a single
 # input ttnn.reduce_scatter, so fast_reduce should produce one output instead of N.
 _DEEPSEEK_RS_DP_DIM = 8
-_WH_MAX_CORE_GRID_Y = 7
+_WH_MAX_CORE_GRID_Y = 9
 
 
 def _default_post_combine_tilize_memory_config(
@@ -109,7 +109,7 @@ def _default_post_combine_tilize_memory_config(
     caller is expected to fall back to the `tilize_with_val_padding` path.
     """
 
-    usable_rows = _WH_MAX_CORE_GRID_Y + 1  # 0-indexed inclusive max → row count
+    usable_rows = _WH_MAX_CORE_GRID_Y  # 0-indexed inclusive max → row count
     usable_cols = _POST_COMBINE_TILIZE_MAX_CORES_X
     num_bands = (effective_experts_k + usable_rows - 1) // usable_rows
     # Each band is num_cores_x wide; all bands must fit the compute width side by side.
@@ -128,7 +128,7 @@ def _default_post_combine_tilize_memory_config(
     shard_width = hidden_size // num_cores_x
 
     # Lay experts into column-bands: band b holds experts [b*usable_dim, ...), stacked
-    # down y, at x-offset b*num_cores_x. A single band (effective_experts_k ≤ usable_dim)
+    # down y, at x-offset b*num_cores_x. A single band (effective_experts_k ≤ usable_rows)
     # reproduces the original single-rectangle grid exactly.
     core_ranges = []
     for band in range(num_bands):
