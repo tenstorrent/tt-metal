@@ -225,6 +225,8 @@ def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, map
     else:
         # Purely local single-rank discovery: no --host => mpirun never ssh's out.
         cmd = ["mpirun", "--np", "1", "--mca", "btl", "self,tcp"]
+        if mpi_if:
+            cmd.extend(["--mca", "btl_tcp_if_include", mpi_if])
     cmd.extend(["--bind-to", "none", "--tag-output", "--wdir", str(cwd)])
     cmd.extend([str(test_executable), f"--gtest_filter={SLICE_MAPPING_GTEST_FILTER}"])
 
@@ -364,7 +366,7 @@ def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_d
     # inside one docker container, so the script works when the local env only has
     # the pulled image and no native build. The launch host need not be hosts[0].
     if run_discovery:
-        generate_slice_to_pcie_device_mapping(None, work_dir=cwd)
+        generate_slice_to_pcie_device_mapping(None, mpi_if=mpi_if, work_dir=cwd)
     elif not mapping_path.exists():
         logger.error(f"{mapping_path} not found (run discovery or generate it first)")
         sys.exit(1)

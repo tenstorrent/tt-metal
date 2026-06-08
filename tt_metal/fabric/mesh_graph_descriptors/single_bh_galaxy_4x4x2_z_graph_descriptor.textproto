@@ -13,7 +13,7 @@
 #     is isomorphic to 4x2 (still embeds on one tray) but does not match that
 #     trigger, so the mapper places the 4 meshes freely as it did before #43384.
 # Neighbor-exchange therefore exercises BOTH:
-#   - non-Z links: intra-mesh 4x2 adjacency (N/S/E/W)
+#   - non-Z links: intra-mesh 2x4 adjacency (N/S/E/W)
 #   - Z links:     inter-mesh ring connections (assign_z_direction)
 #
 # Launch: 4 MPI ranks on a single host, one per mesh (TT_MESH_ID 0..3), each
