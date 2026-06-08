@@ -37,7 +37,10 @@ class GemmaConfig:
 
     @classmethod
     def gemma_300m(cls) -> "GemmaConfig":
-        """Gemma 300M configuration (action expert)."""
+        """Pi0.5 action expert: Gemma-300M-sized (18L, 1024H, 4096 MLP) but with
+        head_dim=256 to MATCH the VLM, not the stock Gemma-300M head_dim=64.
+        Required because pi0.5 cross-attention reuses the VLM's KV cache;
+        expert Q heads must share head_dim with VLM K/V."""
         return cls(
             width=1024,
             depth=18,
@@ -61,6 +64,11 @@ class SigLIPConfig:
     intermediate_size: int = 4304
     layer_norm_eps: float = 1e-6
 
+    def __post_init__(self):
+        assert self.hidden_size % self.num_attention_heads == 0, (
+            f"SigLIP hidden_size={self.hidden_size} not divisible by " f"num_attention_heads={self.num_attention_heads}"
+        )
+
     @property
     def num_patches(self) -> int:
         return (self.image_size // self.patch_size) ** 2
@@ -77,7 +85,7 @@ class SuffixConfig:
     action_dim: int = 32
     action_horizon: int = 50
     expert_width: int = 1024
-    state_dim: int = 32  # Robot state dimension
+    state_dim: int = 32  # padded for tile alignment; real state is 8-dim (see norm_stats.json)
     time_emb_dim: int = 1024  # Time embedding dimension
     pi05: bool = False  # PI05 uses different time handling
 
@@ -88,7 +96,6 @@ class PrefixConfig:
 
     vlm_hidden_size: int = 2048
     num_image_tokens: int = 256  # Tokens per image from SigLIP
-    max_lang_tokens: int = 512
 
 
 @dataclass
@@ -107,6 +114,10 @@ class PaliGemmaConfig:
             self.expert_config = GemmaConfig.gemma_300m()
         if self.siglip_config is None:
             self.siglip_config = SigLIPConfig()
+        assert self.expert_config.head_dim == self.vlm_config.head_dim, (
+            f"expert head_dim={self.expert_config.head_dim} must match "
+            f"vlm head_dim={self.vlm_config.head_dim} (cross-attention KV-cache sharing)"
+        )
 
 
 @dataclass
@@ -149,6 +160,10 @@ class PI0ModelConfig:
         self.vlm_config = GemmaConfig.gemma_2b()
         self.expert_config = GemmaConfig.gemma_300m()
         self.siglip_config = SigLIPConfig()
+        assert self.expert_config.head_dim == self.vlm_config.head_dim, (
+            f"expert head_dim={self.expert_config.head_dim} must match "
+            f"vlm head_dim={self.vlm_config.head_dim} (cross-attention KV-cache sharing)"
+        )
 
 
 # ============================================================================
@@ -179,3 +194,24 @@ class Pi0_5ModelConfig(PI0ModelConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+    @classmethod
+    def from_checkpoint(cls, ckpt_dir, **overrides) -> "Pi0_5ModelConfig":
+        """Construct config with action_horizon auto-read from <ckpt_dir>/config.json.
+
+        Use this in any test or production path that loads weights from a
+        specific checkpoint. The pi05_libero upstream checkpoint trains at
+        action_horizon=10, the lerobot finetune at 50 — instantiating with
+        the default silently degrades PCC (see
+        [[feedback_action_horizon_from_config]]).
+
+        Any keyword in `overrides` wins over the auto-detected value.
+        """
+        from pathlib import Path
+
+        from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
+
+        default_ah = cls.__dataclass_fields__["action_horizon"].default
+        ah = action_horizon_from_checkpoint(Path(ckpt_dir), default=default_ah)
+        overrides.setdefault("action_horizon", ah)
+        return cls(**overrides)

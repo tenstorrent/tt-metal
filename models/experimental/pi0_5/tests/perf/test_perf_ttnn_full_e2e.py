@@ -31,14 +31,18 @@ import ttnn
 
 from models.experimental.pi0_5.common.checkpoint_meta import action_horizon_from_checkpoint
 
-_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+_DEFAULT_CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", str(_DEFAULT_CHECKPOINT_DIR)))
 
-NUM_WARMUP = 0
-NUM_ITERS = 1
+NUM_WARMUP = int(os.environ.get("PI05_E2E_NUM_WARMUP", "0"))
+NUM_ITERS = int(os.environ.get("PI05_E2E_NUM_ITERS", "1"))
 LANG_SEQ_LEN = 256
 SEED = 0
 TRACE_REGION_SIZE = 80_000_000
+# Production pi0.5 LIBERO passes 3 images to SigLIP (base + wrist + zero placeholder
+# for the unused right_wrist slot — see [[pi05-siglip-bs3-production]]). Default to
+# bs=3 to match real production; override with PI0_NUM_CAMERAS=1/2 for A/B.
+NUM_CAMERAS = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
@@ -46,20 +50,43 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _build_inputs(cfg, device, batch_size: int = 1):
+def _build_inputs(cfg, device, num_cameras: int = NUM_CAMERAS):
     torch.manual_seed(SEED)
-    image = torch.randn(batch_size, 3, 224, 224, dtype=torch.float32)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
-    lang_tokens = torch.randint(0, 256000, (batch_size, LANG_SEQ_LEN), dtype=torch.int32)
-    lang_masks = torch.ones(batch_size, LANG_SEQ_LEN, dtype=torch.bool)
+    images = [torch.randn(1, 3, 224, 224, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cameras)]
+    lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
+    lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    image_ttnn = ttnn.from_torch(
-        image,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # PI0_SIGLIP_USE_FOLD=1 — match the production / trace-test image upload path
+    # (see test_perf_ttnn_full_e2e_trace.py:61 and [[pi05-siglip-fold-win]]).
+    # Pre-stack ALL cameras on host into one (N, H, W, 3) NHWC tensor, then
+    # pre-reshape to (N, H, W/patch, C*patch) so the device-side permute /
+    # untilize / reshape / concat (~0.89 ms) all disappear from prefix_setup.
+    _use_fold = os.environ.get("PI0_SIGLIP_USE_FOLD", "").lower() in ("1", "true", "yes", "on")
+    if _use_fold:
+        _PATCH = 14
+        stacked_host = torch.cat([im.permute(0, 2, 3, 1).contiguous() for im in images], dim=0)
+        N_, H_, W_, C_ = stacked_host.shape
+        stacked_host = stacked_host.reshape(N_, H_, W_ // _PATCH, C_ * _PATCH).contiguous()
+        stacked_ttnn = ttnn.from_torch(
+            stacked_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        images_ttnn = [stacked_ttnn]
+    else:
+        images_ttnn = [
+            ttnn.from_torch(
+                im,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for im in images
+        ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
@@ -72,7 +99,7 @@ def _build_inputs(cfg, device, batch_size: int = 1):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    return image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn
+    return images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn
 
 
 @pytest.mark.parametrize(
@@ -81,7 +108,7 @@ def _build_inputs(cfg, device, batch_size: int = 1):
     indirect=True,
 )
 def test_pi0_5_ttnn_full_e2e_fps(device):
-    """End-to-end `sample_actions` latency on real pi05_base weights."""
+    """End-to-end `sample_actions` latency on real pi05_libero_upstream weights."""
     from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
     from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
     from models.experimental.pi0_5.tt.ttnn_pi0_5_model import Pi0_5ModelTTNN
@@ -97,7 +124,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
-    image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
+    images_ttnn, img_masks, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(cfg, device)
+    print(f"   num_cameras={len(images_ttnn)} (SigLIP runs bs={len(images_ttnn)} via concat)")
 
     # Set NUM_WARMUP=0 to skip the cold-start call entirely (useful when
     # profiling — the per-op CSV will then contain exactly NUM_ITERS
@@ -109,8 +137,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
         for _ in range(NUM_WARMUP):
             with torch.no_grad():
                 out = model.sample_actions(
-                    images=[image_ttnn],
-                    img_masks=[img_mask],
+                    images=images_ttnn,
+                    img_masks=img_masks,
                     lang_tokens=lang_tokens_ttnn,
                     lang_masks=lang_masks_ttnn,
                     state=None,
@@ -134,8 +162,8 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
         start = time.perf_counter()
         with torch.no_grad():
             _ = model.sample_actions(
-                images=[image_ttnn],
-                img_masks=[img_mask],
+                images=images_ttnn,
+                img_masks=img_masks,
                 lang_tokens=lang_tokens_ttnn,
                 lang_masks=lang_masks_ttnn,
                 state=None,
@@ -153,8 +181,9 @@ def test_pi0_5_ttnn_full_e2e_fps(device):
     actions_per_sec = chunks_per_sec * cfg.action_horizon
 
     print("\n" + "=" * 72)
-    print("  PI0.5 TTNN END-TO-END PERFORMANCE (real pi05_base weights)")
+    print(f"  PI0.5 TTNN END-TO-END PERFORMANCE ({CHECKPOINT_DIR.name})")
     print("=" * 72)
+    print(f"   Denoising steps:     {num_denoising_steps}")
     print(f"   Cold-start (JIT):    {cold_ms:7.2f} ms (one-time)")
     print(f"   Steady-state avg:    {avg:7.2f} ms")
     print(f"   Steady-state min:    {mn:7.2f} ms")

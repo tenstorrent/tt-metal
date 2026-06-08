@@ -35,7 +35,7 @@ from models.experimental.pi0_5.common.configs import SigLIPConfig, GemmaConfig, 
 from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
-CHECKPOINT_PATH = str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")
+CHECKPOINT_PATH = str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream")
 SEED = 42
 
 

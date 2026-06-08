@@ -65,23 +65,91 @@ def get_sdpa_math_fidelity() -> "ttnn.MathFidelity":
     return ttnn.MathFidelity.HiFi4 if hifi >= 4 else ttnn.MathFidelity.HiFi2
 
 
-def get_sdpa_exp_approx_mode() -> bool:
-    """Return SDPA softmax exp_approx_mode, env-controllable for A/B testing.
+def get_sdpa_exp_approx_mode(seq_len_kv: Optional[int] = None) -> bool:
+    """Return SDPA softmax exp_approx_mode.
 
-    Default: False ("more correct" per ViT-BH-hiRes; measured Pareto-positive
-    vs True on this branch).
+    Default: False (exact). Per PERF_PLAYBOOKS/04_ATTENTION_SDPA.md §3c the
+    short-ratio case should favour True, and the SigLIP isolated sweep
+    (Sq=Skv=256, k_chunk=256 single chunk) showed `exp=1` as the wall-clock
+    winner. BUT tracy-verified end-to-end (2026-06-04 v7 run): enabling
+    exp_approx=True for SigLIP regressed device kernel time by +0.18 µs/call
+    (12.90 → 13.08 µs). Same wall-clock-doesn't-translate pattern we saw
+    on the VLM band. Per-shape default reverted to False; opt-in via
+    `PI0_SDPA_EXP_APPROX_PER_SHAPE=1` if you want to A/B again.
+
+    Global override: `PI0_SDPA_EXP_APPROX={0|1}` forces a single value
+    everywhere (the prior global A/B knob).
     """
-    return _env_bool("PI0_SDPA_EXP_APPROX", False)
+    explicit = os.environ.get("PI0_SDPA_EXP_APPROX")
+    if explicit is not None:
+        return explicit.strip().lower() in ("1", "true", "yes", "on")
+    per_shape = _env_bool("PI0_SDPA_EXP_APPROX_PER_SHAPE", False)
+    if not per_shape or seq_len_kv is None:
+        return False
+    # Per-shape opt-in path (kept for future A/B): single-chunk K → True.
+    return seq_len_kv <= 256
 
 
-def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
-    """Return SDPA compute kernel config matching env knobs."""
+def get_sdpa_compute_kernel_config(seq_len_kv: Optional[int] = None) -> "ttnn.WormholeComputeKernelConfig":
+    """Return SDPA compute kernel config matching env knobs.
+
+    Pass `seq_len_kv` to enable per-shape `exp_approx_mode` (04 §3c). When
+    omitted, falls back to the previous global default for backwards-compat.
+    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=get_sdpa_math_fidelity(),
         math_approx_mode=False,
         fp32_dest_acc_en=_env_bool("PI0_SDPA_FP32_DEST", True),
         packer_l1_acc=_env_bool("PI0_SDPA_PACKER_L1", True),
     )
+
+
+def build_dram_width_sharded_memcfg(device, k: int, n: int, tile_size: int = 32, dram_cores: Optional[int] = None):
+    """Build a DRAM width-sharded memory config for a weight tensor of shape (K, N).
+
+    Per playbook 05 §3b + 08 §2 the decode-mode matmul recipe is:
+      - weights in DRAM width-sharded (one tile-aligned slice per DRAM bank)
+      - activations in L1 width-sharded
+      - program config = MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+
+    `dram_cores` defaults to `device.dram_grid_size().x` (full DRAM grid;
+    12 on BH). Caller can override to a smaller power-of-2 to avoid N
+    padding when `n` doesn't divide cleanly into 12. For example, pi0.5
+    denoise mlp_down has N=1024 — 1024 % 12 ≠ 0 (would pad to 1152), but
+    1024 % 8 == 0 (no padding). Using dram_cores=8 constructs a
+    sub-range CoreRange((0,0)→(7,0)) of the full DRAM grid.
+
+    Returns (memcfg, padded_n, dram_cores_used). `padded_n` ≥ `n` — the
+    caller must pad the host weight tensor along N to `padded_n` before
+    upload.
+    """
+    import math as _math
+
+    dram_size = device.dram_grid_size()
+    if dram_cores is None:
+        dram_cores = dram_size.x
+    assert dram_cores <= dram_size.x, f"dram_cores={dram_cores} exceeds BH limit {dram_size.x}"
+    # CoreRange((0,0) → (dram_cores-1, dram_size.y-1)) — first `dram_cores` banks.
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, dram_size.y - 1))}
+    )
+    padded_n = _math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
+    shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_n // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    return memcfg, padded_n, dram_cores
+
+
+def get_ln_weight_memory_config() -> "ttnn.MemoryConfig":
+    """Memory config for LN/RMSNorm weights (γ/β tensors).
+
+    Default DRAM. `PI0_LN_WEIGHTS_L1=1` opts into L1 placement —
+    eliminates the per-LN-call DRAM read of the weight tensor.
+    Total budget at full pi0.5 (VLM-2B + expert-300M + SigLIP-27):
+    ~14.7 MB of L1 (4.6 VLM + 2.3 expert + 7.8 SigLIP).
+    Risk: trace mode may OOM L1; opt-in only.
+    Per PERF_PLAYBOOKS/01 §6 + 06 §3 (layout matching).
+    """
+    return ttnn.L1_MEMORY_CONFIG if _env_bool("PI0_LN_WEIGHTS_L1", False) else ttnn.DRAM_MEMORY_CONFIG
 
 
 def denoise_loop_fp32() -> bool:
@@ -138,19 +206,86 @@ def sdpa_prefill_chunk_sizes(
     only for long sequences (>= 2048), otherwise 64 — then cap by tile-aligned lengths.
     """
     longest = max(seq_len_q, seq_len_kv)
-    # For pi0 the expert cross-attention has kv=595, prefix self-attn has kv=544
-    # — both fall in the 512-2048 band where a larger k_chunk drastically reduces
-    # the number of SDPA chunks (e.g. 595 / 64 = 10 chunks vs 595 / 256 = 3).
-    if longest >= 2048:
-        base_q, base_k = 256, 256
-    elif longest >= 512:
-        base_q, base_k = 64, 128
+    # Bands tuned via tests/perf/test_sdpa_all_shapes_sweep.py +
+    # tracy device-kernel verification on test_perf_ttnn_full_e2e.py:
+    # - longest>=2048: base=256/256 (long context, lots of chunks anyway)
+    # - longest>=512:  base=64/256  (VLM-prefill at bs=2 single-pass Sq=Skv=768:
+    #                                k=256 beats k=128 by -5.64 µs/call tracy-
+    #                                verified (-0.10 ms over 18 calls). Halves
+    #                                the K-chunk loop iterations (3 vs 6 at
+    #                                S=768). q=64 stays — q=128 regressed by
+    #                                +13 µs/call at S=512, kept conservative.
+    #                                See [[pi05-sdpa-bs2-sweep-2026-06-05]].)
+    # - longest>=128:  base=64/256  (SigLIP Sq=Skv=256 wants single-chunk K.
+    #                                At Skv=256, k=256 means 1 chunk vs 4 with
+    #                                the prior k=64. Tracy-verified -8 µs/call
+    #                                (-39%, -0.217 ms over 27 calls).)
+    # - else:          base=64/64   (very short — preserve original behavior)
+    # PI0_SDPA_LEGACY_BANDS=1 reverts to pre-2026-06-04 bands for A/B
+    # (k=128 at the VLM band — the previous default before this commit).
+    import os as _os
+
+    if _os.environ.get("PI0_SDPA_LEGACY_BANDS", "").lower() in ("1", "true", "yes", "on"):
+        if longest >= 2048:
+            base_q, base_k = 256, 256
+        elif longest >= 512:
+            base_q, base_k = 64, 128
+        else:
+            base_q, base_k = 64, 64
     else:
-        base_q, base_k = 64, 64
+        if longest >= 2048:
+            base_q, base_k = 256, 256
+        elif longest >= 512:
+            base_q, base_k = 64, 256
+        elif longest >= 128:
+            base_q, base_k = 64, 256
+        else:
+            base_q, base_k = 64, 64
     q_aligned = ((seq_len_q + tile - 1) // tile) * tile if seq_len_q > 0 else tile
     k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
     q_chunk = min(base_q, q_aligned)
     k_chunk = min(base_k, k_aligned)
+    # Two opt-in force-overrides for shape-specific k_chunk tuning. Trade the
+    # divisor-aware "no waste" picker for a smaller iteration count when fewer
+    # SDPA inner iters beats less masking compute on the trailing iter. At
+    # bs=3 chunk=1024 the denoise shape is (Sq=32, Skv=1056); divisor-aware
+    # picks k_chunk=32 → 33 K-iters where dispatch overhead dominates. Force
+    # =128 → 9 iters (last masked), trades 75% waste on iter 9 for −24 saved
+    # iters. Sweep at 5 denoise steps: k=64 / k=128 both win −0.4 ms over
+    # the auto pick (k=32) on the bs=3 e2e trace.
+    import os as _os
+
+    if seq_len_q <= 64 and seq_len_kv >= 512:
+        _force = _os.environ.get("PI0_SDPA_DENOISE_K_FORCE", "").strip()
+        if _force.isdigit():
+            forced = int(_force)
+            if forced >= tile and forced <= base_k:
+                return max(q_chunk, tile), forced
+    if seq_len_q >= 512 and seq_len_kv >= 512:
+        _force = _os.environ.get("PI0_SDPA_PREFILL_K_FORCE", "").strip()
+        if _force.isdigit():
+            forced = int(_force)
+            if forced >= tile:
+                return max(q_chunk, tile), forced
+    # Divisor-aware k_chunk: SDPA does not short-circuit on masked positions —
+    # if k_chunk does not divide k_aligned the last K-iter still processes the
+    # full k_chunk columns and masks the trailing ones, wasting compute. Prefer
+    # the largest power-of-2 ≤ base_k that divides k_aligned cleanly. For the
+    # pi0.5 denoise step (k_aligned=544): 544 % 128 = 32 → drops to 32, the
+    # only power-of-2 ≤ 128 that divides 544; cuts denoise SDPA ~1.7×. Power-
+    # of-2 candidates only — non-pow2 tile-aligned chunks (e.g. 96) trip the
+    # kernel's CB heuristics on some shapes.
+    if k_aligned % k_chunk != 0:
+        for cand in (256, 128, 64, 32):
+            if cand > base_k:
+                continue
+            if cand < tile:
+                break
+            if k_aligned % cand == 0:
+                k_chunk = cand
+                break
+        else:
+            k_chunk = tile
     return max(q_chunk, tile), max(k_chunk, tile)
 
 

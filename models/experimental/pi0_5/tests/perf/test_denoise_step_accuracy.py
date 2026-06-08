@@ -3,7 +3,7 @@
 
 """
 PI0.5 denoise-step accuracy sweep — self-consistency at different
-`num_denoising_steps` values on real lerobot/pi05_base weights.
+`num_denoising_steps` values on real pi05_libero_upstream weights.
 
 Idea:
   Take the 10-step output as the reference. For each smaller N, run
@@ -26,11 +26,13 @@ Skipped if the checkpoint isn't present locally.
 from pathlib import Path
 from typing import Dict
 
+import os
+
 import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 SEED = 0
 LANG_SEQ_LEN = 32
 
@@ -49,25 +51,29 @@ pytestmark = pytest.mark.skipif(
 
 def _build_inputs(device):
     torch.manual_seed(SEED)
-    image = torch.randn(1, 3, 224, 224, dtype=torch.float32)
-    img_mask = torch.ones(1, dtype=torch.bool)
+    # Production pi0.5 LIBERO bs=3 — see [[pi05-siglip-bs3-production]].
+    num_cameras = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+    images = [torch.randn(1, 3, 224, 224, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cameras)]
     lang_tokens = torch.randint(0, 256000, (1, LANG_SEQ_LEN), dtype=torch.int32)
     lang_masks = torch.ones(1, LANG_SEQ_LEN, dtype=torch.bool)
 
-    image_ttnn = ttnn.from_torch(
-        image,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    img_mask_ttnn = ttnn.from_torch(
-        img_mask.float(),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    images_ttnn = [
+        ttnn.from_torch(
+            im, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for im in images
+    ]
+    img_masks_ttnn = [
+        ttnn.from_torch(
+            m.float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for m in img_masks
+    ]
     lang_tokens_ttnn = ttnn.from_torch(
         lang_tokens.to(torch.uint32),
         dtype=ttnn.uint32,
@@ -80,7 +86,7 @@ def _build_inputs(device):
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    return image_ttnn, img_mask_ttnn, lang_tokens_ttnn, lang_masks_ttnn
+    return images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn
 
 
 def _set_num_steps(model, n: int) -> None:
@@ -121,10 +127,10 @@ def _set_initial_noise(model, device, seed: int) -> None:
     model.resample_noise = False
 
 
-def _run_one(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn) -> torch.Tensor:
+def _run_one(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn) -> torch.Tensor:
     out = model.sample_actions(
-        images=[image_ttnn],
-        img_masks=[img_mask],
+        images=images_ttnn,
+        img_masks=img_masks_ttnn,
         lang_tokens=lang_tokens_ttnn,
         lang_masks=lang_masks_ttnn,
         state=None,
@@ -161,7 +167,7 @@ def test_pi0_5_denoise_step_accuracy_sweep(device):
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
-    image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
+    images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn = _build_inputs(device)
 
     results: Dict[int, Dict[str, float]] = {}
     ref_actions: torch.Tensor = None
@@ -170,7 +176,7 @@ def test_pi0_5_denoise_step_accuracy_sweep(device):
         _set_num_steps(model, n)
         _set_initial_noise(model, device, SEED + 1)  # same noise every call
         with torch.no_grad():
-            actions = _run_one(model, image_ttnn, img_mask, lang_tokens_ttnn, lang_masks_ttnn)
+            actions = _run_one(model, images_ttnn, img_masks_ttnn, lang_tokens_ttnn, lang_masks_ttnn)
         if ref_actions is None:
             ref_actions = actions
             results[n] = {"cosine": 1.0, "rms": 0.0, "max_delta": 0.0}
@@ -186,7 +192,7 @@ def test_pi0_5_denoise_step_accuracy_sweep(device):
     PER_STEP_MS = (142.0 - PREFIX_MS) / 10.0  # 10.8 ms / step
 
     print("\n" + "=" * 84)
-    print("  PI0.5 DENOISE-STEP ACCURACY + PERF SWEEP (real pi05_base weights, Blackhole)")
+    print(f"  PI0.5 DENOISE-STEP ACCURACY + PERF SWEEP ({CHECKPOINT_DIR.name}, Blackhole)")
     print("=" * 84)
     print(
         f"  {'N steps':>8}  {'~latency':>10}  {'~actions/s':>11}  "

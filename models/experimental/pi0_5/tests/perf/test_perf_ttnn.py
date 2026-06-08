@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PI0.5 TTNN performance test on the real lerobot/pi05_base checkpoint.
+PI0.5 TTNN performance test on the real pi05_libero_upstream checkpoint.
 
 Measures steady-state per-denoise-step latency on the action-expert path
 (embed_suffix → forward_expert(adaRMS) → project_output) with a synthetic
@@ -29,7 +29,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 NUM_WARMUP_ITERATIONS = 2
 NUM_INFERENCE_ITERATIONS = 10
@@ -101,7 +101,7 @@ def test_pi0_5_ttnn_perf(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()  # default 10 denoise steps, horizon=50, dim=32
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)  # 10 denoise steps; horizon from checkpoint
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded ({cfg.expert_config.depth} expert layers)")
 
@@ -132,7 +132,7 @@ def test_pi0_5_ttnn_perf(device):
     actions_per_sec = chunks_per_sec * cfg.action_horizon
 
     print("\n" + "=" * 72)
-    print("  PI0.5 TTNN PERFORMANCE (action-expert path, real pi05_base weights)")
+    print(f"  PI0.5 TTNN PERFORMANCE (action-expert path, {CHECKPOINT_DIR.name})")
     print("=" * 72)
     print(f"   Expert layers:       {cfg.expert_config.depth}")
     print(f"   Suffix tokens:       {cfg.action_horizon} (no state token)")

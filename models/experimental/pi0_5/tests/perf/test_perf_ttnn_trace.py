@@ -30,7 +30,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 NUM_WARMUP_ITERATIONS = 2
 NUM_INFERENCE_ITERATIONS = 20
@@ -103,7 +103,7 @@ def test_pi0_5_ttnn_perf_trace(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded ({cfg.expert_config.depth} expert layers)")
 

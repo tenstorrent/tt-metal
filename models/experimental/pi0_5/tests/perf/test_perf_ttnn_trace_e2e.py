@@ -26,7 +26,7 @@ import pytest
 import torch
 import ttnn
 
-CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_base"
+CHECKPOINT_DIR = Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"
 
 NUM_WARMUP = 2
 NUM_ITERS = 20
@@ -118,7 +118,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded; {len(model._adarms_cond_per_step_bs1)} adarms_cond tensors precomputed")
 
@@ -134,7 +134,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
         ttnn.deallocate(out)
         print(f"   warmup chunk {i + 1} done")
 
-    print(f"\n📷 Capturing trace of full 10-step denoise loop…")
+    print(f"\n📷 Capturing trace of full {cfg.num_denoising_steps}-step denoise loop…")
     capture_start = time.perf_counter()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     out_trace = _run_denoise_loop(model, x_t, prefix_kv)
@@ -153,7 +153,7 @@ def test_pi0_5_ttnn_perf_trace_e2e(device):
         print(f"   chunk {i + 1:2d}: {elapsed_ms:7.2f} ms")
 
     ttnn.release_trace(device, tid)
-    _print_summary("trace, full 10-step denoise loop (1 CQ)", capture_ms, times_ms, cfg)
+    _print_summary(f"trace, full {cfg.num_denoising_steps}-step denoise loop (1 CQ)", capture_ms, times_ms, cfg)
     assert statistics.mean(times_ms) > 0
 
 
@@ -185,7 +185,7 @@ def test_pi0_5_ttnn_perf_trace_2cq(device):
 
     print(f"\n📋 Loading PI0.5 TTNN model from {CHECKPOINT_DIR}")
     loader = Pi0_5WeightLoader(str(CHECKPOINT_DIR))
-    cfg = Pi0_5ModelConfig()
+    cfg = Pi0_5ModelConfig.from_checkpoint(CHECKPOINT_DIR)
     model = Pi0_5ModelTTNN(cfg, loader, device)
     print(f"✅ Model loaded")
 
@@ -237,5 +237,5 @@ def test_pi0_5_ttnn_perf_trace_2cq(device):
         print(f"   chunk {i + 1:2d}: {elapsed_ms:7.2f} ms")
 
     ttnn.release_trace(device, tid)
-    _print_summary("trace + 2CQ, full 10-step denoise loop", capture_ms, times_ms, cfg)
+    _print_summary(f"trace + 2CQ, full {cfg.num_denoising_steps}-step denoise loop", capture_ms, times_ms, cfg)
     assert statistics.mean(times_ms) > 0

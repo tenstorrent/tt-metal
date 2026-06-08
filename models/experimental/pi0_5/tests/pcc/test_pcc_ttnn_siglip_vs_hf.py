@@ -17,6 +17,7 @@ Usage:
       -x -s --no-header
 """
 
+import os
 import sys
 import types as _types
 from pathlib import Path
@@ -104,7 +105,9 @@ def test_ttnn_siglip_vs_hf_e2e(device):
     print(f"   {len(weights_vis)} vlm_vision keys")
 
     torch.manual_seed(0)
-    pix = torch.randn(1, 3, 224, 224, dtype=torch.float32) * 0.1
+    # Production pi0.5 LIBERO bs=3 — see [[pi05-siglip-bs3-production]].
+    bs = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+    pix = torch.randn(bs, 3, 224, 224, dtype=torch.float32) * 0.1
     print(f"   input: {tuple(pix.shape)} std={pix.std().item():.3f}")
 
     print(f"\n🧪 Running HF SigLIP (host)")

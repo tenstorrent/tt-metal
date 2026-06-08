@@ -18,6 +18,8 @@ Exercises the full inference path:
 Validates wiring + shapes + that outputs are finite and time-dependent.
 """
 
+import os
+
 import torch
 
 from models.experimental.pi0_5.common.configs import (
@@ -191,16 +193,20 @@ def test_pi0_5_reference_end_to_end():
 
     backbone, suffix, prefix = _build_pi0_5_reference(pg_cfg, action_dim, action_horizon)
 
-    # Prefix inputs.
-    image = torch.randn(batch_size, 3, pg_cfg.siglip_config.image_size, pg_cfg.siglip_config.image_size)
-    img_mask = torch.ones(batch_size, dtype=torch.bool)
+    # Prefix inputs — production pi0.5 LIBERO bs=3; see [[pi05-siglip-bs3-production]].
+    num_cameras = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+    images = [
+        torch.randn(batch_size, 3, pg_cfg.siglip_config.image_size, pg_cfg.siglip_config.image_size)
+        for _ in range(num_cameras)
+    ]
+    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(num_cameras)]
     lang_tokens = torch.randint(0, 1000, (batch_size, 6))
     lang_masks = torch.ones(batch_size, 6, dtype=torch.bool)
 
-    prefix_embs, _, _ = prefix.embed_prefix([image], [img_mask], lang_tokens, lang_masks)
+    prefix_embs, _, _ = prefix.embed_prefix(images, img_masks, lang_tokens, lang_masks)
     assert prefix_embs.shape[0] == batch_size
     assert prefix_embs.shape[-1] == pg_cfg.vlm_config.width
-    expected_prefix_len = pg_cfg.siglip_config.num_patches + lang_tokens.shape[1]
+    expected_prefix_len = num_cameras * pg_cfg.siglip_config.num_patches + lang_tokens.shape[1]
     assert prefix_embs.shape[1] == expected_prefix_len
 
     _, vlm_cache = backbone.forward_vlm(prefix_embs, use_cache=True)

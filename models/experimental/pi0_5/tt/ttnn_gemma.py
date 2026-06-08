@@ -222,6 +222,98 @@ def build_matmul_pcfg(
     # When m_tiles is much smaller than grid_y, the 2D grid wastes rows.
     # Switch to 1D width-shard so all 120 cores work on N slices.
     if m_tiles * 4 <= grid_y and n_tiles >= total_cores // 4:
+        # PI0_DENOISE_MM_TUNE=1 enables per-shape overrides discovered by
+        # tests/perf/test_denoise_matmul_sweep.py for the 4 expert matmul
+        # shapes (M=32). Wall-clock wins of -10% to -42% on the sweep;
+        # device-kernel-time delta needs tracy verification before keeping
+        # by default.
+        import os as _os
+
+        _tune = _os.environ.get("PI0_DENOISE_MM_TUNE", "").lower() in ("1", "true", "yes", "on")
+        # PI0_MM_SWEEP_V2=1 — proposed new override table from 2026-06-05
+        # sharding sweep. See [[pi05-matmul-sharding-sweep-results]] memory.
+        # Production picker ranked bottom-half on all swept shapes; sweep
+        # top-1 configs predict +13 to +62% wall-clock speedup (subject to
+        # in-model tracy translation). These are UNVERIFIED — use only for
+        # A/B testing, never default-on.
+        _tune_v2 = _os.environ.get("PI0_MM_SWEEP_V2", "").lower() in ("1", "true", "yes", "on")
+        if _tune and m_tiles == 1:
+            # (k_tiles, n_tiles) -> (num_cores, in0_block_w)
+            # Only shapes where tracy verified a real device-kernel-time WIN
+            # vs the production picker. Other denoise shapes (qkv_fused,
+            # mlp_gate_up) regressed when their wall-clock-sweep "winners"
+            # were applied — the wall-clock proxy doesn't generalize at
+            # small K. Tracy-verified wins for large K only.
+            if _tune_v2:
+                # Sweep-derived configs (2026-06-05). Tracy verification on the
+                # v10 perf trace (52.432 ms) showed only 1 of 3 candidates
+                # translated to a real device-kernel-time win:
+                #   - qkv_fused: 9.04 → 8.22 µs/call (-9%, -0.147 ms) ✓ KEPT
+                #   - mlp_gate_up: 12.50 → 13.62 µs/call (+0.40 ms) ✗ REVERTED
+                #   - mlp_down:    13.60 → 14.41 µs/call (+0.15 ms) ✗ REVERTED
+                # Same wall-clock-doesn't-translate pattern as prior sweeps.
+                # Keeping the env knob so V2 stays a clean opt-in for future
+                # A/B testing of additional candidates; only the verified
+                # qkv_fused override is in the table by default.
+                _DENOISE_TUNE_TABLE = {
+                    (64, 32): (120, 32),  # o_proj:     keep verified config
+                    (128, 32): (24, 32),  # mlp_down:   keep verified config
+                    (32, 80): (64, 8),  # qkv_fused:  tracy-verified -9%
+                }
+                # BH-recalibration attempts 2026-06-05 (all REVERTED).
+                # Verified against true baseline 51.023 ms (full flag set incl.
+                # QWEN_NLP_*_HEAD_SPLIT=1 + PI0_UPSTREAM_MASKS=1 + PI0_LN_WEIGHTS_L1=1):
+                # - qkv_fused (32,80): (80,8) — matmul +0.186 ms (40→80 active cores too granular)
+                # - mlp_down (128,32): (32,32) — matmul +0.197 ms (16→32 active cores too granular)
+                # - mlp_gate_up (32,128): (32,16) — matmul +0.482 ms (fewer cores raises µs/call)
+                # - mlp_gate_up (32,128): (64,32) — matmul +0.04 ms (ibw=32 vs 16, neutral)
+                # Conclusion: V11 picker outputs are at the BH dispatch floor; pushing toward
+                # per_core_N=1 in any of these shapes worsens dispatch/work balance.
+            else:
+                _DENOISE_TUNE_TABLE = {
+                    (64, 32): (120, 32),  # o_proj:   M=32 K=2048 N=1024 — verified -10% kernel
+                    (128, 32): (24, 32),  # mlp_down: M=32 K=4096 N=1024 — verified -6% kernel
+                }
+            override = _DENOISE_TUNE_TABLE.get((k_tiles, n_tiles))
+            if override is not None:
+                tuned_cores, tuned_bw = override
+                num_cores = tuned_cores
+                if n_tiles % num_cores != 0:
+                    per_core_N_1d = (n_tiles + num_cores - 1) // num_cores
+                else:
+                    per_core_N_1d = n_tiles // num_cores
+                in0_bw = tuned_bw
+                # Validate before applying — same checks as the regular path
+                if k_tiles % in0_bw == 0:
+                    # dst_budget=4 here matches the sweep winner's fp32_dest=True;
+                    # the compute_kernel_config side is set in the matmul forward.
+                    eff_budget = 4
+                    out_sw = min(per_core_N_1d, eff_budget)
+                    while out_sw > 1 and per_core_N_1d % out_sw != 0:
+                        out_sw -= 1
+                    out_sh = max(1, eff_budget // out_sw)
+                    out_sh = min(m_tiles, out_sh)
+                    while out_sh > 1 and m_tiles % out_sh != 0:
+                        out_sh -= 1
+                    cfg_gx = min(grid_x, num_cores)
+                    cfg_gy = (num_cores + cfg_gx - 1) // cfg_gx
+                    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), 4, "1d-tuned")
+                    if key in _pcfg_cache:
+                        return _pcfg_cache[key]
+                    cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(cfg_gx, cfg_gy),
+                        in0_block_w=in0_bw,
+                        out_subblock_h=out_sh,
+                        out_subblock_w=out_sw,
+                        per_core_M=m_tiles,
+                        per_core_N=per_core_N_1d,
+                        fuse_batch=True,
+                        fused_activation=activation,
+                        mcast_in0=True,
+                    )
+                    _pcfg_cache[key] = cfg
+                    return cfg
+                # else: fall through to the default 1D logic below
         # Pick num_cores: largest divisor of n_tiles ≤ total_cores, and not
         # smaller than half the grid (otherwise stick with 2D).
         num_cores = min(total_cores, n_tiles)
@@ -282,6 +374,64 @@ def build_matmul_pcfg(
         return cfg
 
     # --- 2D block-shard path (default, large M) --------------------------
+    # PI0_PREFILL_MM_TUNE=1 enables per-shape overrides from the sweep at
+    # tests/perf/test_prefill_matmul_sweep.py. Same caution applies as the
+    # denoise sweep: wall-clock numbers are a proxy that needs tracy
+    # verification before keeping by default. Each entry was tracy-verified
+    # to give a real device-kernel-time win.
+    import os as _os
+
+    _tune2d = _os.environ.get("PI0_PREFILL_MM_TUNE", "").lower() in ("1", "true", "yes", "on")
+    if _tune2d:
+        # (m_tiles, k_tiles, n_tiles) -> (grid_x, grid_y, in0_block_w)
+        # Includes all 2D-path shapes the sweep flagged with wall-clock wins;
+        # the tracy verifier filters this down to the real wins.
+        # Only entries where tracy verified a real device-kernel-time win
+        # over the production picker. Sweep wall-clock predictions for the
+        # other shapes (vlm_qkv_fused, vlm_o_proj, siglip_*) either showed
+        # noise (±0.007 ms total) or didn't match real production shapes
+        # (e.g. the sweep's "siglip_attn_proj" at K=N=1152 doesn't exist —
+        # production SigLIP Q/K/V are K=1152 N=1536 since head_dim=72
+        # padded to 96 × num_heads=16 = 1536).
+        #
+        # The gate_up override (16, 64, 512) was tried with bw=8 and trips
+        # a runtime CB-clash in production (clean-L1 sweep didn't catch it).
+        _PREFILL_TUNE_TABLE = {
+            (16, 512, 64): (12, 8, 16),  # vlm_mlp_down: M=512 K=16384 N=2048
+            # Tracy-verified: 3.254 -> 2.956 ms (-0.298 ms)
+        }
+        override = _PREFILL_TUNE_TABLE.get((m_tiles, k_tiles, n_tiles))
+        if override is not None:
+            tg_x, tg_y, tg_bw = override
+            if k_tiles % tg_bw == 0:
+                per_core_M_t = (m_tiles + tg_y - 1) // tg_y
+                per_core_N_t = (n_tiles + tg_x - 1) // tg_x
+                if per_core_M_t > 0 and per_core_N_t > 0:
+                    eff_budget = 4  # matches fp32_dest=True (the common sweep winner)
+                    sub_w = min(per_core_N_t, eff_budget)
+                    while sub_w > 1 and per_core_N_t % sub_w != 0:
+                        sub_w -= 1
+                    sub_h = max(1, eff_budget // sub_w)
+                    sub_h = min(per_core_M_t, sub_h)
+                    while sub_h > 1 and per_core_M_t % sub_h != 0:
+                        sub_h -= 1
+                    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), 4, "2d-tuned")
+                    if key in _pcfg_cache:
+                        return _pcfg_cache[key]
+                    cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(tg_x, tg_y),
+                        in0_block_w=tg_bw,
+                        out_subblock_h=sub_h,
+                        out_subblock_w=sub_w,
+                        per_core_M=per_core_M_t,
+                        per_core_N=per_core_N_t,
+                        transpose_mcast=False,
+                        fused_activation=activation,
+                    )
+                    _pcfg_cache[key] = cfg
+                    return cfg
+                # else fall through to default
+
     per_core_M = (m_tiles + grid_y - 1) // grid_y
     per_core_N = (n_tiles + grid_x - 1) // grid_x
     if per_core_M == 0 or per_core_N == 0:
@@ -393,9 +543,17 @@ class GemmaAttentionTTNN:
         self.cos_meta = cos_meta
         self.sin_meta = sin_meta
 
-        # HiFi2 config for projections (faster, less precision needed)
+        # HiFi2 config for projections (faster, less precision needed).
+        # PI0_EXPERT_MM_LOFI=1 drops fidelity to LoFi for the expert matmul
+        # path (PERF_PLAYBOOKS/05 §6: BGE-M3 saw -6 ms FF1, -2 ms FF2 on
+        # bf8b weights from this walk). PCC must be verified end-to-end
+        # via LIBERO rollouts before promoting default. fp32_dest_acc_en
+        # stays False to keep the subblock cap at 8 (01 §3).
+        import os as _os
+
+        _expert_lofi = _os.environ.get("PI0_EXPERT_MM_LOFI", "").lower() in ("1", "true", "yes", "on")
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi if _expert_lofi else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -522,6 +680,10 @@ class GemmaAttentionTTNN:
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do NOT deallocate xqkv — nlp_create_qkv_heads may view-alias
+        # into its input buffer rather than allocating fresh q/k/v tensors.
+        # Tried `ttnn.deallocate(xqkv)` here in commit attempt 2026-06-04 22:30
+        # and it crashed with "Tensor is not allocated" at trace replay.
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern).
         # If the caller passed in `cos`/`sin` overrides (position-aware tables
@@ -548,6 +710,10 @@ class GemmaAttentionTTNN:
             _own_rope_tensors = True
 
         # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
+        # NOTE: do NOT deallocate q/k after RoPE — rotary_embedding may alias
+        # its input. Same caveat applies to q_rope_padded after slice. Both
+        # were tried in commit attempt 2026-06-04 22:30 → "Tensor is not
+        # allocated" at trace replay.
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_for_rope, sin_for_rope)
         k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_for_rope, sin_for_rope)
 
@@ -583,7 +749,7 @@ class GemmaAttentionTTNN:
             compute_with_storage_grid_size=self.grid_size,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
-            exp_approx_mode=get_sdpa_exp_approx_mode(),
+            exp_approx_mode=get_sdpa_exp_approx_mode(kv_seq_len),
         )
 
         attn_output = ttnn.transformer.scaled_dot_product_attention(
@@ -597,6 +763,8 @@ class GemmaAttentionTTNN:
             compute_kernel_config=self.compute_kernel_config_sdpa,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do not deallocate q_rope here — it may alias q_rope_padded
+        # (and thus q for keep_padded=True). Tried it 2026-06-04 22:30 → crash.
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
         # attn_output: [batch, num_heads, seq, head_dim] -> [batch, 1, seq, num_heads * head_dim]
@@ -604,17 +772,29 @@ class GemmaAttentionTTNN:
             attn_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do not deallocate attn_output — nlp_concat_heads may alias.
 
         # Output projection — 2D BLOCK_SHARDED program config.
         # K = num_heads*head_dim (concatenated heads), N = hidden_size.
         oproj_k = (self.num_heads * self.head_dim) // 32
         oproj_n = self.hidden_size // 32
         oproj_pcfg = build_matmul_pcfg(m_tiles, oproj_k, oproj_n, self.grid_size[0], self.grid_size[1], in0_block_w=8)
+        # PI0_VLM_MLP_BF8_OUT=1 also controls the attention O-proj output dtype.
+        # Saves ~17 KB / core (33 KB bf16 → 16 KB bf8) at chunk=1024 — needed to
+        # close the ~32 KB CB-clash gap that blocks chunk=1024 at LIBERO bs=3.
+        # Same PCC-safety expectation as MLP gate/up outputs (validated 0.9964 PCC).
+        import os as _os_oproj
+
+        _oproj_dtype = (
+            ttnn.bfloat8_b
+            if _os_oproj.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
+            else ttnn.bfloat16
+        )
         if oproj_pcfg is not None:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat16,
+                dtype=_oproj_dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=oproj_pcfg,
@@ -623,11 +803,14 @@ class GemmaAttentionTTNN:
             output = ttnn.linear(
                 attn_concat,
                 self.o_proj,
-                dtype=ttnn.bfloat16,
+                dtype=_oproj_dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
             )
+        # NOTE: linear typically allocates a new output, so attn_concat
+        # would be safe to free here in principle — but skipping until
+        # we have a way to test aliasing semantics op-by-op.
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
         output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
@@ -688,18 +871,118 @@ class GemmaMLPTTNN:
         self.hidden_size = config.width
         self.intermediate_size = config.mlp_dim
 
+        # PI0_DRAM_SHARDED_MLP_DOWN=1 — DRAM width-sharded weight variant for
+        # down_proj. Per PERF_PLAYBOOKS/05 §3b + 08 §2 (decode matmul recipe).
+        # Scoped to expert MLP (mlp_dim ≤ 4096) — VLM (mlp_dim=16384) doesn't
+        # benefit from this pattern at its larger M.
+        import os as _os
+        from .ttnn_common import build_dram_width_sharded_memcfg
+
+        self.down_proj_dram_sharded = None
+        self.down_proj_dram_sharded_padded_n = None
+        self.down_proj_dram_sharded_dram_cores = None
+        # =====================================================================
+        # ⚠ DO NOT ENABLE FOR PRODUCTION ⚠
+        # The DRAM-width-sharded mlp_down path was empirically VERIFIED to
+        # regress total kernel time on the pi0.5 denoise expert shape
+        # (M=32 K=4096 N=1024) at every compute-core count tested. See
+        # [[pi05-dram-sharded-mlp-down-attempt]] memory for the full data.
+        #
+        # Quick summary of why this is parked, not deleted:
+        #   - The matmul itself does win (~-0.3 ms over 180 calls at 8c).
+        #   - But the per-call activation I2S reshard costs ~+1.88 ms.
+        #   - BH has only 8 DRAM banks (not 12 — that's Wormhole), so the
+        #     bandwidth ceiling is half of what the reference benchmark had.
+        #   - Our shape is too small for the L1-handoff workaround
+        #     (gate/up matmuls would need to drop to 8 compute cores, which
+        #     adds more time than mlp_down saves).
+        #
+        # KEPT AS SCAFFOLDING because the infrastructure (helper, runtime
+        # branch, isolated test) is reusable for any future experiment on
+        # larger shapes (e.g. VLM mlp_down on Wormhole, or pi0.5 if shape
+        # changes). Default OFF; the flag is intentionally opt-in only.
+        # =====================================================================
+        # PI0_DRAM_SHARDED_MLP_DOWN values: 1|true|yes|on|8 → 8 banks (no N-pad);
+        # 12 → 12 banks (N-padded to 1152, only works on hardware with ≥12 banks).
+        # Empty/0/false → disabled.
+        _flag = _os.environ.get("PI0_DRAM_SHARDED_MLP_DOWN", "")
+        _enabled = _flag.lower() in ("1", "true", "yes", "on", "8", "12")
+        if _enabled:
+            if self.intermediate_size <= 4096:
+                # K = mlp_dim, N = hidden_size for down_proj (after transpose).
+                # PI0_DRAM_SHARDED_MLP_DOWN value selects bank count:
+                #   "1" / "8"  → dram_cores=8 (no N-padding, 67% BW; compute=8)
+                #   "12"       → dram_cores=12 (N=1024→1152 padding, 100% BW; compute=4)
+                # Both keep clean K/N divisibility for our shape.
+                _banks = 12 if _flag == "12" else 8
+                k_dim = self.intermediate_size
+                n_dim = self.hidden_size
+                memcfg, padded_n, dram_cores_used = build_dram_width_sharded_memcfg(
+                    device, k_dim, n_dim, dram_cores=_banks
+                )
+                w_raw = weights["mlp.down_proj.weight"]
+                if isinstance(w_raw, torch.Tensor):
+                    # VLM path: weight is host torch tensor. Pad + upload sharded.
+                    w_torch = w_raw.T.contiguous()
+                    if padded_n > n_dim:
+                        pad_cols = padded_n - n_dim
+                        w_torch = torch.nn.functional.pad(w_torch, (0, pad_cols), mode="constant", value=0.0)
+                    self.down_proj_dram_sharded = ttnn.from_torch(
+                        w_torch,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=memcfg,
+                    )
+                else:
+                    # Expert path: weight already on-device (DRAM interleaved).
+                    # For dram_cores=12 + N=1024, need to pad on-device first.
+                    w_to_shard = self.down_proj
+                    if padded_n > n_dim:
+                        # self.down_proj shape: [..., K, N]; pad last dim
+                        # ttnn.pad takes per-dim (low, high) tuples
+                        pad_low = (0,) * len(self.down_proj.shape)
+                        pad_high = tuple(
+                            (padded_n - n_dim) if i == len(self.down_proj.shape) - 1 else 0
+                            for i in range(len(self.down_proj.shape))
+                        )
+                        w_to_shard = ttnn.pad(self.down_proj, padding=list(zip(pad_low, pad_high)), value=0.0)
+                    self.down_proj_dram_sharded = ttnn.to_memory_config(w_to_shard, memcfg)
+                self.down_proj_dram_sharded_padded_n = padded_n
+                self.down_proj_dram_sharded_dram_cores = dram_cores_used
+
         # Query device grid to size chunks for available cores
         device_grid = device.compute_with_storage_grid_size()
         self.grid_size = (device_grid.x, device_grid.y)
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
         num_cores = device_grid.x * device_grid.y
 
-        # Chunk size must be tile-aligned (multiple of 32).
-        # Scale chunk size with core count: more cores can process larger chunks
-        # in parallel. P150 (~130 cores) uses 544 (full seq, no chunking needed),
-        # N150 (64 cores) uses 256.
-        if num_cores >= 100:
-            self.chunk_size = 544
+        # Chunk size must be tile-aligned (multiple of 32). Scale with core count.
+        #
+        # P150 / BH (>=100 cores): default 768. pi0.5 LIBERO production is bs=2
+        # single-arm (base + wrist; the 3rd zero-padded right_wrist slot from the
+        # bimanual training convention is masked off in single-arm — see
+        # [[pi05-siglip-bs3-production]]). Prefix at bs=2 = 2·256 + ≤256 lang ≤ 768
+        # tokens, so 768 fits in one chunk. Single-pass VLM saves -7.7 ms tracy-
+        # verified at bs=2 (vs the prior 544-chunk default which forced two
+        # 18-layer MLP dispatches at 544 + 224 = 768).
+        # At bs=3 (PI0_NUM_CAMERAS=3, prefix=1024) this chunks as 768 + 256.
+        # Override via PI0_VLM_CHUNK_SIZE to test other values:
+        #   1024 → single-pass at bs=3 (CB clash today; see OPEN_ISSUE_MLP_CB_CLASH.md)
+        #   544  → previous default (preserves bs=1 production behavior)
+        #
+        # N150 (64 cores): 256, unchanged.
+        import os as _os
+
+        _user_chunk = _os.environ.get("PI0_VLM_CHUNK_SIZE", "").strip()
+        if _user_chunk:
+            try:
+                self.chunk_size = int(_user_chunk)
+                assert self.chunk_size % 32 == 0, f"PI0_VLM_CHUNK_SIZE={self.chunk_size} must be tile-aligned (mod 32)"
+            except (ValueError, AssertionError) as e:
+                raise RuntimeError(f"Invalid PI0_VLM_CHUNK_SIZE={_user_chunk!r}: {e}") from e
+        elif num_cores >= 100:
+            self.chunk_size = 768
         else:
             self.chunk_size = 256
 
@@ -791,6 +1074,16 @@ class GemmaMLPTTNN:
             # MLP gate/up/down — let the helper auto-pick in0_block_w based on
             # per_core_N. Large-N (gate/up, per_core_N=43) keeps block_w=4;
             # small-N (down, per_core_N=6-22 depending on width) gets block_w=8.
+            #
+            # PI0_VLM_MLP_IBW=<N> opt-in: forces in0_block_w on gate/up only.
+            # Use to shrink in0 CB when fitting larger chunks (e.g. chunk=992
+            # CB-clashes with default ibw=4; ibw=2 halves the in0 CB at the
+            # cost of more K-trips per matmul). Must divide K_tiles=64.
+            import os as _os_ibw
+
+            _ibw_env = _os_ibw.environ.get("PI0_VLM_MLP_IBW", "").strip()
+            _ibw_override = int(_ibw_env) if _ibw_env.isdigit() else None
+            _gate_up_kwargs = {"in0_block_w": _ibw_override} if _ibw_override else {}
             gate_pcfg = build_matmul_pcfg(
                 m_tiles,
                 k_to_intermediate,
@@ -798,6 +1091,7 @@ class GemmaMLPTTNN:
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
                 activation=(ttnn.UnaryOpType.GELU, True),
+                **_gate_up_kwargs,
             )
             up_pcfg = build_matmul_pcfg(
                 m_tiles,
@@ -805,6 +1099,7 @@ class GemmaMLPTTNN:
                 n_intermediate,
                 self._pcfg_grid[0],
                 self._pcfg_grid[1],
+                **_gate_up_kwargs,
             )
             down_pcfg = build_matmul_pcfg(
                 m_tiles,
@@ -814,34 +1109,190 @@ class GemmaMLPTTNN:
                 self._pcfg_grid[1],
             )
 
+            # PI0_VLM_MLP_BF8_OUT=1 opt-in: store gate/up matmul outputs as bf8_b
+            # instead of bf16. Halves the peak L1 footprint of the two
+            # intermediate (1, M, 16384) tensors (~660 KB/core → ~330 KB/core at
+            # chunk_size=1024). Required to make chunk_size=1024 fit alongside
+            # the matmul kernel's static CB region. PCC risk: bf8 quantization
+            # of post-GELU activations compounds across 18 layers — validate via
+            # test_pcc_pi05_model_libero.py before promoting to default.
+            import os as _os_mlp
+
+            _mlp_bf8_out = _os_mlp.environ.get("PI0_VLM_MLP_BF8_OUT", "").lower() in ("1", "true", "yes", "on")
             common_kwargs = dict(
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
-            if gate_pcfg is not None:
-                gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
-            else:
-                gate_activated = ttnn.linear(
-                    x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
+            # PI0_VLM_MLP_MINIMAL=1 opt-in: switch gate/up from ttnn.linear
+            # (2D-mcast) to ttnn.experimental.minimal_matmul. minimal_matmul
+            # streams K in K_block_size chunks via ONE reused in0 CB instead
+            # of the 2D-mcast's per_core_M × in0_block_w double-buffered CB,
+            # collapsing the static-CB L1 footprint (per PERF_PLAYBOOKS/05 §4).
+            # The escape hatch when 2D-mcast can't fit chunk=1024 even with
+            # PI0_VLM_MLP_BF8_OUT=1 + PI0_VLM_MLP_IBW=2. NOTE: minimal_matmul
+            # requires input.dtype == weight.dtype, so x_chunk must be cast
+            # to bf8_b (weights are bf8_b). Only kicks in for VLM-sized M
+            # (m_tiles ≥ 8); expert (m_tiles=1-2) stays on the 1D-width path.
+            _mlp_minimal = _os_mlp.environ.get("PI0_VLM_MLP_MINIMAL", "").lower() in ("1", "true", "yes", "on")
+            use_minimal = _mlp_minimal and m_tiles >= 8
+
+            if use_minimal:
+                x_chunk_bf8 = ttnn.typecast(x_chunk, ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(x_chunk)
+                # Playbook 05 §5: LoFi + fp32_dest=False unlocks subblock h*w cap 4 → 8.
+                # bf8b weights tolerate LoFi (PCC validated layer-by-layer in BGE-M3).
+                minimal_compute = ttnn.init_device_compute_kernel_config(
+                    self.device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
                 )
-            if up_pcfg is not None:
-                up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
+                # PI0_VLM_MINIMAL_CFG="M,K,N,sh,sw" overrides block/subblock sizes
+                # for the gate/up minimal_matmul. Default (8,8,8,4,2) matches the
+                # Llama prefill ≤4096 config. Try (8,8,8,1,8) for the playbook 05
+                # §5 wide-N subblock orientation.
+                _cfg_env = _os_mlp.environ.get("PI0_VLM_MINIMAL_CFG", "").strip()
+                _bs = [8, 8, 8, 4, 2]
+                if _cfg_env:
+                    try:
+                        _parts = [int(x) for x in _cfg_env.split(",")]
+                        if len(_parts) == 5 and all(p > 0 for p in _parts):
+                            _bs = _parts
+                    except ValueError:
+                        pass
+                minimal_cfg = ttnn.MinimalMatmulConfig(
+                    M_block_size=_bs[0],
+                    K_block_size=_bs[1],
+                    N_block_size=_bs[2],
+                    subblock_h=_bs[3],
+                    subblock_w=_bs[4],
+                    compute_with_storage_grid_size=ttnn.CoreCoord(self._pcfg_grid[0], self._pcfg_grid[1]),
+                )
+                gate_activated = ttnn.experimental.minimal_matmul(
+                    x_chunk_bf8,
+                    self.gate_proj,
+                    fused_activation=(ttnn.UnaryOpType.GELU, True),
+                    config=minimal_cfg,
+                    compute_kernel_config=minimal_compute,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
+                )
+                up = ttnn.experimental.minimal_matmul(
+                    x_chunk_bf8,
+                    self.up_proj,
+                    config=minimal_cfg,
+                    compute_kernel_config=minimal_compute,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b if _mlp_bf8_out else ttnn.bfloat16,
+                )
+                ttnn.deallocate(x_chunk_bf8)
             else:
-                up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
-            ttnn.deallocate(x_chunk)
+                if gate_pcfg is not None:
+                    gate_activated = ttnn.linear(x_chunk, self.gate_proj, program_config=gate_pcfg, **common_kwargs)
+                else:
+                    gate_activated = ttnn.linear(
+                        x_chunk, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common_kwargs
+                    )
+                if up_pcfg is not None:
+                    up = ttnn.linear(x_chunk, self.up_proj, program_config=up_pcfg, **common_kwargs)
+                else:
+                    up = ttnn.linear(x_chunk, self.up_proj, core_grid=self.core_grid, **common_kwargs)
+                ttnn.deallocate(x_chunk)
 
             # Element-wise multiply (keep on L1 — feeds the down-proj matmul next)
             hidden_out = ttnn.multiply(gate_activated, up, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(gate_activated)
             ttnn.deallocate(up)
 
-            # Down projection
-            if down_pcfg is not None:
+            # Down projection — PI0_DRAM_SHARDED_MLP_DOWN=1 takes the
+            # DRAM-width-sharded weight + L1-width-sharded activation path
+            # (PERF_PLAYBOOKS/05 §3b decode recipe). Only fires for tiny M
+            # (denoise expert m_tiles=1), VLM stays on existing path.
+            if self.down_proj_dram_sharded is not None and m_tiles == 1:
+                # Activation: L1 interleaved → L1 width-sharded across compute cores.
+                # Compute cores are INDEPENDENT of DRAM banks (BH: 120 cores, 8 banks).
+                # PI0_DRAM_SHARDED_MLP_COMPUTE_CORES overrides default (8). Must divide
+                # both K_tiles (activation shard) and N_tiles_padded (output shard).
+                # For our shape: K_t=128, N_t=32 → clean divisors {1,2,4,8,16,32}.
+                # 32 cores gives K=4/core, N=1/core, 8×4 grid (uses 27% of BH grid).
+                k_tiles_local = k_to_hidden  # mlp_dim // 32
+                padded_n_tiles = self.down_proj_dram_sharded_padded_n // 32
+                import os as _os_inner
+
+                _cores_env = _os_inner.environ.get("PI0_DRAM_SHARDED_MLP_COMPUTE_CORES", "")
+                if _cores_env in ("16", "32"):
+                    num_compute_cores = int(_cores_env)
+                elif self.down_proj_dram_sharded_dram_cores == 12:
+                    num_compute_cores = 4
+                else:
+                    num_compute_cores = 8
+                act_shard_k = (k_tiles_local // num_compute_cores) * 32  # K-cols per core
+                # Construct grid: for ≤12 cores use 1-row strip; for 16/32 use a 2D grid
+                if num_compute_cores <= 12:
+                    act_grid = ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_compute_cores - 1, 0))}
+                    )
+                elif num_compute_cores == 16:
+                    # 8 × 2 grid
+                    act_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))})
+                elif num_compute_cores == 32:
+                    # 8 × 4 grid
+                    act_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+                else:
+                    raise ValueError(f"unsupported num_compute_cores={num_compute_cores}")
+                act_memcfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        act_grid,
+                        (padded_chunk_size, act_shard_k),
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                hidden_out_sh = ttnn.to_memory_config(hidden_out, act_memcfg)
+                ttnn.deallocate(hidden_out)
+
+                # DRAM-sharded matmul program config.
+                # in0_block_w capped at 8 (the helper's `_find_largest_divisor(N, max=8)`
+                # convention); larger ibw would inflate L1 CB pressure.
+                _kpc = k_tiles_local // num_compute_cores
+                _ibw = min(_kpc, 8)
+                # Walk down to a divisor of K-per-core if needed
+                while _kpc % _ibw != 0 and _ibw > 1:
+                    _ibw -= 1
+                ds_pcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=_ibw,
+                    per_core_M=padded_chunk_size // 32,
+                    per_core_N=padded_n_tiles // num_compute_cores,
+                    fused_activation=None,
+                )
+                # Output stays L1 width-sharded; convert back to interleaved + slice padding.
+                # No compute_kernel_config — match existing MLP matmuls (which use ttnn default).
+                output_sh = ttnn.linear(
+                    hidden_out_sh,
+                    self.down_proj_dram_sharded,
+                    program_config=ds_pcfg,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(hidden_out_sh)
+                output_chunk = ttnn.sharded_to_interleaved(output_sh, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(output_sh)
+                # Slice off N-padding if applied (e.g. N=1024 → padded 1152 → slice back)
+                if self.down_proj_dram_sharded_padded_n > hidden:
+                    output_chunk = ttnn.slice(
+                        output_chunk,
+                        [0, 0, 0, 0],
+                        [batch_size, 1, padded_chunk_size, hidden],
+                    )
+            elif down_pcfg is not None:
                 output_chunk = ttnn.linear(hidden_out, self.down_proj, program_config=down_pcfg, **common_kwargs)
+                ttnn.deallocate(hidden_out)
             else:
                 output_chunk = ttnn.linear(hidden_out, self.down_proj, core_grid=self.core_grid, **common_kwargs)
-            ttnn.deallocate(hidden_out)
+                ttnn.deallocate(hidden_out)
 
             # Slice back to actual size if padded
             if needs_chunk_padding:
@@ -923,7 +1374,21 @@ class GemmaBlockTTNN:
         if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
             m_tiles = m_padded // 32
             hidden_tiles = self.config.width // 32
-            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
+            # PI0_LN_INTERLEAVED_SMALL_M=1 forces interleaved LN at M_tiles==1 (the
+            # denoise expert case). The sharded path at M_tiles=1 runs on 8 cores
+            # but adds an I2S+S2I round-trip (~1.15 µs/LN); the interleaved op may
+            # win net on this shape. Toggle for perf A/B testing.
+            import os as _os
+
+            disable_small_m_sharded = (
+                _os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
+            )
+            if disable_small_m_sharded:
+                norm_cfg = None
+            else:
+                norm_cfg = build_sharded_norm_pcfg(
+                    m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles))
+                )
             if norm_cfg is not None:
                 pc, memcfg_factory, _grid = norm_cfg
                 self._rms_norm_sharded_pcfg = pc
@@ -984,6 +1449,7 @@ class GemmaBlockTTNN:
             use_cache,
             keep_padded=keep_padded,
         )
+        ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
@@ -1320,11 +1786,23 @@ class AdaRMSGemmaBlockTTNN:
             mod_owned = True
 
         # Lazy build of the sharded RMSNorm config keyed on actual M.
+        # PI0_LN_INTERLEAVED_SMALL_M=1 disables the sharded path at M_tiles=1
+        # (denoise suffix case): the sharded path runs on only 8 cores and adds
+        # an I2S input convert + S2I output convert (~1.15 µs/LN). At this size
+        # interleaved LN may net out faster — toggle for perf A/B testing.
         m_padded = hidden_states.shape[1] if len(hidden_states.shape) == 3 else hidden_states.shape[2]
         if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
             m_tiles = m_padded // 32
             hidden_tiles = self.config.width // 32
-            norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=max(1, m_tiles))
+            import os as _os
+
+            disable_small_m_sharded = (
+                _os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
+            )
+            if disable_small_m_sharded:
+                norm_cfg = None
+            else:
+                norm_cfg = build_sharded_norm_pcfg(m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=max(1, m_tiles))
             if norm_cfg is not None:
                 pc, memcfg_factory, _grid = norm_cfg
                 self._rms_norm_sharded_pcfg = pc

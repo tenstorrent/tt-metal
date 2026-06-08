@@ -269,7 +269,7 @@ def main():
 
     checkpoint_dir = os.environ.get(
         "PI05_CHECKPOINT_DIR",
-        str(os.path.join(os.path.dirname(__file__), "..", "weights", "pi05_base")),
+        str(os.path.join(os.path.dirname(__file__), "..", "weights", "pi05_libero_upstream")),
     )
     print(f"Loading adapter: backend={args.backend}, checkpoint={checkpoint_dir}")
     adapter = Pi0_5LiberoAdapter(checkpoint_dir, backend=args.backend)

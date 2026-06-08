@@ -15,6 +15,13 @@ Usage:
 
 import sys
 import os
+
+
+def _pi0_num_cameras() -> int:
+    """Production pi0.5 LIBERO bs=3 — see [[pi05-siglip-bs3-production]]."""
+    return int(os.environ.get("PI0_NUM_CAMERAS", "2"))
+
+
 from pathlib import Path
 
 import pytest
@@ -34,7 +41,7 @@ if not TT_METAL_HOME:
     raise EnvironmentError("TT_METAL_HOME environment variable is not set")
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"),
+    str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream"),
 )
 SEED = 42
 PCC_THRESHOLD = 0.90
@@ -236,7 +243,7 @@ def test_pcc_paligemma_embed_image(device, use_pretrained):
     weights = get_paligemma_weights(use_pretrained, config)
 
     # Create input
-    pixel_values = torch.randn(1, 3, config.siglip_config.image_size, config.siglip_config.image_size)
+    pixel_values = torch.randn(_pi0_num_cameras(), 3, config.siglip_config.image_size, config.siglip_config.image_size)
 
     # PyTorch forward
     model_torch = PaliGemmaBackboneTorch(config, weights)
@@ -346,7 +353,9 @@ def main():
         print(f"   ✅ Loaded weights")
 
         print("\n2. Testing embed_image...")
-        pixel_values = torch.randn(1, 3, config.siglip_config.image_size, config.siglip_config.image_size)
+        pixel_values = torch.randn(
+            _pi0_num_cameras(), 3, config.siglip_config.image_size, config.siglip_config.image_size
+        )
 
         model_torch = PaliGemmaBackboneTorch(config, weights)
         out_torch = model_torch.embed_image(pixel_values)

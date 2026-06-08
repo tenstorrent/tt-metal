@@ -62,7 +62,7 @@ TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
 # PI0_CHECKPOINT (legacy for this file) for back-compat.
 CHECKPOINT_PATH = os.environ.get(
     "PI05_CHECKPOINT_DIR",
-    os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base")),
+    os.environ.get("PI0_CHECKPOINT", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_libero_upstream")),
 )
 BATCH_SIZE = 1
 SEED = 42  # used for per-step velocity diagnostics (first seed in the sweep)
@@ -94,10 +94,13 @@ def create_pi05_config() -> PI0ModelConfig:
     return config
 
 
-def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1):
+def create_test_inputs(config: PI0ModelConfig, batch_size: int = 1, num_cameras: int = None):
+    # Production pi0.5 LIBERO uses 3 image slots — see [[pi05-siglip-bs3-production]].
+    if num_cameras is None:
+        num_cameras = int(os.environ.get("PI0_NUM_CAMERAS", "2"))
     image_size = config.siglip_config.image_size
-    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(2)]
-    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(2)]
+    images = [torch.randn(batch_size, 3, image_size, image_size, dtype=torch.float32) for _ in range(num_cameras)]
+    img_masks = [torch.ones(batch_size, dtype=torch.bool) for _ in range(num_cameras)]
     LANG_SEQ_LEN = 256
     lang_tokens = torch.zeros(batch_size, LANG_SEQ_LEN, dtype=torch.int64)
     lang_tokens[:, :32] = torch.randint(0, 256000, (batch_size, 32))
