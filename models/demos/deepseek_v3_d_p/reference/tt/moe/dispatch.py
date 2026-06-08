@@ -80,8 +80,10 @@ class TorchDispatchModule(torch.nn.Module):
             self.metadata_len,
         )
 
-        self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
-        self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
+        # NOTE: forward() allocates fresh dispatched_buffer / dispatched_metadata each call
+        # (see below). Do NOT pre-allocate them here — for large configs the buffer is
+        # ~num_dispatch_groups*dispatch_group_size*max_dispatch_buffer_token_size*emb_dim
+        # fp32 elements (hundreds of GB), and this __init__ copy is never read.
 
     def forward(
         self,
