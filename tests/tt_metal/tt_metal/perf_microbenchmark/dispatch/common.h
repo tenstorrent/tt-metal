@@ -941,6 +941,24 @@ inline constexpr CoreCoord sd_prefetch_core = {0, 0};  // combined prefetch_hd
 // this window to avoid aliasing collisions.
 static constexpr uint32_t QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE = 1u << 26;  // 64 MB
 
+// True when running on the Quasar RTL/behavioral simulator. Used to select DRAM-backed CQ paths
+// and scale down data sizes / iteration counts to fit within the simulator's memory window.
+inline bool is_quasar_sim() {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    return rtoptions.get_simulator_enabled() &&
+           tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
+}
+
+// DRAM addresses for the SD (slow-dispatch) command queue on the Quasar simulator.
+// Bank 0 decodes only 64 MB; issue (8 MB) and completion (8 MB) sit at [48, 56) and [56, 64) MB
+// respectively, exactly filling the decoded window without aliasing into the low-memory region.
+static constexpr uint32_t kSdQuasarIssueBase = 0x3000000u;                                    // 48 MB
+static constexpr uint32_t kSdQuasarIssueSize = DispatchSettings::MAX_DEV_CHANNEL_SIZE / 32;   // 8 MB
+static constexpr uint32_t kSdQuasarCompletionBase = kSdQuasarIssueBase + kSdQuasarIssueSize;  // 56 MB
+static_assert(
+    kSdQuasarCompletionBase + kSdQuasarIssueSize <= QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
+    "SD CQ overruns Quasar DRAM bank-0 window");
+
 // BaseTestFixture forms the basis for prefetch and dispatcher tests.
 // Inherits from GenericMeshDeviceFixture which determines the mesh device type automatically
 class BaseTestFixture : public tt_metal::GenericMeshDeviceFixture {
@@ -975,6 +993,9 @@ protected:
     void SetUp() override {
         if (!validate_dispatch_mode()) {
             GTEST_SKIP();
+        }
+        if (is_quasar_sim()) {
+            GTEST_SKIP() << "FD unsupported on Quasar simulator: 256 MB DRAM-backed CQ overflows the 64 MB window";
         }
         tt_metal::GenericMeshDeviceFixture::SetUp();
 
@@ -1035,14 +1056,12 @@ protected:
     // queues must be stored in DRAM due to limitations, and only 64 MB of physical DRAM space
     // (QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) is available even though the bank size is 1 GB. The remaining addresses
     // alias this physical space. The SD command queue must therefore fit in a single 64-MB window, so each half is
-    // capped at 16 MB on Quasar.
+    // capped at 8 MB on Quasar (matching kSdQuasarIssueSize so the host and kernel agree on the CQ wrap boundary).
     uint32_t sd_hugepage_issue_buffer_size() const {
-        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
-                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return (device_->arch() == tt::ARCH::QUASAR) ? kSdQuasarIssueSize : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
     uint32_t sd_completion_queue_size() const {
-        return (device_->arch() == tt::ARCH::QUASAR) ? QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE / 4
-                                                     : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
+        return (device_->arch() == tt::ARCH::QUASAR) ? kSdQuasarIssueSize : DispatchSettings::MAX_DEV_CHANNEL_SIZE / 2;
     }
 
     // Helper function that polls completion queue until expected data is written into by dispatcher
