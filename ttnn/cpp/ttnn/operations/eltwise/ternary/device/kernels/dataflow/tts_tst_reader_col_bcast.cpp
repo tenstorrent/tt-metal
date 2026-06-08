@@ -53,9 +53,9 @@ void kernel_main() {
     CircularBuffer cb_pred(predicate_cb);
     CircularBuffer cb_true(true_cb);
 
-    const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
+    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
     const auto s0 = TensorAccessor(src0_args, src0_addr);
-    const uint32_t src1_tile_bytes = get_tile_size(true_cb);
+    const uint32_t src1_tile_bytes = cb_true.get_tile_size();
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     constexpr uint32_t onetile = 1;

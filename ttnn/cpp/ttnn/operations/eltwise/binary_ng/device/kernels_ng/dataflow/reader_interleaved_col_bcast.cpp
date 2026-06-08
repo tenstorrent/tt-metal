@@ -49,7 +49,7 @@ void kernel_main() {
     cb_push_back(cb_id_src, src_num_tiles);
 #endif
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if SRC_SHARDED_B
@@ -58,7 +58,7 @@ void kernel_main() {
     cb_push_back(cb_id_src_b, src_num_tiles_b);
 #endif
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
     const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;

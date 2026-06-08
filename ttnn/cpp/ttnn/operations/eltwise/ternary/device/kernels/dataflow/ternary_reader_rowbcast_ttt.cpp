@@ -76,21 +76,21 @@ void kernel_main() {
     cb_a.reserve_back(src_num_tiles);
     cb_a.push_back(src_num_tiles);
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_a.get_tile_size();
     const auto src = TensorAccessor(src0_args, src_addr);
 #endif
 #if SRC_SHARDED_B
     cb_b.reserve_back(src_num_tiles_b);
     cb_b.push_back(src_num_tiles_b);
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_b.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, src_addr_b);
 #endif
 #if SRC_SHARDED_C
     cb_c.reserve_back(src_num_tiles_c);
     cb_c.push_back(src_num_tiles_c);
 #else
-    const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
+    const uint32_t src_tile_bytes_c = cb_c.get_tile_size();
     const auto src_c = TensorAccessor(src2_args, src_addr_c);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C

@@ -48,11 +48,11 @@ void kernel_main() {
     CircularBuffer cb_b(src_b_cb);
 
     // #if !SRC_SHARDED_A
-    const uint32_t src_tile_bytes = get_tile_size(predicate_cb);
+    const uint32_t src_tile_bytes = cb_pred.get_tile_size();
     const auto src = TensorAccessor(src_args, src0_addr);
     // #endif
     // #if !SRC_SHARDED_B
-    const uint32_t src_tile_bytes_b = get_tile_size(src_b_cb);
+    const uint32_t src_tile_bytes_b = cb_b.get_tile_size();
     const auto src_b = TensorAccessor(src_b_args, src1_addr);
     // #endif
 

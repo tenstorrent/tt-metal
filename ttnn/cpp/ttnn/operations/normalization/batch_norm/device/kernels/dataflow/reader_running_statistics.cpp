@@ -31,12 +31,12 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr);
-
     Noc noc;
     CircularBuffer cb_id_src_obj(cb_id_src);
     CircularBuffer cb_id_momentum_obj(cb_id_momentum);
+
+    const uint32_t src_tile_bytes = cb_id_src_obj.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
