@@ -67,7 +67,7 @@ jobs:
     container:
       image: >-
         ${{
-          !contains(fromJSON('["bh_quietbox","wh_galaxy","bh_loudbox"]'), matrix.test-group.sku) &&
+          !contains(fromJSON('["wh_galaxy","bh_loudbox"]'), matrix.test-group.sku) &&
             format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) ||
           inputs.docker-image || 'docker-image-unresolved!'
         }}
