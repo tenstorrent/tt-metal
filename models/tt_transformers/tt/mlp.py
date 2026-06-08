@@ -48,8 +48,18 @@ class MLP(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
 
-        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        # Opt-in (Voxtral mlp_interleaved_weights): w1/w3 DRAM-INTERLEAVED instead of bank-sharded,
+        # so decode can use a 1D mcast matmul. getattr-gated → every other model unchanged.
+        if getattr(args, "mlp_interleaved_weights", False):
+            w1_w3_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
+        # Opt-in (Voxtral mlp_ff2_interleaved_weights): w2 DRAM-INTERLEAVED instead of bank-sharded,
+        # so decode can use a 1D mcast w2 matmul. getattr-gated → every other model unchanged.
+        if getattr(args, "mlp_ff2_interleaved_weights", False):
+            w2_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        else:
+            w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
@@ -94,11 +104,17 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
+        # Layout-aware cache tag: interleaved w1/w3 must NOT reuse the DRAM-sharded cache entry
+        # (as_tensor loads the cached tensor's layout and ignores memory_config on a cache hit).
+        _ff13_tag = "w{}_interleaved" if getattr(args, "mlp_interleaved_weights", False) else "w{}_sharded"
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
+            _ff13_tag.format(1), ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        # Layout-aware tag: interleaved w2 must NOT reuse the DRAM-sharded cache entry (as_tensor
+        # loads the cached tensor's layout and ignores memory_config on a cache hit).
+        _ff2_tag = "w2_interleaved" if getattr(args, "mlp_ff2_interleaved_weights", False) else "w2_sharded"
+        self.w2 = as_sharded_tensor(_ff2_tag, ff2_dtype, dims=w2_dims)
+        self.w3 = as_sharded_tensor(_ff13_tag.format(3), ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
         self.activation_type = (
