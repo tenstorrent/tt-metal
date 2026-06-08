@@ -503,7 +503,7 @@ if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
 else
   AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
 fi
-TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
+TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
 
 
 fi # bh-sp4-glx
