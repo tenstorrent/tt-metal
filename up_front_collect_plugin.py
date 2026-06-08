@@ -60,6 +60,12 @@ _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
 # under NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT
 # change what is collected — it stops pass 1 paying for the golden reference + PCC + RNG.
 _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
+# UP_FRONT_FAST_COLLECT_SHALLOW=1 (default): within fast collect, make ttnn.from_torch allocate the
+# ttnn tensor SHAPE-ONLY (skip the host tilize/convert/copy) — program build needs only the spec, not
+# values. Removes the dominant collect cost on weight-heavy models (e.g. SDXL UNet weight prep, ~35s
+# of from_torch). Keeps REAL torch tensors so host-side weight prep value reads still work (unlike
+# meta). Set =0 to restore the original full from_torch inside fast collect.
+_FAST_SHALLOW = os.environ.get("UP_FRONT_FAST_COLLECT_SHALLOW", "1") == "1"
 # UP_FRONT_META_COLLECT=1 (opt-in): the GENERIC version of fast-collect. Instead of per-op torch
 # swaps (randn/conv2d/layer_norm/...), run the throwaway body on the torch META device: tensors
 # carry shape+dtype but NO storage, and the dispatcher propagates shapes through ANY torch op with
@@ -108,11 +114,74 @@ def _cheap_host_ops():
 
     import torch
     import torch.nn.functional as F
+    import ttnn
 
     real_randn = torch.randn
     real_rand = torch.rand
     real_conv2d = F.conv2d
     real_layer_norm = F.layer_norm
+    real_from_torch = ttnn.from_torch
+
+    # Shape-only from_torch: skip the host tilize/convert/copy and allocate the ttnn tensor by spec
+    # (the program build only needs shape/dtype/layout/memory_config). Real torch tensors are kept so
+    # host weight prep (transpose/reshape/value reads) still works. Falls back to the real from_torch
+    # for anything it can't safely shape-only (mesh_mapper, custom tile, meta/host tensors).
+    _t2t = {
+        torch.float32: ttnn.float32,
+        torch.float64: ttnn.float32,
+        torch.bfloat16: ttnn.bfloat16,
+        torch.float16: ttnn.bfloat16,
+        torch.int32: ttnn.uint32,
+        torch.int64: ttnn.uint32,
+        torch.int16: ttnn.uint16,
+        torch.uint8: ttnn.uint8,
+        torch.bool: ttnn.uint8,
+    }
+
+    def _shallow_from_torch(
+        tensor,
+        dtype=None,
+        *,
+        spec=None,
+        tile=None,
+        layout=None,
+        device=None,
+        memory_config=None,
+        mesh_mapper=None,
+        **kw,
+    ):
+        if (
+            tensor is not None
+            and device is not None
+            and mesh_mapper is None
+            and tile is None
+            and not getattr(tensor, "is_meta", False)
+        ):
+            try:
+                if spec is not None:
+                    dt, lay, mc = spec.dtype, spec.layout, spec.memory_config
+                    shp = ttnn.Shape(tuple(spec.shape))
+                else:
+                    dt = dtype or _t2t.get(tensor.dtype, ttnn.bfloat16)
+                    lay = layout or ttnn.ROW_MAJOR_LAYOUT
+                    mc = memory_config or ttnn.DRAM_MEMORY_CONFIG
+                    shp = ttnn.Shape(tuple(tensor.shape))
+                t = ttnn.allocate_tensor_on_device(shp, dt, lay, device, mc)
+                _fast_stats["shallow"] += 1
+                return t
+            except Exception:
+                _fast_stats["fallback"] += 1
+        return real_from_torch(
+            tensor,
+            dtype,
+            spec=spec,
+            tile=tile,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+            mesh_mapper=mesh_mapper,
+            **kw,
+        )
 
     def _fast_randn(*size, **kw):
         if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)):
@@ -150,6 +219,8 @@ def _cheap_host_ops():
     torch.rand = _fast_randn
     F.conv2d = _fast_conv2d
     F.layer_norm = _fast_layer_norm
+    if _FAST_SHALLOW:
+        ttnn.from_torch = _shallow_from_torch
     try:
         yield
     finally:
@@ -157,11 +228,13 @@ def _cheap_host_ops():
         torch.rand = real_rand
         F.conv2d = real_conv2d
         F.layer_norm = real_layer_norm
+        ttnn.from_torch = real_from_torch
         for _mod, _orig in pcc_saved:
             _mod.comp_pcc = _orig
 
 
 _meta_stats = {"from_torch_alloc": 0, "from_torch_fallback": 0, "to_torch_meta": 0}
+_fast_stats = {"shallow": 0, "fallback": 0}
 
 
 @contextlib.contextmanager
@@ -389,6 +462,12 @@ def pytest_sessionfinish(session, exitstatus):
         print(
             f"UP_FRONT_COLLECT: meta-collect boundary — from_torch alloc={_meta_stats['from_torch_alloc']} "
             f"fallback={_meta_stats['from_torch_fallback']}, to_torch meta={_meta_stats['to_torch_meta']}",
+            flush=True,
+        )
+    elif _FAST_COLLECT and _FAST_SHALLOW:
+        print(
+            f"UP_FRONT_COLLECT: fast-shallow from_torch — shape-only={_fast_stats['shallow']} "
+            f"fallback={_fast_stats['fallback']}",
             flush=True,
         )
     if n_unique == 0:
