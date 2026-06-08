@@ -76,8 +76,8 @@ class TTNNConvTranspose1d:
             weight: [in_ch, out_ch/groups, kernel_size] — PyTorch transposed conv format.
             bias: [out_ch] or None.
         """
-        # conv_transpose2d expects: [in_ch, out_ch/groups, kH, kW]
-        w_4d = weight.unsqueeze(2).float()  # [in_ch, out_ch/groups, 1, kernel_size]
+        # [in_ch, out_ch/groups, K] -> [in_ch, out_ch/groups, 1, K] for conv_transpose2d
+        w_4d = weight.unsqueeze(2).float()
         self._weight_host = ttnn.from_torch(w_4d, dtype=ttnn.bfloat16)
 
         if bias is not None:
@@ -122,7 +122,6 @@ class TTNNConvTranspose1d:
             return_output_dim=True,
         )
 
-        # Parse return value
         if isinstance(result, tuple) and len(result) >= 2:
             output_tensor = result[0]
             dims = result[1]

@@ -37,9 +37,7 @@ from models.demos.rvc.tt.utils import (
 from models.demos.rvc.tt.ops.conv_transpose1d import TTNNConvTranspose1d
 
 
-# =====================================================================
 # Config constants (v2 48k)
-# =====================================================================
 
 HIDDEN_CH = 192
 HALF_CH = 96
@@ -82,9 +80,7 @@ def _linear_channel_first(x, weight, bias):
     return y
 
 
-# =====================================================================
 # Persistent Flow Decoder
-# =====================================================================
 
 class TTNNFlowDecoder:
     """Persistent TTNN flow decoder with device-resident weights.
@@ -106,11 +102,8 @@ class TTNNFlowDecoder:
 
     def __init__(self):
         self._flows = []  # List of per-flow weight dicts
-        self._conv_weights = []  # Host-side conv weights (not device-resident)
+        self._conv_weights = []
         self._device = None
-        # Lazy cache of prepared conv1d weight+bias keyed by (flow_idx, layer_idx, seq_len).
-        # prepare_conv_weights does the per-call internal weight tilization once,
-        # returning a device-resident tensor — skips that write on every conv1d call.
         self._prep_cache = {}
 
     @classmethod
@@ -122,7 +115,6 @@ class TTNNFlowDecoder:
         for f in range(N_FLOWS):
             prefix = f"flow.flows.{f}"
 
-            # Device-resident linear weights (uploaded once)
             fw = {
                 "pre_w": preprocess_linear_weight(state_dict[f"{prefix}.pre_linear.weight"].float(), device),
                 "pre_b": preprocess_linear_bias(state_dict[f"{prefix}.pre_linear.bias"].float(), device),
@@ -140,8 +132,6 @@ class TTNNFlowDecoder:
                     preprocess_linear_bias(state_dict[f"{prefix}.enc.res_skip_layers.{i}.bias"].float(), device))
             obj._flows.append(fw)
 
-            # Host-side conv weights + ttnn-tensor biases for native conv1d bias_tensor= path
-            # (matches Generator's _prep_bias_for_conv1d pattern; eliminates host-side bias add)
             conv = {
                 "ws": [],
                 "bs_tt": [],
@@ -207,7 +197,6 @@ class TTNNFlowDecoder:
         fw = self._flows[flow_idx]
         conv = self._conv_weights[flow_idx]
 
-        # Reshape h_tt to 4D NHWC-ish for conv1d: [batch, 1, T, HIDDEN]
         x_dev = ttnn.reshape(h_tt, (batch, 1, seq_len, HIDDEN_CH))
         output_acc = None
 
@@ -215,7 +204,7 @@ class TTNNFlowDecoder:
             d = DILATION_RATE ** i
             padding = d * (KERNEL_SIZE - 1) // 2
 
-            # conv1d rejects TILE input at the WN config -> ROW_MAJOR
+            # conv1d rejects TILE input at WN config — relayout to ROW_MAJOR
             x_rm = ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT)
             w_p, b_p, cfg = self._ensure_prepared_conv(flow_idx, i, seq_len, batch)
             result = ttnn.conv1d(
@@ -233,13 +222,11 @@ class TTNNFlowDecoder:
                 conv_out = ttnn.sharded_to_interleaved(conv_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             except RuntimeError:
                 conv_out = ttnn.to_memory_config(conv_out, ttnn.DRAM_MEMORY_CONFIG)
-            # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C]; reshape back so
-            # downstream slices on T and broadcast-add against [B,1,1,C] g_l
-            # align correctly per batch row.
+            # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C] at B>1; reshape back
+            # so downstream slices on T and broadcast-add against g_l align.
             if batch > 1:
                 conv_out = ttnn.reshape(conv_out, (batch, 1, seq_len, 2 * HIDDEN_CH))
 
-            # Slice conditioning from g_proj_4d on device and broadcast-add
             cond_offset = i * 2 * HIDDEN_CH
             g_l = ttnn.slice(g_proj_4d, [0, 0, 0, cond_offset],
                               [batch, 1, 1, cond_offset + 2 * HIDDEN_CH])
@@ -247,7 +234,6 @@ class TTNNFlowDecoder:
             ttnn.deallocate(conv_out)
             ttnn.deallocate(g_l)
 
-            # Split gating halves on device
             tanh_half = ttnn.slice(cond_in, [0, 0, 0, 0],
                                     [batch, 1, seq_len, HIDDEN_CH])
             sig_half = ttnn.slice(cond_in, [0, 0, 0, HIDDEN_CH],
@@ -258,13 +244,11 @@ class TTNNFlowDecoder:
             ttnn.deallocate(tanh_half)
             ttnn.deallocate(sig_half)
 
-            # res_skip linear on device
             rs_out = ttnn.linear(gated, fw["rsl_ws"][i], bias=fw["rsl_bs"][i],
                                   memory_config=DEFAULT_MEMORY_CONFIG)
             ttnn.deallocate(gated)
 
             if i < NUM_WN_LAYERS - 1:
-                # rs_out: [batch, 1, T, 2*HIDDEN] — first half residual, second half skip
                 res_part = ttnn.slice(rs_out, [0, 0, 0, 0],
                                        [batch, 1, seq_len, HIDDEN_CH])
                 skip_part = ttnn.slice(rs_out, [0, 0, 0, HIDDEN_CH],
@@ -284,7 +268,6 @@ class TTNNFlowDecoder:
                     ttnn.deallocate(skip_part)
                     output_acc = new_acc
             else:
-                # Last layer: rs_out shape [1, 1, T, HIDDEN] = skip only
                 if output_acc is None:
                     output_acc = rs_out
                 else:
@@ -313,32 +296,25 @@ class TTNNFlowDecoder:
         for f in range(N_FLOWS):
             fw = self._flows[f]
 
-            # Channel flip
             x_cl = torch.flip(x_cl, [2])
             x0_cl = x_cl[:, :, :HALF_CH]
             x1_cl = x_cl[:, :, HALF_CH:]
 
-            # pre_linear (persistent weight) — output stays on device
             x0_tt = to_device(x0_cl, self._device)
             h_tt = ttnn.linear(x0_tt, fw["pre_w"], bias=fw["pre_b"],
                                 memory_config=DEFAULT_MEMORY_CONFIG)
             ttnn.deallocate(x0_tt)
 
-            # Project g (persistent weight) — output stays on device
             g_cl = g.permute(0, 2, 1)
             g_tt = to_device(g_cl, self._device)
             g_proj_tt = ttnn.linear(g_tt, fw["cond_w"], bias=fw["cond_b"],
                                      memory_config=DEFAULT_MEMORY_CONFIG)
             ttnn.deallocate(g_tt)
-            # Reshape to 4D for broadcast-add against [B,1,T,2*HIDDEN] conv outputs
             g_proj_4d = ttnn.reshape(g_proj_tt, (batch, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
 
-            # Conditioned WN — fully device-resident
             wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len, batch)
             ttnn.deallocate(g_proj_4d)
 
-            # post_linear (persistent weight) — input on device
-            # Reshape wn_out from [B,1,T,HIDDEN] back to [B,T,HIDDEN] for linear
             wn_3d = ttnn.reshape(wn_out, (batch, seq_len, HIDDEN_CH))
             ttnn.deallocate(wn_out)
             stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
@@ -347,18 +323,15 @@ class TTNNFlowDecoder:
             ttnn.deallocate(wn_3d)
             ttnn.deallocate(stats_tt)
 
-            # Affine + concat
             x1_cl = x1_cl - stats_cl
             x_cl = torch.cat([x0_cl, x1_cl], dim=-1)
 
-        return x_cl.permute(0, 2, 1)  # [B, C, T]
+        return x_cl.permute(0, 2, 1)
 
     def __call__(self, z_p, g):
-        """Enable callable syntax: flow(z_p, g) instead of flow.forward(z_p, g)."""
         return self.forward(z_p, g)
 
     def deallocate(self):
-        """Explicitly free all device-resident weights."""
         for fw in self._flows:
             for key in ["pre_w", "pre_b", "post_w", "post_b", "cond_w", "cond_b"]:
                 try:
@@ -375,9 +348,6 @@ class TTNNFlowDecoder:
                     ttnn.deallocate(b)
                 except (RuntimeError, ValueError):
                     pass
-        # Free prepared conv1d (weight, bias) tensors held in _prep_cache. They
-        # come from ttnn.prepare_conv_weights / prepare_conv_bias and stay
-        # device-resident across calls — must be released on teardown too.
         for (w_p, b_p, _cfg) in self._prep_cache.values():
             for t in (w_p, b_p):
                 try:
@@ -389,54 +359,29 @@ class TTNNFlowDecoder:
         self._conv_weights = []
 
 
-# =====================================================================
 # Persistent Generator
-# =====================================================================
 
 class TTNNGeneratorNSF:
     """Persistent TTNN generator with device-resident weights.
 
-    Architecture: conv_pre → cond → 4×(upsample + noise + 3×ResBlock) → conv_post → tanh
-
-    Device-resident tensors:
-        - cond_w, cond_b: Linear(256 → 512)
-        - 4 × TTNNConvTranspose1d (each holds weight + bias on host for conv_transpose2d)
-
-    Host-resident tensors (ttnn.conv1d manages device transfer):
-        - conv_pre weight
-        - conv_post weight
-        - 12 ResBlocks × 6 conv weights = 72 conv weight tensors
-        - 4 noise_conv weights
-
-    The conv1d weights are host tensors. ttnn.conv1d handles device upload
-    internally with its own caching. By reusing the SAME host tensor objects,
-    we allow ttnn's internal cache to work instead of creating new entries.
+    conv_pre → cond → 4×(upsample + noise + 3×ResBlock) → conv_post → tanh
     """
 
     def __init__(self):
         self._device = None
-        # Device-resident
         self._cond_w = None
         self._cond_b = None
-        # Host-resident (persistent objects for ttnn.conv1d cache)
         self._conv_pre_w = None
         self._conv_pre_b = None
         self._conv_post_w = None
-        self._ups = []  # TTNNConvTranspose1d objects
-        self._noise_convs = []  # dicts with torch weights
-        self._resblocks = []  # dicts with host ttnn tensors
-        self._gen_torch = None  # torch weights for ops that stay on host
-        # Conditioning projection cache: cond_linear(g) only depends on the
-        # speaker embedding g, which is constant across chunks of a single
-        # inference. Cache cond_cl keyed by g so we don't repeat the linear
-        # + two host roundtrips on every chunk.
+        self._ups = []
+        self._noise_convs = []
+        self._resblocks = []
+        self._gen_torch = None
+        # cond_linear(g) depends only on g (constant across chunks of one
+        # inference) — cached by g to skip the linear + two roundtrips per chunk.
         self._cond_cache_g = None
         self._cond_cache_cl = None
-        # Lazy cache of prepared ResBlock conv1d weight+bias keyed by shape.
-        # ttnn.conv1d re-tilizes weight on every call by default;
-        # prepare_conv_weights does that once and returns a device-resident
-        # tensor — eliminates the per-call write that dominates Generator
-        # inner-loop overhead (288 conv1d calls per inference).
         self._prep_cache = {}
 
     @classmethod
@@ -446,18 +391,14 @@ class TTNNGeneratorNSF:
         obj._device = device
         sd = state_dict
 
-        # conv_pre: host tensor (for ttnn.conv1d)
         obj._conv_pre_w = preprocess_conv1d_weight(sd["dec.conv_pre.weight"].float())
         obj._conv_pre_b = sd["dec.conv_pre.bias"].float()
 
-        # conv_post: host tensor (for ttnn.conv1d)
         obj._conv_post_w = preprocess_conv1d_weight(sd["dec.conv_post.weight"].float())
 
-        # cond_linear: device-resident
         obj._cond_w = preprocess_linear_weight(sd["dec.cond_linear.weight"].float(), device)
         obj._cond_b = preprocess_linear_bias(sd["dec.cond_linear.bias"].float(), device)
 
-        # Upsample ConvTranspose1d: created once, weights loaded once
         for i in range(NUM_UPSAMPLES):
             s = UPSAMPLE_RATES[i]
             k = UPSAMPLE_KERNELS[i]
@@ -469,20 +410,14 @@ class TTNNGeneratorNSF:
                             sd[f"dec.ups.{i}.bias"].float())
             obj._ups.append(ct)
 
-        # Noise convs: torch weights (used via F.conv1d or linear_channel_first)
         for i in range(NUM_UPSAMPLES):
             obj._noise_convs.append({
                 "w": sd[f"dec.noise_convs.{i}.weight"].float(),
                 "b": sd[f"dec.noise_convs.{i}.bias"].float(),
             })
 
-        # ResBlocks: host ttnn tensors (persistent for ttnn.conv1d cache)
-        # Bias is preprocessed as ttnn tensor for direct use in conv1d bias_tensor param
         def _prep_bias_for_conv1d(bias_1d):
-            """Reshape [out_ch] bias to [1,1,1,out_ch] ttnn tensor for conv1d."""
-            return ttnn.from_torch(
-                bias_1d.reshape(1, 1, 1, -1), dtype=DEFAULT_DTYPE
-            )
+            return ttnn.from_torch(bias_1d.reshape(1, 1, 1, -1), dtype=DEFAULT_DTYPE)
 
         for rb in range(12):
             block = {"convs1": [], "convs2": []}
@@ -503,11 +438,9 @@ class TTNNGeneratorNSF:
         return obj
 
     def _conv1d_persistent(self, x_cl, w_tt, b_torch, in_ch, out_ch, k, seq_len, dilation=1, batch=1):
-        """Conv1d using persistent host weight tensor (legacy path for conv_pre/conv_post).
-
-        At batch>1, pin act_block_h_override=32 — auto-picker otherwise busts
-        L1 (static CB clashes with prior L1 buffers); 32 makes all shapes fit.
-        """
+        """Conv1d via persistent host weight tensor (conv_pre/conv_post path).
+        At B>1, pin act_block_h_override=32 — auto-picker busts L1 (static
+        CB clashes with prior buffers); 32 keeps all shapes fitting."""
         padding = dilation * (k - 1) // 2
         x_tt = ttnn.from_torch(x_cl, dtype=DEFAULT_DTYPE)
         conv_kwargs = dict(
@@ -527,19 +460,11 @@ class TTNNGeneratorNSF:
         return out, out_len
 
     def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation, batch=1):
-        """Lazy prepared-weight cache for Generator conv1d shapes.
-
-        B=1: HEIGHT_SHARDED where it fits per-core L1 (40/48 shapes), else
-        DEFAULT — tuned for single-stream RTF.
-
-        B>1: pinned act_block_h_override=32 universally. ttnn.conv1d's
-        auto-picker at batch>=2 statically allocates a CB region that
-        clashes with prior L1 buffers (at byte 1118848) for 24/48 shapes
-        (k>=7 at upsampled seq_len>=9000). Forcing act_block_h=32 keeps
-        the CB small enough that all 48 shapes fit at B=2..8.
-
-        Cache key includes batch — prepared weights bake batch_size in.
-        """
+        """Lazy prepared-weight cache for Generator conv1d.
+        B=1: HEIGHT_SHARDED whitelist (40/48 shapes fit per-core L1), else DEFAULT.
+        B>1: pinned act_block_h_override=32 — auto-picker's static CB clashes
+        with prior L1 buffers for 24/48 shapes; act_bh=32 fits all 48 at B=2..8.
+        Cache key includes batch since prepared weights bake batch in."""
         key = (id(w_host), in_ch, out_ch, k, seq_len, dilation, batch)
         cached = self._prep_cache.get(key)
         if cached is not None:
@@ -568,7 +493,6 @@ class TTNNGeneratorNSF:
             self._prep_cache[key] = _build(cfg)
             return self._prep_cache[key]
 
-        # B=1 path: whitelist HEIGHT_SHARDED for shapes that fit.
         sharded_safe = not (in_ch >= 128 and k >= 11)
         if sharded_safe:
             try:
@@ -584,21 +508,10 @@ class TTNNGeneratorNSF:
 
     def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
                        dilation=1, batch=1):
-        """Conv1d that returns a device tensor in interleaved DRAM.
-
-        Used by ``_resblock1_device``. The input must already be on device
-        in ROW_MAJOR layout — ``ttnn.conv1d`` at the HiFi-GAN ResBlock
-        config (e.g. k=11/d=5/ch=128/seq=7200) rejects TILE inputs with
-        ``program.cpp:1403: tt::exception``, regardless of storage or
-        memory_config. The caller is responsible for the ROW_MAJOR
-        relayout. Output is forced to interleaved DRAM because sharded
-        L1 outputs accumulate bank pressure across chained calls and
-        eventually break subsequent conv halo allocations.
-
-        Weight + bias are passed through prepare_conv_weights/bias on first
-        call per shape (cached) so the per-call internal tilization write
-        is paid once at model warmup, not on every conv1d dispatch.
-        """
+        """Device-resident conv1d returning interleaved DRAM. Input must be
+        ROW_MAJOR on device (conv1d rejects TILE at HiFi-GAN ResBlock config).
+        Output forced to interleaved DRAM — sharded L1 outputs accumulate
+        bank pressure that breaks subsequent conv halo allocations."""
         padding = dilation * (k - 1) // 2
         w_p, b_p, cfg = self._ensure_prepared_conv(w_tt, b_tt, in_ch, out_ch, k, seq_len, dilation, batch)
         result = ttnn.conv1d(
@@ -615,31 +528,16 @@ class TTNNGeneratorNSF:
             out_tt = ttnn.sharded_to_interleaved(out_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         except RuntimeError:
             out_tt = ttnn.to_memory_config(out_tt, ttnn.DRAM_MEMORY_CONFIG)
-        # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C]; reshape back so
-        # downstream eltwise ops broadcast against x_dev [B,1,T,C] correctly.
+        # conv1d may flatten [B,1,T,C] -> [1,1,B*T,C] at B>1; reshape back.
         if batch > 1:
             out_tt = ttnn.reshape(out_tt, (batch, 1, seq_len, out_ch))
         return out_tt
 
     def _resblock1_device(self, x_cf, block_idx, dilations, seq_len, batch=1):
         """ResBlock1 inner loop with device-resident activations.
-
-        Sequence per dilation iteration:
-            leaky_relu (device) -> to_layout(ROW_MAJOR) -> conv1 (device)
-            -> leaky_relu (device) -> to_layout(ROW_MAJOR) -> conv2 (device)
-            -> add(residual) (device)
-
-        The ROW_MAJOR conversion between every leaky_relu and conv1d is
-        mandatory: ``ttnn.conv1d`` rejects TILE-layout input at the
-        (k=11, d=5, ch=128, seq=7200) configuration, while
-        ``ttnn.leaky_relu`` requires TILE for its compute kernel. The
-        per-step relayout is cheap on device and satisfies both.
-
-        One ``from_torch`` at entry, one ``to_torch`` at exit, regardless
-        of the three dilation iterations. All intermediates explicitly
-        deallocated to keep L1/DRAM pressure stable across chained
-        ResBlocks at long seq_len.
-        """
+        Per-step ROW_MAJOR relayout between leaky_relu (needs TILE) and
+        conv1d (rejects TILE at HiFi-GAN ResBlock shapes) is mandatory.
+        One from_torch at entry, one to_torch at exit."""
         block = self._resblocks[block_idx]
         ch = block["channels"]
 
@@ -657,9 +555,7 @@ class TTNNGeneratorNSF:
             c1 = block["convs1"][idx]
             c2 = block["convs2"][idx]
 
-            # leaky_relu reads TILE
             lr1 = ttnn.leaky_relu(x_dev, negative_slope=LRELU_SLOPE)
-            # conv1d rejects TILE at the HiFi-GAN config -> relayout
             lr1_rm = ttnn.to_layout(lr1, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(lr1)
             c1_out = self._conv1d_device(
@@ -667,7 +563,6 @@ class TTNNGeneratorNSF:
                 dilation=d, batch=batch)
             ttnn.deallocate(lr1_rm)
 
-            # conv1d outputs TILE; leaky_relu accepts TILE
             lr2 = ttnn.leaky_relu(c1_out, negative_slope=LRELU_SLOPE)
             ttnn.deallocate(c1_out)
             lr2_rm = ttnn.to_layout(lr2, ttnn.ROW_MAJOR_LAYOUT)
@@ -687,30 +582,18 @@ class TTNNGeneratorNSF:
 
     def forward(self, z, har_source, g):
         """Execute full generator with persistent weights — TTNN-native B>=1.
-
-        Args:
-            z:          [B, 192, T] latent from flow decoder
-            har_source: [B, 1, T*480] harmonic source from SineGen
-            g:          [B, 256, 1] speaker embedding — per-row conditioning.
-                        Different rows may target different speakers; each
-                        row's cond is computed independently.
-
-        Returns:
-            audio: [B, 1, T*480] generated waveform in [-1, 1]
-        """
+        z=[B,192,T], har_source=[B,1,T*480], g=[B,256,1] per-row.
+        Returns audio=[B,1,T*480] in [-1,1]."""
         batch = z.shape[0]
         seq_len = z.shape[2]
 
-        # conv_pre (persistent host weight)
         x_cl = z.permute(0, 2, 1)
         x_cl, _ = self._conv1d_persistent(
             x_cl, self._conv_pre_w, self._conv_pre_b, 192, 512, 7, seq_len, batch=batch)
         x_cf = x_cl.permute(0, 2, 1)
 
-        # Conditioning projection — per-row. cond_cl depends only on g and is
-        # constant across chunks for the same speakers, so cache by the full
-        # g tensor; same-target batches reuse one linear pass, mixed-target
-        # batches compute per-row cond correctly.
+        # cond_linear(g) is constant across chunks for the same g; cache by
+        # full g so same-target batches reuse one linear, mixed-target are still per-row.
         if self._cond_cache_g is None or self._cond_cache_g.shape != g.shape or not torch.equal(g, self._cond_cache_g):
             g_cl = g.permute(0, 2, 1)
             g_tt = to_device(g_cl, self._device)
@@ -726,7 +609,6 @@ class TTNNGeneratorNSF:
         for i in range(NUM_UPSAMPLES):
             x_cf = F.leaky_relu(x_cf, LRELU_SLOPE)
 
-            # Upsample (persistent TTNNConvTranspose1d)
             ct = self._ups[i]
             out_ch = UPSAMPLE_INITIAL_CH // (2 ** (i + 1))
             x_nhwc = x_cf.permute(0, 2, 1).unsqueeze(1)
@@ -735,7 +617,6 @@ class TTNNGeneratorNSF:
             x_cf = TTNNConvTranspose1d.postprocess_output(out_tt, batch, out_len, out_ch)
             seq_len = out_len
 
-            # Noise injection (torch — small ops)
             nc = self._noise_convs[i]
             if i < NUM_UPSAMPLES - 1:
                 stride_f0 = math.prod(UPSAMPLE_RATES[i + 1:])
@@ -745,7 +626,6 @@ class TTNNGeneratorNSF:
                 x_source = _linear_channel_first(har_source, nc["w"], nc["b"])
             x_cf = x_cf + x_source[:, :, :seq_len]
 
-            # ResBlocks (persistent conv weights)
             xs = None
             for j in range(NUM_KERNELS):
                 rb_idx = i * NUM_KERNELS + j
@@ -753,7 +633,6 @@ class TTNNGeneratorNSF:
                 xs = rb_out if xs is None else xs + rb_out
             x_cf = xs / NUM_KERNELS
 
-        # conv_post + tanh (persistent host weight)
         x_cf = F.leaky_relu(x_cf)
         x_cl = x_cf.permute(0, 2, 1)
         x_cl, _ = self._conv1d_persistent(
@@ -761,20 +640,15 @@ class TTNNGeneratorNSF:
         return torch.tanh(x_cl.permute(0, 2, 1))
 
     def __call__(self, z, har_source, g):
-        """Enable callable syntax: gen(z, har, g) instead of gen.forward(z, har, g)."""
         return self.forward(z, har_source, g)
 
     def deallocate(self):
-        """Explicitly free device-resident weights."""
         for tensor in [self._cond_w, self._cond_b]:
             if tensor is not None:
                 try:
                     ttnn.deallocate(tensor)
                 except (RuntimeError, ValueError):
                     pass
-        # Free prepared conv1d (weight, bias) tensors held in _prep_cache.
-        # ttnn.prepare_conv_weights / prepare_conv_bias produce device-resident
-        # tensors that live until explicitly deallocated.
         for (w_p, b_p, _cfg) in self._prep_cache.values():
             for t in (w_p, b_p):
                 try:
@@ -787,7 +661,5 @@ class TTNNGeneratorNSF:
         self._ups = []
         self._resblocks = []
         self._noise_convs = []
-        # Drop the host-side conditioning cache so we don't hold a stale
-        # cond_cl referencing weights that no longer exist on device.
         self._cond_cache_g = None
         self._cond_cache_cl = None

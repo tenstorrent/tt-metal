@@ -17,14 +17,11 @@ Usage:
 import sys
 import os
 
-# Add repo root to path FIRST so 'models.demos.rvc...' imports work
-# (our local ttnn/ package __init__.py uses absolute imports)
 _DEMO_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_DEMO_DIR, "..", "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# Now safe to import ttnn (system ttnn is already on sys.path via pip)
 import ttnn  # noqa: E402
 
 import argparse
@@ -48,24 +45,17 @@ from models.demos.rvc.utils.config import (
     get_hubert_paths, get_model_and_config_paths,
 )
 
-# =====================================================================
-# Config
-# =====================================================================
-
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 SR_HUBERT = 16000
 SR_TARGET = 48000
 WINDOW = 160
 UPP = 480  # product of upsample rates [12, 10, 2, 2]
 
-# Chunking — single source of truth used by demo, benchmark, and tests.
-# A change here must be reflected in benchmark.py and any test that
-# parametrizes over production chunk shapes.
-MAX_CHUNK_FRAMES = 75  # L1-safe maximum nominal chunk
-OVERLAP = 3            # boundary smoothing context per side
-TARGET_LEN = MAX_CHUNK_FRAMES + 2 * OVERLAP  # padded ext-chunk size = 81
+# Source of truth for benchmark + tests — change in tandem.
+MAX_CHUNK_FRAMES = 75  # L1-safe maximum
+OVERLAP = 3
+TARGET_LEN = MAX_CHUNK_FRAMES + 2 * OVERLAP
 
-# Butterworth highpass for preprocessing
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=SR_HUBERT)
 
 
@@ -93,8 +83,8 @@ def load_text_encoder(state_dict):
 
 
 def load_source_module(state_dict):
-    """Load SineGen/SourceModule from checkpoint."""
-    # validation=False: enable noise + random phase for natural-sounding output
+    """Load SineGen/SourceModule from checkpoint.
+    validation=False enables noise + random phase for natural output."""
     m_source = SourceModuleHnNSF(sampling_rate=SR_TARGET, harmonic_num=0, validation=False)
     m_state = {k.replace("dec.m_source.", ""): v.float()
                 for k, v in state_dict.items() if k.startswith("dec.m_source.")}
@@ -112,10 +102,7 @@ def extract_f0_dio(audio_np, f0_up_key=0):
                     frame_period=frame_period, allowed_range=0.1)
     f0 = pw.stonemask(audio_f64, f0, t, SR_HUBERT)
     f0 = torch.from_numpy(f0.astype(np.float32)).unsqueeze(0)
-
-    # Apply pitch shift
     f0 *= pow(2, f0_up_key / 12)
-
     return _f0_to_coarse(f0)
 
 
@@ -161,7 +148,6 @@ def load_feature_index(index_path):
     return index, big_npy
 
 
-# Module-level cache for torch fallback modules (used when TTNN hits L1 OOM)
 _torch_fallback_cache = {}
 
 
@@ -181,17 +167,14 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print("RVC TTNN Hybrid Inference Demo")
     print("=" * 60)
 
-    # --- Load audio ---
     t0 = time.time()
     audio_raw = load_audio(SR_HUBERT)
-    # Truncate for manageable first demo
     max_samples = int(max_secs * SR_HUBERT)
     if audio_raw.shape[0] > max_samples:
         audio_raw = audio_raw[:max_samples]
         print(f"  Truncated to {max_secs}s ({max_samples} samples)")
     audio_np = audio_raw.numpy()
 
-    # Normalize + highpass
     audio_max = np.abs(audio_np).max()
     if audio_max > 1:
         audio_np = audio_np / audio_max
@@ -200,7 +183,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     audio_secs = audio.shape[1] / SR_HUBERT
     print(f"  Input: {audio.shape[1]} samples, {audio_secs:.2f}s @ {SR_HUBERT}Hz")
 
-    # --- Load checkpoint ---
     synth_path, _ = get_model_and_config_paths("v2", "48k", True)
     sd = load_file(synth_path)
     print(f"  Checkpoint: {os.path.basename(synth_path)} loaded")
@@ -214,25 +196,16 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     t_load = time.time() - t0
     print(f"  Torch modules loaded in {t_load:.2f}s")
 
-    # --- Open TTNN device ---
     device = ttnn.open_device(device_id=device_id, l1_small_size=32768)
 
-    # --- Load TTNN modules ---
     t0 = time.time()
     flow = TTNNFlowDecoder.from_checkpoint(sd, device)
     gen = TTNNGeneratorNSF.from_checkpoint(sd, device)
     t_ttnn_load = time.time() - t0
     print(f"  TTNN modules loaded in {t_ttnn_load:.2f}s")
 
-    # === INFERENCE ===
-    # Chunked processing: Hubert+TextEncoder run on full audio (torch),
-    # then z_p is chunked for TTNN flow+generator to stay within L1 limits.
-    # Generator L1 budget allows up to 75 frames per chunk on N300; 80+ OOMs.
-    # MAX_CHUNK_FRAMES / OVERLAP / TARGET_LEN are module-level above.
-
     print("\n--- Preprocessing (torch, full audio) ---")
     with torch.no_grad():
-        # 1. Hubert
         t_hubert_start = time.time()
         logits = hubert(source=audio, output_layer=12)
         feats = logits
@@ -241,7 +214,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
         t_hubert = time.time() - t_hubert_start
         print(f"  Hubert: {audio.shape} → feats {feats.shape}, {t_hubert:.3f}s")
 
-        # 2. F0 extraction
         t_f0_start = time.time()
         if f0_method == "rmvpe":
             pitch, pitchf = extract_f0_rmvpe(audio, f0_up_key)
@@ -252,7 +224,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
         t_f0 = time.time() - t_f0_start
         print(f"  F0 ({f0_method}): pitch {pitch.shape}, {t_f0:.3f}s")
 
-        # 2b. Feature retrieval (FAISS, optional)
         t_retrieval_start = time.time()
         index, big_npy = load_feature_index(index_path)
         if index is not None and index_rate > 0:
@@ -269,25 +240,21 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
         else:
             print(f"  Retrieval: disabled (no index or rate=0)")
 
-        # 3. Speaker embedding
         sid = torch.tensor([speaker_id])
         g = emb_g(sid).unsqueeze(-1)
 
-        # 4. TextEncoder (full sequence)
         t_enc_start = time.time()
         m_p, logs_p = enc_p(feats, pitch)
-        # Normal inference: add noise for natural-sounding output
+        # Add noise for natural-sounding output.
         z_p = m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666
         t_enc = time.time() - t_enc_start
         print(f"  TextEncoder: → z_p {z_p.shape}, {t_enc:.3f}s")
 
-        # 5. SineGen (full sequence)
         t_src_start = time.time()
         har_source = m_source(pitchf, UPP).transpose(1, 2)
         t_src = time.time() - t_src_start
         print(f"  SineGen: → har_source {har_source.shape}, {t_src:.3f}s")
 
-    # === CHUNKED TTNN INFERENCE ===
     n_chunks = (num_frames + MAX_CHUNK_FRAMES - 1) // MAX_CHUNK_FRAMES
     print(f"\n--- TTNN Inference ({n_chunks} chunks of ≤{MAX_CHUNK_FRAMES} frames, overlap-add) ---")
     OVERLAP_SAMPLES = OVERLAP * UPP
@@ -296,15 +263,13 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     audio_segments = []
     t_flow_total = 0
     t_gen_total = 0
-    fallback_chunks = []  # chunk indices that ran on torch instead of TTNN
+    fallback_chunks = []
 
     with torch.no_grad():
         for c in range(n_chunks):
-            # Nominal chunk boundaries
             nom_start = c * MAX_CHUNK_FRAMES
             nom_end = min(nom_start + MAX_CHUNK_FRAMES, num_frames)
 
-            # Extended boundaries with overlap
             ext_start = max(0, nom_start - OVERLAP)
             ext_end = min(num_frames, nom_end + OVERLAP)
             ext_len = ext_end - ext_start
@@ -312,17 +277,12 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             z_p_chunk = z_p[:, :, ext_start:ext_end]
             har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
 
-            # Pad to uniform shape so conv1d cache reuses entries (prevents OOM)
+            # Pad to uniform shape so conv1d cache reuses entries.
             if ext_len < TARGET_LEN:
                 pad_len = TARGET_LEN - ext_len
                 z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
                 har_chunk = F.pad(har_chunk, (0, pad_len * UPP))
 
-            # No silent fallback by default — TTNN errors must surface so a
-            # device-shape regression doesn't masquerade as a successful run.
-            # The opt-in --allow-torch-fallback path catches OOM/L1 and runs
-            # torch for that chunk, but the chunk is then excluded from the
-            # TTNN timing summary (RTF reflects actual N300 work).
             if not allow_torch_fallback:
                 t0 = time.time()
                 z_chunk = flow(z_p_chunk, g)
@@ -332,9 +292,8 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
                 t_gen_total += time.time() - t0
                 backend = "TTNN"
             else:
-                # Local timers so a gen failure after a successful flow
-                # doesn't leak flow time into t_flow_total for a chunk that
-                # ultimately ran on torch.
+                # Local timers so a gen failure after a successful flow doesn't
+                # leak flow time into t_flow_total for a chunk that ran on torch.
                 t_flow_chunk = 0.0
                 t_gen_chunk = 0.0
                 try:
@@ -349,7 +308,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
                     backend = "TTNN"
                 except RuntimeError as e:
                     if "out of memory" not in str(e).lower() and "l1" not in str(e).lower():
-                        raise  # non-OOM errors still surface
+                        raise
                     from models.demos.rvc.torch_impl.reference import (
                         load_flow_torch_modules, torch_flow_forward,
                         build_torch_generator, torch_generator_forward,
@@ -362,12 +321,9 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
                     backend = "torch"
                     fallback_chunks.append(c)
 
-            # Trim: first remove zero-padding, then remove overlap
-            # Audio from padded region
             audio_chunk = audio_chunk[:, :, :ext_len * UPP]
             z_chunk = z_chunk[:, :, :ext_len]
 
-            # Trim to nominal region (remove overlap)
             left_trim = (nom_start - ext_start) * UPP
             right_trim = (ext_end - nom_end) * UPP
             nominal_audio = audio_chunk[:, :, left_trim:audio_chunk.shape[2] - right_trim if right_trim > 0 else audio_chunk.shape[2]]
@@ -380,12 +336,10 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             audio_segments.append(nominal_audio)
             print(f"    Chunk {c+1}/{n_chunks}: T={nom_end-nom_start} (ext={ext_end-ext_start}) [{backend}] → audio {nominal_audio.shape}")
 
-    # Concatenate (overlap already trimmed, segments are contiguous)
     audio_out = torch.cat(audio_segments, dim=2)
     z_out = torch.cat(ttnn_z_chunks, dim=2)
     print(f"  Total TTNN output: {audio_out.shape}")
 
-    # === TORCH REFERENCE (same overlap-add for fair comparison) ===
     print("\n--- Torch Reference ---")
     with torch.no_grad():
         from models.demos.rvc.torch_impl.reference import (
@@ -408,7 +362,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             z_p_chunk = z_p[:, :, ext_start:ext_end]
             har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
 
-            # Pad to uniform shape (same as TTNN)
             if ext_len < TARGET_LEN:
                 pad_len = TARGET_LEN - ext_len
                 z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
@@ -417,7 +370,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             z_ref_c = torch_flow_forward(z_p_chunk, g, flow_mods)
             audio_ref_c = torch_generator_forward(z_ref_c, har_chunk, g, gen_torch)
 
-            # Remove padding then overlap
             audio_ref_c = audio_ref_c[:, :, :ext_len * UPP]
             z_ref_c = z_ref_c[:, :, :ext_len]
 
@@ -446,7 +398,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print(f"  Audio PCC: {audio_pcc:.6f}")
     print(f"  Max error: {max_err:.6f}")
 
-    # === SAVE OUTPUT ===
     output_dir = os.path.join(DATA_DIR, "output")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -462,14 +413,12 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print(f"\n  Saved: {ttnn_path}")
     print(f"  Saved: {ref_path}")
 
-    # === TIMING SUMMARY ===
     output_secs = audio_out.shape[2] / SR_TARGET
     t_ttnn_total = t_flow_total + t_gen_total
     t_preprocessing = t_hubert + t_f0 + t_enc + t_src
     n_ttnn_chunks = n_chunks - len(fallback_chunks)
-    # RTF: t_ttnn_total covers only TTNN chunks (fallback chunks excluded
-    # from the accumulators above). Scale denominator to match — otherwise
-    # RTF reports artificially low when some chunks ran on torch CPU.
+    # Scale denominator to TTNN chunks only, otherwise RTF reports low when
+    # some chunks ran on torch CPU.
     if n_ttnn_chunks > 0 and output_secs > 0:
         ttnn_secs = output_secs * (n_ttnn_chunks / n_chunks)
         rtf = t_ttnn_total / ttnn_secs
@@ -498,7 +447,6 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print(f"  Audio PCC:        {audio_pcc:.6f}")
     print(f"{'=' * 60}")
 
-    # Cleanup
     flow.deallocate()
     gen.deallocate()
     ttnn.close_device(device)

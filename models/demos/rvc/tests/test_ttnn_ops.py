@@ -18,9 +18,7 @@ import ttnn
 from models.demos.rvc.tests.pcc_utils import compute_pcc, assert_pcc
 
 
-# =============================================================================
 # 1. LINEAR TESTS
-# =============================================================================
 
 
 class TestLinear:
@@ -43,14 +41,11 @@ class TestLinear:
         """Test ttnn.linear against torch.nn.functional.linear."""
         torch.manual_seed(42)
 
-        # PyTorch reference
         x = torch.randn(batch, seq, in_feat)
         w = torch.randn(out_feat, in_feat)
         b = torch.randn(out_feat)
-
         ref = torch.nn.functional.linear(x, w, b)
 
-        # TTNN execution
         w_t = w.T.contiguous()
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         w_tt = ttnn.from_torch(w_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -64,7 +59,6 @@ class TestLinear:
         out_tt = ttnn.linear(x_tt, w_tt, bias=b_tt)
         out = ttnn.to_torch(out_tt).float()
 
-        # Unpad if needed
         if out.shape != ref.shape:
             out = out[: ref.shape[0], : ref.shape[1], : ref.shape[2]]
 
@@ -72,9 +66,7 @@ class TestLinear:
         print(f"  linear/{desc}: PCC={pcc:.6f}")
 
 
-# =============================================================================
 # 2. LAYER NORM TESTS
-# =============================================================================
 
 
 class TestLayerNorm:
@@ -124,9 +116,7 @@ class TestLayerNorm:
         print(f"  layer_norm/{desc}: PCC={pcc:.6f}")
 
 
-# =============================================================================
 # 3. SOFTMAX TESTS
-# =============================================================================
 
 
 class TestSoftmax:
@@ -161,9 +151,7 @@ class TestSoftmax:
         print(f"  softmax/{desc}: PCC={pcc:.6f}")
 
 
-# =============================================================================
 # 4. CONV1D TESTS (via conv2d)
-# =============================================================================
 
 
 class TestConv1d:
@@ -200,21 +188,14 @@ class TestConv1d:
         """Test Conv1d via ttnn.conv2d against torch.nn.Conv1d."""
         torch.manual_seed(42)
 
-        # PyTorch reference
         conv = torch.nn.Conv1d(in_ch, out_ch, kernel, stride=stride, padding=pad, bias=True)
-        # Input for torch Conv1d: [B, C, L]
-        x_nchw = torch.randn(batch, in_ch, seq)
-        ref = conv(x_nchw)  # [B, out_ch, L_out]
+        x_nchw = torch.randn(batch, in_ch, seq)  # torch Conv1d wants [B, C, L]
+        ref = conv(x_nchw)
 
-        # For TTNN: input must be channels-last [B, L, C]
-        x_nhwc = x_nchw.permute(0, 2, 1)  # [B, L, C]
-
-        # Prepare weight: torch [out_ch, in_ch, K] → [out_ch, in_ch, 1, K]
-        w_4d = conv.weight.data.unsqueeze(2)
+        x_nhwc = x_nchw.permute(0, 2, 1)  # TTNN wants channels-last [B, L, C]
+        w_4d = conv.weight.data.unsqueeze(2)  # [out, in, K] -> [out, in, 1, K]
         b_4d = conv.bias.data.reshape(1, 1, 1, -1) if conv.bias is not None else None
-
-        # Input NHWC for conv2d: [B, 1, L, C]
-        input_nhwc = x_nhwc.unsqueeze(1)  # [B, 1, L, C]
+        input_nhwc = x_nhwc.unsqueeze(1)  # NHWC for conv2d: [B, 1, L, C]
 
         ttnn_input = ttnn.from_torch(input_nhwc, dtype=ttnn.bfloat16)
         ttnn_weight = ttnn.from_torch(w_4d, dtype=ttnn.bfloat16)
@@ -243,27 +224,21 @@ class TestConv1d:
                 conv_config=conv_config,
                 dtype=ttnn.bfloat16,
             )
-            # Handle different return formats
             if isinstance(result, tuple) and len(result) == 2:
                 output_tensor, (out_h, out_w) = result
             else:
                 output_tensor = result
-                # Compute expected output width manually
                 out_w = (seq + 2 * pad - kernel) // stride + 1
         except Exception as e:
             pytest.fail(f"conv1d/{desc}: ttnn.conv2d FAILED with: {e}")
 
-        # Postprocess: TTNN output → torch
         output = ttnn.from_device(output_tensor)
         out_torch = ttnn.to_torch(output)
         out_torch = out_torch.reshape(batch, 1, out_w, -1)
         out_torch = out_torch[:, :, :, :out_ch]
-        out_torch = out_torch.squeeze(1)  # [B, L_out, out_ch]
-
-        # Convert to [B, C, L] for comparison with torch reference
+        out_torch = out_torch.squeeze(1)
         out_nchw = out_torch.permute(0, 2, 1).float()
 
-        # Compare shapes
         assert out_nchw.shape == ref.shape, (
             f"conv1d/{desc}: Shape mismatch: TTNN {out_nchw.shape} vs torch {ref.shape}"
         )
@@ -272,9 +247,7 @@ class TestConv1d:
         print(f"  conv1d/{desc}: PCC={pcc:.6f}, shape={ref.shape}")
 
 
-# =============================================================================
 # 5. CONV TRANSPOSE 1D TESTS (FEASIBILITY)
-# =============================================================================
 
 
 class TestConvTranspose1d:
@@ -289,12 +262,9 @@ class TestConvTranspose1d:
     @pytest.mark.parametrize(
         "batch, seq, in_ch, out_ch, kernel, stride, pad, desc",
         [
-            # Small feasibility test first
             (1, 32, 64, 32, 4, 2, 1, "small_k4_s2"),
-            # HiFi-GAN upsample layers (from smallest to largest stride)
             (1, 300, 128, 64, 4, 2, 1, "hifigan_up3_k4_s2"),
             (1, 150, 256, 128, 4, 2, 1, "hifigan_up2_k4_s2"),
-            # These are the risky ones:
             (1, 25, 512, 256, 16, 6, 5, "hifigan_up1_k16_s6"),
             (1, 5, 512, 512, 16, 10, 3, "hifigan_up0_k16_s10"),
         ],
@@ -306,21 +276,16 @@ class TestConvTranspose1d:
         """Test ConvTranspose1d via ttnn.conv_transpose2d."""
         torch.manual_seed(42)
 
-        # PyTorch reference
         conv_t = torch.nn.ConvTranspose1d(
             in_ch, out_ch, kernel, stride=stride, padding=pad, bias=True
         )
         x_nchw = torch.randn(batch, in_ch, seq)
-        ref = conv_t(x_nchw)  # [B, out_ch, L_out]
+        ref = conv_t(x_nchw)
 
-        # Channels-last
         x_nhwc = x_nchw.permute(0, 2, 1)
-
-        # Weight: torch [in_ch, out_ch, K] → [in_ch, out_ch, 1, K]
         w_4d = conv_t.weight.data.unsqueeze(2)
         b_4d = conv_t.bias.data.reshape(1, 1, 1, -1) if conv_t.bias is not None else None
-
-        input_nhwc = x_nhwc.unsqueeze(1)  # [B, 1, L, C]
+        input_nhwc = x_nhwc.unsqueeze(1)
 
         ttnn_input = ttnn.from_torch(input_nhwc, dtype=ttnn.bfloat16)
         ttnn_weight = ttnn.from_torch(w_4d, dtype=ttnn.bfloat16)
@@ -373,9 +338,7 @@ class TestConvTranspose1d:
         print(f"  conv_transpose1d/{desc}: PCC={pcc:.6f}, shape_out={out_nchw.shape}")
 
 
-# =============================================================================
 # 6. ELEMENT-WISE OPS TESTS
-# =============================================================================
 
 
 class TestElementWise:

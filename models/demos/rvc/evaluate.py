@@ -52,7 +52,6 @@ def compute_speaker_similarity(wav1, sr1, wav2, sr2):
 
     encoder = VoiceEncoder()
 
-    # Resemblyzer expects 16kHz mono float
     if sr1 != 16000:
         from scipy.signal import resample
         wav1 = resample(wav1, int(len(wav1) * 16000 / sr1))
@@ -149,38 +148,32 @@ def main():
         src_dur = len(src_wav) / src_sr
         print(f"  Source input:  {os.path.basename(args.source)} ({src_dur:.2f}s, {src_sr}Hz)")
 
-    # =================================================================
-    # 1. TTNN CORRECTNESS: PCC vs PyTorch reference
-    # =================================================================
+    # 1. TTNN correctness: PCC vs PyTorch reference
     print(f"\n{'─' * 60}")
     print("1. TTNN Correctness (TTNN vs PyTorch reference)")
     print(f"{'─' * 60}")
     pcc = compute_audio_pcc(ttnn_wav, ref_wav)
     min_len = min(len(ttnn_wav), len(ref_wav))
     max_err = np.max(np.abs(ttnn_wav[:min_len] - ref_wav[:min_len]))
-    print(f"  Audio PCC:  {pcc:.6f}  {'✅ PASS' if pcc > 0.95 else '❌ FAIL'} (threshold: 0.95)")
+    print(f"  Audio PCC:  {pcc:.6f}  {'PASS' if pcc > 0.95 else 'FAIL'} (threshold: 0.95)")
     print(f"  Max error:  {max_err:.6f}")
     print(f"  Note: This measures whether TTNN produces the same output as PyTorch.")
 
-    # =================================================================
-    # 2. SPEAKER SIMILARITY
-    # =================================================================
+    # 2. Speaker similarity
     print(f"\n{'─' * 60}")
     print("2. Speaker Similarity (d-vector cosine similarity)")
     print(f"{'─' * 60}")
 
-    # 2a. TTNN vs Torch (correctness — expect very high)
     print(f"  TTNN vs Torch ref (correctness check):")
     sim_tt = compute_speaker_similarity(ttnn_wav, ttnn_sr, ref_wav, ref_sr)
     if sim_tt is not None:
         print(f"    Cosine sim: {sim_tt:.4f}  (expected ~1.0, same model output)")
 
-    # 2b. Output vs Source (voice conversion quality)
     if src_wav is not None:
         print(f"  TTNN output vs Source input (voice conversion effect):")
         sim_src = compute_speaker_similarity(ttnn_wav, ttnn_sr, src_wav, src_sr)
         if sim_src is not None:
-            print(f"    Cosine sim: {sim_src:.4f}  {'✅ PASS' if sim_src > 0.75 else '⚠️ LOW'} (threshold: 0.75)")
+            print(f"    Cosine sim: {sim_src:.4f}  {'PASS' if sim_src > 0.75 else 'LOW'} (threshold: 0.75)")
             if sim_src > 0.90:
                 print(f"    Note: High similarity suggests minimal voice conversion effect")
                 print(f"          (expected for same-speaker demo without target index)")
@@ -194,9 +187,7 @@ def main():
     else:
         print(f"  [SKIP] No source audio provided (use --source to enable)")
 
-    # =================================================================
-    # 3. CONTENT PRESERVATION: WER
-    # =================================================================
+    # 3. Content preservation: WER
     print(f"\n{'─' * 60}")
     print("3. Content Preservation (WER via Whisper)")
     print(f"{'─' * 60}")
@@ -206,26 +197,20 @@ def main():
         print(f"  TTNN output:   \"{ttnn_text}\"")
 
         if src_wav is not None:
-            # WER: source vs output (content preservation through pipeline).
-            # Truncate source to TTNN output duration so the two transcriptions
-            # cover the same audio span; otherwise WER is dominated by source
-            # words past the converted clip's end.
+            # Truncate source to TTNN output duration — otherwise WER is
+            # dominated by source words past the converted clip's end.
             src_text = transcribe_wav(args.source, max_secs=ttnn_dur)
             if src_text is not None:
                 print(f"  Source input ({ttnn_dur:.2f}s window):  \"{src_text}\"")
                 wer_content = compute_wer_score(ttnn_text, src_text)
-                print(f"  WER (output vs source, matched window): {wer_content:.4f}  {'✅ PASS' if wer_content < 2.5 else '❌ FAIL'} (threshold: 2.5)")
+                print(f"  WER (output vs source, matched window): {wer_content:.4f}  {'PASS' if wer_content < 2.5 else 'FAIL'} (threshold: 2.5)")
 
-        # Also compare TTNN vs Torch (correctness)
         ref_text = transcribe_wav(args.ref)
         if ref_text is not None:
             print(f"  Torch ref:     \"{ref_text}\"")
             wer_correct = compute_wer_score(ttnn_text, ref_text)
             print(f"  WER (TTNN vs Torch): {wer_correct:.4f}  (correctness check)")
 
-    # =================================================================
-    # SUMMARY
-    # =================================================================
     print(f"\n{'=' * 60}")
     print("Summary")
     print(f"{'=' * 60}")

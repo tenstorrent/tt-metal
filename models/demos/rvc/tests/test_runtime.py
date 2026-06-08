@@ -63,7 +63,7 @@ class TestFlowRuntime:
             assert diff == 0.0, f"Non-determinism at run {i}: max_diff={diff}"
 
         flow.deallocate()
-        print(f"  Flow: 5/5 repeated runs, bit-identical, no OOM ✓")
+        print(f"  Flow: 5/5 repeated runs, bit-identical, no OOM")
 
     def test_correctness_vs_torch(self, device, checkpoint):
         """Compare persistent flow against torch reference."""
@@ -83,7 +83,7 @@ class TestFlowRuntime:
         max_err = (ref - out).abs().max().item()
 
         flow.deallocate()
-        print(f"  Persistent flow vs torch: PCC={pcc:.6f}, max_err={max_err:.6f} ✓")
+        print(f"  Persistent flow vs torch: PCC={pcc:.6f}, max_err={max_err:.6f}")
 
 
 class TestGeneratorRuntime:
@@ -111,7 +111,7 @@ class TestGeneratorRuntime:
             assert diff == 0.0, f"Non-determinism at run {i}: max_diff={diff}"
 
         gen.deallocate()
-        print(f"  Generator: 3/3 repeated runs, bit-identical, no OOM ✓")
+        print(f"  Generator: 3/3 repeated runs, bit-identical, no OOM")
 
     def test_correctness_vs_torch(self, device, checkpoint):
         """Compare persistent generator against torch reference."""
@@ -133,7 +133,7 @@ class TestGeneratorRuntime:
         max_err = (ref - out).abs().max().item()
 
         gen.deallocate()
-        print(f"  Persistent generator vs torch: PCC={pcc:.6f}, max_err={max_err:.4f} ✓")
+        print(f"  Persistent generator vs torch: PCC={pcc:.6f}, max_err={max_err:.4f}")
 
 
 class TestFullPipelineRuntime:
@@ -158,11 +158,9 @@ class TestFullPipelineRuntime:
         z_p = torch.randn(1, 192, 10)
         har = torch.randn(1, 1, 10 * 480)
 
-        # Torch reference
         z_ref = torch_flow_forward(z_p, g, flow_mods)
         audio_ref = torch_generator_forward(z_ref, har, g, gen_torch)
 
-        # Run 3 times
         results = []
         z_ttnn = None
         for i in range(3):
@@ -173,7 +171,6 @@ class TestFullPipelineRuntime:
             results.append(audio.clone())
             print(f"    Run {i}: shape={audio.shape}, range=[{audio.min():.4f}, {audio.max():.4f}]")
 
-        # Correctness
         flow_pcc = compute_pcc(z_ref, z_ttnn)
         audio_pcc = compute_pcc(audio_ref, results[0])
         assert flow_pcc > 0.995, f"Flow PCC={flow_pcc}"
@@ -182,11 +179,10 @@ class TestFullPipelineRuntime:
         assert results[0].abs().max() <= 1.0
         print(f"    Correctness: flow PCC={flow_pcc:.6f}, audio PCC={audio_pcc:.6f}")
 
-        # Determinism
         for i in range(1, 3):
             diff = (results[0] - results[i]).abs().max().item()
             assert diff == 0.0, f"Non-determinism at run {i}: max_diff={diff}"
 
         flow.deallocate()
         gen.deallocate()
-        print(f"  Full pipeline: 3/3 runs, correct + deterministic + no OOM ✓")
+        print(f"  Full pipeline: 3/3 runs, correct + deterministic + no OOM")

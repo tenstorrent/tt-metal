@@ -23,18 +23,14 @@ import torch
 import ttnn
 
 
-# =====================================================================
 # Default memory configs (Stage 1: all DRAM, no sharding)
-# =====================================================================
 
 DEFAULT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 DEFAULT_DTYPE = ttnn.bfloat16
 DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
 
 
-# =====================================================================
 # Tensor conversion helpers
-# =====================================================================
 
 def to_device(
     tensor: torch.Tensor,
@@ -82,9 +78,7 @@ def to_host(
     return ttnn.to_torch(tensor).float()
 
 
-# =====================================================================
 # Weight preprocessing helpers
-# =====================================================================
 
 def preprocess_linear_weight(
     weight: torch.Tensor,
@@ -180,9 +174,7 @@ def preprocess_conv1d_weight(
     )
 
 
-# =====================================================================
 # Conv output postprocessing
-# =====================================================================
 
 def postprocess_conv_output(
     output_tensor: ttnn.Tensor,
