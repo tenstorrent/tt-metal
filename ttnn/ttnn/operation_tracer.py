@@ -307,6 +307,116 @@ def _serialize_torch_tensor(value: Any, serialize_values: bool) -> Dict[str, Any
     return tensor_data
 
 
+def _serialize_value(value: Any, serialize_tensor_values: bool, name_prefix: str = "") -> Any:
+    """Recursively serialize a value, handling tensors specially.
+
+    Module-level so it can be invoked BEFORE an operation runs (to snapshot
+    argument metadata) as well as after (for the return value). See
+    ``serialize_arguments`` and ``wrap_function_for_tracing``.
+    """
+    # Lazy import torch to avoid global import validation errors
+    import torch
+
+    if isinstance(value, ttnn.Tensor):
+        return _serialize_ttnn_tensor(value, serialize_tensor_values)
+
+    if isinstance(value, torch.Tensor):
+        return _serialize_torch_tensor(value, serialize_tensor_values)
+
+    if isinstance(value, (int, float, bool, str, type(None))):
+        # Simple types that can be JSON serialized
+        return value
+
+    elif isinstance(value, (list, tuple)):
+        # Recursively serialize list/tuple elements
+        return [_serialize_value(item, serialize_tensor_values, f"{name_prefix}[{i}]") for i, item in enumerate(value)]
+
+    elif isinstance(value, dict):
+        # Recursively serialize dict values
+        return {k: _serialize_value(v, serialize_tensor_values, f"{name_prefix}.{k}") for k, v in value.items()}
+
+    else:
+        # Special handling for MeshDevice
+        if type(value).__name__ == "MeshDevice":
+            mesh_data = {
+                "type": "MeshDevice",
+                "repr": str(value),
+            }
+            # Try to get mesh shape (it's a property, not a method)
+            if hasattr(value, "shape"):
+                mesh_shape = value.shape
+                # Try to convert to list, fallback to string if not iterable
+                if hasattr(mesh_shape, "__iter__"):
+                    mesh_data["shape"] = list(mesh_shape)
+                else:
+                    mesh_data["shape"] = str(mesh_shape)
+
+            # Try to get device IDs
+            if hasattr(value, "get_device_ids"):
+                device_ids = value.get_device_ids()
+                mesh_data["device_ids"] = list(device_ids) if device_ids else None
+            return mesh_data
+        # For other types, try specialized serializers
+        type_name = type(value).__name__
+
+        # Try to use tensor_utils serializers first
+        serializers = _get_tensor_utils_serializers()
+
+        # Try tensor_utils serializers for specific types
+        if serializers:
+            try:
+                if type_name == "MemoryConfig":
+                    return serializers["memory_config_to_dict"](value)
+                elif type_name in [
+                    "WormholeComputeKernelConfig",
+                    "BlackholeComputeKernelConfig",
+                    "DeviceComputeKernelConfig",
+                ]:
+                    return serializers["compute_kernel_config_to_dict"](value)
+                elif "ProgramConfig" in type_name and "Matmul" in type_name:
+                    # tensor_utils only handles Matmul program configs
+                    return serializers["program_config_to_dict"](value)
+            except Exception as e:
+                logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
+                # Fall through to use __repr__
+        # For other types, convert to string or get basic info
+        if hasattr(value, "__dict__"):
+            return {"type": type(value).__name__, "repr": str(value)}
+        else:
+            return {"type": type(value).__name__, "value": str(value)}
+
+
+def serialize_arguments(
+    function_args: Tuple[Any, ...],
+    function_kwargs: Dict[str, Any],
+    serialize_tensor_values: bool = True,
+):
+    """Serialize an operation's positional + keyword args to their JSON forms.
+
+    Called BEFORE the operation executes so that arguments which the op mutates
+    in place — notably an output buffer like ``persistent_output_buffer`` whose
+    tensor topology becomes the gathered/output layout after the op — are
+    captured as they were PASSED IN. (The model trace records the input topology;
+    serializing after execution would instead capture the post-op topology and
+    spuriously diff against the master.) Returns ``(serialized_args, serialized_kwargs)``.
+    """
+    global _IS_SERIALIZING
+    if _IS_SERIALIZING:
+        return None, None
+    _IS_SERIALIZING = True
+    try:
+        serialized_args = [
+            {"position": i, "value": _serialize_value(arg, serialize_tensor_values, f"arg_{i}")}
+            for i, arg in enumerate(function_args)
+        ]
+        serialized_kwargs = {
+            k: _serialize_value(v, serialize_tensor_values, f"kwarg_{k}") for k, v in function_kwargs.items()
+        }
+        return serialized_args, serialized_kwargs
+    finally:
+        _IS_SERIALIZING = False
+
+
 def serialize_operation_parameters(
     operation_name: str,
     function_args: Tuple[Any, ...],
@@ -314,6 +424,8 @@ def serialize_operation_parameters(
     log_dir: pathlib.Path,
     return_value: Optional[Any] = None,
     serialize_tensor_values: bool = True,
+    pre_serialized_args: Optional[list] = None,
+    pre_serialized_kwargs: Optional[dict] = None,
 ) -> None:
     """Serialize operation parameters and return value to a single JSON file.
 
@@ -346,84 +458,22 @@ def serialize_operation_parameters(
         serialized_args = []
 
         def serialize_value(value: Any, name_prefix: str = "") -> Any:
-            """Recursively serialize a value, handling tensors specially."""
-            # Lazy import torch to avoid global import validation errors
-            import torch
+            return _serialize_value(value, serialize_tensor_values, name_prefix)
 
-            if isinstance(value, ttnn.Tensor):
-                return _serialize_ttnn_tensor(value, serialize_tensor_values)
+        # Prefer args serialized BEFORE the op executed (see serialize_arguments):
+        # in-place output buffers (e.g. persistent_output_buffer) are mutated to the
+        # post-op topology, so serializing them now would diff against the master,
+        # which records the input topology. Fall back to serializing now otherwise.
+        if pre_serialized_args is not None:
+            serialized_args = pre_serialized_args
+        else:
+            for i, arg in enumerate(function_args):
+                serialized_args.append({"position": i, "value": serialize_value(arg, f"arg_{i}")})
 
-            if isinstance(value, torch.Tensor):
-                return _serialize_torch_tensor(value, serialize_tensor_values)
-
-            if isinstance(value, (int, float, bool, str, type(None))):
-                # Simple types that can be JSON serialized
-                return value
-
-            elif isinstance(value, (list, tuple)):
-                # Recursively serialize list/tuple elements
-                return [serialize_value(item, f"{name_prefix}[{i}]") for i, item in enumerate(value)]
-
-            elif isinstance(value, dict):
-                # Recursively serialize dict values
-                return {k: serialize_value(v, f"{name_prefix}.{k}") for k, v in value.items()}
-
-            else:
-                # Special handling for MeshDevice
-                if type(value).__name__ == "MeshDevice":
-                    mesh_data = {
-                        "type": "MeshDevice",
-                        "repr": str(value),
-                    }
-                    # Try to get mesh shape (it's a property, not a method)
-                    if hasattr(value, "shape"):
-                        mesh_shape = value.shape
-                        # Try to convert to list, fallback to string if not iterable
-                        if hasattr(mesh_shape, "__iter__"):
-                            mesh_data["shape"] = list(mesh_shape)
-                        else:
-                            mesh_data["shape"] = str(mesh_shape)
-
-                    # Try to get device IDs
-                    if hasattr(value, "get_device_ids"):
-                        device_ids = value.get_device_ids()
-                        mesh_data["device_ids"] = list(device_ids) if device_ids else None
-                    return mesh_data
-                # For other types, try specialized serializers
-                type_name = type(value).__name__
-
-                # Try to use tensor_utils serializers first
-                serializers = _get_tensor_utils_serializers()
-
-                # Try tensor_utils serializers for specific types
-                if serializers:
-                    try:
-                        if type_name == "MemoryConfig":
-                            return serializers["memory_config_to_dict"](value)
-                        elif type_name in [
-                            "WormholeComputeKernelConfig",
-                            "BlackholeComputeKernelConfig",
-                            "DeviceComputeKernelConfig",
-                        ]:
-                            return serializers["compute_kernel_config_to_dict"](value)
-                        elif "ProgramConfig" in type_name and "Matmul" in type_name:
-                            # tensor_utils only handles Matmul program configs
-                            return serializers["program_config_to_dict"](value)
-                    except Exception as e:
-                        logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
-                        # Fall through to use __repr__
-                # For other types, convert to string or get basic info
-                if hasattr(value, "__dict__"):
-                    return {"type": type(value).__name__, "repr": str(value)}
-                else:
-                    return {"type": type(value).__name__, "value": str(value)}
-
-        # Serialize positional arguments
-        for i, arg in enumerate(function_args):
-            serialized_args.append({"position": i, "value": serialize_value(arg, f"arg_{i}")})
-
-        # Serialize keyword arguments
-        serialized_kwargs = {k: serialize_value(v, f"kwarg_{k}") for k, v in function_kwargs.items()}
+        if pre_serialized_kwargs is not None:
+            serialized_kwargs = pre_serialized_kwargs
+        else:
+            serialized_kwargs = {k: serialize_value(v, f"kwarg_{k}") for k, v in function_kwargs.items()}
 
         # Serialize return value if provided
         serialized_return_value = None
@@ -480,11 +530,23 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
     # Always wrap, but check the boolean flag at runtime
     @wraps(original_function)
     def wrapped_function(*function_args, **function_kwargs):
+        # Snapshot argument metadata BEFORE running the op. Operations that write
+        # into an in-place output buffer (e.g. all_gather_async's
+        # persistent_output_buffer) mutate that tensor's topology to the post-op
+        # layout; the model trace records the INPUT topology, so we must serialize
+        # the arguments as they were passed in, not after the op mutated them.
+        tracing = _is_tracing_enabled()
+        pre_serialized_args = pre_serialized_kwargs = None
+        if tracing:
+            pre_serialized_args, pre_serialized_kwargs = serialize_arguments(
+                function_args, function_kwargs, _SERIALIZE_TENSOR_VALUES
+            )
+
         # Call the original function first (use closure variable)
         return_value = _original_func(*function_args, **function_kwargs)
 
         # Check if tracing is enabled (uses helper with cached sys.argv check)
-        if _is_tracing_enabled():
+        if tracing:
             # Determine log directory - use config if available, otherwise default
             log_dir = None
             # First check environment variable (highest priority for custom trace directory)
@@ -508,6 +570,8 @@ def wrap_function_for_tracing(original_function: Any, operation_name: str) -> An
                 log_dir,
                 return_value,
                 serialize_tensor_values=serialize_values,
+                pre_serialized_args=pre_serialized_args,
+                pre_serialized_kwargs=pre_serialized_kwargs,
             )
 
         return return_value
