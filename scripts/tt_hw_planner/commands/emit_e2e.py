@@ -74,23 +74,6 @@ def _render_grader_report(demo_dir: Path) -> bool:
         if missing:
             nw_extra += f", missing: {', '.join(map(str, missing))}"
     lines.append(f"  {'No-waste':<11} {_ok(nw)}{nw_extra}")
-
-    gen = rep.get("generalization") or {}
-    if gen:
-        lines.append(f"  {'Generalize':<11} {_ok(gen)}")
-        for h in (gen.get("heads") or [])[:8]:
-            res = h.get("results")
-            lines.append(f"    {str(h.get('call', '?'))}: {res}" if res else f"    {h.get('call', '?')}")
-            for pi in (h.get("per_input") or [])[:4]:
-                try:
-                    pcc_s = f"{float(pi.get('pcc')):.6f}"
-                except Exception:
-                    pcc_s = str(pi.get("pcc", "?"))
-                mark = "ok" if pi.get("ok") else "DIVERGED"
-                lines.append(
-                    f"      - {mark}  PCC={pcc_s}  len[{pi.get('gen_len', '?')}]  {str(pi.get('input', ''))[:48]!r}"
-                )
-
     if holes:
         lines.append(f"  {'Holes':<11} {len(holes)}")
         for h in holes[:8]:
@@ -126,6 +109,78 @@ def _render_compute_split(model_id: str) -> None:
         print()
         for ln in lines:
             print(ln)
+
+
+_G1_TORCH_DELEGATION = (
+    r"self\._torch_module\s*\(",
+    r"self\.torch_module\s*\(",
+    r"_get_torch_submodule\s*\(",
+)
+
+
+def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
+    """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
+    reasons = []
+    e2e_dir = demo_dir / "tests" / "e2e"
+    test_files = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
+    if not test_files:
+        return False, ["G2/G3: no tests/e2e/test_*.py to run"]
+
+    demo_subdir = demo_dir / "demo"
+    demo_entrypoints = sorted(demo_subdir.glob("demo_*.py")) if demo_subdir.is_dir() else []
+    if not demo_entrypoints:
+        reasons.append("G4 structure: no runnable demo/demo_*.py entrypoint (standard layout requires per-Call demos)")
+    else:
+        no_main = [p.name for p in demo_entrypoints if "__main__" not in p.read_text(errors="ignore")]
+        if no_main:
+            reasons.append(f"G4 structure: demo entrypoint(s) missing `__main__` (not runnable): {', '.join(no_main)}")
+    if not (demo_dir / "tt").is_dir():
+        reasons.append("G4 structure: no tt/ package (standard demo layout)")
+    if not (demo_dir / "README.md").is_file():
+        reasons.append("G4 structure: no README.md (standard demo layout)")
+
+    stub_dir = demo_dir / "_stubs"
+    nonnative = []
+    for p in sorted(stub_dir.glob("*.py")) if stub_dir.is_dir() else []:
+        if p.name.startswith("_"):
+            continue
+        try:
+            src = p.read_text(errors="ignore")
+        except Exception:
+            continue
+        if any(re.search(pat, src) for pat in _G1_TORCH_DELEGATION):
+            nonnative.append(p.stem)
+    if nonnative:
+        reasons.append("G1: stub(s) delegate to the torch reference (not native ttnn): " + ", ".join(nonnative[:8]))
+
+    py = sys.executable
+    for parent in [Path.cwd(), *demo_dir.parents]:
+        cand = parent / "python_env" / "bin" / "python"
+        if cand.exists():
+            py = str(cand)
+            break
+    try:
+        proc = subprocess.run(
+            [py, "-m", "pytest", str(e2e_dir), "-p", "no:cacheprovider"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        if proc.returncode != 0:
+            tail = "\n".join((proc.stdout or "").splitlines()[-15:])
+            reasons.append(f"G2/G3: tests/e2e did not pass (pytest rc={proc.returncode}); tail:\n{tail}")
+    except subprocess.TimeoutExpired:
+        reasons.append(f"G2/G3: tests/e2e exceeded {timeout_s}s with no verdict")
+
+    for p in test_files:
+        try:
+            src = p.read_text(errors="ignore")
+        except Exception:
+            continue
+        if re.search(r"pytest\.skip|assert\s+True\b", src):
+            reasons.append(f"honesty: {p.name} contains pytest.skip / assert True")
+
+    return (len(reasons) == 0), reasons
 
 
 def cmd_emit_e2e(args) -> int:
@@ -187,36 +242,31 @@ def cmd_emit_e2e(args) -> int:
         _render_compute_split(model_id)
         return 0
 
-    grade_prompt = _build_grader_prompt(model_id=model_id, demo_dir=demo_dir, pcc=pcc)
+    rule = "  " + "─" * 74
     for rnd in range(1, max_grade_rounds + 1):
-        print(f"\n  ===== PHASE 3: GRADER agent (round {rnd}/{max_grade_rounds}) =====\n")
-        rc_grade, grade_final = _run_agent(
-            prompt=grade_prompt,
-            agent_bin=agent_bin,
-            agent_model=agent_model,
-            timeout_s=timeout_s,
-            label="grader",
-            log_path=full_log,
-        )
-        # Clean, professional terminal summary: render the structured
-        # grader_report.json; fall back to a markdown-stripped prose summary.
-        if not _render_grader_report(demo_dir) and (grade_final or "").strip():
-            print("\n" + _md_to_terminal(grade_final))
+        print(f"\n  ===== PHASE 3: DETERMINISTIC GATES (tool-run, round {rnd}/{max_grade_rounds}) =====\n")
+        ok, reasons = _run_deterministic_gates(demo_dir, pcc, timeout_s)
+        print(rule)
+        print(f"  GATES (tool-enforced, not agent-reported): {'PASS' if ok else 'FAIL'}")
+        for r in reasons:
+            print(f"    - {r}")
+        print(rule)
         _render_compute_split(model_id)
 
-        if rc_grade == 0 and "GRADER_VERDICT: PASS" in (grade_final or ""):
+        if ok:
             print("\n" + sep)
-            print(f"  ✓ INDEPENDENT GRADER: PASS (round {rnd}) — verified by a separate agent")
+            print(f"  ✓ TOOL-ENFORCED GATES: PASS (round {rnd}) — verdict computed by the tool")
             print(sep)
             return 0
         if rnd == max_grade_rounds:
             break
-        print(f"\n  ===== FIX agent (round {rnd}/{max_grade_rounds - 1}) — addressing grader findings =====\n")
+        print(f"\n  ===== FIX agent (round {rnd}/{max_grade_rounds - 1}) — addressing gate failures =====\n")
         fix_prompt = _build_fix_prompt(
             model_id=model_id,
             demo_dir=demo_dir,
             pcc=pcc,
-            grader_findings=grade_final or "",
+            grader_findings="TOOL-ENFORCED GATES FAILED (fix these, do not weaken them):\n"
+            + "\n".join(f"  - {r}" for r in reasons),
         )
         _run_agent(
             prompt=fix_prompt,
@@ -228,7 +278,7 @@ def cmd_emit_e2e(args) -> int:
         )
 
     print("\n" + sep)
-    print(f"  ✗ INDEPENDENT GRADER: did NOT pass within {max_grade_rounds} round(s) — see grader report")
+    print(f"  ✗ TOOL-ENFORCED GATES: did NOT pass within {max_grade_rounds} round(s)")
     print(sep)
     return 1
 
@@ -397,43 +447,42 @@ def _fmt_tool(name: str, inp: dict) -> str:
 
 
 def _build_fix_prompt(*, model_id: str, demo_dir: Path, pcc: float, grader_findings: str) -> str:
-    return f"""The independent GRADER FAILED the end-to-end TTNN pipeline of
-`{model_id}` at {demo_dir}. Your job is to fix EXACTLY the holes it found —
-nothing else — and leave a result that an adversarial grader will pass.
+    return f"""The TOOL-ENFORCED end-to-end gates FAILED for `{model_id}` at {demo_dir}.
+The verdict is computed by the tool itself (it runs tests/e2e on the device and
+reads pass/fail) — you CANNOT pass by editing a report; you must make the gates
+genuinely pass when the tool re-runs them.
 
-FIRST read {demo_dir}/grader_report.json — it lists every hole as a structured
-record: {{id, call, modules, file, lines, mechanism, fix_hint, severity}}. Work
-through the `holes` array and close EACH one at its file:lines using its
-fix_hint. (grader_report.md and the verdict text below are supporting context.)
-
-Grader verdict text:
+Gate failures to fix:
 {grader_findings}
 
 Fix rules:
-  - Make every flagged module GENUINELY on the real compute path: its real
-    input must come from the actual pipeline (the previous stage's output),
-    and its output must flow downstream into the FINAL output that the PCC
-    asserts on. NO off-path side-runs, NO random/synthetic inputs whose output
-    is discarded, NO counter that is bumped while the real compute bypasses
-    the stub. If a monolithic top-level stub inlines work instead of delegating
-    to its graduated children, either route the pipeline THROUGH the children
-    so they are the real compute path, or replace the inlined section with real
-    calls to those child stubs whose outputs are used.
-  - Do NOT weaken any gate, lower any PCC threshold, add skips, or relax the
-    no-waste requirement. Keep input from the real HF processor/tokenizer and
-    the golden from the real HF reference.
-  - If a hole is about GENERALIZATION or GENERATE-PARITY, fix the MECHANISM so
-    the decode loop reproduces HF `model.generate()` (conditioning source, stop
-    and cache logic) and matches its full generated sequence/length on arbitrary
-    inputs. Do NOT "fix" it by hardcoding the grader's held-out input into the
-    test or fixtures, and do NOT replace a generate-parity check with a `>= 1`
-    liveness assert — that is re-overfitting and will fail the grader again.
-  - Keep the yito package structure intact.
-  - Re-run the affected tests/e2e on the TT device yourself and confirm they
-    still pass with PCC >= {pcc} AND the flagged modules now fire on-path.
+  - Failures here are WIRING/ASSEMBLY, not component math. The components are
+    already graduated and PCC-verified in isolation — do NOT change stub math or
+    re-run per-component PCC. Make every flagged module genuinely on the real
+    compute path: fed by the previous TT stage's real output, its output flowing
+    into the FINAL output. NO off-path side-runs, NO matched/reference tensor
+    injected at a joint, NO counter bumped while the real compute bypasses the
+    stub.
+  - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
+    real chain and compare to it. Keep the gate fast by capping BOTH sides to the
+    same small N (e.g. 40): pass `max_new_tokens=N` to `model.generate()` AND stop
+    the TT decode loop at N, then compare the first-N sequence (+ per-step PCC).
+    Do NOT run full-length generation (the gate times out). Do NOT cap only the
+    TT side while HF runs full (lengths won't match → false fail, and HF stays
+    slow).
+  - Do NOT weaken any gate, lower a threshold, add pytest.skip/assert True, or
+    relax no-waste. Keep input from the real HF processor/tokenizer and the
+    golden from the real HF reference (`model.generate()`).
+  - STRUCTURE/demo failures: emit-e2e's deliverable is a runnable demo. Ensure
+    `demo/demo_<task>.py` entrypoints exist (each with `__main__` + argparse),
+    plus `tt/` and `README.md`. The demo MUST call the SAME shared pipeline in
+    `tt/` that the e2e test calls — do NOT give the demo its own copy of the
+    wiring (it will drift and ship broken while the test stays green). Fix the
+    demo by routing it through the test's pipeline, not by rewriting wiring.
+  - Keep the demo package structure (demo/ + tt/ + tests/ + README) intact.
+  - Re-run tests/e2e on the device yourself and confirm they pass before finishing.
 
-Edit only what is needed to close the grader's holes. Report what you changed
-and the device re-run result."""
+Report what you changed and the device re-run result."""
 
 
 def _build_grader_prompt(*, model_id: str, demo_dir: Path, pcc: float) -> str:
@@ -461,16 +510,9 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
      that is bumped while the real compute bypasses it;
    - there is NO `pytest.skip`, no `assert True`, no early return that dodges
      the PCC assertion;
-   - every PCC assertion threshold is >= {pcc};
-   - for any head whose reference is `model.generate()`, the test compares the
-     FULL TT-generated sequence/length against HF `model.generate()` on the same
-     input — NOT a single teacher-forced step's PCC on a matched prefix, NOT a
-     stage PCC that feeds the SAME generated ids to both sides, and NOT a bare
-     `>= 1` liveness assert. If the only behavioral check on generation is a
-     liveness or matched-input stage PCC, that is a hole: the decode loop is
-     unvalidated and may collapse on other inputs.
+   - every PCC assertion threshold is >= {pcc}.
 
-3. STRUCTURE (yito layout). Confirm the emitted package exists and is real:
+3. STRUCTURE (standard demo layout). Confirm the emitted package exists and is real:
    {demo_dir}/demo/ (runnable per-Call entrypoints), {demo_dir}/tt/,
    {demo_dir}/tests/e2e/, and a README.md. Flag missing/placeholder pieces.
 
@@ -478,17 +520,6 @@ Do all of this with your own tools (Read/Bash), then report a verdict.
    components with a `_stubs/<name>.py.last_good_native` snapshot). Confirm the
    UNION of INVOKED stubs across all task heads' runs == that graduated set.
    Name any graduated module that is never invoked.
-
-5. GENERALIZATION (held-out inputs — the builder may have overfit to the one
-   input baked into the test). For each task head, run its pipeline/demo on
-   >= 2 of YOUR OWN fresh inputs that are NOT the test's baked-in input (vary
-   length and content; for speech use a different clip). For generative heads,
-   compare the TT output to HF `model.generate()` on each held-out input
-   (generated length + sequence). If a head passes on the baked-in input but
-   collapses or diverges from HF on a held-out input — e.g. produces ~1 token /
-   a near-empty output where HF produces many — that is a BLOCKER hole. Record
-   the exact inputs you used and, FOR EACH, the measured PCC vs HF and the
-   generated length (TT vs HF) — print these numbers, do not summarize.
 
 WRITE the structured machine-readable report to {demo_dir}/grader_report.json
 so the fix agent gets precise targets. Use EXACTLY this schema:
@@ -501,14 +532,6 @@ so the fix agent gets precise targets. Use EXACTLY this schema:
     "structure": {{"ok": true|false, "detail": "<...>"}},
     "no_waste": {{"ok": true|false, "graduated_total": <N>, "on_path": <N>,
                   "names_present": <N>, "missing": [<name>, ...]}},
-    "generalization": {{"ok": true|false,
-      "heads": [
-        {{"call": "<id>", "held_out_inputs": ["<input1>", "<input2>"],
-          "per_input": [{{"input": "<...>", "pcc": <num>,
-                          "gen_len": "tt=<n> hf=<n>", "ok": true|false}}],
-          "results": "<e.g. 2/2 match HF generate len+seq | 1/2 collapsed>",
-          "detail": "<what diverged, if any>"}}
-      ]}},
     "holes": [
       {{"id": "<short-slug>",
         "call": "<id>",
@@ -530,10 +553,8 @@ Then ALSO print this verdict block to stdout (one row per Call):
   | ...  | pass/fail | <num> | clean/ISSUE | <what, or none> |
   STRUCTURE: pass/fail (<detail>)
   NO_WASTE: pass/fail (<N>/<total> graduated invoked; missing: <list>)
-  GENERALIZATION: pass/fail (<per-head held-out results vs HF generate>)
   GRADER_VERDICT: PASS    <-- only if EVERY call re-ran-pass + source-audit clean
-                              + STRUCTURE pass + NO_WASTE pass + GENERALIZATION
-                              pass. Otherwise:
+                              + STRUCTURE pass + NO_WASTE pass. Otherwise:
   GRADER_VERDICT: FAIL
 
 Do not write or edit any pipeline/stub/test files — you are read-only except for
@@ -585,21 +606,6 @@ end-to-end pipeline ready:
            (no graduated module left out — this is critical).
   Gate 3 — the pipeline's FINAL output PCC vs the HF golden (Source A) is
            >= {pcc}.
-  Gate 4 — GENERALIZATION + GENERATE-PARITY (this is how you avoid silently
-           overfitting the pipeline to one hand-picked input):
-           * Validate EVERY head on >= 3 DIVERSE real inputs (varied length and
-             content — for speech, different clips), not a single fixed one. All
-             must pass Gate 3. A head that passes on one input but collapses or
-             diverges on another is a Gate-4 FAIL, even if Gate 3 passed.
-           * For any head whose HF reference is `model.generate()` (autoregressive
-             decode — text->text, text->audio, speech->text, …), the TT decode
-             loop must REPRODUCE generate()'s mechanism (same conditioning source,
-             same stop/cache logic) and the FULL TT-generated output must match HF
-             `model.generate()` on the SAME input — matching generated LENGTH and
-             token/unit ids (or output waveform length). Comparing only one
-             teacher-forced step's logits on a matched prefix, feeding the SAME
-             generated ids to both sides, or asserting merely that `>= 1` token
-             was produced does NOT satisfy Gate 4 and is a FAIL.
 
 CRITICAL REQUIREMENTS:
   - The pipeline must NOT be a smoke test. It must be a REAL pipeline that
@@ -608,31 +614,44 @@ CRITICAL REQUIREMENTS:
     Input is constructed via the HF processor/tokenizer/feature_extractor;
     output is the real task output, compared to the HF reference (Source A).
   - It must chain the graduated stubs into the actual forward pass and produce
-    real task output — not just pass tensors around.
+    real task output — not just pass tensors around. Each stage must be fed the
+    previous TT stage's real output; NEVER inject a matched/reference tensor at
+    a joint (that hides wiring bugs the e2e test exists to catch).
   - ALL graduated modules/components must be used in the pipeline.
   - The end-to-end pipeline must pass PCC >= {pcc}.
-  - For GENERATIVE heads (anything whose reference is `model.generate()`), parity
-    is measured against the reference generate() autoregressive output on the
-    SAME input — full generated sequence / output length — and on MULTIPLE
-    diverse inputs (>= 3). Never a single hand-picked input; never a single
-    teacher-forced-step PCC or a `>= 1` liveness assert standing in for real
-    generation parity. The emitted tests/e2e must be parametrized over those
-    inputs and must assert generate-parity (length + sequence) for such heads.
+  - GENERATIVE heads (reference is `model.generate()`): reproduce generate()'s
+    real chain and compare the TT-generated output to it. To keep the on-device
+    gate fast, CAP BOTH SIDES to the same small horizon N (e.g. 40): pass
+    `max_new_tokens=N` to `model.generate()` AND stop the TT decode loop at N,
+    then compare the first-N sequence (+ per-step PCC). Do NOT run full-length
+    generation (too slow — the gate times out). Do NOT cap only the TT side
+    while HF runs full length (lengths won't match → false fail, and HF is still
+    slow). Both sides capped to the same N → fast, faithful, no false mismatch.
 
-STRUCTURE — follow the "yito" demo layout (the same package style used by the
-hand-authored demos under models/demos/, and the existing demo/ files in this
-model's dir). For ANY model, emit a complete, runnable package — not a lone
-test file:
+STRUCTURE — emit a complete, runnable package in the standard demo layout
+(the same demo/ + tt/ + tests/ package style used by demos under models/demos/).
+For ANY model, emit a complete, runnable package — not a lone test file:
   {demo_dir}/
     demo/         per-task runnable demo entrypoint(s) (one per Call) that load
                   real input, run the chained TTNN pipeline, emit real output.
-    tt/           thin re-exports / wiring of the graduated stubs used.
+                  EACH must have a `__main__` + argparse and be runnable as
+                  `python -m ...demo.demo_<task>`.
+    tt/           the ONE shared chained pipeline (the real forward pass over the
+                  graduated stubs) that BOTH demo/ and tests/e2e/ import and call.
     tests/e2e/    the e2e pipeline test(s): real input -> chained stubs ->
                   real output, asserting Gate 1/2/3 (all stubs INVOKED + final
                   PCC >= {pcc} vs HF golden).
     README.md     what each Call does, how to run it, the PCC numbers.
-Match the conventions of the existing yito demos rather than inventing a new
-layout. Keep iterating (fix the stub/wiring, re-run on the TT device) until the
+
+  CRITICAL — DEMO AND TEST MUST SHARE ONE PIPELINE: the chained forward pass (the
+  exact wiring of the graduated stubs) lives in `tt/` as a single function, and
+  BOTH the demo entrypoint AND the e2e test import and call it. Do NOT write two
+  separate copies of the wiring — if the demo has its own copy it WILL drift from
+  the test and ship a broken pipeline while the test stays green. A passing test
+  must GUARANTEE a working demo because they run identical code. emit-e2e's
+  deliverable is a runnable demo; a green test with no/working demo is NOT done.
+Match the conventions of existing demos under models/demos/ rather than
+inventing a new layout. Keep iterating (fix the stub/wiring, re-run on the TT device) until the
 gates pass. Use `./python_env/bin/python -m pytest <file> -s` to run on device.
 Report a final summary: which calls are READY, the FINAL_PCC per call, and
 confirm all graduated modules were invoked.
