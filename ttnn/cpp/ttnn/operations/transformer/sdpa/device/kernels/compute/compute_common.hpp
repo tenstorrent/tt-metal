@@ -1516,7 +1516,7 @@ void apply_causal_mask_lightweight(
 }
 
 /**
- * Context for lightweight mask application in ring joint SDPA.
+ * Context for lightweight mask application.
  * All mask tiles reside in a single CB. This struct stores the pre-resolved mask metadata used when
  * lightweight masking is enabled; enablement itself is controlled by the `lightweight_mask_enabled`
  * template parameter(s), not by default-constructing this context.
@@ -1525,6 +1525,10 @@ struct LightweightMaskContext {
     bool is_causal = false;                  // Causal masking active for this context instance
     uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
     uint32_t causal_diag_tile_idx = 0;       // Index of causal diagonal tile in the mask CB
+    uint32_t primary_diag_tile_idx = 0;      // Causal diagonal, or sliding-window trailing-primary tile
+    uint32_t sliding_leading_prev_tile_idx = 0;   // Index of previous sliding-window leading tile
+    uint32_t sliding_leading_tile_idx = 0;        // Index of current sliding-window leading tile in the mask CB
+    uint32_t sliding_trailing_next_tile_idx = 0;  // Index of next sliding-window trailing tile
     uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
     uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
     uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk

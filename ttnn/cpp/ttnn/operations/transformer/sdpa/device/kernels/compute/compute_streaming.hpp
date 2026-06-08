@@ -12,11 +12,13 @@
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_streaming_qktv.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -76,9 +78,9 @@ struct RingAccumulatorState {
 };
 
 // Ring-streaming lightweight-mask context. Field NAMES match LightweightMaskContext so sdpa_ring_v2's
-// generic `lw_mask.<field>` reads work for either type, BUT the 9 compile-time-constant fields are
+// generic `lw_mask.<field>` reads work for either type, BUT the 10 compile-time-constant fields are
 // template params (static constexpr → zero per-instance storage), leaving only the 3 per-ring-iter
-// runtime fields on the stack. Shrinks the live lw_mask object ~48 B → ~12 B on kernel_main's frame.
+// runtime fields on the stack. Shrinks the live lw_mask object ~56 B → ~12 B on kernel_main's frame.
 // Only the ring_joint_sdpa producer uses it; exp_ring keeps the plain LightweightMaskContext —
 // sdpa_ring_v2's MaskCtx template param is deduced per caller.
 template <
@@ -99,6 +101,7 @@ struct RingStreamingMaskCtx {
     // Compile-time-constant fields (no per-instance storage):
     static constexpr uint32_t neginf_tile_idx = NeginfTileIdx;
     static constexpr uint32_t causal_diag_tile_idx = CausalDiagTileIdx;
+    static constexpr uint32_t primary_diag_tile_idx = CausalDiagTileIdx;
     static constexpr uint32_t local_n_padded_tiles = LocalNPaddedTiles;
     static constexpr uint32_t joint_n_padded_tiles = JointNPaddedTiles;
     static constexpr uint32_t global_n_partial_col = GlobalNPartialCol;
@@ -115,6 +118,7 @@ struct RingStreamingMaskCtx {
         m.is_causal = is_causal;
         m.neginf_tile_idx = neginf_tile_idx;
         m.causal_diag_tile_idx = causal_diag_tile_idx;
+        m.primary_diag_tile_idx = primary_diag_tile_idx;
         m.global_n_padded_tiles = global_n_padded_tiles;
         m.local_n_padded_tiles = local_n_padded_tiles;
         m.joint_n_padded_tiles = joint_n_padded_tiles;
@@ -202,6 +206,14 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     const bool use_blocked_pack_width = should_use_blocked_pack_width(pack_width);
     configure_pack_width(cb, use_blocked_pack_width ? pack_width : 1);
     return use_blocked_pack_width;
+}
+
+ALWI void init_sdpa_streaming_semaphores() {
+    // reduce_trigger splits QK row-max reduce across a PACK->UNPACK handshake:
+    // PACK posts FPU_SFPU after QK writes are visible, then UNPACK waits before
+    // running the second half of the reduce MOP. Default firmware init covers
+    // common math/pack semaphores, but not FPU_SFPU, so initialize it here.
+    PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
 }
 
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
@@ -613,9 +625,24 @@ template <
     uint32_t dst_size,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
-    uint32_t normalized_out_cb>
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
-    uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
+    uint32_t cur_sum_cb,
+    uint32_t cur_out_cb,
+    uint32_t sbh,
+    [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
+    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    // Attention sink: cb_attention_sink holds raw per-head sink logits (column 0, zeros elsewhere).
+    // exp((sink - max)*scale) is computed inline per-row via sub_bcast_cols+exp, then folded into
+    // the col-reduced denominator (DST[0]). sbh tiles consumed per call, popped once at end;
+    // across all normalize calls for the chunk this consumes exactly Sq_chunk_t tiles.
+    if constexpr (use_attention_sink) {
+        cb_wait_front(cb_attention_sink, sbh);
+        cb_wait_front(cur_max_cb_rt, sink_row_offset + sbh);
+    }
     configure_single_tile_pack(scratch_cb);
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
@@ -634,6 +661,18 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_reserve_back(scratch_cb, 1);
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+            if constexpr (use_attention_sink) {
+                // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
+                sub_bcast_cols_init_short(cb_attention_sink, cur_max_cb_rt);
+                sub_tiles_bcast_cols(cb_attention_sink, cur_max_cb_rt, s, sink_row_offset + s, 1);
+                // The custom first-column exp needs generic unary SFPU addrmod state, but not the
+                // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>()));
+                constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+                MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(1)));
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+            }
 #ifdef ARCH_BLACKHOLE
             recip_tile_init<false>();
             MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
@@ -683,6 +722,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             cb_pop_front(cur_out_cb, head_dim_t_);
         }
     }
+    if constexpr (use_attention_sink) {
+        cb_pop_front(cb_attention_sink, sbh);
+    }
     // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
     // (e.g. salad_correct_fused on the next K-chunk's drain row) pack to F16b CBs
     // with the right format. Without this, when normalized_out_cb has a different
@@ -730,6 +772,91 @@ static inline void l1_acc_causal_col_mask(
 }
 
 /**
+ * Row-local mask stamping primitives for one Q row of a subblock. All column writes clamp to
+ * [0, mask_cols), so callers can pass raw (possibly out-of-range) diagonal columns directly.
+ */
+struct RowMaskStamper {
+    uint32_t mask_cb;
+    uint32_t out_cb;
+    uint32_t neginf_idx;
+    uint32_t row_offset;
+    uint32_t mask_cols;
+
+    // L1-accumulate diagonal tile `tile_idx` at column `col` (no-op if col out of range).
+    inline void stamp_tile_at(int32_t col, uint32_t tile_idx) const {
+        if (col >= 0 && static_cast<uint32_t>(col) < mask_cols) {
+            l1_acc_single_tile(mask_cb, tile_idx, out_cb, row_offset + static_cast<uint32_t>(col));
+        }
+    }
+    // Fill columns [0, end) with neginf.
+    inline void neginf_prefix(int32_t end) const {
+        if (end > 0) {
+            const uint32_t e = static_cast<uint32_t>(end) < mask_cols ? static_cast<uint32_t>(end) : mask_cols;
+            l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, e, neginf_idx);
+        }
+    }
+    // Fill columns [start, mask_cols) with neginf (start <= 0 ⇒ whole row).
+    inline void neginf_suffix(int32_t start) const {
+        const uint32_t s =
+            start <= 0 ? 0u : (static_cast<uint32_t>(start) < mask_cols ? static_cast<uint32_t>(start) : mask_cols);
+        l1_acc_neginf_cols(mask_cb, out_cb, row_offset, s, mask_cols, neginf_idx);
+    }
+};
+
+// Stamp the leading (left) sliding-window edge for one Q row: neginf everything before the window,
+// then the diagonal edge tile(s). When the edge straddles two K tiles (leading_remainder != 0) the
+// previous tile carries the neginf run and both straddle tiles are stamped.
+template <uint32_t leading_base_tiles, uint32_t leading_remainder>
+static inline void stamp_sliding_leading_edge(
+    const RowMaskStamper& stamper,
+    int32_t q_pos,
+    uint32_t k_start_tile,
+    uint32_t sliding_leading_prev_idx,
+    uint32_t sliding_leading_idx) {
+    const int32_t leading_col = q_pos - static_cast<int32_t>(leading_base_tiles) - static_cast<int32_t>(k_start_tile);
+    if constexpr (leading_remainder == 0) {
+        // Window edge tile-aligned: single leading diagonal tile.
+        stamper.neginf_prefix(leading_col);
+        stamper.stamp_tile_at(leading_col, sliding_leading_idx);
+    } else {
+        // Window edge straddles two K tiles: prev tile carries the neginf run.
+        const int32_t leading_prev_col = leading_col - 1;
+        stamper.neginf_prefix(leading_prev_col);
+        stamper.stamp_tile_at(leading_prev_col, sliding_leading_prev_idx);
+        stamper.stamp_tile_at(leading_col, sliding_leading_idx);
+    }
+}
+
+// Stamp the trailing (right) sliding-window edge for one Q row (non-causal centered windows): the
+// diagonal edge tile(s) followed by neginf for everything past the window. When the edge straddles
+// into the next K tile (trailing_remainder != 0) both straddle tiles are stamped.
+template <uint32_t trailing_base_tiles, uint32_t trailing_remainder>
+static inline void stamp_sliding_trailing_edge(
+    const RowMaskStamper& stamper,
+    int32_t q_pos,
+    uint32_t k_start_tile,
+    uint32_t trailing_primary_idx,
+    uint32_t sliding_trailing_next_idx) {
+    const int32_t trailing_col = q_pos + static_cast<int32_t>(trailing_base_tiles) - static_cast<int32_t>(k_start_tile);
+    if constexpr (trailing_remainder == 0) {
+        // Window edge tile-aligned: single trailing diagonal tile.
+        if (trailing_col < 0) {
+            stamper.neginf_suffix(0);
+        } else if (static_cast<uint32_t>(trailing_col) < stamper.mask_cols) {
+            stamper.stamp_tile_at(trailing_col, trailing_primary_idx);
+            stamper.neginf_suffix(trailing_col + 1);
+        }
+    } else if (trailing_col < -1) {
+        stamper.neginf_suffix(0);
+    } else {
+        // Window edge straddles into the next K tile.
+        stamper.stamp_tile_at(trailing_col, trailing_primary_idx);
+        stamper.stamp_tile_at(trailing_col + 1, sliding_trailing_next_idx);
+        stamper.neginf_suffix(trailing_col + 2);
+    }
+}
+
+/**
  * Combined lightweight mask for streaming ring SDPA. Applies causal, partial, and padded masks.
  * KV-pad rotation reuses the causal path with a compile-time-selected Q row mapping.
  * Caller must set up copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1) before calling,
@@ -741,7 +868,8 @@ template <
     bool kv_pad_rotation_enabled = false,
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
-    uint32_t kv_pad_kv_local_padded_Nt = 0>
+    uint32_t kv_pad_kv_local_padded_Nt = 0,
+    uint32_t sliding_window_size = 0>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -752,10 +880,14 @@ static void apply_lightweight_mask_streaming(
     uint32_t sbh,
     bool apply_causal,
     uint32_t neginf_idx,
-    uint32_t causal_diag_idx,
+    uint32_t primary_diag_idx,
+    uint32_t sliding_leading_prev_idx,
+    uint32_t sliding_leading_idx,
+    uint32_t sliding_trailing_next_idx,
     uint32_t q_start_tile,
     uint32_t k_start_tile,
     uint32_t active_Sk,
+    bool apply_sliding_window = false,
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0,
     const KVPadRotationContext& kv_pad_rotation = {}) {
@@ -765,12 +897,22 @@ static void apply_lightweight_mask_streaming(
 
     // Caller-owned contract (see function comment): pack state for mask_cb is initialized
     // before entry via copy_tile_to_dst_init_short + llk_pack_reconfig_l1_acc(1).
+    // Per-row stamp geometry: floor division + remainder, distinct from the ceil-based loop
+    // bounds in SlidingWindowLoopGeometry (causal reach here is `window`, not `window - 1`).
+    constexpr bool has_sliding_window = sliding_window_size > 0;
+    constexpr uint32_t half_window = sliding_window_size / 2;
+    constexpr uint32_t leading_base_tiles =
+        has_sliding_window ? (is_causal_sdpa ? (sliding_window_size / TILE_HEIGHT) : (half_window / TILE_HEIGHT)) : 0;
+    constexpr uint32_t leading_remainder =
+        has_sliding_window ? (is_causal_sdpa ? (sliding_window_size % TILE_HEIGHT) : (half_window % TILE_HEIGHT)) : 0;
+    constexpr uint32_t trailing_base_tiles = has_sliding_window && !is_causal_sdpa ? (half_window / TILE_HEIGHT) : 0;
+    constexpr uint32_t trailing_remainder = has_sliding_window && !is_causal_sdpa ? (half_window % TILE_HEIGHT) : 0;
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
 
-        // Causal mask: per-row diagonal + trailing neginf
-        if constexpr (is_causal_sdpa) {
-            if (apply_causal || kv_pad_rotation_enabled) {
+        // Causal / sliding mask: per-row diagonal stamps plus full-neginf regions.
+        if constexpr (is_causal_sdpa || has_sliding_window) {
+            if (apply_causal || apply_sliding_window || kv_pad_rotation_enabled) {
                 const uint32_t q_tile = q_subblock * sbh + row;
                 const uint32_t q_pos_u32 =
                     q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
@@ -783,6 +925,15 @@ static void apply_lightweight_mask_streaming(
                 }
 
                 const int32_t q_pos = static_cast<int32_t>(q_pos_u32);
+                [[maybe_unused]] const RowMaskStamper stamper{mask_cb, out_cb, neginf_idx, row_offset, mask_cols};
+
+                if constexpr (has_sliding_window) {
+                    if (apply_sliding_window) {
+                        stamp_sliding_leading_edge<leading_base_tiles, leading_remainder>(
+                            stamper, q_pos, k_start_tile, sliding_leading_prev_idx, sliding_leading_idx);
+                    }
+                }
+
                 if constexpr (kv_pad_rotation_enabled) {
                     for (uint32_t col = 0; col < mask_cols; col++) {
                         const uint32_t local_k_tile = kv_pad_rotation.k_local_start_tile + col;
@@ -799,29 +950,36 @@ static void apply_lightweight_mask_streaming(
                         }
                         const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
                         l1_acc_causal_col_mask(
-                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, causal_diag_idx);
+                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
                     }
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
-                    int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
-                    if (diag_col < 0) {
-                        l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
-                    } else if (static_cast<uint32_t>(diag_col) < mask_cols) {
-                        l1_acc_single_tile(
-                            mask_cb, causal_diag_idx, out_cb, row_offset + static_cast<uint32_t>(diag_col));
-                        l1_acc_neginf_cols(
-                            mask_cb, out_cb, row_offset, static_cast<uint32_t>(diag_col) + 1, mask_cols, neginf_idx);
+                    if (apply_causal) {
+                        const int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
+                        if (diag_col < 0) {
+                            stamper.neginf_suffix(0);
+                        } else if (static_cast<uint32_t>(diag_col) < mask_cols) {
+                            stamper.stamp_tile_at(diag_col, primary_diag_idx);
+                            stamper.neginf_suffix(diag_col + 1);
+                        }
+                    } else if constexpr (has_sliding_window && !is_causal_sdpa) {
+                        if (apply_sliding_window) {
+                            stamp_sliding_trailing_edge<trailing_base_tiles, trailing_remainder>(
+                                stamper, q_pos, k_start_tile, primary_diag_idx, sliding_trailing_next_idx);
+                        }
                     }
                 } else {
                     // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
                     // (the K-chunk crosses a slab boundary). Evaluate per-col.
-                    for (uint32_t col = 0; col < mask_cols; col++) {
-                        int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
-                        if (col >= straddle_col) {
-                            k_pos += static_cast<int32_t>(straddle_jump);
+                    if (apply_causal) {
+                        for (uint32_t col = 0; col < mask_cols; col++) {
+                            int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
+                            if (col >= straddle_col) {
+                                k_pos += static_cast<int32_t>(straddle_jump);
+                            }
+                            l1_acc_causal_col_mask(
+                                mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, primary_diag_idx);
                         }
-                        l1_acc_causal_col_mask(
-                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, causal_diag_idx);
                     }
                 }
             }
@@ -892,7 +1050,10 @@ template <
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
     uint32_t v_cb_physical_width_t = vDHt,
-    bool kt_inplace_v = false>
+    bool kt_inplace_v = false,
+    uint32_t sliding_window_size = 0,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -909,7 +1070,11 @@ static void sdpa_inner_loop_step(
     const uint32_t mask_q_start_tile = 0,
     const uint32_t mask_k_start_tile = 0,
     const uint32_t neginf_idx = 0,
-    const uint32_t causal_diag_idx = 0,
+    const uint32_t primary_diag_idx = 0,
+    const uint32_t sliding_leading_prev_idx = 0,
+    const uint32_t sliding_leading_idx = 0,
+    const uint32_t sliding_trailing_next_idx = 0,
+    const bool apply_sliding_window = false,
     const uint32_t mask_straddle_col = 0,
     const uint32_t mask_straddle_jump = 0,
     const KVPadRotationContext& kv_pad_rotation = {}) {
@@ -1002,9 +1167,9 @@ static void sdpa_inner_loop_step(
         // Lightweight mask stamp: L1-accumulate causal and/or padding masks onto cb_qkt_im
         // for this row group. Active for ring, causal non-ring, or non-causal padded with a
         // partial-tile mask (single-chip streaming partial-K case).
-        if constexpr (ring_mode || is_causal_sdpa || use_padded_mask) {
-            const bool should_apply_lightweight_mask =
-                kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) || (apply_mask && lw_partial_tile_idx > 0);
+        if constexpr (ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0) {
+            const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
+                                                       apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
             if (should_apply_lightweight_mask) {
                 // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
                 configure_single_tile_pack(cb_qkt_im);
@@ -1016,7 +1181,8 @@ static void sdpa_inner_loop_step(
                     kv_pad_rotation_enabled,
                     kv_pad_q_local_padded_Nt,
                     kv_pad_chunk_size_t,
-                    kv_pad_kv_local_padded_Nt>(
+                    kv_pad_kv_local_padded_Nt,
+                    sliding_window_size>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
@@ -1026,10 +1192,14 @@ static void sdpa_inner_loop_step(
                     qkt_subblock_h,
                     kv_pad_rotation_enabled || apply_causal,
                     neginf_idx,
-                    causal_diag_idx,
+                    primary_diag_idx,
+                    sliding_leading_prev_idx,
+                    sliding_leading_idx,
+                    sliding_trailing_next_idx,
                     mask_q_start_tile,
                     mask_k_start_tile,
                     kv_pad_rotation_enabled ? KT_stride : active_Sk,
+                    apply_sliding_window,
                     mask_straddle_col,
                     mask_straddle_jump,
                     kv_pad_rotation);
@@ -1206,6 +1376,7 @@ static void sdpa_inner_loop_step(
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
+        [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             cb_push_back(cur.sum, sbh);
@@ -1216,7 +1387,13 @@ static void sdpa_inner_loop_step(
                 dst_size,
                 cb_col_identity,
                 cb_recip_scratch,
-                cb_normalized_out>(cur.sum, out_cb, sbh);
+                cb_normalized_out,
+                scale_fp32,
+                use_attention_sink,
+                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+            if constexpr (use_attention_sink) {
+                sink_row_offset += sbh;
+            }
             pushed++;
         };
 
@@ -1456,7 +1633,10 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     uint32_t cb_mask_in,
-    bool is_causal_sdpa = false>
+    uint32_t sliding_window_size = 0,
+    bool is_causal_sdpa = false,
+    bool use_attention_sink = false,
+    uint32_t cb_attention_sink = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -1471,9 +1651,16 @@ void sdpa_standard_v2(
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
     const bool use_zigzag_balancing = false) {
+    init_sdpa_streaming_semaphores();
+
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
     static_assert(
         !(use_padded_mask && is_causal_sdpa), "use_padded_mask and is_causal_sdpa are mutually exclusive in v2");
+    // K-loop bound geometry shared with the reader (see sliding_window_geometry.hpp).
+    using window_geom = SlidingWindowLoopGeometry<sliding_window_size, is_causal_sdpa, TILE_HEIGHT>;
+    constexpr bool has_sliding_window = window_geom::has_sliding_window;
+    constexpr uint32_t left_window_tiles = window_geom::left_window_tiles;
+    constexpr uint32_t right_window_tiles = window_geom::right_window_tiles;
 
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
     constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
@@ -1504,13 +1691,14 @@ void sdpa_standard_v2(
         constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
                                                    (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
-        // Causal-only: optional zigzag Q-chunk remap, per-Q diagonal K-chunk limit, and
-        // q_start_tile (the only causal-mask consumer downstream). Non-causal builds skip
-        // the whole block — q_chunk_local stays in-order, q_start_tile=0, k_loop_end=full.
+        // Optional zigzag Q-chunk remap plus per-Q K-chunk bounds. Causal uses the
+        // diagonal upper bound; sliding-window adds a lower bound and, for non-causal
+        // centered windows, an upper bound around the Q chunk.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
+        uint32_t k_loop_start = 0;
         uint32_t k_loop_end = k_num_chunks;
-        if constexpr (is_causal_sdpa) {
+        if constexpr (is_causal_sdpa || has_sliding_window) {
             // Reader and writer apply the same remap; compute must agree or causal
             // masks and output positions desync. The mod is a no-op when the input is per-head
             // ([0, q_num_chunks)) and extracts the per-head q_chunk when it's a flat global index
@@ -1520,8 +1708,20 @@ void sdpa_standard_v2(
             // chunked-prefill shifts this via chunked_q_chunk_offset.
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;
             q_start_tile = q_chunk_global * Sq_chunk_t;
-            const uint32_t limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
-            k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
+            if constexpr (is_causal_sdpa) {
+                const uint32_t limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
+            }
+            if constexpr (has_sliding_window) {
+                if (q_start_tile > left_window_tiles) {
+                    k_loop_start = (q_start_tile - left_window_tiles) / Sk_chunk_t;
+                }
+                if constexpr (!is_causal_sdpa) {
+                    const uint32_t limit =
+                        (q_start_tile + Sq_chunk_t + right_window_tiles + Sk_chunk_t - 1) / Sk_chunk_t;
+                    k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
+                }
+            }
         }
 
         auto call_step = [&](auto profiling_tag,
@@ -1533,7 +1733,8 @@ void sdpa_standard_v2(
                              bool apply_causal,
                              uint32_t k_start_tile,
                              bool apply_mask,
-                             uint32_t lw_partial_tile_idx) {
+                             uint32_t lw_partial_tile_idx,
+                             bool apply_sliding_window) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
@@ -1558,7 +1759,17 @@ void sdpa_standard_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
+                cb_mask_in,
+                Sk_chunk_t,
+                false,
+                0,
+                0,
+                0,
+                vDHt,
+                false,
+                sliding_window_size,
+                use_attention_sink,
+                cb_attention_sink>(
                 prev,
                 cur,
                 is_last,
@@ -1574,15 +1785,20 @@ void sdpa_standard_v2(
                 q_start_tile,
                 k_start_tile,
                 lw_mask.neginf_tile_idx,
-                lw_mask.causal_diag_tile_idx);
+                lw_mask.primary_diag_tile_idx,
+                lw_mask.sliding_leading_prev_tile_idx,
+                lw_mask.sliding_leading_tile_idx,
+                lw_mask.sliding_trailing_next_tile_idx,
+                apply_sliding_window);
         };
 
-        for (uint32_t k_chunk = 0; k_chunk < k_loop_end; k_chunk++) {
-            bool is_first = (k_chunk == 0);
+        for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
+            bool is_first = (k_chunk == k_loop_start);
             bool is_last = (k_chunk == k_loop_end - 1);
 
             // Padded path is non-causal only (use_padded_mask && is_causal_sdpa rejected by static_assert).
-            const bool is_padded = !is_causal_sdpa && is_last && (padded_k_tiles_inner > 0);
+            // With sliding-window loop narrowing, the loop's last chunk may not be the tensor's final K chunk.
+            const bool is_padded = !is_causal_sdpa && (k_chunk == k_num_chunks - 1) && (padded_k_tiles_inner > 0);
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
             uint32_t chunk_sbw = is_padded ? padded_sbw : full_sbw;
@@ -1597,18 +1813,33 @@ void sdpa_standard_v2(
             // - Non-causal partial: trailing fully-padded tiles → neginf via num_padded; partial
             //   boundary tile → vertical-bar mask tile via apply_mask + lw_partial_tile_idx.
             bool apply_partial_mask = false;
+            bool apply_sliding_mask = false;
+            bool apply_causal_mask = is_causal_sdpa;
             uint32_t target_active_Sk = chunk_active_Sk;
             if constexpr (use_padded_mask && !is_causal_sdpa) {
-                if (is_last && lw_mask.global_n_partial_col > 0) {
+                if (is_padded && lw_mask.global_n_partial_col > 0) {
                     target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     apply_partial_mask = true;
+                }
+            }
+            if constexpr (has_sliding_window) {
+                const uint32_t k_start_tile = k_chunk * Sk_chunk_t;
+                const uint32_t trailing_range_end =
+                    is_causal_sdpa ? (q_start_tile + Sq_chunk_t) : (q_start_tile + Sq_chunk_t + right_window_tiles);
+                apply_sliding_mask = true;
+                if constexpr (is_causal_sdpa) {
+                    const uint32_t k_end_tile = k_start_tile + Sk_chunk_t;
+                    apply_causal_mask = (q_start_tile < k_end_tile) && ((q_start_tile + Sq_chunk_t) > k_start_tile);
+                }
+                if (is_last && trailing_range_end > k_start_tile) {
+                    const uint32_t window_active_Sk = trailing_range_end - k_start_tile;
+                    target_active_Sk = target_active_Sk < window_active_Sk ? target_active_Sk : window_active_Sk;
                 }
             } else if constexpr (is_causal_sdpa) {
                 if (is_last) {
                     target_active_Sk = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
                 }
             }
-            const bool apply_causal = is_causal_sdpa;
             if (target_active_Sk < chunk_active_Sk) {
                 chunk_active_Sk = target_active_Sk;
                 chunk_sbw = largest_factor_le(chunk_active_Sk, qkt_subblock_w);
@@ -1623,10 +1854,11 @@ void sdpa_standard_v2(
                 chunk_active_Sk,
                 chunk_reduce_trigger,
                 chunk_sbw,
-                apply_causal,
+                apply_causal_mask,
                 k_chunk * Sk_chunk_t,
                 apply_partial_mask,
-                apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u);
+                apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u,
+                apply_sliding_mask);
 
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
@@ -1753,6 +1985,8 @@ void sdpa_ring_v2(
     const bool use_zigzag_balancing = false,
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true) {
+    init_sdpa_streaming_semaphores();
+
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     // is_causal: diagonal stamp only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
     const bool is_causal_iter = (is_causal_sdpa && (ring_iter == 0)) || chunked_enabled;
@@ -2142,6 +2376,10 @@ void sdpa_ring_v2(
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 lw_mask.causal_diag_tile_idx,
+                0,      // sliding_leading_prev_idx (not used in ring)
+                0,      // sliding_leading_idx (not used in ring)
+                0,      // sliding_trailing_next_idx (not used in ring)
+                false,  // apply_sliding_window
                 step_straddle_col,
                 step_straddle_jump,
                 step_kv_pad_rotation);
