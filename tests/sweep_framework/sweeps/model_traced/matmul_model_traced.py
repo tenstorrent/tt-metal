@@ -100,6 +100,7 @@ def _run_gather_in0_ring_matmul(
     input_b_dtype,
     output_dtype,
     compute_kernel_config_raw,
+    input_a_placement=None,
 ):
     """gather_in0 1D ring matmul (decode LM-head / MLP-w2 projections), ttnn.matmul form.
 
@@ -142,6 +143,7 @@ def _run_gather_in0_ring_matmul(
     out_subblock_h = int(pc.get("out_subblock_h", 1))
     out_subblock_w = int(pc.get("out_subblock_w", 1))
     per_core_M = int(pc.get("per_core_M", 1))
+    untilize_out = bool(pc.get("untilize_out", False))
     n_gcb = pc.get("num_global_cb_receivers")
     prefetch = bool(n_gcb is not None and int(n_gcb) >= 2)
 
@@ -266,6 +268,17 @@ def _run_gather_in0_ring_matmul(
             use_height_and_width_as_shard_shape=True,
         )
         a_tt = ttnn.to_memory_config(a_tt, in0_ring_mc)
+        # Stamp the model's traced input topology (e.g. [Replicate, Shard(K)]) so the
+        # trace matches the master. The ring activation is built per-device K-sliced
+        # (ShardTensor2dMesh dims=(0,1)); this only corrects the recorded topology
+        # metadata, not the L1 ring buffers the gather kernel uses. Best-effort.
+        if input_a_placement:
+            try:
+                from tests.sweep_framework.sweep_utils.mesh_tensor_utils import apply_tensor_placement_topology
+
+                apply_tensor_placement_topology(a_tt, input_a_placement, mesh_shape)
+            except Exception:
+                pass
 
         out_mc = ttnn.create_sharded_memory_config(
             shape=(M, N_PADDED // RING),
@@ -286,6 +299,7 @@ def _run_gather_in0_ring_matmul(
             fused_activation=None,
             mcast_in0=False,
             gather_in0=True,
+            untilize_out=untilize_out,
             hop_cores=_crs(hop_grid),
             **({"num_global_cb_receivers": int(n_gcb)} if prefetch else {}),
         )
@@ -444,6 +458,7 @@ def run(
             input_b_dtype=(input_b_dtype if input_b_dtype is not None else kwargs.get("input_tensor_b_dtype")),
             output_dtype=kwargs.get("dtype"),
             compute_kernel_config_raw=kwargs.get("compute_kernel_config"),
+            input_a_placement=input_a_tensor_placement,
         )
 
     # Keep all traced params including program_config — they are required for
@@ -579,57 +594,40 @@ def run(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    # Create input_b tensor.
-    # When a program_config is present (e.g. MatmulMultiCoreReuseProgramConfig), the
-    # kernel may expect input_b in its traced memory layout (including sharded).
-    # Only force input_b to interleaved when there is NO program_config.
-    input_b_is_sharded = (
-        hasattr(input_b_memory_config, "shard_spec")
-        and input_b_memory_config.shard_spec is not None
-        and input_b_memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    )
-    has_program_config = "program_config" in op_kwargs
-
-    if input_b_is_sharded and not has_program_config:
-        # No program_config: matmul's default path requires input_b to be INTERLEAVED
-        input_tensor_b_interleaved = ttnn.from_torch(
+    # Create input_b tensor with its traced memory_config + placement (including
+    # sharded). The op accepts a sharded weight even without a program_config — the
+    # model traced exactly that — so build it faithfully (matching the master's
+    # tensor_placement and memory layout) and fall back to DRAM-interleaved only if
+    # that construction fails.
+    try:
+        if not is_host:
+            if is_mesh_device and input_b_tensor_placement:
+                input_tensor_b = create_tensor_on_mesh(
+                    torch_input_tensor_b,
+                    device,
+                    input_b_dtype,
+                    input_b_layout,
+                    input_b_memory_config,
+                    input_b_tensor_placement,
+                )
+            else:
+                input_tensor_b = ttnn.from_torch(
+                    torch_input_tensor_b,
+                    dtype=input_b_dtype,
+                    layout=input_b_layout,
+                    device=device,
+                    memory_config=input_b_memory_config,
+                )
+        else:
+            input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
+    except Exception:
+        input_tensor_b = ttnn.from_torch(
             torch_input_tensor_b,
             dtype=input_b_dtype,
             layout=input_b_layout,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        input_tensor_b = input_tensor_b_interleaved
-    else:
-        try:
-            if not is_host:
-                if is_mesh_device and input_b_tensor_placement:
-                    input_tensor_b = create_tensor_on_mesh(
-                        torch_input_tensor_b,
-                        device,
-                        input_b_dtype,
-                        input_b_layout,
-                        input_b_memory_config,
-                        input_b_tensor_placement,
-                    )
-                else:
-                    input_tensor_b = ttnn.from_torch(
-                        torch_input_tensor_b,
-                        dtype=input_b_dtype,
-                        layout=input_b_layout,
-                        device=device,
-                        memory_config=input_b_memory_config,
-                    )
-            else:
-                input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
-        except Exception:
-            input_tensor_b = ttnn.from_torch(
-                torch_input_tensor_b,
-                dtype=input_b_dtype,
-                layout=input_b_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
     try:
         start_time = start_measuring_time()

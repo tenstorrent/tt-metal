@@ -218,6 +218,9 @@ def dict_to_compute_kernel_config(cfg):
         math_approx_mode=_to_bool(cfg.get("math_approx_mode", False)),
         fp32_dest_acc_en=_to_bool(cfg.get("fp32_dest_acc_en", False)),
         packer_l1_acc=_to_bool(cfg.get("packer_l1_acc", True)),
+        # Preserve the traced dst_full_sync_en; without it the rebuilt config
+        # defaults to False and diffs against a master traced with True.
+        dst_full_sync_en=_to_bool(cfg.get("dst_full_sync_en", False)),
     )
 
 
@@ -379,6 +382,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 # constructor defaults to True and the kernel asserts on the
                 # batch-shape requirement for any non-singleton-batch input_b.
                 fuse_batch=bool(cfg.get("fuse_batch", False)),
+                untilize_out=bool(cfg.get("untilize_out", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
@@ -397,6 +401,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 fuse_batch=bool(cfg.get("fuse_batch", True)),
                 mcast_in0=bool(cfg.get("mcast_in0", True)),
                 fused_activation=fused_activation,
+                untilize_out=bool(cfg.get("untilize_out", False)),
             )
             if cfg.get("out_block_h") is not None:
                 kwargs["out_block_h"] = int(cfg["out_block_h"])
