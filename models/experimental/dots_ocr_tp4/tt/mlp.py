@@ -23,10 +23,12 @@ from models.experimental.dots_ocr_tp4.tt.common import (
     prefill_matmul_2d_config,
     shard_to_mesh,
 )
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
-class DotsOCRMLPTP4:
+class DotsOCRMLPTP4(TTNNModule):
     def __init__(self, mesh_device, config, weight_dtype=ttnn.bfloat16):
+        super().__init__()
         self.mesh_device = mesh_device
         self.config = config
         self.weight_dtype = weight_dtype
@@ -65,6 +67,9 @@ class DotsOCRMLPTP4:
         m = cls(mesh_device, config, weight_dtype=weight_dtype)
         m.set_weight_dtype(gate_up_dtype=gate_up_weight_dtype, down_dtype=down_weight_dtype)
         m.load_weights(torch_mlp)
+        m.to_device(mesh_device)
+        m._preprocessed_weight = True
+        m._weights_on_device = True
         return m
 
     def set_weight_dtype(self, gate_up_dtype=None, down_dtype=None):
@@ -100,8 +105,12 @@ class DotsOCRMLPTP4:
         self.down_w = shard_to_mesh(down_w, self.mesh_device, dim=0, dtype=self.down_weight_dtype)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # Decode (seq==1) keeps the tiny M=1 activations L1-resident; prefill stays
+        # DRAM-interleaved (its large CBs clash with L1-staged in0 -> L1 OOM).
+        is_decode = int(x.shape[-2]) == 1
+        act_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mc)
 
         m = matmul_m_dim(x)
         K = int(x.shape[-1])
@@ -116,7 +125,7 @@ class DotsOCRMLPTP4:
             x,
             self.gate_up_w,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mc,
             compute_kernel_config=self.gate_up_compute,
             program_config=gate_up_pc,
         )
@@ -127,7 +136,7 @@ class DotsOCRMLPTP4:
             up,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mc,
         )
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
@@ -139,11 +148,11 @@ class DotsOCRMLPTP4:
             act,
             self.down_w,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mc,
             compute_kernel_config=self.down_compute,
             program_config=down_pc,
         )
         ttnn.deallocate(act)
 
-        out = all_reduce(out, self.mesh_device)
+        out = all_reduce(out, self.mesh_device, output_memory_config=act_mc)
         return out

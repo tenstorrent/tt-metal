@@ -11,15 +11,25 @@ import ttnn
 
 from models.experimental.dots_ocr_tp4.tt.decoder_block import DotsOCRDecoderBlockTP4
 from models.experimental.dots_ocr_tp4.tt.lm_head import DotsOCRLMHeadTP4
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
-class DotsOCRPrefillModelTP4:
+class DotsOCRPrefillModelTP4(TTNNModule):
     def __init__(self, mesh_device, config, weight_dtype=ttnn.bfloat16):
+        super().__init__()
         self.mesh_device = mesh_device
         self.config = config
         self.weight_dtype = weight_dtype
         self.layers = []
         self.head = None  # optional DotsOCRLMHeadTP4 (final norm + LM head)
+
+    def to_device(self, device):
+        super().to_device(device)
+        for layer in self.layers:
+            layer.to_device(device)
+        if self.head is not None:
+            self.head.to_device(device)
+        return self
 
     @classmethod
     def from_torch(
@@ -40,6 +50,9 @@ class DotsOCRPrefillModelTP4:
             m.head = DotsOCRLMHeadTP4.from_torch(
                 mesh_device, config, torch_norm, torch_lm_head, weight_dtype=weight_dtype
             )
+        m.to_device(mesh_device)
+        m._preprocessed_weight = True
+        m._weights_on_device = True
         return m
 
     def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:

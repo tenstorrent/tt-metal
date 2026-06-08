@@ -72,16 +72,22 @@ def tp_cluster_axis(mesh_device) -> int:
     return 0 if (len(shape) == 2 and shape[0] > 1 and shape[1] == 1) else 1
 
 
-def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1) -> ttnn.Tensor:
-    """All-reduce a [.., N] partial-sum tensor along its last dim across the TP axis.
+def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1, output_memory_config=None) -> ttnn.Tensor:
+    """All-reduce a [.., N] full-width partial-sum tensor across the TP axis.
 
     Implemented as reduce_scatter + all_gather (the proven 1x4-ring pattern on
-    this host). Input/output last dim N must be divisible by num_devices and
-    tile-aligned. Returns a replicated full-N tensor.
+    this host). ``output_memory_config`` selects where the gathered result lands
+    (default DRAM; pass L1 for decode so the replicated hidden stays resident).
+    Returns a replicated full-N tensor.
+
+    Note: a single fused ``ttnn.all_reduce`` (Ring) was tried for the decode path
+    and was speed-neutral (decode is not CCL-bandwidth-bound at M=1), so the
+    bandwidth-efficient RS+AG is kept for both prefill and decode.
     """
     nd = mesh_num_devices(mesh_device)
     if nd <= 1:
         return t
+    out_mc = output_memory_config or ttnn.DRAM_MEMORY_CONFIG
     orig_shape = list(t.shape)
     work = t
     if len(work.shape) < 4:
@@ -100,7 +106,7 @@ def all_reduce(t: ttnn.Tensor, mesh_device, num_links: int = 1) -> ttnn.Tensor:
         dim=3,
         num_links=num_links,
         cluster_axis=axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=out_mc,
         topology=ttnn.Topology.Linear,
     )
     ttnn.deallocate(scattered)

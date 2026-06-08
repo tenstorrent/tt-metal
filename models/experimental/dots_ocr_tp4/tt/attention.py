@@ -28,11 +28,13 @@ from models.experimental.dots_ocr_tp4.tt.common import (
     prefill_matmul_2d_config,
     shard_to_mesh,
 )
+from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
 
-class DotsOCRAttentionTP4:
+class DotsOCRAttentionTP4(TTNNModule):
     def __init__(self, mesh_device, config, layer_idx=0, weight_dtype=ttnn.bfloat16):
+        super().__init__()
         self.mesh_device = mesh_device
         self.config = config
         self.layer_idx = layer_idx
@@ -92,6 +94,11 @@ class DotsOCRAttentionTP4:
     def from_torch(cls, mesh_device, config, torch_attn, layer_idx=0, weight_dtype=ttnn.bfloat16):
         m = cls(mesh_device, config, layer_idx=layer_idx, weight_dtype=weight_dtype)
         m.load_weights(torch_attn)
+        m.to_device(mesh_device)
+        # Weights are sharded to device in load_weights (construction-time), so the
+        # TTNNModule weight lifecycle is already satisfied -- mark it ready.
+        m._preprocessed_weight = True
+        m._weights_on_device = True
         return m
 
     def _chip_kv_index(self, chip: int) -> int:
@@ -170,7 +177,14 @@ class DotsOCRAttentionTP4:
             self._sdpa_decode_program_config = None
 
     def _project_qkv_heads(self, x, batch_size, seq_len, heads_mem_config):
-        """qkv linear (+bias) -> per-chip [Q3 | K1 | V1] -> create heads."""
+        """qkv linear (+bias) -> per-chip [Q3 | K1 | V1] -> create heads.
+
+        Kept DRAM-interleaved: q/k/v feed the paged KV kernels, which require a
+        DRAM (or sharded) Q for ``paged_sdpa_decode`` and sharded K/V for
+        ``paged_update`` -- L1-interleaved q/k/v is rejected. The decode L1 win is
+        in the residual stream (RMSNorm, residual adds, o_proj/MLP + all-reduce),
+        not these tiny immediately-consumed head tensors.
+        """
         qkv_pc = prefill_matmul_2d_config(
             self.mesh_device, matmul_m_dim(x), int(x.shape[-1]), int(self.qkv_w.shape[-1]), fp32_dest=False
         )
@@ -195,6 +209,9 @@ class DotsOCRAttentionTP4:
         return q, k, v
 
     def _o_proj_all_reduce(self, attn):
+        # Decode (seq==1) keeps the o_proj matmul + all-reduce L1-resident.
+        is_decode = int(attn.shape[-2]) == 1
+        out_mc = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         o_pc = prefill_matmul_2d_config(
             self.mesh_device, matmul_m_dim(attn), int(attn.shape[-1]), int(self.o_w.shape[-1]), fp32_dest=False
         )
@@ -202,14 +219,14 @@ class DotsOCRAttentionTP4:
             attn,
             self.o_w,
             dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=out_mc,
             compute_kernel_config=self.o_compute,
             program_config=o_pc,
         )
         ttnn.deallocate(attn)
-        out = all_reduce(out, self.mesh_device)
+        out = all_reduce(out, self.mesh_device, output_memory_config=out_mc)
         if self.o_bias is not None:
-            out = ttnn.add(out, self.o_bias)
+            out = ttnn.add(out, self.o_bias, memory_config=out_mc)
         return out
 
     def forward(self, x: ttnn.Tensor, past_key_value=None, cache_position=None) -> ttnn.Tensor:
@@ -317,7 +334,7 @@ class DotsOCRAttentionTP4:
         )
         attn = ttnn.to_memory_config(attn, sdpa_out_memcfg)
         attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=self.q_heads_per_chip)
-        attn = ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.to_memory_config(attn, ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.slice(attn, [0, 0, 0, 0], [1, 1, batch_size, int(attn.shape[-1])])
         attn = ttnn.squeeze(attn, 1)  # [1, B, H*D]
         return self._o_proj_all_reduce(attn)

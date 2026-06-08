@@ -40,8 +40,15 @@ def mesh_num_devices_for_shape(shape) -> int:
     return int(shape)
 
 
+def _trace_enabled() -> bool:
+    return os.environ.get("DOTS_OCR_TP4_TRACE", "").lower() in {"1", "true", "yes", "on"}
+
+
 def device_params():
     n = mesh_num_devices_for_shape(resolve_mesh_shape())
-    dp = {"trace_region_size": 0, "num_command_queues": 1}
+    # Reserve a trace region only when traced decode is requested (capture/replay
+    # needs it); otherwise keep it 0 so prefill-only runs don't reserve DRAM.
+    trace_size = 300_000_000 if _trace_enabled() else 0
+    dp = {"trace_region_size": trace_size, "num_command_queues": 1}
     dp["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING if n > 1 else ttnn.FabricConfig.DISABLED
     return dp
