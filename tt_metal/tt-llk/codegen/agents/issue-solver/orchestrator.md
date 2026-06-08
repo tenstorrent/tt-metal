@@ -74,6 +74,10 @@ Inside the issue-solver and its subagents:
 
 - Allowed: `git status`, `git diff`, `git show`, `git log`, `git rev-parse`.
 - Not allowed: `git push`, PR creation, branch deletion, destructive reset/restore.
+- One scoped exception: the perf-tester (`perf-tester.md` Step 3) may use a
+  `git stash push` / `git stash pop` pair **only** to revert the fix while it
+  re-measures the perf baseline on the branch base, and must always pop it back.
+  No other agent performs git writes.
 - Commit/PR decisions are returned to the caller via the final report.
 
 ## Step 0: Setup
@@ -120,13 +124,29 @@ export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom |
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
 export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "$WORKTREE_BRANCH")
+# Issue-solver-local version string (independent of Quasar codegen). Just a
+# string you edit by hand in codegen/agents/issue-solver/VERSION when you want.
+export CODEGEN_VERSION=$(tr -d '[:space:]' < codegen/agents/issue-solver/VERSION 2>/dev/null || echo "")
 export COMPILATION_ATTEMPTS=0
 export DEBUG_CYCLES=0
 export TESTS_TOTAL=0
 export TESTS_PASSED=0
+export PERF_RETRIES=0
+export MAX_PERF_RETRIES=2
 export OBSTACLE=
 export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 export TEST_BACKEND TTSIM_SO_PATH CREATE_LOCAL_BRANCH CREATE_PR
+
+# PERF_GOAL drives the perf stage (Step 4.5). Optimization issues must get
+# faster; everything else must not regress. Prefer the analyzer's perf_intent
+# line (Step 1) when present; this is the keyword fallback.
+if echo "${ISSUE_TITLE} ${ISSUE_LABELS} ${ISSUE_BODY}" | grep -qiE \
+   'perf|performance|optimi|speed|slow|cycles|latency|throughput|regression|recover'; then
+  export PERF_GOAL=improve
+else
+  export PERF_GOAL=no_regress
+fi
+
 mkdir -p "$LOG_DIR/instructions" codegen/artifacts
 
 cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
@@ -138,7 +158,8 @@ PIPELINE_STEPS='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement the smallest fix"},
   {"id":"tester","name":"Test","desc":"Run selected backend tests"},
-  {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after test failure"}
+  {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
+  {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test or perf failure"}
 ]'
 
 ISSUE_JSON=$(python - <<PY
@@ -167,6 +188,7 @@ python codegen/scripts/run_json_writer.py init \
   --run-type "${CODEGEN_RUN_TYPE:-manual}" \
   --git-commit "$GIT_COMMIT" \
   --git-branch "$GIT_BRANCH" \
+  --version "$CODEGEN_VERSION" \
   --description "#${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
   --pipeline-steps "$PIPELINE_STEPS" \
   --issue "$ISSUE_JSON"
@@ -199,6 +221,19 @@ Agent:
 The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`.
 
 If the analyzer declares the issue out of scope, finalize as `skipped`.
+
+**Refine `PERF_GOAL` from the analysis.** The analyzer emits a `perf_intent:` line
+(`optimize` or `maintain`) in the analysis. Prefer it over the Step 0 keyword
+guess:
+
+```bash
+PERF_INTENT=$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain)' \
+  "codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md" | head -1 | grep -ioE 'optimize|maintain')
+case "$PERF_INTENT" in
+  optimize) export PERF_GOAL=improve ;;
+  maintain) export PERF_GOAL=no_regress ;;
+esac
+```
 
 ## Step 2: Research If Needed
 
@@ -307,6 +342,109 @@ The retry worker reads the existing plan plus tester evidence, patches the imple
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Finalize as `failed` unless the caller explicitly reruns with `TEST_BACKEND=local`.
 
+## Step 5.5: Measure Perf and Feed Back
+
+Run this only once the functional tests are **green** (the tester returned
+`SUCCESS`, either on the first pass or after the Step 5 debug retry). If the
+functional result is not green, skip straight to Step 6.
+
+**Gate.** Perf cycle counts are only meaningful on real silicon. Skip the perf
+stage (record it as not measured and go to Step 6) when **either**:
+
+- `TEST_BACKEND != local`, or
+- `TARGET_ARCH` is not `blackhole` or `wormhole`.
+
+```bash
+if [ "$TEST_BACKEND" != "local" ] || { [ "$TARGET_ARCH" != "blackhole" ] && [ "$TARGET_ARCH" != "wormhole" ]; }; then
+  python codegen/scripts/run_json_writer.py metric \
+    --log-dir "$LOG_DIR" \
+    --patch-json "{\"perf\": {\"measured\": false, \"verdict\": \"not_measured\", \"reason\": \"perf only runs on local Blackhole/Wormhole silicon\"}}"
+  # proceed to Step 6
+fi
+```
+
+Otherwise advance to the `perf` step and run the perf-tester:
+
+```bash
+python codegen/scripts/run_json_writer.py advance \
+  --log-dir "$LOG_DIR" \
+  --new-step "perf" \
+  --new-message "Measuring ${TARGET_ARCH} perf for issue #${ISSUE_NUMBER} (goal=${PERF_GOAL})" \
+  --prev-result "success" \
+  --prev-message "Functional tests passed" \
+  --agent "perf"
+```
+
+Spawn `perf-tester.md` with: `TARGET_ARCH`, `TEST_BACKEND`, `PERF_GOAL`, issue
+number, the changed kernel/op (from the analysis), fix plan path, changed files,
+`WORKTREE_DIR`, `LOG_DIR`. The perf-tester writes its result to
+`$LOG_DIR/perf_result.json`; patch it into `run.json` after it returns:
+
+```bash
+python codegen/scripts/run_json_writer.py metric \
+  --log-dir "$LOG_DIR" \
+  --patch-json "{\"perf\": $(cat "$LOG_DIR/perf_result.json")}"
+```
+
+The perf-tester returns one of:
+
+- `PERF_OK` — goal met (faster, or not slower). Proceed to Step 6.
+- `PERF_NOT_APPLICABLE` / `PERF_ENV_ERROR` — could not measure/judge (no perf
+  test maps to the change, no baseline, or the perf test could not run). **Never
+  block** on these; proceed to Step 6 on the functional result.
+- `PERF_REGRESSED` — got slower than baseline. A miss for any goal.
+- `PERF_NOT_IMPROVED` — `PERF_GOAL=improve` and the fix did not get faster. A
+  miss only for optimization issues.
+
+**Perf feedback loop.** If the perf-tester returns a *miss* (`PERF_REGRESSED`, or
+`PERF_NOT_IMPROVED` when `PERF_GOAL=improve`) and `PERF_RETRIES < MAX_PERF_RETRIES`:
+
+```bash
+python codegen/scripts/run_json_writer.py failure \
+  --log-dir "$LOG_DIR" \
+  --step "perf" \
+  --agent "perf" \
+  --type "test_failure" \
+  --message "$PERF_FAILURE_SUMMARY" \
+  --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+  --log-dir "$LOG_DIR" \
+  --new-step "fix_tests" \
+  --new-message "Recovering perf for issue #${ISSUE_NUMBER} (${PERF_GOAL}); attempt $((PERF_RETRIES+1))/${MAX_PERF_RETRIES}" \
+  --prev-result "test_failure" \
+  --prev-message "$PERF_FAILURE_SUMMARY" \
+  --agent "fix_tests"
+```
+
+Spawn `issue-worker.md` in debug/retry mode with
+`FAILURE_CLASS=PERF_REGRESSION` (goal `no_regress`) or
+`FAILURE_CLASS=PERF_NOT_IMPROVED` (goal `improve`), plus the perf evidence and
+the `perf_baseline_*`/`perf_current_*` CSV paths from `LOG_DIR`. The worker must
+recover/improve cycles **without breaking correctness**. Then:
+
+```bash
+PERF_RETRIES=$((PERF_RETRIES + 1))
+DEBUG_CYCLES=$((DEBUG_CYCLES + 1))
+```
+
+Re-run **Step 4 (functional Test)** — correctness must still hold — and, if it
+stays green, re-run this Step 5.5 perf check. Never accept a perf "fix" that
+breaks a functional test. If the worker returns `HYPOTHESIS_REFUTED` (e.g., the
+regression is inherent to the correctness fix), stop looping and treat it as an
+exhausted miss below.
+
+**When the perf budget is exhausted** (`PERF_RETRIES == MAX_PERF_RETRIES` and
+still a miss, or `HYPOTHESIS_REFUTED`):
+
+- `PERF_GOAL=no_regress` + still regressed → set `STATUS=failed`,
+  `OBSTACLE=perf_regression`, `FINAL_RESULT=test_failure`. A correctness fix that
+  silently regresses perf is not acceptable; surface it for human review.
+- `PERF_GOAL=improve` + still not improved → keep the functional `STATUS`
+  (`success`) but leave `perf.verdict=not_improved` in `run.json` and note it in
+  the report. An otherwise-correct change is not failed solely for missing a
+  speedup, but the unmet optimization goal is made visible.
+
 ## Step 6: Finalize
 
 Pick status:
@@ -334,8 +472,10 @@ case "$STATUS" in
 esac
 
 export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only)
-export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))")
+# Exclude perf_data/ — the perf stage regenerates those CSVs as a measurement
+# artifact; they are not part of the fix and must not land in the diff or PR.
+export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only | grep -v '/perf_data/' | grep -v '^perf_data/' || true)
+export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps([l for l in os.environ['CHANGED_FILES'].splitlines() if l]))")
 
 python codegen/scripts/run_json_writer.py finalize \
   --log-dir "$LOG_DIR" \
@@ -357,6 +497,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
 ]:
     if os.path.exists(os.path.join(log_dir, filename)) and agent not in agents:
@@ -399,12 +540,23 @@ Return:
 ```text
 Issue-Solver Result:
   status: success|compiled|failed|skipped
+  codegen_version: ${CODEGEN_VERSION}
   run_id: ${RUN_ID}
   log_dir: ${LOG_DIR}
   test_backend: ${TEST_BACKEND}
+  perf:
+    goal: ${PERF_GOAL}            # improve | no_regress
+    verdict: ...                  # improved | neutral | regressed | not_improved | no_baseline | not_measured
+    test: ...                     # perf module + -k filter, or "n/a"
+    baseline_vs_current: ...      # "<base> -> <cur> cycles (median <pct>%, worst <pct>%)", or "not measured"
+    retries_used: ${PERF_RETRIES}/${MAX_PERF_RETRIES}
   create_local_branch_requested: ${CREATE_LOCAL_BRANCH}
   create_pr_requested: ${CREATE_PR}
   changed_files:
     ...
   obstacle: ...
 ```
+
+Populate the `perf:` block from the `perf` object in `run.json` (written by the
+perf-tester). When the perf stage was gated out, report `verdict: not_measured`
+and `test: n/a`.
