@@ -1790,7 +1790,7 @@ uint32_t process_exec_buf_cmd(
     // dispatch on eth cores is memory constrained, so exec_buf reuses the cmddat_q
     // prefetch_h stalls upon issuing an exec_buf to prevent conflicting use of the cmddat_q,
     // the exec_buf contains the release commands
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr) _outer;
+    volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr_outer);
 
     // setup exec_buf_state the first time
     exec_buf_state.page_id = 0;
