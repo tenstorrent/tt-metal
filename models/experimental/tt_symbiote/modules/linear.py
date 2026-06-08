@@ -84,6 +84,14 @@ def _ccl_num_links(device) -> int:
     return 1
 
 
+def _ccl_worker_kwargs(op_name: str) -> dict:
+    specific_name = f"DOTS_OCR_CCL_{op_name.upper()}_NUM_WORKERS_PER_LINK"
+    num_workers = os.environ.get(specific_name, os.environ.get("DOTS_OCR_CCL_NUM_WORKERS_PER_LINK"))
+    if num_workers is None:
+        return {}
+    return {"num_workers_per_link": int(num_workers)}
+
+
 def _largest_divisor_at_most(value: int, limit: int) -> int:
     for candidate in range(min(value, limit), 0, -1):
         if value % candidate == 0:
@@ -179,6 +187,23 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
 
     num_cores = max(1, grid_x * grid_y)
     per_core_n = max(1, math.ceil(n_tiles / num_cores))
+
+    # TP4 col-parallel fused gate/up: each device sees K=1536, N=4480.
+    # N has 140 tiles, so per_core_N=2 uses exactly 70 active output cores.
+    # Use a 10x7 grid instead of the full 11x10 device grid so the mcast
+    # program does not carry unused rows for this shape.
+    if k_dim == 1536 and n_dim == 4480:
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(10, 7),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            per_core_M=1,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
 
     # TP4 col-parallel MLP down: each device sees K=8960/4=2240 and N=1536.
     # N has exactly 48 tiles, so the 1D-mcast kernel is already capped at 48
@@ -702,6 +727,7 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                **_ccl_worker_kwargs("reduce_scatter"),
             )
             if self.tt_bias is not None:
                 tt_output += self.tt_bias
@@ -805,6 +831,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                **_ccl_worker_kwargs("reduce_scatter"),
             )
             # Fallback: if bias was not fused (e.g. legacy sharded mapper
             # path), add it here while the tensor is still N-sharded.
@@ -817,6 +844,7 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                **_ccl_worker_kwargs("all_gather"),
             )
 
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])

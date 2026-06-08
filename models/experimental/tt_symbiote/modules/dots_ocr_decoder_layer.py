@@ -13,6 +13,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_rmsnorm_program_config,
     _decode_width_sharded_input_memory_config,
     _ccl_num_links,
+    _ccl_worker_kwargs,
     _tp_requires_ccl,
 )
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
@@ -54,6 +55,7 @@ def _match_residual_width(tensor, residual, device):
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         topology=ttnn.Topology.Linear,
+        **_ccl_worker_kwargs("all_gather"),
     )
 
 
@@ -69,7 +71,74 @@ def _gather_tp_hidden_if_needed(tensor, device, hidden_size: int):
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         topology=ttnn.Topology.Linear,
+        **_ccl_worker_kwargs("all_gather"),
     )
+
+
+def _col_parallel_rmsnorm_mode() -> str:
+    return os.environ.get("DOTS_OCR_COL_PARALLEL_RMSNORM_MODE", "distributed").lower()
+
+
+def _partition_tp_hidden(tensor, device):
+    if not _tp_requires_ccl(device):
+        return tensor
+    return ttnn.mesh_partition(
+        tensor,
+        dim=len(tensor.shape) - 1,
+        cluster_axis=1,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+
+def _local_tp_shard_rmsnorm(norm, tensor):
+    original_shape = tensor.shape
+    eps = getattr(norm.torch_layer, "variance_epsilon", getattr(norm.torch_layer, "eps", 1e-6))
+    if len(original_shape) == 3:
+        tensor = ttnn.unsqueeze(tensor, 1)
+    if tensor.layout != ttnn.TILE_LAYOUT:
+        tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = ttnn.rms_norm(
+        tensor,
+        epsilon=eps,
+        weight=norm.weight_distributed,
+        compute_kernel_config=norm.compute_kernel_config,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    if len(original_shape) == 3 and len(out.shape) == 4:
+        out = ttnn.reshape(out, [out.shape[0], out.shape[2], out.shape[3]])
+    return out
+
+
+def _full_hidden_rmsnorm_then_maybe_partition(
+    norm,
+    tensor,
+    device,
+    hidden_size: int,
+    partition_output: bool,
+    use_multicore: bool,
+):
+    full_hidden = _gather_tp_hidden_if_needed(tensor, device, hidden_size)
+    normed = (
+        norm._forward_decode_sharded(full_hidden, full_hidden.shape)
+        if use_multicore
+        else TTNNDistributedRMSNorm.forward(norm, full_hidden)
+    )
+    if full_hidden is not tensor:
+        ttnn.deallocate(full_hidden)
+    if not partition_output:
+        if normed.memory_config().is_sharded():
+            interleaved = ttnn.sharded_to_interleaved(normed, ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(normed)
+            normed = interleaved
+        if len(normed.shape) == 4 and int(normed.shape[1]) == 1:
+            normed = ttnn.reshape(normed, [normed.shape[0], normed.shape[2], normed.shape[3]])
+        return normed
+    partitioned = _partition_tp_hidden(normed, device)
+    if partitioned is not normed:
+        ttnn.deallocate(normed)
+    if len(partitioned.shape) == 4 and int(partitioned.shape[1]) == 1:
+        partitioned = ttnn.reshape(partitioned, [partitioned.shape[0], partitioned.shape[2], partitioned.shape[3]])
+    return partitioned
 
 
 def _use_bfp8_decoder_weights(layer_idx) -> bool:
@@ -337,17 +406,40 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             hs = ttnn.typecast(hs, ttnn.bfloat16)
 
         hidden_dim = int(self.input_layernorm.torch_layer.weight.shape[0])
+        rmsnorm_mode = _col_parallel_rmsnorm_mode() if is_col_parallel else "distributed"
 
         # Attention block. The residual stays in the TP-sharded hidden layout
         # (e.g. 384 on a 1x4 mesh); input_layernorm runs distributed (TP4) on
         # that shard. For col_parallel decode the normed shard is all-gathered
         # to full hidden so the column-parallel QKV contracts over full hidden.
         residual = hs
-        hs = self.input_layernorm(hs)
-
         seq_len = hs.shape[-2]
         is_decode = seq_len == 1
         decode_l1_mc = ttnn.L1_MEMORY_CONFIG if is_decode else None
+        if is_col_parallel and is_decode and rmsnorm_mode == "full_multicore":
+            hs = _full_hidden_rmsnorm_then_maybe_partition(
+                self.input_layernorm,
+                hs,
+                self.device,
+                hidden_dim,
+                partition_output=not getattr(self, "_col_parallel_use_n_parallel_attn", False),
+                use_multicore=True,
+            )
+        elif is_col_parallel and is_decode and rmsnorm_mode == "full_single":
+            hs = _full_hidden_rmsnorm_then_maybe_partition(
+                self.input_layernorm,
+                hs,
+                self.device,
+                hidden_dim,
+                partition_output=not getattr(self, "_col_parallel_use_n_parallel_attn", False),
+                use_multicore=False,
+            )
+        elif is_col_parallel and is_decode and rmsnorm_mode == "local_shard":
+            hs = _local_tp_shard_rmsnorm(self.input_layernorm, hs)
+            if getattr(self, "_col_parallel_use_n_parallel_attn", False):
+                hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
+        else:
+            hs = self.input_layernorm(hs)
         if is_col_parallel and is_decode and getattr(self, "_col_parallel_use_n_parallel_attn", False):
             hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         attn_out, _ = self.self_attn(
@@ -404,8 +496,30 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         # row-parallel down does reduce_scatter only, so mlp_out comes back
         # hidden-sharded and the residual add stays on the sharded hidden.
         residual = hs
-        hs = self.post_attention_layernorm(hs)
-        if is_col_parallel and is_decode:
+        if is_col_parallel and is_decode and rmsnorm_mode == "full_multicore":
+            hs = _full_hidden_rmsnorm_then_maybe_partition(
+                self.post_attention_layernorm,
+                hs,
+                self.device,
+                hidden_dim,
+                partition_output=False,
+                use_multicore=True,
+            )
+        elif is_col_parallel and is_decode and rmsnorm_mode == "full_single":
+            hs = _full_hidden_rmsnorm_then_maybe_partition(
+                self.post_attention_layernorm,
+                hs,
+                self.device,
+                hidden_dim,
+                partition_output=False,
+                use_multicore=False,
+            )
+        elif is_col_parallel and is_decode and rmsnorm_mode == "local_shard":
+            hs = _local_tp_shard_rmsnorm(self.post_attention_layernorm, hs)
+            hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
+        else:
+            hs = self.post_attention_layernorm(hs)
+        if is_col_parallel and is_decode and rmsnorm_mode == "distributed":
             hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         mlp = self.mlp if is_decode else getattr(self, "mlp_prefill", self.mlp)
         mlp_out = mlp(hs)

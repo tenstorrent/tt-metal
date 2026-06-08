@@ -27,6 +27,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_mesh_mapper,
     _linear_mesh_num_devices,
     _ccl_num_links,
+    _ccl_worker_kwargs,
 )
 
 _GATE_UP_COL_DRAM_SHARDED_NUM_CORES = 64
@@ -156,6 +157,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
                 cluster_axis=1,
                 memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,
+                **_ccl_worker_kwargs("reduce_scatter"),
             )
             if self.tt_bias is not None:
                 tt_output += self.tt_bias
@@ -323,6 +325,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
                 cluster_axis=1,
                 memory_config=output_mc,
                 topology=ttnn.Topology.Linear,
+                **_ccl_worker_kwargs("reduce_scatter"),
             )
             if self.tt_bias is not None:
                 tt_output += self.tt_bias
@@ -591,6 +594,18 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 compute_kernel_config=self._gate_up_col_decode_ckc,
                 program_config=program_config,
+            )
+            return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+
+        if is_decode:
+            input_4d = ttnn.reshape(input_tensor, input_shape)
+            tt_output = ttnn.linear(
+                input_4d,
+                self.tt_weight,
+                bias=self.tt_bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
             )
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 

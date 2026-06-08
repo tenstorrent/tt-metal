@@ -13,6 +13,7 @@ from models.experimental.tt_symbiote.core.module import (
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
 )
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.modules.linear import _ccl_worker_kwargs
 
 
 def _mesh_num_devices(device) -> int:
@@ -295,6 +296,7 @@ class TTNNDistributedRMSNorm(TTNNModule):
             num_links=1,
             cluster_axis=1,
             topology=ttnn.Topology.Linear,
+            **_ccl_worker_kwargs("all_gather"),
         )
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
