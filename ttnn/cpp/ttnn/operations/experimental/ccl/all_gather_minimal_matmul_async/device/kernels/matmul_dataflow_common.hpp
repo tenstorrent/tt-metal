@@ -158,18 +158,14 @@ void compute_actual_k_block(
                 // Dev N-1, from Dev 0 via long send). All sends use out_ready_semaphore_forward
                 // at the receiver — single sem per iter.
                 //
-                // Sender fires K_num_blocks sem incs per m_block (iter 0..N-1). Receiver waits
-                // (N-1)*K_blocks_per_device times — leaves K_blocks_per_device extra sem incs
-                // unconsumed per m_block. Without compensation, sem accumulates past sem_target
-                // and the NEXT m_block's first wait passes BEFORE sender has written that
-                // m_block's data, causing stale reads. Fix: at the last K-block iter of each
-                // m_block, advance sem_target by K_blocks_per_device to consume those extras.
+                // The sender skips the redundant final relay lap (the last K_blocks_per_device
+                // iters; see dm_in0_sender), so it fires exactly (N-1)*K_blocks_per_device sem
+                // incs per m_block — precisely the count the receiver waits on here. sem ends each
+                // m_block exactly at sem_target with nothing left in flight, so no compensation
+                // (and no end-of-op drain) is needed.
                 if (device_iter > 0) {
                     noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
                     sem_target_forward += 1;
-                }
-                if (k_block_iter == total_k_block_count - 1) {
-                    sem_target_forward += k_blocks_per_device;
                 }
             } else if (device_iter > 0) {
                 // Ring: both halves arrive simultaneously from both directions
@@ -349,7 +345,10 @@ void read_in0_block_sync(
     uint32_t d1_tiles_right) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end_left > d1_start_left);
-    ASSERT(d1_end_right > d1_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty
+    // (k_right_tiles == 0 for a full block), so allow an empty range here. A non-empty-but-
+    // inverted range would still be a bug, hence >=.
+    ASSERT(d1_end_right >= d1_start_right);
 
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
@@ -419,7 +418,8 @@ void read_in1_block_sync(
     uint32_t d1_start,
     uint32_t d1_end) {
     ASSERT(d0_end_left > d0_start_left);
-    ASSERT(d0_end_right > d0_start_right);
+    // Linear topology is unidirectional: the "right" (backward) half is legitimately empty.
+    ASSERT(d0_end_right >= d0_start_right);
     ASSERT(d1_end > d1_start);
     for (uint32_t i = d0_start_left; i < d0_end_left; i++) {
         for (uint32_t j = d1_start; j < d1_end; j++) {
