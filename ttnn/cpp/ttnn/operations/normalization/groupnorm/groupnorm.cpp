@@ -220,6 +220,14 @@ Tensor group_norm(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
+    if (input_mask.has_value()) {
+        TT_FATAL(
+            input_mask->storage_type() == StorageType::DEVICE,
+            "Input mask must be on device, got storage type: {}",
+            input_mask->storage_type());
+        TT_FATAL(input_mask->buffer() != nullptr, "Input mask must be allocated in buffers on device!");
+        TT_FATAL(input_tensor.device() == input_mask->device(), "Input and input mask tensors must be on same device");
+    }
     const auto arch = input_tensor.device()->arch();
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;

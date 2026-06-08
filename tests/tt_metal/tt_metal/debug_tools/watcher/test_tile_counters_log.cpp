@@ -63,9 +63,9 @@ void RunTest(
     // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
     const auto cap = use_remapper ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
 
-    constexpr const char* TILE_COUNTER_DFB = "tile_counter_dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
+    const experimental::DFBSpecName TILE_COUNTER_DFB{"tile_counter_dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
 
     experimental::DataflowBufferSpec dfb_spec{
         .unique_id = TILE_COUNTER_DFB,

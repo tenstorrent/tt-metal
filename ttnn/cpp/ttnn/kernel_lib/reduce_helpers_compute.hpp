@@ -170,6 +170,11 @@ struct AccumulationConfig {
  * - iteration == 0: skip reload (first call, no accumulated value yet)
  * - iteration > 0: reload from accumulator CB before reducing
  *
+ * Unsupported combinations (rejected by static_assert in reduce()):
+ * - MAX + REDUCE_SCALAR: the running max cannot be reproduced by the copy_tile reload.
+ * - MAX + REDUCE_ROW on Quasar: the reload needs a within-16x16-face transpose that
+ *   copy_tile_to_dst_init_short asserts against on Quasar.
+ *
  * Usage:
  *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
  *   for (uint32_t i = 0; i < num_blocks; ++i) {

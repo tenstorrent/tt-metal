@@ -57,10 +57,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat series_result = x * (x * (x * 0x2.44734p-4f - 0xd.e712ap-4f) + 0x2.4f5388p+0f) - 0x1.952992p+0f;
 
     // Convert exponent to float
-    sfpi::vInt exp = sfpi::exexp(base);
-    v_if(exp < 0) { exp = sfpi::setsgn(~exp + 1, 1); }
-    v_endif;
-    sfpi::vFloat exp_f32 = sfpi::int32_to_float(exp, sfpi::RoundMode::NearestEven);
+    auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(base));
+    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::NearestEven);
 
     // De-normalize to original range
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;           // vConst1Ln2 = 1.4426950408889634f;
@@ -114,9 +112,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
-    sfpi::vInt pow_int = sfpi::float_to_int16(
+    auto pow_int = sfpi::convert<sfpi::vSMag16>(
         pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-    sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
+    auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN
     v_if((absbase == 0.f) && pow < 0.f) {
@@ -128,7 +126,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::copysgn(y, pow_int << 31);
+        y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
@@ -214,14 +212,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
-        sfpi::vInt pow_int = sfpi::float_to_int16(
+        auto pow_int = sfpi::convert<sfpi::vSMag16>(
             pow, sfpi::RoundMode::NearestEven);  // int16 should be plenty, since large powers will approach 0/Inf
-        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, sfpi::RoundMode::NearestEven);
+        auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::NearestEven);
 
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
-        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = sfpi::copysgn(y, pow_int << 31);
+        y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN

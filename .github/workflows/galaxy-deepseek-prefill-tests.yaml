@@ -15,6 +15,9 @@ on:
           - kv_cache_table
           - prefill_block
           - prefill_transformer
+          - kimi_mla
+          - kimi_moe
+          - kimi_prefill_block
         default: 'all'
       platform:
         required: false
@@ -63,7 +66,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: bh_galaxy

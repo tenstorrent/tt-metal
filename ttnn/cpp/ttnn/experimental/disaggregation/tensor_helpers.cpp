@@ -17,7 +17,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::experimental::disaggregation {
+namespace ttnn::experimental_disaggregation {
 
 ttnn::Tensor tensor_from_bfp8_bytes(std::span<const uint8_t> raw_bytes, const std::vector<uint32_t>& shape) {
     TT_FATAL(
@@ -40,4 +40,4 @@ ttnn::Tensor tensor_from_bfp8_bytes(std::span<const uint8_t> raw_bytes, const st
     return ttnn::Tensor(std::move(host_buffer), std::move(spec));
 }
 
-}  // namespace ttnn::experimental::disaggregation
+}  // namespace ttnn::experimental_disaggregation

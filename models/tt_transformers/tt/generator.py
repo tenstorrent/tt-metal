@@ -43,6 +43,11 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
+# Position of the page table within the decode input tuple produced by
+# Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
+# Used to refresh only the page-table trace input when KV blocks are reallocated.
+DECODE_PAGE_TABLE_INPUT_IDX = 3
+
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
@@ -640,6 +645,27 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 n == 0 for n in num_cached_per_user
             )  # batched path feeds full tokens; incompatible with cached prefixes
         )
+
+        # Batched prefill passes a per-user `last_token_idx` *list* (and a list
+        # `user_id`) into prefill_forward_single_user_text. That function's
+        # chunked-prefill branch only supports a single sequence with a scalar
+        # last_token_idx -- it compares/slices it arithmetically
+        # (`last_token_idx < seq_len`, `// chunk_size`, ...), pins user_id=0 and
+        # slices the page table to one row. A batch whose padded length exceeds
+        # max_prefill_chunk_size therefore reaches the chunked path with a list
+        # and dies on the first assert with
+        # `TypeError: '<' not supported between instances of 'list' and 'int'`.
+        # Such prompts already require multi-pass chunked prefill (so batching
+        # buys no single-pass win and would re-introduce the very DRAM pressure
+        # chunking exists to relieve); keep them on the sequential per-user path
+        # that chunks each prompt correctly. See tenstorrent/tt-metal#45234.
+        if use_batched_prefill and any(s > self.model_args[0].max_prefill_chunk_size for s in prefill_seq_lens):
+            logger.info(
+                f"Batched prefill disabled: padded prefill len {prefill_seq_lens[0]} exceeds "
+                f"max_prefill_chunk_size {self.model_args[0].max_prefill_chunk_size}; chunked "
+                f"prefill requires the sequential prefill path (#45234)"
+            )
+            use_batched_prefill = False
 
         if use_batched_prefill and sampling_on_device_requested:
             sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
@@ -1269,7 +1295,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            # A real batch reset / slot remap (reset_batch) also makes the device
+            # token/current_pos trace buffers stale, not just a prefill->decode
+            # mode switch, so both must force a full traced-input reset.
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs, reset_batch=reset_batch or mode_switched
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -1425,28 +1456,40 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self._prev_sampling_on_device = sampling_on_device
         sampling_mode_changed = prev_sampling_on_device is not None and prev_sampling_on_device != sampling_on_device
         reset_inputs = reset_batch or not sampling_on_device or sampling_mode_changed
-        if self.prev_page_table is None or any(
-            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
-        ):
-            # If the page table has changed, it means additional pages have been added or inputs are shuffled
-            reset_inputs = True
-            if page_table is not None:
-                self.prev_page_table = tuple(pt.clone() for pt in page_table)
+        page_table_changed = page_table is not None and (
+            self.prev_page_table is None
+            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
+        )
 
         for i in range(self.data_parallel):
             refresh_trace_inputs = reset_inputs or getattr(
                 self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
             )
-            if not refresh_trace_inputs:
-                continue
-
             user_page_table = page_table[i] if page_table is not None else None
-            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
 
-            copy_host_to_device(
-                host_tensors=host_inputs_i,
-                device_tensors=self.trace_inputs_decode[sampling_on_device][i],
-            )
+            if refresh_trace_inputs:
+                # Full resets are required when host token/position inputs are
+                # authoritative again, or for models that explicitly opt out of
+                # partial decode trace input refreshes.
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                copy_host_to_device(
+                    host_tensors=host_inputs_i,
+                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
+                )
+            elif page_table_changed:
+                # With async device sampling, token/position inputs may
+                # intentionally be stale on host: the previous decode updates
+                # them on device. Page tables still need refreshing when new KV
+                # blocks are allocated, so copy only that trace input and
+                # preserve device-produced tokens.
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+                host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
+                device_page_table = self.trace_inputs_decode[sampling_on_device][i][DECODE_PAGE_TABLE_INPUT_IDX]
+                if host_page_table is not None:
+                    ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+
+        if page_table_changed:
+            self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         outputs = self.trace_output_decode[sampling_on_device]

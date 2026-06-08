@@ -84,6 +84,14 @@ void AllToAllDispatchMetadataDeviceOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(operation_attributes.num_links > 0, "Number of links must be greater than 0");
 
+    // SPARSE_MCAST_LINEAR sends a single-direction multicast packet, which cannot reach
+    // destinations on both sides of the source on a non-wrapping (Linear) topology. Use the
+    // bidirectional SPARSE_MCAST_SHORTEST_PATH algorithm for Linear meshes instead.
+    TT_FATAL(
+        !(operation_attributes.topology == tt::tt_fabric::Topology::Linear &&
+          operation_attributes.dispatch_algorithm == DispatchAlgorithm::SPARSE_MCAST_LINEAR),
+        "DispatchAlgorithm::SPARSE_MCAST_LINEAR is not supported with Linear fabric topology");
+
     auto input_shape = input_tensor.tensor_spec().logical_shape();
     TT_FATAL(
         input_shape.rank() == 4 && (input_shape.rank() == indices_shape.rank()),

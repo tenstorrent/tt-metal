@@ -70,7 +70,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       model: ${{ inputs.model || 'all' }}

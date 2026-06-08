@@ -176,6 +176,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Temperature for softmax in probablistic sampling",
     )
     parser.add_argument(
+        "--num-mtp-levels",
+        type=int,
+        default=1,
+        help="Number of MTP stages to use for the pipeline",
+    )
+    parser.add_argument(
         "--io-socket-descriptor-prefix",
         type=str,
         default=None,
@@ -220,7 +226,7 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
-    enable_speculative_decode: bool = True,
+    num_mtp_levels: int = 1,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
@@ -241,7 +247,7 @@ def run_demo(
         stop_at_eos,
     )
 
-    with open_mesh_device(enable_speculative_decode=enable_speculative_decode) as mesh_device:
+    with open_mesh_device(num_mtp_levels=num_mtp_levels) as mesh_device:
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -257,7 +263,7 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
-            enable_speculative_decode=enable_speculative_decode,
+            num_mtp_levels=num_mtp_levels,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
@@ -374,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
-        enable_speculative_decode=args.enable_speculative_decode,
+        num_mtp_levels=args.num_mtp_levels,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
