@@ -59,6 +59,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #elif defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
+// Cached alias of the mailbox region. Needed for atomics.
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MAILBOX_BASE)->x))
 #endif
@@ -109,6 +111,14 @@ constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 // Per-processor "shared globals ready" signal for Quasar DM kernel startup (dm.cc sets WAIT; thread 0 in dmk sets GO).
 constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
 constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
+
+// Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
+// host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
+// num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
+// helpers live in circular_buffer_interface.h; host code packs the same field in
+// global_circular_buffer.cpp.
+constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
+constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -274,6 +284,7 @@ enum debug_assert_type_t {
     DebugAssertRtaOutOfBounds = 8,
     DebugAssertCrtaOutOfBounds = 9,
     DebugAssertHwFault = 10,
+    DebugAssertNCriscNOCPacketTagClearedTripped = 11,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -327,19 +338,6 @@ struct watcher_msg_t {
     struct debug_insert_delays_msg_t debug_insert_delays;
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
-
-#ifndef CODEGEN
-// Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
-// see DebugPrintMemLayout.
-struct dprint_buf_msg_t {
-    union {
-        DebugPrintMemLayout data[PROCESSOR_COUNT];
-        DevicePrintMemoryLayout shared_data;
-    };
-
-    static_assert(sizeof(data) == sizeof(shared_data));
-};
-#endif
 
 // NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
@@ -415,7 +413,7 @@ struct mailboxes_t {
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
                                                            // the compute kernel.
     struct watcher_msg_t watcher;
-    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
+    struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     uint32_t aerisc_run_flag;  // 1: run active ethernet firmware, 0: return to base firmware (active erisc)
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT)  // CODEGEN:skip

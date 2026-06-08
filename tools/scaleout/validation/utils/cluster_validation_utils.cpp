@@ -33,6 +33,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
+#include "umd/device/utils/semver.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -1137,10 +1138,12 @@ void handle_workload_timeout(
     if (validation_config.cabling_descriptor_path.has_value() || validation_config.fsd_path.has_value()) {
         log_output_rank0("Re-running discovery to check for link failures");
         auto& context = tt::tt_metal::MetalContext::instance();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*context.get_cluster().get_driver());
         ctx.physical_system_descriptor.clear();
         auto new_psd = tt::tt_metal::run_physical_system_discovery(
-            driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device(), true, true);
+            *context.get_cluster().get_cluster_desc(),
+            context.get_distributed_context_ptr(),
+            context.rtoptions().get_target_device(),
+            true);
         ctx.physical_system_descriptor.merge(std::move(new_psd));
 
         log_output_rank0("Generating Global System Descriptor in-memory");
@@ -1725,8 +1728,13 @@ void perform_link_reset(
     uint32_t reset_asic_location,
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
-    TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto eth_fw = cluster.get_ethernet_firmware_version();
+    TT_FATAL(
+        cluster.supports_ethernet_link_retraining(),
+        "Link reset is only supported on WORMHOLE_B0 or BLACKHOLE with ETH FW >= 1.9.0 (detected arch: {}, FW: {})",
+        cluster.arch(),
+        eth_fw.has_value() ? eth_fw->to_string() : "unknown");
 
     tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);

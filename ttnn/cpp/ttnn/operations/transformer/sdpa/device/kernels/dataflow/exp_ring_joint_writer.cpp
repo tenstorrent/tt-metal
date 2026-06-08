@@ -19,33 +19,6 @@
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
-// Row-by-row drain of cb_out to DRAM; writes overlap with compute's next row-group push.
-// Padding past end_seq_tile is silently skipped by maybe_write_tile.
-//
-// flush_trid: TRID the caller stamped writes with via noc_async_write_set_trid (0 = default).
-// This file's only call site uses default trid → pass 0. Caller handles any final NoC barrier.
-template <typename ReaderType>
-void write_out_row_by_row(
-    const PaddedAddrGenerator<ReaderType>& cat_out_generator,
-    const Slice& out_slice,
-    const uint32_t end_seq_tile,
-    const uint32_t cb_out,
-    const uint32_t tile_bytes,
-    const uint32_t sbh,
-    const uint32_t flush_trid) {
-    drain_cb_row_grouped(
-        cb_out,
-        out_slice.get_d2_size(),
-        out_slice.get_d3_size(),
-        tile_bytes,
-        sbh,
-        flush_trid,
-        [&](uint32_t row, uint32_t col, uint32_t l1_addr) {
-            cat_out_generator.maybe_write_tile(
-                out_slice.d0, out_slice.d1, out_slice.d2_start + row, out_slice.d3_start + col, end_seq_tile, l1_addr);
-        });
-}
-
 struct QChunkInfo {
     bool is_joint_q;
     Slice out_slice;
@@ -484,7 +457,7 @@ void kernel_main() {
                 // On last ring iteration, drain normalized output to DRAM.
                 if (is_last_ring_iter) {
                     // Default trid here → pass 0 so per-group flush waits exactly for these writes.
-                    write_out_row_by_row(
+                    write_block_row_grouped_trid(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
                         qi.end_seq_tile,

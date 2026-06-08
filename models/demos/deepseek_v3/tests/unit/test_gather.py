@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.ttnn.utils_for_testing import assert_allclose, maybe_trace
 
 DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.uint16]]
@@ -14,7 +15,7 @@ DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.u
 
 @pytest.mark.requires_device(["N150", "N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shapes_dtypes", DEEPSEEK_SHAPES_DTYPES)
 @pytest.mark.parametrize("dim", [3])

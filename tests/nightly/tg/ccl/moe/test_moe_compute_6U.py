@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
 from loguru import logger
 import math
@@ -9,22 +10,22 @@ import os
 import pytest
 import random
 import torch
+
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob.
+# Required to keep compute_matmul_golden's fp32-cast fast path actually
+# parallel — without it, the golden compute can take ~30 s/layer on BH-LB
+# shape instead of ~33 ms.
+torch.set_num_threads(os.cpu_count())
+
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w0_w1_tensor_with_bias,
-    prepare_w2_tensor_for_moe_compute,
-    prepare_w2_tensor_with_bias,
-    DS_PAD_CORES,
-    DS_W0_W1_SHARD_VALS,
-    DS_W2_SHARD_VALS,
-    GPT_PAD_CORES,
-    GPT_W0_W1_SHARD_VALS,
-    GPT_W2_SHARD_VALS,
-    get_weight_core_shard_maps,
-    get_weight_mem_configs,
+    auto_output_width_shard_dim,
+    get_tilize_drain_core,
+    _shard_tiles,
+    _w2_shard_tiles,
 )
 
 from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
@@ -38,12 +39,16 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
-
-# TODO (AM) this should go in a central location
-HIDDEN_TO_SHARD_INFO = {
-    7168: (DS_PAD_CORES, DS_W0_W1_SHARD_VALS, DS_W2_SHARD_VALS),
-    2880: (GPT_PAD_CORES, GPT_W0_W1_SHARD_VALS, GPT_W2_SHARD_VALS),
-}
+MESH_GRAPH_DESC_1x16_LINEAR = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_linear_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x8_LINEAR = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_linear_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_BH_LB_1x8_LINEAR = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto"
+)
+# FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
 def is_mesh_graph_descriptor_set(expected_path):
@@ -51,8 +56,270 @@ def is_mesh_graph_descriptor_set(expected_path):
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
 
+# ---------------------------------------------------------------------------
+# Data-driven model configs for parametrized MoE tests
+# ---------------------------------------------------------------------------
+
+MOE_DEVICE_PARAMS = {
+    "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+    "trace_region_size": 500000,
+}
+
+MOE_DEVICE_PARAMS_LINEAR = {
+    "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+    "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+    "trace_region_size": 500000,
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class MoEMeshConfig:
+    name: str
+    mesh_width: int
+    mesh_graph_desc: str
+    model_configs: tuple
+    device_params: dict
+    use_linear_topology: bool = False
+    num_links: int = 4
+
+    @property
+    def mesh_shape(self):
+        return (1, self.mesh_width)
+
+
+@dataclasses.dataclass(frozen=True)
+class MoEModelConfig:
+    name: str
+    N: int
+    hidden_size: int
+    selected_experts_k: int
+    experts_per_device_values: tuple = (2,)
+    has_bias_values: tuple = (False,)
+    test_modes: tuple = ("correctness",)
+    activation_types: tuple = (MoEActivationFunction.SILU,)
+    num_layers: int = 5
+    num_iterations: int = 3
+    tokens_per_device: int = 32
+    output_height_shard_dim: int = 4
+    marks: tuple = ()
+
+
+# Tier-1 models: deepseek_v3, gpt_oss; perf + correctness when configured.
+#   deepseek_v3: perf no bias; correctness no_bias + bias; gpt_oss: bias only.
+#   correctness: both trace modes; perf: enable_trace only.
+# Tier-2 models: all others on torus only, no bias, trace off, correctness only.
+# Linear default: tier-1 only.
+# MOE_COMPUTE_LINEAR_ALL_MODELS=1: all models on linear meshes (tier rules unchanged).
+# MOE_COMPUTE_FULL=1: every model on every mesh (1x8/1x16 x torus/linear); tier rules unchanged.
+MOE_PRIORITY_MODEL_NAMES = frozenset({"deepseek_v3", "gpt_oss"})
+
+
+def _moe_compute_env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in ("1", "true", "yes")
+
+
+def _include_model_on_mesh(mesh_cfg: MoEMeshConfig, model_cfg: MoEModelConfig) -> bool:
+    if mesh_cfg.use_linear_topology:
+        if _moe_compute_env_flag("MOE_COMPUTE_LINEAR_ALL_MODELS"):
+            return True
+        return model_cfg.name in MOE_PRIORITY_MODEL_NAMES
+    return True
+
+
+def _bias_values_for_case(model_cfg: MoEModelConfig, test_mode: str) -> tuple:
+    if model_cfg.name == "gpt_oss":
+        return (True,)
+    if model_cfg.name == "deepseek_v3":
+        if test_mode == "perf":
+            return (False,)
+        return model_cfg.has_bias_values
+    return (False,)
+
+
+def _test_modes_for_model(model_cfg: MoEModelConfig) -> tuple:
+    if model_cfg.name in MOE_PRIORITY_MODEL_NAMES:
+        modes = tuple(m for m in ("perf", "correctness") if m in model_cfg.test_modes)
+        return modes if modes else ("correctness",)
+    return ("correctness",)
+
+
+def _trace_values_for_case(model_cfg: MoEModelConfig, test_mode: str) -> tuple:
+    if test_mode == "perf":
+        return (True,)
+    if model_cfg.name in MOE_PRIORITY_MODEL_NAMES:
+        return (False, True)
+    return (False,)
+
+
+def _expand_model_configs(
+    configs,
+    *,
+    bias_values_fn=_bias_values_for_case,
+    test_modes_fn=_test_modes_for_model,
+    trace_values_fn=_trace_values_for_case,
+):
+    """Expand model configs into pytest.param entries (test_mode, has_bias, epd, act, enable_trace)."""
+    expanded = []
+    for cfg in configs:
+        for test_mode in test_modes_fn(cfg):
+            for has_bias in bias_values_fn(cfg, test_mode):
+                for epd in cfg.experts_per_device_values:
+                    for act in cfg.activation_types:
+                        for enable_trace in trace_values_fn(cfg, test_mode):
+                            bias_tag = "bias" if has_bias else "no_bias"
+                            act_tag = act.name.lower()
+                            trace_tag = "enable_trace" if enable_trace else "disable_trace"
+                            expanded.append(
+                                pytest.param(
+                                    cfg,
+                                    test_mode,
+                                    has_bias,
+                                    epd,
+                                    act,
+                                    enable_trace,
+                                    id=f"{cfg.name}-{test_mode}-{bias_tag}-{epd}experts_per_device-{act_tag}-{trace_tag}",
+                                    marks=cfg.marks,
+                                )
+                            )
+    return expanded
+
+
+def _all_moe_model_configs():
+    """Union of 1x8 and 1x16 model tables (deduped by name)."""
+    by_name = {}
+    for cfg in _MODELS_1x8 + _MODELS_1x16:
+        by_name[cfg.name] = cfg
+    return tuple(by_name.values())
+
+
+def _models_for_mesh(mesh_cfg: MoEMeshConfig):
+    if _moe_compute_env_flag("MOE_COMPUTE_FULL"):
+        return _all_moe_model_configs()
+    return tuple(m for m in mesh_cfg.model_configs if _include_model_on_mesh(mesh_cfg, m))
+
+
+def _expand_mesh_model_test_cases(mesh_configs):
+    """Expand mesh + model configs into pytest.param entries for parametrized MoE model tests."""
+    cases = []
+    for mesh_cfg in mesh_configs:
+        for model_param in _expand_model_configs(_models_for_mesh(mesh_cfg)):
+            desc_skip = pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(mesh_cfg.mesh_graph_desc),
+                reason=f"{mesh_cfg.name} tests require TT_MESH_GRAPH_DESC_PATH={mesh_cfg.mesh_graph_desc}",
+            )
+            cases.append(
+                pytest.param(
+                    mesh_cfg.device_params,
+                    mesh_cfg,
+                    mesh_cfg.mesh_shape,
+                    mesh_cfg.mesh_shape,
+                    *model_param.values,
+                    marks=list(model_param.marks) + [desc_skip],
+                    id=f"{mesh_cfg.name}-{model_param.id}",
+                )
+            )
+    return cases
+
+
+# fmt: off
+_MODELS_1x16 = [
+    MoEModelConfig("qwen3_omni_talker",   N=384,  hidden_size=1024, selected_experts_k=6),
+    MoEModelConfig("qwen3_omni_thinker",  N=768,  hidden_size=2048, selected_experts_k=8),
+    MoEModelConfig("qwen35_35b",          N=512,  hidden_size=2048, selected_experts_k=8),
+    MoEModelConfig("qwen3_235b",          N=1536, hidden_size=4096, selected_experts_k=8),
+    MoEModelConfig("qwen35_397b",         N=1024, hidden_size=4096, selected_experts_k=10),
+    MoEModelConfig("glm_47",              N=1536, hidden_size=5120, selected_experts_k=8),
+    MoEModelConfig("glm5",                N=2048, hidden_size=6144, selected_experts_k=8),
+    MoEModelConfig("deepseek_v3",         N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), test_modes=("perf", "correctness")),
+    MoEModelConfig("kimi_k25",            N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), num_layers=3, num_iterations=2),
+    MoEModelConfig("deepseek_v4_flash",   N=2048, hidden_size=4096, selected_experts_k=6),
+    MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
+                   marks=(pytest.mark.xfail(reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
+    MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
+                   marks=(pytest.mark.xfail(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
+    MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
+                   marks=(pytest.mark.xfail(reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
+]
+
+_MODELS_1x8 = [
+    MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
+    MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
+    MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
+]
+
+_MODELS_BH_LB_1x8 = [
+    MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), tokens_per_device=8, num_layers=1, num_iterations=2, activation_types=(MoEActivationFunction.SWIGLU,)),
+    MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
+]
+
+_MOE_MESH_CONFIGS = [
+    MoEMeshConfig("1x8-torus",        8, MESH_GRAPH_DESC_1x8,              _MODELS_1x8,       MOE_DEVICE_PARAMS),
+    MoEMeshConfig("1x16-torus",      16, MESH_GRAPH_DESC_1x16,             _MODELS_1x16,      MOE_DEVICE_PARAMS),
+    MoEMeshConfig("1x8-linear",       8, MESH_GRAPH_DESC_1x8_LINEAR,       _MODELS_1x8,       MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True),
+    MoEMeshConfig("1x16-linear",     16, MESH_GRAPH_DESC_1x16_LINEAR,      _MODELS_1x16,      MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True,),
+    MoEMeshConfig("1x8-linear-bh_lb", 8, MESH_GRAPH_DESC_BH_LB_1x8_LINEAR, _MODELS_BH_LB_1x8, MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True, num_links=2),
+]
+# fmt: on
+
+MOE_COMPUTE_MODEL_TEST_CASES = _expand_mesh_model_test_cases(_MOE_MESH_CONFIGS)
+
+
+def _run_model_test(
+    mesh_device,
+    mesh_shape,
+    enable_trace,
+    model_cfg,
+    test_mode,
+    has_bias,
+    experts_per_device,
+    activation_type,
+    num_links,
+    topology=None,
+):
+    if test_mode == "perf":
+        selected_experts_k = 1
+        num_layers = 1
+        num_iterations = 5
+    else:
+        selected_experts_k = model_cfg.selected_experts_k
+        num_layers = model_cfg.num_layers
+        num_iterations = model_cfg.num_iterations
+
+    _run_moe_compute_impl(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=1,
+        experts_per_device=experts_per_device,
+        tokens_per_device=model_cfg.tokens_per_device,
+        selected_experts_k=selected_experts_k,
+        num_layers=num_layers,
+        num_iterations=num_iterations,
+        N=model_cfg.N,
+        hidden_size=model_cfg.hidden_size,
+        output_height_shard_dim=model_cfg.output_height_shard_dim,
+        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
+        dtype=ttnn.bfloat16,
+        enable_trace=enable_trace,
+        activation_type=activation_type,
+        has_bias=has_bias,
+        topology=topology,
+        num_links=num_links,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Validation functions
+# ---------------------------------------------------------------------------
 def validate_per_expert_tokens(
-    mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+    mesh_device,
+    experts_per_device,
+    num_devices,
+    per_expert_total_tokens_output_tensor,
+    expert_token_counts,
+    worker_mcast_bbox=None,
 ):
     logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
     per_expert_tokens_all_passed = True
@@ -64,7 +331,6 @@ def validate_per_expert_tokens(
     # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
     core_range = mesh_device.compute_with_storage_grid_size()
     num_cores = core_range.x * core_range.y
     expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
@@ -84,22 +350,99 @@ def validate_per_expert_tokens(
     per_expert_total_tokens_torch = per_expert_total_tokens_torch.reshape(
         (num_devices, num_cores, per_expert_row_elements)
     )
-    for device_idx in range(num_devices):
-        for c in range(num_cores):
-            device_counts = per_expert_total_tokens_torch[device_idx][c]
+    # The op allocates the per_expert_total_tokens output sharded across the FULL
+    # compute_with_storage_grid_size() (see `compute_output_specs` in
+    # moe_compute_device_operation.cpp), but
+    # the kernel only multicasts the counts to its `all_worker_cores_bounding_box`
+    # (= tilize + matmul + combine cores). On WH 6U the op uses the full grid, so every
+    # core is inside the bbox and every shard slot gets the count via mcast. On BH single
+    # LB the op uses ~110 of the grid's 130 cores, so shard slots outside the bbox hold
+    # the initial-allocation zero. When `worker_mcast_bbox` is provided, skip out-of-bbox
+    # slots explicitly (strict in-bbox check). When omitted (legacy callers), fall back
+    # to the heuristic: treat actual=0/expected>0 as off-bbox; flag any other mismatch.
+    all_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_range.x - 1, core_range.y - 1),
+            ),
+        }
+    )
+    grid_cores_row_major = ttnn.corerange_to_cores(all_core_range_set, row_wise=True)
+    assert len(grid_cores_row_major) == num_cores
 
-            for local_exp_idx in range(experts_per_device):
-                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-                actual_count = device_counts[local_exp_idx].item()
+    if worker_mcast_bbox is not None:
 
-                if actual_count != expected_count:
-                    logger.warning(
-                        f"  Device {device_idx}, Expert {local_exp_idx}: "
-                        f"count mismatch - expected {expected_count}, got {actual_count}"
-                    )
-                    per_expert_tokens_all_passed = False
-                else:
-                    logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+        def core_in_mcast_bbox(core_coord):
+            return (
+                worker_mcast_bbox.start.x <= core_coord.x <= worker_mcast_bbox.end.x
+                and worker_mcast_bbox.start.y <= core_coord.y <= worker_mcast_bbox.end.y
+            )
+
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c, core_coord in enumerate(grid_cores_row_major):
+                if not core_in_mcast_bbox(core_coord):
+                    continue
+
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if device_idx == 0:
+                    cores_per_device_validated += 1
+    else:
+        # Legacy heuristic: treat actual=0 with expected>0 as "core not in mcast bbox"
+        # and skip; only flag truly inconsistent values.
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c in range(num_cores):
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+
+                core_in_bbox = False
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count == 0 and expected_count > 0:
+                        continue
+
+                    core_in_bbox = True
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: "
+                            f"count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if core_in_bbox and device_idx == 0:
+                    cores_per_device_validated += 1
+
+    # Sanity: ensure the mcast actually reached a meaningful number of cores per device.
+    # (Catches the regression where the mcast bbox shrinks to 0 by accident.)
+    if cores_per_device_validated == 0:
+        logger.warning("No cores received per-expert counts via mcast — bbox calculation broken?")
+        per_expert_tokens_all_passed = False
+    else:
+        logger.info(
+            f"Per-expert counts validated on {cores_per_device_validated} cores per device "
+            f"(of {num_cores} grid cores total)"
+        )
 
     return per_expert_tokens_all_passed
 
@@ -337,6 +680,7 @@ PCC_THRESHOLD_MATMUL_WITH_BIAS = 0.98799
 ATOL_THRESHOLD = 700
 SWIGLU_PCC_THRESHOLD = 0.984
 SILU_PCC_THRESHOLD = 0.986
+GELU_PCC_THRESHOLD = 0.986
 
 
 def _get_base_pcc_threshold(activation_type, has_bias):
@@ -346,8 +690,10 @@ def _get_base_pcc_threshold(activation_type, has_bias):
     act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
         act_threshold = SWIGLU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.SILU:  # SILU
+    elif activation_type == MoEActivationFunction.SILU:
         act_threshold = SILU_PCC_THRESHOLD
+    elif activation_type == MoEActivationFunction.GELU:
+        act_threshold = GELU_PCC_THRESHOLD
     else:
         raise TypeError("Invalid Activation type")
 
@@ -519,6 +865,9 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
     return combine_all_passed
 
 
+# ---------------------------------------------------------------------------
+# Tensor creation functions
+# ---------------------------------------------------------------------------
 def create_torch_w0(L, E, K, N):
     """
     Create torch w0 weight tensor.
@@ -743,6 +1092,9 @@ def gen_sparse_buffer_and_indices(
     return sparse_buffer, expert_indices, expert_scores, original_tokens
 
 
+# ---------------------------------------------------------------------------
+# Golden computation functions
+# ---------------------------------------------------------------------------
 def compute_selective_tilize_golden(
     sparse_buffer, expert_indices, expert_scores, expert_mapping, mesh_shape, cluster_axis
 ):
@@ -955,6 +1307,19 @@ def compute_matmul_golden(
     # (L, E/D, N, K) -> (L, E, N, K)
     torch_w2 = torch_w2.repeat([1, devices, 1, 1])
 
+    # Cast to fp32 for CPU matmul: torch's bf16 CPU matmul falls through to a
+    # single-threaded reference loop on many builds (even with OMP/MKL enabled),
+    # making the golden compute take tens of minutes on large shapes. fp32 uses
+    # MKL/oneDNN parallel kernels and is ~100x faster here. Result is cast back
+    # to the original dtype before return so downstream golden compute is
+    # unchanged. Verified on BH single-LB run: bf16 path hung past 15 min in
+    # `compute_matmul_golden`; fp32 path completes in seconds.
+    _orig_dtype = torch_input_ref.dtype
+    torch_input_ref = torch_input_ref.float()
+    torch_w0 = torch_w0.float()
+    torch_w1 = torch_w1.float()
+    torch_w2 = torch_w2.float()
+
     # Compute gate activations for each expert
     # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
     torch_w0_output_ref = torch_input_ref @ torch_w0
@@ -962,13 +1327,13 @@ def compute_matmul_golden(
         # True PyTorch MoE math: x @ W + bias.
         # Bias shape: (L, E, N) - broadcasts across tokens (L, E, T, N) automatically.
         # Weights are replicated per-device, so bias must be too.
-        b0 = torch_b0.repeat([1, devices, 1])  # (L, E, N)
+        b0 = torch_b0.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w0_output_ref = torch_w0_output_ref + b0.unsqueeze(2)  # broadcast T dimension
 
     torch_w1_output_ref = torch_input_ref @ torch_w1
     if torch_b1 is not None:
         # Same reasoning as b0.
-        b1 = torch_b1.repeat([1, devices, 1])  # (L, E, N)
+        b1 = torch_b1.repeat([1, devices, 1]).float()  # (L, E, N)
         torch_w1_output_ref = torch_w1_output_ref + b1.unsqueeze(2)
 
     if activation_type == MoEActivationFunction.SILU:
@@ -978,18 +1343,24 @@ def compute_matmul_golden(
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.GELU:
+        torch_gelu_output_ref = torch.nn.functional.gelu(torch_w0_output_ref, approximate="tanh")
+        torch_intermediate_ref = torch_gelu_output_ref * torch_w1_output_ref  # (L, E, T, N)
     else:
         raise ValueError(f"Unsupported activation type: {activation_type}")
 
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
     if torch_b2 is not None:
-        # Same reasoning as b0: true PyTorch bias addition.
-        b2 = torch_b2.repeat([1, devices, 1])  # (L, E, K)
+        # Same reasoning as b0: true PyTorch bias addition, replicated per device.
+        b2 = torch_b2.repeat([1, devices, 1]).float()  # (L, E, K)
         torch_output_ref = torch_output_ref + b2.unsqueeze(2)
 
+    # Cast back to the input dtype to keep downstream golden compute unchanged.
+    torch_output_ref = torch_output_ref.to(_orig_dtype)
+
     # pull device dim back out for comparison
-    # (L, E, T, H) -> (L, D, E/D, T, H)
+    # (L, E, T, H) -> (L, devices, E/devices, T, H)
     return torch_output_ref.reshape(layers, devices, experts // devices, tokens, hidden)
 
 
@@ -1069,64 +1440,8 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
     )
 
 
-# Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 or 1x8 mesh descriptor before running
-@pytest.mark.skipif(
-    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device",
-    [
-        pytest.param(
-            (1, 8),
-            (1, 8),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-            ),
-            id="1x8",
-        ),
-        pytest.param(
-            (1, 16),
-            (1, 16),
-            marks=pytest.mark.skipif(
-                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-            ),
-            id="1x16",
-        ),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("experts_per_device", [2])
-@pytest.mark.parametrize("tokens_per_device", [3, 8, 16, 32])  # Collapsed batch * seq_len
-@pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations",
-    [(1, 1, 5), (8, 5, 3)],
-    ids=["perf", "accuracy"],
-)
-@pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("output_height_shard_dim", [4])
-@pytest.mark.parametrize("output_width_shard_dim", [4])
-@pytest.mark.parametrize("activation_type", [MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU])
-@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @torch.no_grad()
-def run_moe_compute_test(
+def _run_moe_compute_impl(
     mesh_device,
     mesh_shape,
     cluster_axis,
@@ -1143,10 +1458,10 @@ def run_moe_compute_test(
     enable_trace,
     activation_type,
     has_bias,
+    num_links,
+    topology=None,
 ):
-    """
-    Core test execution helper function.
-    """
+    """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     torch.manual_seed(2003)
     random.seed(2003)
 
@@ -1181,8 +1496,14 @@ def run_moe_compute_test(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core is core (6,9) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
+    # Drain tilize core: per-arch coordinate where indices/scores are L1-sharded so the
+    # op kernel can read them via NOC. Must match the op's drain tilize core (tilize_cores[0]
+    # in moe_compute_program_factory.cpp's get_layout()), or non-drain tilize cores will
+    # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
+    #   WH (max_tilize_cores[0]): (6, 9)
+    #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
+    drain_core_coord = get_tilize_drain_core()
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -1259,17 +1580,12 @@ def run_moe_compute_test(
         e_t_goldens.append(golden_e_t)
 
         # Create input tensors
-        # NOTE:
-        # - when running multiple layers we initially create tt_sparse_buffer, tt_expert_indices and tt_expert_scores in DRAM, we'll move to L1 before running moe_compute
-        # - we're extremely tight on L1 for a single invocation of the op
-        if num_layers == 1:
-            init_sparse_mem_config = sparse_mem_config
-            init_expert_indices_mem_config = expert_indices_mem_config
-            init_expert_scores_mem_config = expert_scores_mem_config
-        else:
-            init_sparse_mem_config = ttnn.DRAM_MEMORY_CONFIG
-            init_expert_indices_mem_config = ttnn.DRAM_MEMORY_CONFIG
-            init_expert_scores_mem_config = ttnn.DRAM_MEMORY_CONFIG
+        # NOTE: we're extremely tight on L1 for a single invocation of the op.
+        # When running multiple layers, all inputs go to DRAM and get moved to L1
+        # per-layer via to_memory_config.
+        init_sparse_mem_config = sparse_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+        init_expert_indices_mem_config = expert_indices_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
+        init_expert_scores_mem_config = expert_scores_mem_config if num_layers == 1 else ttnn.DRAM_MEMORY_CONFIG
 
         ### Sparse buffer is sharded across devices (dim 0) ###
         tt_sparse_buffer = ttnn.from_torch(
@@ -1320,14 +1636,6 @@ def run_moe_compute_test(
     # CREATE MATMUL INPUT TENSORS
     #########################################
     logger.info(f"Creating matmul goldens and input tensors")
-
-    # --------------------------------------------------------------------------
-    # Shard grid
-    # --------------------------------------------------------------------------
-
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(
-        mesh_device, *HIDDEN_TO_SHARD_INFO[hidden_size]
-    )
 
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
@@ -1389,80 +1697,96 @@ def run_moe_compute_test(
     )
 
     # Get memory configurations for weights (handles bias padding)
-    w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
-        num_layers,
-        experts_per_device,
-        hidden_size,
-        N,
-        w0_w1_shard_map,
-        w2_shard_map,
-        dram_core_range_set,
+    weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
+        mesh_device,
+        num_layers=num_layers,
+        experts_per_device=experts_per_device,
+        hidden_size=hidden_size,
+        intermediate_size=N,
         has_bias=has_bias,
     )
+    w0_w1_mem_config = weight_mem_configs.w0_w1
+    w2_mem_config = weight_mem_configs.w2
 
     # ------------------------------------------------------------------------
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    if has_bias:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    else:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+    # Upload raw weights/biases to mesh (replicated, bfloat16, ROW_MAJOR) so the
+    # C++ ttnn.experimental.prepare_* helpers can do the layout transformation on
+    # device, then convert to the DRAM-sharded bfloat4_b TILE layout the kernel
+    # consumes.
+    def _upload_raw(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    # Create tt_w0_w1 tensor with DRAM sharding
-    tt_w0_w1 = ttnn.from_torch(
-        torch_w0_w1_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    tt_w0_raw = _upload_raw(torch_w0)
+    tt_w1_raw = _upload_raw(torch_w1)
+    tt_w2_raw = _upload_raw(torch_w2)
+    if has_bias:
+        tt_b0_raw = _upload_raw(torch_b0)
+        tt_b1_raw = _upload_raw(torch_b1)
+        tt_b2_raw = _upload_raw(torch_b2)
 
     # ------------------------------------------------------------------------
-    # Prepare w2 tensor (padded and reordered)
+    # Prepare w0_w1 tensor (interleaved, padded, and reordered) on device.
     if has_bias:
-        torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_with_bias(
+            tt_w0_raw,
+            tt_w1_raw,
+            tt_b0_raw,
+            tt_b1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
         )
+        ttnn.deallocate(tt_b0_raw)
+        ttnn.deallocate(tt_b1_raw)
     else:
-        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
+            tt_w0_raw,
+            tt_w1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
         )
+    ttnn.deallocate(tt_w0_raw)
+    ttnn.deallocate(tt_w1_raw)
 
-    if False:  # has_bias:
-        # Verify prepare_w2_tensor_with_bias correctness:
-        # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
-        # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
-        # (bias tile is at position Nt, after all ring-rotated weight tiles).
-        #
-        # Note: different cores receive different K-column slices, so bias row values
-        # differ per core. The invariant is positional: bias is at N, not ring-rotated
-        # into an earlier N position.
-        bias_rows = torch_w2_reordered[:, :, :, :, N : N + ttnn.TILE_SIZE, :]  # (12, L, E, 5, 32, 128)
-        assert bias_rows.abs().max() > 0.1, (
-            "W2 bias row (at N-dim position N:N+TILE_SIZE) appears to be all zeros — "
-            "bias may not have been appended at the correct position"
-        )
-        # Groups 0-3 (dim 3, indices 0:4) are fully populated from unpadded bias data for all
-        # 12 cores; group 4 may have trailing padding zeros for some cores, so exclude it.
-        first_four_groups = bias_rows[:, :, :, :4, :, :]  # (12, L, E, 4, 32, 128)
-        assert torch.isfinite(first_four_groups).all(), "W2 bias row groups 0-3 contain non-finite values"
-        assert (
-            first_four_groups.abs().max() > 1e-3
-        ), "W2 bias row groups 0-3 appear all-near-zero — bias may not be packed at N:N+TILE_SIZE"
-
-    # Create tt_w2 tensor with DRAM sharding
-    tt_w2 = ttnn.from_torch(
-        torch_w2_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
+        tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=w0_w1_mem_config
     )
+    ttnn.deallocate(tt_w0_w1_prepped)
+
+    # ------------------------------------------------------------------------
+    # Prepare w2 tensor (padded and reordered) on device.
+    if has_bias:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_with_bias(
+            tt_w2_raw,
+            tt_b2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+        )
+        ttnn.deallocate(tt_b2_raw)
+    else:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_for_moe_compute(
+            tt_w2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+        )
+    ttnn.deallocate(tt_w2_raw)
+
+    tt_w2 = ttnn.experimental.quantize_weights_via_host(
+        tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=w2_mem_config
+    )
+    ttnn.deallocate(tt_w2_prepped)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
@@ -1529,6 +1853,11 @@ def run_moe_compute_test(
 
     def run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id):
         """Core moe_compute operation"""
+        # Forward an explicit topology when supplied. The op normally derives this from the
+        # fabric config + tensor coverage via get_usable_topology(), but that heuristic
+        # marks any tensor that spans a full mesh row as WRAP/Ring — incorrect for
+        # physically-line meshes (e.g. BH single Loudbox p150_x8). When set, this lets the
+        # caller force Linear and avoid forwarding requests across non-existent wrap edges.
         return ttnn.experimental.moe_compute(
             tt_sparse_buffer,
             tt_expert_indices,
@@ -1538,8 +1867,11 @@ def run_moe_compute_test(
             tt_w2,
             layer_id=layer_id,
             output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
             has_bias=has_bias,
             cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
@@ -1617,6 +1949,9 @@ def run_moe_compute_test(
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
+    worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+    )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1641,7 +1976,12 @@ def run_moe_compute_test(
             # ========== Per Expert Total Tokens Tensor Validation ==========
             expert_token_counts = per_expert_tokens_goldens[layer_id]
             if not validate_per_expert_tokens(
-                mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+                mesh_device,
+                experts_per_device,
+                num_devices,
+                per_expert_total_tokens_output_tensor,
+                expert_token_counts,
+                worker_mcast_bbox,
             ):
                 per_expert_tokens_all_passed = False
 
@@ -1704,143 +2044,184 @@ def run_moe_compute_test(
     assert combine_all_passed, "Combine output tensor verification failed!"
 
 
-# Test for DeepSeek configuration - requires 1x16 mesh
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"DeepSeek test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
-)
+# ---------------------------------------------------------------------------
+# Parametrized model tests (1x8 / 1x16, torus and linear topologies)
+#
+# Default matrix (avoids combinatorial explosion):
+#   Tier 1 — deepseek_v3, gpt_oss: perf + correctness; deepseek correctness includes bias; perf uses enable_trace only.
+#   Tier 2 — remaining models: torus only, no bias, correctness, trace off.
+#   Linear — tier 1 only.
+#
+# Development overrides:
+#   MOE_COMPUTE_LINEAR_ALL_MODELS=1  — all models on linear meshes (tier rules unchanged).
+#   MOE_COMPUTE_FULL=1             — all models x all meshes (1x8/1x16 x torus/linear); tier rules unchanged.
+# ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
-        }
-    ],
-    indirect=True,
+    "device_params, mesh_cfg, mesh_shape, mesh_device, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace",
+    MOE_COMPUTE_MODEL_TEST_CASES,
+    indirect=["device_params", "mesh_device"],
 )
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 16), (1, 16))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
-@pytest.mark.parametrize("has_bias", [False, True])
-def test_moe_compute_deepseek(
+def test_moe_compute(
     mesh_device,
     mesh_shape,
-    has_bias,
+    mesh_cfg,
     enable_trace,
+    model_cfg,
     test_mode,
+    has_bias,
+    experts_per_device,
+    activation_type,
 ):
-    """Test MoE compute for DeepSeek configuration on 1x16 mesh."""
+    from ttnn.operations.ccl import Topology
 
-    # DeepSeek specific configuration
-    cluster_axis = 1
-    experts_per_device = 2
-    tokens_per_device = 32
-    N = 2048
-    hidden_size = 7168
-    output_height_shard_dim = 4
-    output_width_shard_dim = 4  # DeepSeekRingConfig::OUTPUT_WIDTH_SHARD_DIM
-    dtype = ttnn.bfloat16
-    activation_type = MoEActivationFunction.SILU
-
-    # Test mode specific parameters
-    if test_mode == "perf":
-        selected_experts_k = 1
-        num_layers = 1
-        num_iterations = 5
-    else:  # correctness
-        selected_experts_k = 8
-        num_layers = 5
-        num_iterations = 3
-
-    run_moe_compute_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        cluster_axis=cluster_axis,
-        experts_per_device=experts_per_device,
-        tokens_per_device=tokens_per_device,
-        selected_experts_k=selected_experts_k,
-        num_layers=num_layers,
-        num_iterations=num_iterations,
-        N=N,
-        hidden_size=hidden_size,
-        output_height_shard_dim=output_height_shard_dim,
-        output_width_shard_dim=output_width_shard_dim,
-        dtype=dtype,
-        enable_trace=enable_trace,
-        activation_type=activation_type,
-        has_bias=has_bias,
+    topology = Topology.Linear if mesh_cfg.use_linear_topology else None
+    _run_model_test(
+        mesh_device,
+        mesh_shape,
+        enable_trace,
+        model_cfg,
+        test_mode,
+        has_bias,
+        experts_per_device,
+        activation_type,
+        topology=topology,
+        num_links=mesh_cfg.num_links,
     )
 
 
-# Test for GPT-OSS configuration - requires 1x8 mesh
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
-    reason=f"GPT-OSS test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize("enable_trace", [False, True])
-@pytest.mark.parametrize("test_mode", ["perf", "correctness"])
-@pytest.mark.parametrize("has_bias", [True])
-def test_moe_compute_gpt_oss(
-    mesh_device,
-    mesh_shape,
-    enable_trace,
-    has_bias,
-    test_mode,
-):
-    """Test MoE compute for GPT-OSS configuration on 1x8 mesh."""
+# ---------------------------------------------------------------------------
+# CPU-only unit tests for formula-based shard distribution (no hardware required)
+# ---------------------------------------------------------------------------
 
-    # GPT-OSS specific configuration
-    cluster_axis = 1
-    experts_per_device = 4
-    tokens_per_device = 32
-    N = 2880
-    hidden_size = 2880
-    output_height_shard_dim = 4
-    output_width_shard_dim = 3  # GptRingConfig::OUTPUT_WIDTH_SHARD_DIM
-    dtype = ttnn.bfloat16
-    activation_type = MoEActivationFunction.SILU
 
-    # Test mode specific parameters
-    if test_mode == "perf":
-        selected_experts_k = 1
-        num_layers = 1
-        num_iterations = 5
-    else:  # correctness
-        selected_experts_k = 8
-        num_layers = 5
-        num_iterations = 3
+def test_shard_tiles_deepseek_w0w1():
+    """DS: Nt=64, n_cores=12 → big=6, small=5; big at positions where (i*4)%12 < 4 = {0,3,6,9}."""
+    n_tiles, n_cores = 64, 12
+    result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
+    assert sum(result) == n_tiles
+    assert result[0] == 6  # (0*4)%12=0 < 4 → big
+    assert result[1] == 5  # (1*4)%12=4, not < 4 → small
+    assert result[3] == 6  # (3*4)%12=0 < 4 → big
+    assert result[6] == 6
+    assert result[9] == 6
+    assert all(v in (5, 6) for v in result)
 
-    run_moe_compute_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        cluster_axis=cluster_axis,
-        experts_per_device=experts_per_device,
-        tokens_per_device=tokens_per_device,
-        selected_experts_k=selected_experts_k,
-        num_layers=num_layers,
-        num_iterations=num_iterations,
-        N=N,
-        hidden_size=hidden_size,
-        output_height_shard_dim=output_height_shard_dim,
-        output_width_shard_dim=output_width_shard_dim,
-        dtype=dtype,
-        enable_trace=enable_trace,
-        activation_type=activation_type,
-        has_bias=has_bias,
-    )
+
+def test_shard_tiles_gpt_w0w1():
+    """GPT: Nt=90, n_cores=12 → big=8, small=7; exactly 6 big cores."""
+    n_tiles, n_cores = 90, 12
+    result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
+    assert sum(result) == n_tiles
+    assert result.count(8) == 6
+    assert result.count(7) == 6
+
+
+def test_shard_tiles_glm5_w0w1():
+    """GLM-5: Nt=64 (same as DS), same distribution."""
+    result = [_shard_tiles(64, c, 12) for c in range(12)]
+    assert sum(result) == 64
+    assert result[0] == 6 and result[3] == 6  # same big positions as DS
+
+
+def test_shard_tiles_exactly_divisible():
+    """DS V4 Pro: Nt=96, 96%12=0 → all cores get 8."""
+    result = [_shard_tiles(96, c, 12) for c in range(12)]
+    assert all(v == 8 for v in result)
+    assert sum(result) == 96
+
+
+def test_w2_shard_tiles_deepseek():
+    """DS: Ht=224, Nt=64, n=12, n_big_nt+n_big_ht=4+8=12 → complement.
+    W0W1-big cores {0,3,6,9} get small W2 (18 tiles);
+    W0W1-small cores get big W2 (19 tiles)."""
+    result = [_w2_shard_tiles(224, c, 64, 12) for c in range(12)]
+    assert sum(result) == 224
+    assert result[0] == 18  # W0W1-big → small W2
+    assert result[1] == 19  # W0W1-small → big W2
+    assert result[3] == 18
+    assert result[2] == 19
+
+
+def test_w2_shard_tiles_glm5():
+    """GLM-5: Ht=192, Nt=64, n=12 → Ht%12=0 so n_big_ht=0.
+    n_big_nt+n_big_ht=4+0≠12 → fallback to _shard_tiles(192,c,12)=16 uniform."""
+    result = [_w2_shard_tiles(192, c, 64, 12) for c in range(12)]
+    assert all(v == 16 for v in result)
+    assert sum(result) == 192
+
+
+def test_w2_shard_tiles_complementary_off():
+    """When n_big_nt + n_big_ht != n_cores, _w2_shard_tiles falls back to _shard_tiles.
+
+    Ht=224, Nt=96, n=12: n_big_nt=96%12=0, n_big_ht=224%12=8, 0+8!=12 -> fallback.
+    """
+    Ht, Nt, n = 224, 96, 12
+    result = [_w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
+    fallback = [_shard_tiles(Ht, c, n) for c in range(n)]
+    assert result == fallback, "Expected fallback to _shard_tiles when complementary condition not met"
+    assert sum(result) == Ht
+
+
+def test_w2_shard_tiles_complementary_off_another():
+    """Ht=160, Nt=64, n=12: n_big_nt=4, n_big_ht=4, 4+4=8!=12 -> fallback."""
+    Ht, Nt, n = 160, 64, 12
+    result = [_w2_shard_tiles(Ht, c, Nt, n) for c in range(n)]
+    fallback = [_shard_tiles(Ht, c, n) for c in range(n)]
+    assert result == fallback
+    assert sum(result) == Ht
+
+
+def test_w2_shard_tiles_dsv4_flash():
+    """DS V4 Flash: Ht=128, Nt=64, n=12. n_big_nt=4, n_big_ht=8, 4+8=12 → complement."""
+    result = [_w2_shard_tiles(128, c, 64, 12) for c in range(12)]
+    assert sum(result) == 128
+    assert result[0] == 128 // 12  # W0W1-big → small W2
+    assert result[1] == 128 // 12 + 1  # W0W1-small → big W2
+
+
+def test_w2_shard_tiles_gpt():
+    """GPT: Ht=90, Nt=90, n=12. n_big_nt=6, n_big_ht=6, 6+6=12 → complement."""
+    result = [_w2_shard_tiles(90, c, 90, 12) for c in range(12)]
+    assert sum(result) == 90
+    assert result.count(8) + result.count(7) == 12
+
+
+def test_auto_output_width_shard_dim():
+    assert auto_output_width_shard_dim(7168) == 4  # DS: Ht=224, 224%4=0
+    assert auto_output_width_shard_dim(2880) == 3  # GPT: Ht=90, 90%4≠0, 90%3=0
+    assert auto_output_width_shard_dim(6144) == 4  # GLM-5: Ht=192, 192%4=0
+    assert auto_output_width_shard_dim(8192) == 4  # Ling-1T: Ht=256
+    assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
+    assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
+    assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
+
+
+def test_shard_tiles_total_always_correct():
+    """Property: sum of all _shard_tiles == n_tiles, for all interesting model shapes."""
+    shapes = [(64, 12), (90, 12), (96, 12), (192, 12), (48, 12), (128, 12), (224, 12), (256, 12)]
+    for n_tiles, n_cores in shapes:
+        result = [_shard_tiles(n_tiles, c, n_cores) for c in range(n_cores)]
+        assert sum(result) == n_tiles, f"Failed for n_tiles={n_tiles}, n_cores={n_cores}"
+
+
+def test_intermediate_tiles_must_exceed_core_count():
+    """Verify that configurations with intermediate_tiles < n_cores are detectable.
+
+    The C++ validate function enforces intermediate_tiles >= matmul_num_cores
+    via TT_FATAL. This test validates the invariant at the formula level:
+    if intermediate_size / 32 < n_cores, the _shard_tiles distribution degenerates
+    (some cores get 0 tiles).
+    """
+    n_cores = 12
+    # intermediate_size = 256 -> intermediate_tiles = 8, which is < 12
+    small_intermediate_tiles = 256 // 32  # = 8
+    assert small_intermediate_tiles < n_cores
+    shards = [_shard_tiles(small_intermediate_tiles, c, n_cores) for c in range(n_cores)]
+    # At least one core gets 0 tiles -- degenerate, triggers TT_FATAL on device
+    assert any(s == 0 for s in shards), "Expected degenerate shard distribution with 0-tile cores"
+    assert sum(shards) == small_intermediate_tiles
+
+    # Boundary: intermediate_tiles == n_cores -> exactly 1 tile per core, valid
+    boundary_tiles = n_cores
+    boundary_shards = [_shard_tiles(boundary_tiles, c, n_cores) for c in range(n_cores)]
+    assert all(s == 1 for s in boundary_shards)

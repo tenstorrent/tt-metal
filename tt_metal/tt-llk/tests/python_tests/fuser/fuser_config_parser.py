@@ -5,7 +5,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Annotated, List, Optional, Tuple, Union
+from typing import Annotated, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -24,7 +24,7 @@ from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_config"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
 )
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -68,6 +68,9 @@ class OperandDefinition(BaseModel):
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
     const_value: Optional[float] = None
+    tile_dimensions: Optional[
+        Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
+    ] = None
 
     @field_validator("dims")
     @classmethod
@@ -77,6 +80,20 @@ class OperandDefinition(BaseModel):
                 raise ValueError(f"must be positive, got {dim}")
             if dim % 32 != 0:
                 raise ValueError(f"must be multiple of 32, got {dim}")
+        return tuple(v)
+
+    @field_validator("tile_dimensions")
+    @classmethod
+    def validate_tile_dimensions(
+        cls, v: Optional[Tuple[int, int]]
+    ) -> Optional[Tuple[int, int]]:
+        if v is None:
+            return v
+        # Defer the supported-shape check to helpers.tile_constants so the YAML
+        # schema stays the single source of truth for the (rows, cols) contract.
+        from helpers.tile_constants import validate_tile_dimensions
+
+        validate_tile_dimensions(list(v))
         return tuple(v)
 
     @field_validator("format", mode="before")
@@ -112,7 +129,7 @@ class FuserConfigSchema(BaseModel):
                     seen_operands.add(node.src_b)
 
             if op.output in seen_operands:
-                raise ValueError("output already used")
+                raise ValueError(f"cannot use '{op.output}' as output twice")
 
             seen_operands.add(op.output)
 
@@ -127,6 +144,7 @@ class FuserConfigSchema(BaseModel):
                 dimensions=op_def.dims,
                 data_format=op_def.format,
                 const_value=op_def.const_value,
+                tile_dimensions=op_def.tile_dimensions,
             )
 
         pipeline = [op.to_fused_operation(operands) for op in self.operations]
@@ -142,22 +160,6 @@ class FuserConfigSchema(BaseModel):
         )
 
     @classmethod
-    def validate_file(cls, yaml_path: Union[str, Path]) -> "FuserConfigSchema":
-        yaml_path = Path(yaml_path)
-        if not yaml_path.exists():
-            raise FileNotFoundError(f"File not found: {yaml_path}")
-
-        with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
-
-        try:
-            return cls.model_validate(config_dict)
-        except ValidationError as e:
-            raise ValueError(
-                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
-            ) from None
-
-    @classmethod
     def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
         config_dict = yaml.safe_load(yaml_content)
         try:
@@ -169,6 +171,28 @@ class FuserConfigSchema(BaseModel):
 
     @classmethod
     def load(cls, test_name: str):
-        yaml_path = FUSER_CONFIG_DIR / f"{test_name}.yaml"
-        schema = cls.validate_file(yaml_path)
+        yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
+        if not yaml_path.is_relative_to(FUSER_CONFIG_DIR.resolve()):
+            raise ValueError(f"Invalid test name: {test_name}")
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"File not found: {yaml_path}")
+
+        with open(yaml_path, "r") as f:
+            config_dict = yaml.safe_load(f)
+
+        if not isinstance(config_dict, dict):
+            raise ValueError(f"Invalid config in {yaml_path.name}")
+
+        supported_archs = config_dict.pop("supported_archs", None)
+        if supported_archs is not None:
+            if arch.value not in supported_archs:
+                pytest.skip(f"Test '{test_name}' not supported on {arch.value}")
+
+        try:
+            schema = cls.model_validate(config_dict)
+        except ValidationError as e:
+            raise ValueError(
+                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
+            ) from None
+
         return schema.to_fuser_config(test_name)

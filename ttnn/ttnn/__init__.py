@@ -210,6 +210,10 @@ from ttnn._ttnn.hd_socket import (
     H2DMode,
 )
 
+from ttnn._ttnn.h2d_stream_service import (
+    H2DStreamService,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -221,6 +225,7 @@ from ttnn.types import (
     bfloat8_b,
     bfloat4_b,
     bfloat16,
+    fp8_e4m3,
     float32,
     MathFidelity,
     MemoryConfig,
@@ -288,6 +293,7 @@ from ttnn.types import (
     cb_descriptor_from_sharded_tensor,
     get_cb_address,
     UnpackToDestMode,
+    FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
 )

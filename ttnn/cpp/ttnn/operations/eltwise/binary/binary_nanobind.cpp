@@ -1718,7 +1718,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::eq),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::eq),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
 
     detail::bind_binary_operation<"ne">(
         mod,
@@ -1727,7 +1727,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ne),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ne),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
 
     detail::bind_binary_operation<"lt">(
         mod,
@@ -1736,7 +1736,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::lt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::lt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"le">(
@@ -1746,7 +1746,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::le),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::le),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"gt">(
@@ -1756,7 +1756,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::gt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::gt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"ge">(
@@ -1766,7 +1766,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ge),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ge),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"logical_and">(
@@ -2033,7 +2033,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite_with_rtol_atol<"isclose">(
         mod,
-        R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. INT32 tensors are typecast to FLOAT32 on device; for integers with magnitude much larger than 2^24 (~1.67e7), that cast can round distinct values to the same float, so the result may differ from ``torch.isclose`` on the original integer tensors.)doc",
         R"doc(\mathrm{output\_tensor} = \begin{cases} 1, & \text{if } |\mathrm{input\_tensor\_a} - \mathrm{input\_tensor\_b}| \leq (\mathrm{atol} + \mathrm{rtol} \times |\mathrm{input\_tensor\_b}|) \\ 0, & \text{otherwise} \end{cases}
         )doc",
         &ttnn::isclose);

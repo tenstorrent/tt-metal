@@ -85,17 +85,19 @@ class TtGemmaImageFeedForward(LightweightModule):
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
+        # Bias + activation applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         c_fc_out = ttnn.linear(
             x_in,
             self.c_fc_weight,
-            bias=self.c_fc_bias,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
             # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             # program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
+        if self.c_fc_bias is not None:
+            c_fc_out = ttnn.add(c_fc_out, self.c_fc_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c_fc_out = ttnn.gelu(c_fc_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         c_proj_out = ttnn.linear(
             c_fc_out,

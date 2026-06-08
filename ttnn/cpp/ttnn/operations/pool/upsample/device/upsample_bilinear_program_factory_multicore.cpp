@@ -7,6 +7,7 @@
 #include <cmath>
 #include <map>
 #include <string>
+#include <utility>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -123,6 +124,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_0),
             .data_format = input_cb_data_format,
             .page_size = in1_cb_pagesize,
+            .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
         }}},
     });
 
@@ -135,6 +137,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_1),
             .data_format = input_cb_data_format,
             .page_size = in_cb_pagesize,
+            .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
         }}},
     });
 
@@ -176,6 +179,7 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(out_cb_id),
             .data_format = output_cb_data_format,
             .page_size = out_cb_pagesize,
+            .face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
         }}},
         .buffer = output.buffer(),
     });

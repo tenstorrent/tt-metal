@@ -48,7 +48,7 @@ void kernel_main() {
     // Read input value data
     cb_reserve_back(src_cb_index, one_tile);
     const uint32_t l1_write_addr = get_write_ptr(src_cb_index);
-    noc_async_read_tile(0, interleaved_accessor, l1_write_addr);
+    noc_async_read_page(0, interleaved_accessor, l1_write_addr);
     noc_async_read_barrier();
     cb_push_back(src_cb_index, one_tile);
 

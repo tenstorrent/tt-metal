@@ -27,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/data_collection.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
@@ -79,6 +80,25 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
+void record_program_sub_device_for_range(
+    MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
+    // Skip programs that didn't opt into a user-defined sub-device manager.
+    const uint64_t active_manager_id = *mesh_device->get_active_sub_device_manager_id();
+    if (active_manager_id == *mesh_device->get_default_sub_device_manager_id()) {
+        return;
+    }
+    const uint32_t num_available_worker_cores =
+        mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
+        tt::RecordProgramSubDevice(
+            mesh_device->impl().get_device(coord)->id(),
+            active_manager_id,
+            runtime_id,
+            sub_device_id,
+            num_available_worker_cores);
+    });
+}
+
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
         if (mesh_device->impl().is_local(coord)) {
@@ -97,6 +117,11 @@ struct MeshReadEventDescriptor {
 
 struct MeshBufferReadDescriptor {
     std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
+    // Keeps host-buffer memory alive until the reader thread finishes the async memcpy.
+    // Without this, a caller that discards the returned Tensor before synchronize_device()
+    // would free the destination buffer while the NumaAwareExecutor thread is still copying
+    // into it (use-after-free / SIGSEGV in libumd read_from_sysmem). See issue #43638.
+    std::vector<MemoryPin> memory_pins;
 };
 
 struct MeshCoreDataReadDescriptor {
@@ -404,6 +429,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
+        record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
+
         this->write_program_cmds_to_subgrid(
             device_range,
             program_cmd_seq,
@@ -693,9 +720,13 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+    bool blocking,
+    std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device)));
+        std::in_place_type<MeshBufferReadDescriptor>,
+        std::move(num_txns_per_device),
+        std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -1366,6 +1397,8 @@ void FDMeshCommandQueue::record_end() {
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
 
+            record_program_sub_device_for_range(mesh_device_, range, node.program_runtime_id, sub_device_id);
+
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(
                 cached_program_command_sequence,
@@ -1454,6 +1487,8 @@ std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t work
 }
 
 void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
+
+void FDMeshCommandQueue::invalidate_prefetcher_cache_after_pinned_write() { this->reset_prefetcher_cache_manager(); }
 
 int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
     return this->prefetcher_cache_manager_->get_cache_sizeB();

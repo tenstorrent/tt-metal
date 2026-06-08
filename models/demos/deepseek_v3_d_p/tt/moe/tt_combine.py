@@ -31,6 +31,7 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -58,6 +59,7 @@ class TtCombineModule(LightweightModule):
         topology: ttnn.Topology = ttnn.Topology.Linear,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
+        fp8_output: bool = False,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -74,7 +76,10 @@ class TtCombineModule(LightweightModule):
             topology: Fabric topology for remote token writes.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
+            fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
         """
+        if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
+            raise ValueError("fp8_output requires Blackhole hardware")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -87,6 +92,7 @@ class TtCombineModule(LightweightModule):
         self.topology = topology
         self.memory_config = memory_config
         self.init_zeros = init_zeros
+        self.fp8_output = fp8_output
 
     def forward(
         self,
@@ -126,6 +132,14 @@ class TtCombineModule(LightweightModule):
                 BFLOAT16 ROW_MAJOR. Token slots for experts outside this dispatch group contain
                 uninitialized values.
         """
+        # FP8 output only works when the dispatched buffer is TILE: the BF16 -> FP8 conversion
+        # happens in the packer at the untilize stage, which only exists on the TILE path.
+        # The C++ validator enforces this too; checking here gives a clearer Python-side error.
+        if self.fp8_output and dispatched_buffer.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(
+                f"fp8_output=True requires dispatched_buffer in TILE_LAYOUT (got {dispatched_buffer.layout})"
+            )
+
         output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
             dispatched_metadata,
@@ -140,5 +154,7 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
+            use_fp8_combine=self.fp8_output,
         )
+
         return output

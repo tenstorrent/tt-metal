@@ -37,8 +37,8 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Weights tensor must be BFLOAT16, got {}",
         tensor_args.weights_tensor.dtype());
     TT_FATAL(
-        tensor_args.indices_tensor.dtype() == DataType::INT32 || tensor_args.indices_tensor.dtype() == DataType::UINT32,
-        "Indices tensor must be INT32 or UINT32, got {}",
+        tensor_args.indices_tensor.dtype() == DataType::UINT16,
+        "Indices tensor must be UINT16 (matching moe_grouped_topk output), got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||

@@ -8,7 +8,7 @@
 #include "internal/debug/stack_usage.h"
 
 void kernel_main() {
-    uint32_t usage = get_compile_time_arg_val (0);
+    uint32_t usage = get_compile_time_arg_val(0);
     uint32_t* stack_base = get_stack_base();
     auto point = &stack_base[usage / sizeof(uint32_t)];
     uint32_t *sp;

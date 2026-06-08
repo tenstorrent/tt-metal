@@ -14,14 +14,14 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDMKernel;
@@ -50,20 +50,23 @@ ScratchLayout make_layout(uint32_t base_addr, uint32_t rounds) {
     return layout;
 }
 
-ProgramRunParams::KernelRunParams make_run_params(
-    const KernelSpecName& kernel_name, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
-    return ProgramRunParams::KernelRunParams{
-        .kernel_spec_name = kernel_name,
-        .runtime_varargs =
-            {{node,
-              {
-                  layout.arrivals_addr,
-                  layout.observed_addr,
-                  layout.post_addr,
-                  rounds,
-                  skew_iters,
-                  layout.total_words,
-              }}},
+ProgramRunArgs::KernelRunArgs make_run_params(
+    KernelSpecName kernel, const NodeCoord& node, const ScratchLayout& layout, uint32_t rounds, uint32_t skew_iters) {
+    return ProgramRunArgs::KernelRunArgs{
+        .kernel = std::move(kernel),
+        .advanced_options =
+            AdvancedKernelRunArgs{
+                .runtime_varargs =
+                    {{node,
+                      {
+                          layout.arrivals_addr,
+                          layout.observed_addr,
+                          layout.post_addr,
+                          rounds,
+                          skew_iters,
+                          layout.total_words,
+                      }}},
+            },
     };
 }
 
@@ -91,16 +94,16 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", static_cast<uint8_t>(expected_num_threads));
-        spec.source = KernelSpec::SourceFilePath{kKernelPath};
-        spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);
+        spec.source = kKernelPath;
+        spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
         auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
             auto spec = MakeMinimalGen1DMKernel(name, proc);
-            spec.source = KernelSpec::SourceFilePath{kKernelPath};
-            spec.runtime_arguments_schema.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
+            spec.source = kKernelPath;
+            spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
             return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
         };
         kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
@@ -110,7 +113,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     }
 
     ProgramSpec spec;
-    spec.program_id = "kernel_thread_barrier";
+    spec.name = "kernel_thread_barrier";
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
@@ -121,11 +124,12 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     std::vector<uint32_t> zeros(total_zeros, 0);
     detail::WriteToDeviceL1(device, kCore, l1_base, zeros);
 
-    ProgramRunParams params;
+    ProgramRunArgs params;
     for (const auto& cfg : kernel_configs) {
-        params.kernel_run_params.push_back(make_run_params(cfg.name, node, cfg.layout, kRounds, kSkewIters));
+        params.kernel_run_args.push_back(
+            make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
-    SetProgramRunParameters(program, params);
+    SetProgramRunArgs(program, params);
     detail::LaunchProgram(device, program);
 
     for (const auto& cfg : kernel_configs) {
@@ -150,4 +154,4 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
