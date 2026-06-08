@@ -16,7 +16,7 @@ FP="${PRECOMPILE_FINGERPRINT:-/tmp/tt_precompile_build_fingerprint.txt}"
 [[ $# -eq 0 ]] && { echo "PRECOMPILE: no test path -> COLD"; exit 0; }
 TEST_PATH="$1"; shift; EXTRA=("$@")
 
-echo "PRECOMPILE: ===== warming (hardware-free, fingerprint replay) for: $TEST_PATH ${EXTRA[*]} ====="
+echo "PRECOMPILE: ===== warmup (collect + precompile, hardware-free, fingerprint replay) for: $TEST_PATH ${EXTRA[*]} ====="
 echo "PRECOMPILE: TT_METAL_CACHE=${TT_METAL_CACHE:-<default>}  workers=$WORKERS"
 
 # 1. cluster descriptor from UMD topology
@@ -74,10 +74,10 @@ env TT_METAL_FORCE_2_ERISC_MODE="$force2" TT_METAL_JIT_BUILD_FINGERPRINT="$FP" \
     pytest "$TEST_PATH" "${EXTRA[@]}" -p up_front_collect_plugin "${nf[@]}" >/tmp/ci_warm_collect.log 2>&1
 cs=$?
 if [[ $cs -ne 0 ]]; then
-    echo "PRECOMPILE: ✗ warm collect FAILED (pytest exit $cs) after $(($(date +%s)-t0))s -> warmed NOTHING; COLD"
+    echo "PRECOMPILE: ✗ warmup collect FAILED (pytest exit $cs) after $(($(date +%s)-t0))s -> warmed NOTHING; COLD"
     grep -iE "error|unrecognized|no tests" /tmp/ci_warm_collect.log | head -3
     exit 0
 fi
-echo "PRECOMPILE: ✓ warm complete in $(($(date +%s)-t0))s — real run reuses it"
+echo "PRECOMPILE: ✓ warmup complete in $(($(date +%s)-t0))s — the warmed run reuses it"
 grep -aE "UP_FRONT_COLLECT:|compiled [0-9]+ programs" /tmp/ci_warm_collect.log | tail -3
 exit 0
