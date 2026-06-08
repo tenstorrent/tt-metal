@@ -39,7 +39,22 @@ inline void llk_math_matmul_init(
 
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
         srcA_format, srcB_format);
-    _llk_math_matmul_init_<math_fidelity>(ct_dim, rt_dim);
+
+    // On Quasar an MxFp4 x MxFp4 matmul always consumes the operands through the 2x-packed
+    // source-register format (the unpacker stores them as MxFp4_2x_B; see
+    // llk_unpack_AB_matmul_init), so the matmul must run the EN_X2 traversal (8 MVMULs/tile,
+    // 2 FP4 sub-data expanded per lane). Detected from the L1 input format: unpack_dst_format[]
+    // stays Float16_b for MX (the ALU config above is correct for the expanded data), so the
+    // L1 format is the signal that the operands are the 2x-eligible FP4. Quasar derivatives
+    // without 2x src formats (e.g. Trinity) never define ARCH_QUASAR and so never reach this
+    // wrapper; non-MxFp4 inputs take the standard (EN_X2=false) path unchanged.
+    const bool src_2x = static_cast<DataFormat>(unpack_src_format[operandA_id]) == DataFormat::MxFp4 &&
+                        static_cast<DataFormat>(unpack_src_format[operandB_id]) == DataFormat::MxFp4;
+    if (src_2x) {
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, true /*EN_X2*/>(ct_dim, rt_dim);
+    } else {
+        _llk_math_matmul_init_<math_fidelity, false /*EN_DI*/, false /*EN_X2*/>(ct_dim, rt_dim);
+    }
 }
 
 /**

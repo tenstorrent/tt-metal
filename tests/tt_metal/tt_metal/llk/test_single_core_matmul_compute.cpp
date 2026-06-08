@@ -22,6 +22,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -262,6 +263,19 @@ OperandStimulus make_operand_stimulus(tt::DataFormat fmt, uint32_t tile_count, u
             pack_as_bfp8_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false, /*is_exp_a=*/false);
         out.floats = unpack_bfp8_tiles_into_float_vec(
             ttsl::make_const_span(out.packed), /*row_major_output=*/false, /*is_exp_a=*/false);
+    } else if (fmt == tt::DataFormat::MxFp4) {
+        // MXFP4 (S1E2M1, OCP microscaling) input. Same staging as Bfp8_b: generate random
+        // floats in face-major tile order, pack to the MXFP4 L1 layout, then unpack to recover
+        // the post-quantization float values used as the golden reference. NOTE: this L1 layout
+        // is identical for plain MxFp4 and the register-only MxFp4_2x variants -- the 2x packing
+        // happens in the unpacker (L1->SrcReg), not here.
+        auto rand_float = std::bind(std::uniform_real_distribution<float>(-rng, +rng), std::mt19937(seed));
+        std::vector<float> raw(num_elements);
+        for (float& v : raw) {
+            v = rand_float();
+        }
+        out.packed = pack_as_mxfp4_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false);
+        out.floats = unpack_mxfp4_tiles_into_float_vec(ttsl::make_const_span(out.packed), /*row_major_output=*/false);
     } else {
         TT_FATAL(false, "make_operand_stimulus: unsupported fmt {}", static_cast<int>(fmt));
     }
@@ -995,6 +1009,24 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
+}
+
+// MXFP4-input variant of the multi-block matmul (Quasar-only; the fixture skips on other archs).
+// Baseline for the MxFp4_2x register-format path: inputs are staged as plain MxFp4 in L1 and the
+// unpacker expands them to the BF16 family in src regs (NON-2x). Output is Float16_b so the
+// per-element + PCC comparison path applies. The MxFp4_2x test will reuse this config and only
+// flip the unpack src-register format + enable EN_X2 once the compute API exposes those knobs.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreMultiBlockComputeMatmulMxFp4) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2,
+        .K = 2,
+        .N = 2,
+        .num_blocks = 4,
+        .packer_l1_acc = false,
+        .in0_fmt = tt::DataFormat::MxFp4,
+        .in1_fmt = tt::DataFormat::MxFp4,
+        .out_fmt = tt::DataFormat::Float16_b};
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
 }
 
 // FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH

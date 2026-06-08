@@ -116,7 +116,18 @@ ALWI void mm_init(
     PACK((llk_pack_init(out_cb_id)));
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    // Quasar always consumes an MxFp4 x MxFp4 matmul through the 2x-packed source-register format
+    // MxFp4_2x_B (the math side picks the matching EN_X2 traversal in llk_math_matmul_init). This is
+    // matmul-only, so non-matmul MxFp4 ops are unaffected; non-MxFp4 inputs pass Invalid (use the
+    // jit_build-inferred unpack_dst_format). Quasar derivatives without 2x src formats (e.g. Trinity)
+    // never define ARCH_QUASAR and so never reach this code.
+    UNPACK((llk_unpack_hw_configure(
+        in1_cb_id,
+        in0_cb_id,
+        (static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]) == DataFormat::MxFp4 &&
+         static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]) == DataFormat::MxFp4)
+            ? DataFormat::MxFp4_2x_B
+            : DataFormat::Invalid)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
@@ -274,7 +285,15 @@ ALWI void mm_block_init(
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    // See mm_init: Quasar stores MxFp4 matmul inputs in the 2x-packed MxFp4_2x_B source-register
+    // format (matched by EN_X2 in llk_math_matmul_init); non-MxFp4 inputs use the inferred format.
+    UNPACK((llk_unpack_hw_configure(
+        in1_cb_id,
+        in0_cb_id,
+        (static_cast<DataFormat>(unpack_src_format[get_operand_id(in0_cb_id)]) == DataFormat::MxFp4 &&
+         static_cast<DataFormat>(unpack_src_format[get_operand_id(in1_cb_id)]) == DataFormat::MxFp4)
+            ? DataFormat::MxFp4_2x_B
+            : DataFormat::Invalid)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
