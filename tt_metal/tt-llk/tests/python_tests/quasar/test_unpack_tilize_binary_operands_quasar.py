@@ -17,11 +17,10 @@ from helpers.llk_params import (
     ImpliedMathFormat,
     MathFidelity,
     MathOperation,
-    UnpackerEngine,
+    TilizeUnpackerSel,
     format_dict,
 )
 from helpers.param_config import (
-    generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -36,7 +35,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
-    UNPACKER_ENGINE_SEL,
+    TILIZE_UNPACKER_SEL,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -52,13 +51,16 @@ def generate_unpack_tilize_binary_combinations(
         formats_list: List of input/output format pairs
 
     Returns:
-        List of (format, dest_acc, input_dimensions, relu_type) tuples
+        List of (format, dest_acc, dest_sync, tilize_unpacker_sel, input_dimensions) tuples
     """
 
     def is_supported_format_conversion(in_fmt, out_fmt):
         """Check if the format conversion is supported by packer. These format conversions are NOT dependent on the dest register mode."""
         # Skip if mixing integer and non-integer formats
         if in_fmt.is_integer() ^ out_fmt.is_integer():
+            return False
+        # Unpack to dest is not supported for unpack tilize binary, there input cannot be Int32
+        if in_fmt == DataFormat.Int32:
             return False
         return True
 
@@ -69,59 +71,62 @@ def generate_unpack_tilize_binary_combinations(
             return (DestAccumulation.Yes,)
         return (DestAccumulation.No, DestAccumulation.Yes)
 
-    dimensions_cache = {
-        (dest_acc, dest_sync): tuple(
-            generate_unary_input_dimensions(dest_acc, dest_sync)
-        )
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        for dest_sync in (DestSync.Half, DestSync.Full)
+    def is_supported_dest_mode_dependent_conversion(out_fmt, dest_acc):
+        """Check if the format conversion is supported by packer. These format conversions are dependent on the dest register mode."""
+        # Upcasting to Float32/Int32 requires dest_acc enabled
+        if out_fmt.is_32_bit() and dest_acc == DestAccumulation.No:
+            return False
+        return True
+
+    # Targeted dimensions per (dest_sync, dest_acc) that cover key corner cases:
+    # 1 tile (minimum), max-wide (stresses block_ct), max-tall (stresses block_rt),
+    # and max-square (both loops at capacity).
+    tilize_binary_dims = {
+        (DestSync.Half, DestAccumulation.No): [
+            [32, 32],
+            [32, 256],
+            [256, 32],
+            [64, 128],
+        ],
+        (DestSync.Half, DestAccumulation.Yes): [
+            [32, 32],
+            [32, 128],
+            [128, 32],
+            [64, 64],
+        ],
+        (DestSync.Full, DestAccumulation.No): [
+            [32, 32],
+            [32, 512],
+            [512, 32],
+            [128, 128],
+        ],
+        (DestSync.Full, DestAccumulation.Yes): [
+            [32, 32],
+            [32, 256],
+            [256, 32],
+            [64, 128],
+        ],
     }
 
     combinations = []
 
     for fmt in formats_list:
-        for acc in get_dest_acc_modes(fmt.input_format):
-            for dest_sync in (DestSync.Half, DestSync.Full):
-                for unp_tilize_sel in (UnpackerEngine.UnpA, UnpackerEngine.UnpB):
-                    for dimensions in dimensions_cache[(acc, dest_sync)]:
-                        combinations.append(
-                            (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
-                        )
+        in_fmt, out_fmt = fmt.input_format, fmt.output_format
 
-    return combinations
-
-
-def generate_unpack_tilize_binary_combinations(
-    formats_list: List[FormatConfig],
-):
-    """
-    Generate unpack_tilize_binary_operands test combinations.
-
-    Only non-32-bit formats are supported for now.
-
-    Returns: List of (format, dest_acc, dest_sync, unp_tilize_sel, input_dimensions) tuples
-    """
-    dest_acc = [DestAccumulation.Yes, DestAccumulation.No]
-
-    dimensions_cache = {
-        (acc, dest_sync): tuple(generate_unary_input_dimensions(acc, dest_sync))
-        for acc in dest_acc
-        for dest_sync in (DestSync.Half, DestSync.Full)
-    }
-
-    combinations = []
-
-    for fmt in formats_list:
-        if fmt.input_format.is_32_bit():
+        if not is_supported_format_conversion(in_fmt, out_fmt):
             continue
-
-        for acc in dest_acc:
-            for dest_sync in (DestSync.Half, DestSync.Full):
-                for unp_tilize_sel in (UnpackerEngine.UnpA, UnpackerEngine.UnpB):
-                    for dimensions in dimensions_cache[(acc, dest_sync)]:
-                        combinations.append(
-                            (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
-                        )
+        for acc in get_dest_acc_modes(in_fmt):
+            if is_supported_dest_mode_dependent_conversion(out_fmt, acc):
+                for dest_sync in (DestSync.Half, DestSync.Full):
+                    for unp_tilize_sel in (
+                        TilizeUnpackerSel.UnpA,
+                        TilizeUnpackerSel.UnpB,
+                        TilizeUnpackerSel.UnpAB,
+                    ):
+                        for dimensions in tilize_binary_dims[(dest_sync, acc)]:
+                            combinations.append(
+                                (fmt, acc, dest_sync, unp_tilize_sel, dimensions)
+                            )
 
     return combinations
 
@@ -131,10 +136,12 @@ UNPACK_TILIZE_BINARY_FORMATS = input_output_formats(
         DataFormat.MxFp8P,
         DataFormat.MxFp8R,
         DataFormat.MxFp4,
-        DataFormat.Int8,
-        DataFormat.UInt8,
+        DataFormat.Float32,
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.Int8,
+        DataFormat.UInt8,
+        DataFormat.Int32,
     ],
 )
 ALL_UNPACK_TILIZE_BINARY_OPERANDS_COMBINATIONS = (
@@ -153,9 +160,20 @@ def test_unpack_tilize_binary_operands_quasar(
         formats_dest_acc_sync_tilize_sel_dims[0]
     )
 
+    if formats.input_format == DataFormat.MxFp4 and (
+        formats.output_format == DataFormat.Float32
+        or formats.output_format == DataFormat.Float16_b
+        or formats.output_format == DataFormat.Float16
+        or formats.output_format == DataFormat.MxFp8P
+    ):
+        pytest.skip(
+            "MxFp4 to Float32/Float16_b/Float16/MxFp8P conversion has rounding errors"
+        )
+
     num_faces = 4
 
-    tilize_a = unp_tilize_sel == UnpackerEngine.UnpA
+    tilize_a = unp_tilize_sel in (TilizeUnpackerSel.UnpA, TilizeUnpackerSel.UnpAB)
+    tilize_b = unp_tilize_sel in (TilizeUnpackerSel.UnpB, TilizeUnpackerSel.UnpAB)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -167,15 +185,21 @@ def test_unpack_tilize_binary_operands_quasar(
     tilize_gen = get_golden_generator(TilizeGolden)
     eltwise_binary_gen = get_golden_generator(EltwiseBinaryGolden)
 
-    tilize_src = src_A if tilize_a else src_B
-    tilized = tilize_gen(
-        tilize_src, input_dimensions, formats.input_format, num_faces=num_faces
+    golden_A = (
+        tilize_gen(src_A, input_dimensions, formats.input_format, num_faces=num_faces)
+        if tilize_a
+        else src_A
+    )
+    golden_B = (
+        tilize_gen(src_B, input_dimensions, formats.input_format, num_faces=num_faces)
+        if tilize_b
+        else src_B
     )
 
     golden_tensor = eltwise_binary_gen(
         MathOperation.Elwadd,
-        tilized if tilize_a else src_A,
-        src_B if tilize_a else tilized,
+        golden_A,
+        golden_B,
         formats.output_format,
         MathFidelity.LoFi,
         input_format=formats.input_format,
@@ -188,7 +212,7 @@ def test_unpack_tilize_binary_operands_quasar(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.Yes),
-            UNPACKER_ENGINE_SEL(unp_tilize_sel),
+            TILIZE_UNPACKER_SEL(unp_tilize_sel),
             MATH_OP(mathop=MathOperation.Elwadd),
             MATH_FIDELITY(MathFidelity.LoFi),
             DEST_SYNC(dest_sync_mode),
