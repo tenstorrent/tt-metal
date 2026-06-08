@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: (C) 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNLayerStack, TTNNModule
@@ -274,22 +276,29 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn)
             new_layer.mlp = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         elif tp_decode_scheme == "col_parallel":
-            # Fully TP4-distributed (SP+TP) decode: the hidden/residual stays
-            # TP-sharded (e.g. 384 on a 1x4 mesh) end to end, RMSNorm runs
-            # distributed (TP4) on that shard, and the decoder layer all-gathers
-            # the normed shard to full hidden only to feed the N-dim/column-
-            # parallel QKV and gate/up. The column-parallel o_proj emits an
-            # N-sharded (= hidden-sharded) output with no collective, and the
-            # row-parallel down does reduce_scatter only, so each block costs
-            # ~1 all-gather + (MLP) 1 reduce_scatter and the residual add stays
-            # on the sharded hidden. Prefill still uses the row-parallel
-            # MLP/hidden-sharded contract.
-            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, qkv_n_parallel=True)
+            # TP4-distributed (SP+TP) decode: the hidden/residual stays
+            # TP-sharded (e.g. 384 on a 1x4 mesh) end to end. Keep attention on
+            # the proven K-parallel QKV path by default; the N-parallel QKV A/B
+            # path is opt-in because it collapses greedy OCR decode on structured
+            # HTML/table tokens. The MLP still uses column-parallel gate/up and a
+            # reduce_scatter-only down so the residual add stays hidden-sharded.
+            use_n_parallel_attn = os.environ.get("DOTS_OCR_COL_PARALLEL_USE_N_PARALLEL_ATTN", "0").lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            new_layer._col_parallel_use_n_parallel_attn = use_n_parallel_attn
+            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(
+                torch_layer.self_attn, qkv_n_parallel=use_n_parallel_attn
+            )
             new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=False)
             new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:
             raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
-        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
+        if tp_decode_scheme == "col_parallel" or _use_bfp8_decoder_weights(
+            getattr(new_layer.self_attn, "layer_idx", None)
+        ):
             new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
             if hasattr(new_layer, "mlp_prefill"):
                 new_layer.mlp_prefill.set_weight_dtype(ttnn.bfloat8_b)
@@ -339,7 +348,7 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         seq_len = hs.shape[-2]
         is_decode = seq_len == 1
         decode_l1_mc = ttnn.L1_MEMORY_CONFIG if is_decode else None
-        if is_col_parallel and is_decode:
+        if is_col_parallel and is_decode and getattr(self, "_col_parallel_use_n_parallel_attn", False):
             hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         attn_out, _ = self.self_attn(
             hidden_states=hs,

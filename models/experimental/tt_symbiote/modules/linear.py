@@ -1607,7 +1607,7 @@ class TTNNDotsOCRDRAMShardedLMHead(TTNNModule):
                 device=device,
                 mesh_mapper=weight_mapper,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat8_b,
                 memory_config=mem_cfg,
             )
             self.tt_weight_chunks.append(tt_chunk)
