@@ -7,15 +7,15 @@ import pytest
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "gemma4_ashai_parity: Direct model prefill/decode PCC vs HF (Ashai regression guard)",
+        "gemma4_hf_direct_parity: Direct model prefill/decode PCC vs HuggingFace reference",
     )
     config.addinivalue_line(
         "markers",
-        "gemma4_pr_44955: Batched prefill integration (#44955)",
+        "gemma4_batched_prefill: Batched multi-user prefill integration and perf",
     )
     config.addinivalue_line(
         "markers",
-        "gemma4_pr_44957: Prefill device trace parity/perf (#44957)",
+        "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
     )
 
 

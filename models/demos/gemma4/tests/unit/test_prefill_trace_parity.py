@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill trace audit: traced ``prefill_forward_text`` matches Generator eager and Ashai HF parity.
+"""Prefill trace audit: traced ``prefill_forward_text`` matches Generator eager and HF.
 
-Ashai HF parity uses direct ``ttnn_prefill_forward(page_table=None)`` with a 32-aligned
-kernel (same as ``test_full_model``), per batch slot. Traced/batched Generator prefill
-uses the ISL bucket kernel and is checked against Generator eager at 1.0 PCC — trace
-must not degrade numerics. When the prompt fills the ISL bucket, traced vs HF is also
-asserted at 0.99.
+The direct-model reference path uses ``ttnn_prefill_forward(page_table=None)`` with a
+minimal 32-tile-aligned kernel (same as ``test_full_model``), per batch slot.
+Traced/batched Generator prefill uses the ISL bucket kernel and is checked against
+Generator eager at 1.0 PCC — trace must not degrade numerics. When the prompt fills
+the ISL bucket, traced vs HF is also asserted at 0.99.
 """
 
 import os
@@ -40,7 +40,7 @@ from ..test_factory import (
 # Trace ISL buckets × SUPPORTED_PREFILL_BATCH_SIZES, minus:
 #   - batch×kernel ≥ 128k (e.g. 32×4096 skips trace warmup)
 #   - batch×kernel ≥ 32k or ISL > 4k (prefill trace disabled by policy)
-#   - 31B 1×4 DRAM xfail: batch-32 × {2048, 4096} (2048 valid through batch-16 on QB2)
+#   - 31B 1×4 DRAM xfail: batch-32 × {2048, 4096} (2048 valid through batch-16 on 1×4)
 _PREFILL_TRACE_BUCKETS = list(GEMMA4_TRACE_PREFILL_SEQ_LENS)
 _PREFILL_TRACE_BATCH_SIZES = list(SUPPORTED_PREFILL_BATCH_SIZES)
 
@@ -128,12 +128,12 @@ def _build_tokens(batch_size, prefill_len, vocab_size, *, seed=0):
     return tokens, prompt_lens, kernel_len
 
 
-def _ashai_kernel_len(prompt_len):
-    """Minimal 32-aligned prefill length used by ``test_full_model``."""
+def _minimal_tile_aligned_kernel_len(prompt_len):
+    """Minimal 32-tile-aligned prefill length used by ``test_full_model``."""
     return ((prompt_len + 31) // 32) * 32
 
 
-def _run_ashai_style_last_logit(generator, tokens, prompt_lens):
+def _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens):
     """Direct ``ttnn_prefill_forward(page_table=None)`` — same path as ``test_full_model``."""
     import torch.nn.functional as F
 
@@ -151,7 +151,7 @@ def _run_ashai_style_last_logit(generator, tokens, prompt_lens):
     outputs = []
     for batch_idx, prompt_len in enumerate(prompt_lens_list):
         prompt_len = int(prompt_len)
-        kernel_len = _ashai_kernel_len(prompt_len)
+        kernel_len = _minimal_tile_aligned_kernel_len(prompt_len)
         kv = _allocate_fresh_kv_cache(
             model,
             max_batch_size=1,
@@ -242,7 +242,7 @@ def _assert_parity(name, reference, candidate, request):
     return pcc
 
 
-@pytest.mark.gemma4_pr_44957
+@pytest.mark.gemma4_prefill_trace
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")
@@ -253,7 +253,7 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
     Param matrix: ISL buckets {128,512,1024,2048,4096} × batch {1..32}. Each case warms
     up only its own bucket (no full batch×ISL trace capture sweep).
     Prefill trace is disabled when ISL > 4096 or padded_batch×kernel ≥ 32k.
-    On QB2 (31B 1×4), prefill 2048 is expected through batch 8; batch-16×2048+
+    On 31B blackhole 1×4, prefill 2048 is expected through batch 8; batch-16×2048+
     are skipped (32k trace ceiling). batch-32×2048/4096 are xfails (DRAM).
     Batch-32×4096 also skips the 128k batched-prefill ceiling.
     """
@@ -288,8 +288,8 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
 
     tokens, prompt_lens, kernel_len = _build_tokens(batch_size, prefill_len, hf_config.vocab_size)
     prompt_len = int(prompt_lens[0])
-    ashai_kernel_len = _ashai_kernel_len(prompt_len)
-    hf_last_eager = _hf_last_token_logits(hf_causal_lm, tokens, prompt_lens, kernel_len=ashai_kernel_len)
+    minimal_kernel_len = _minimal_tile_aligned_kernel_len(prompt_len)
+    hf_last_eager = _hf_last_token_logits(hf_causal_lm, tokens, prompt_lens, kernel_len=minimal_kernel_len)
     hf_last_trace = _hf_last_token_logits(hf_causal_lm, tokens, prompt_lens, kernel_len=kernel_len)
 
     max_new_tokens = 32
@@ -338,9 +338,9 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
         generator, kv_trace, tokens, page_table, prompt_lens, enable_trace=True, paged_cfg=paged_cfg
     )
 
-    out_eager_ashai = _run_ashai_style_last_logit(generator, tokens, prompt_lens).float()
-    _assert_parity("eager (Ashai) vs HF", hf_last_eager, out_eager_ashai, request)
+    out_direct = _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens).float()
+    _assert_parity("direct model prefill vs HF", hf_last_eager, out_direct, request)
     _assert_parity("traced vs eager (Generator)", out_eager, out_trace, request)
     if prompt_len >= prefill_len:
         _assert_parity("traced vs HF", hf_last_trace, out_trace, request)
-        _assert_parity("traced vs eager (Ashai)", out_eager_ashai, out_trace, request)
+        _assert_parity("traced vs direct model prefill", out_direct, out_trace, request)

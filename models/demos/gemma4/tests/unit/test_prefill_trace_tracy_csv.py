@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tracy-friendly prefill trace capture for ``ops_perf_results_*.csv`` generation (#44957).
+"""Tracy-friendly prefill trace capture for ``ops_perf_results_*.csv`` generation.
 
 Tracy records the full session (model load, trace capture, warm replay). Steady-state
 inference is trace replay only; filter the CSV to ops between ``start`` and ``stop``
@@ -9,7 +9,7 @@ signposts on the measured replay.
 
 Use ``test_prefill_trace_perf.py`` for capture-vs-replay amortization under plain pytest.
 
-Example (31B on QB2 1×4):
+Example (31B blackhole 1×4):
 
     rm -rf generated/profiler/.logs generated/profiler/reports
     export HF_MODEL=google/gemma-4-31b-it
@@ -41,7 +41,7 @@ from .test_prefill_trace_parity import _PREFILL_TRACE_BATCH_SIZES, _PREFILL_TRAC
 from .tracy_prefill_common import run_prefill_trace_tracy_session
 
 
-@pytest.mark.gemma4_pr_44957
+@pytest.mark.gemma4_prefill_trace
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")

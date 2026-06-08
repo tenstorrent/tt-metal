@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill trace amortization: capture once, replay once (#44957).
+"""Prefill trace amortization: capture once, replay once.
 
 Exercises a single (batch, ISL) bucket without the full batched trace warmup sweep.
 For Tracy ``ops_perf_results_*.csv`` with ``start``/``stop`` signposts on replay, use
 ``test_prefill_trace_tracy_csv.py`` under ``python -m tracy``.
 
-Example (31B on QB2 1×4):
+Example (31B blackhole 1×4):
 
     export HF_MODEL=google/gemma-4-31b-it
     pytest models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \\
@@ -40,7 +40,7 @@ from .tracy_prefill_common import (
 )
 
 
-@pytest.mark.gemma4_pr_44957
+@pytest.mark.gemma4_prefill_trace
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("prefill_len", _PREFILL_TRACE_BUCKETS, ids=lambda n: f"prefill_{n}")

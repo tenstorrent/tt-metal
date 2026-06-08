@@ -15,7 +15,7 @@ Usage:
     # Batch-32 batched prefill:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_prefill -k "prefill_128-1x1" -v
 
-    # Batch-32 prefill + decode (issue #44955); override batch via GEMMA4_BATCH_DEMO_SIZE=8:
+    # Batch-32 prefill + decode; override batch via GEMMA4_BATCH_DEMO_SIZE=8:
     pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_128 and 1x1" -v
     GEMMA4_BATCH_DEMO_SIZE=8 pytest models/demos/gemma4/demo/text_demo.py::test_demo_batch_32 -k "prefill_2048 and 1x4" -v
 
@@ -170,7 +170,7 @@ def _is_31b_model(model_path):
 
 
 def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
-    """True for batch-32 long prefill on 31B 1×4 (QB2 ~64k batched token budget, e.g. 32×2048)."""
+    """True for batch-32 long prefill on 31B 1×4 (~64k batched token DRAM budget, e.g. 32×2048)."""
     if batch_size != _BATCH32_DRAM_OOM_SIZE:
         return False
     if prefill_len not in (2048, 4096):
@@ -183,7 +183,7 @@ def _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_l
 def _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len):
     if _batch_prefill_known_dram_oom(mesh_device, model_path, batch_size, prefill_len):
         pytest.xfail(
-            f"Batch-{batch_size} prefill_len={prefill_len} exceeds QB2 ~64k batched token budget "
+            f"Batch-{batch_size} prefill_len={prefill_len} exceeds ~64k batched token DRAM budget "
             f"on 31B 1×4 (32×2048=65536); run on 1×8 or a smaller model."
         )
 
@@ -1069,6 +1069,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
 
 
 @parametrize_mesh_with_fabric()
+@pytest.mark.gemma4_batched_prefill
 @pytest.mark.parametrize(
     "prefill_len",
     _BATCH_PREFILL_LENGTHS,
@@ -1121,7 +1122,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
     )
 
 
-@pytest.mark.gemma4_pr_44955
+@pytest.mark.gemma4_batched_prefill
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize(
     "prefill_len",
@@ -1131,7 +1132,7 @@ def test_demo_batch_prefill(mesh_device, model_path, prefill_len, request):
 def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
     """Batch-32 demo — validates batched prefill via ``Gemma4Generator``.
 
-    Parametrized over prefill_len ∈ {128, 1024, 2048, 4096} per #44955.
+    Parametrized over prefill_len ∈ {128, 512, 1024, 2048, 4096}.
     Uses identical prompts for all 32 users so batched prefill is eligible,
     and exercises the chunking override at 32×4096 (128k token ceiling).
 
@@ -1178,6 +1179,7 @@ def test_demo_batch_32(mesh_device, model_path, prefill_len, request):
 
 
 @parametrize_mesh_with_fabric()
+@pytest.mark.gemma4_batched_prefill
 def test_demo_batch_prefill_4096_ceiling(mesh_device, model_path, request):
     """Document the 128k batched-prefill ceiling at batch 32 × seq 4096.
 

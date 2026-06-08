@@ -293,7 +293,7 @@ def test_single_layer_model(mesh_device, layer_group, reset_seeds, request):
 # ── Full Model PCC Test ─────────────────────────────────────────────────
 
 
-@pytest.mark.gemma4_ashai_parity
+@pytest.mark.gemma4_hf_direct_parity
 @parametrize_mesh_with_fabric()
 def test_full_model(mesh_device, reset_seeds, request):
     """Test full model (all layers, real weights) against HuggingFace reference.
@@ -452,7 +452,7 @@ def test_full_model(mesh_device, reset_seeds, request):
 # ── Full Model DECODE PCC Test ───────────────────────────────────────────
 
 
-@pytest.mark.gemma4_ashai_parity
+@pytest.mark.gemma4_hf_direct_parity
 @parametrize_mesh_with_fabric()
 def test_full_model_decode(mesh_device, reset_seeds, request):
     """End-to-end full-model DECODE PCC vs HuggingFace.
