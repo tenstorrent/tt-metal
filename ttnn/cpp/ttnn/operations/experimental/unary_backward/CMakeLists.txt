@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_unary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::UnaryBackward ALIAS ttnn_op_experimental_unary_backward)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_unary_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_unary_backward TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_unary_backward)
 
 set_target_properties(
