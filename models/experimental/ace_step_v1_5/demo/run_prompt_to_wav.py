@@ -238,9 +238,10 @@ def _log_duration_preprocess_health(
 
     chunk_n = ace_step_detok_chunk_n()
     if n_codes > chunk_n:
+        n_forwards = (n_codes + chunk_n - 1) // chunk_n
         print(
-            f"[ace_step_v1_5] note: {n_codes} audio codes > TTNN L1 chunk {chunk_n}; "
-            "preprocess uses HF PyTorch detokenizer (global attention)",
+            f"[ace_step_v1_5] note: {n_codes} audio codes → TTNN detokenizer "
+            f"({n_forwards} chunked forwards, cap {chunk_n} codes/forward)",
             flush=True,
         )
     if n_codes >= 50:
@@ -493,9 +494,10 @@ def _log_mesh_decode_quality_health(
                 flush=True,
             )
     if expected_codes > detok_chunk:
+        n_forwards = (expected_codes + detok_chunk - 1) // detok_chunk
         print(
-            f"[ace_step_v1_5] decode quality: expect~{expected_codes} audio codes → HF PyTorch detokenizer "
-            f"(TTNN L1 chunk {detok_chunk})",
+            f"[ace_step_v1_5] decode quality: expect~{expected_codes} audio codes → TTNN detokenizer "
+            f"({n_forwards} chunked forwards, {detok_chunk} codes/forward)",
             flush=True,
         )
 
@@ -1076,6 +1078,7 @@ def main() -> None:
 
     from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import (
         AceStepPerfRecorder,
+        ace_step_build_preprocess_handoff_perf,
         make_denoise_progress_fn,
     )
 
@@ -1112,6 +1115,7 @@ def main() -> None:
     demo_session = AceStepDemoSession()
     _handoff_deferred_payload = None
     _handoff_frames: int | None = None
+    _handoff_preprocess_perf = None
     _dit_handoff_env_saved: dict[str, str | None] | None = None
     if dit_handoff_mode:
         import pickle
@@ -1120,6 +1124,7 @@ def main() -> None:
             handoff = pickle.load(f)
         demo_session.cached_preprocess = handoff.get("cached_preprocess")
         _handoff_deferred_payload = handoff.get("deferred_condition_payload")
+        _handoff_preprocess_perf = handoff.get("preprocess_perf")
         if handoff.get("frames") is not None:
             _handoff_frames = int(handoff["frames"])
         try:
@@ -1134,6 +1139,18 @@ def main() -> None:
             )
         else:
             print("[ace_step_v1_5] DiT handoff: loaded preprocess cache, opening full mesh", flush=True)
+        if isinstance(_handoff_preprocess_perf, dict):
+            _hp = _handoff_preprocess_perf.get("params") or {}
+            _ht = _handoff_preprocess_perf.get("timings_ms") or []
+            _pa_s = float(_handoff_preprocess_perf.get("phase_a_wall_ms") or 0.0) / 1000.0
+            print(
+                f"[ace_step_v1_5][perf] handoff restored Phase-A stats: "
+                f"phase_a_wall_s={_pa_s:.2f} "
+                f"lm_gen_time_s={_hp.get('lm_gen_time_s', 'n/a')} "
+                f"tokens={_hp.get('lm_num_tokens', 'n/a')} "
+                f"modules={len(_ht)}",
+                flush=True,
+            )
         use_ttnn_5hz_lm = False
         args.pytorch_lm = True
         if split_device:
@@ -1144,6 +1161,8 @@ def main() -> None:
         demo_session.session_perf.session_t0 = time.perf_counter()
 
     perf.begin_run(summary_label="demo_total", record=True)
+    if _handoff_preprocess_perf is not None:
+        perf.apply_preprocess_handoff(_handoff_preprocess_perf)
     run_prompt = str(args.prompt)
     run_out_path = Path(args.out)
 
@@ -1741,6 +1760,23 @@ def main() -> None:
         if _should_reexec_dit_mesh:
             import sys
 
+            _preprocess_handoff_perf = ace_step_build_preprocess_handoff_perf(
+                timings_ms=perf.timings_ms,
+                params=perf.params,
+                lm_perf=getattr(llm_handler, "last_lm_perf", None),
+                phase_a_wall_ms=perf.total_ms(),
+            )
+            _hp = _preprocess_handoff_perf.get("params") or {}
+            _ht = _preprocess_handoff_perf.get("timings_ms") or []
+            _pa_s = float(_preprocess_handoff_perf.get("phase_a_wall_ms") or 0.0) / 1000.0
+            print(
+                f"[ace_step_v1_5][perf] handoff saving Phase-A stats: "
+                f"phase_a_wall_s={_pa_s:.2f} "
+                f"lm_gen_time_s={_hp.get('lm_gen_time_s', 'n/a')} "
+                f"tokens={_hp.get('lm_num_tokens', 'n/a')} "
+                f"modules={len(_ht)}",
+                flush=True,
+            )
             if payload_for_mesh_condition is not None:
                 ace_step_reexec_for_dit_mesh(
                     ttnn,
@@ -1749,6 +1785,7 @@ def main() -> None:
                     argv=sys.argv,
                     deferred_condition_payload=payload_for_mesh_condition,
                     frames=int(frames),
+                    preprocess_perf=_preprocess_handoff_perf,
                 )
             else:
                 if demo_session.cached_preprocess is None:
@@ -1775,6 +1812,7 @@ def main() -> None:
                     mesh_sku=mesh_sku,
                     argv=sys.argv,
                     cached_preprocess=demo_session.cached_preprocess,
+                    preprocess_perf=_preprocess_handoff_perf,
                 )
     if dev is None and demo_session.dit_dev is None:
         dit_env_saved = _dit_handoff_env_saved if dit_handoff_mode else None

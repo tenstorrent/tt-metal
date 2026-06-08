@@ -480,8 +480,12 @@ def test_cached_preprocess_reuse():
 def test_emit_session_summary_rollup(monkeypatch):
     monkeypatch.setenv("ACE_STEP_DEMO_PERF_LOG", "1")
     from models.experimental.ace_step_v1_5.utils.ace_step_perf_log import (
+        AceStepPerfRecorder,
         SessionPassSnapshot,
         SessionPerfState,
+        ace_step_apply_preprocess_handoff_perf,
+        ace_step_build_preprocess_handoff_perf,
+        ace_step_effective_wall_ms,
         ace_step_extract_key_metrics,
         ace_step_rtf_per_step,
         emit_session_summary,
@@ -504,6 +508,42 @@ def test_emit_session_summary_rollup(monkeypatch):
     assert metrics["dit_total_time_s"] == pytest.approx(6.5)
     assert metrics["vae_decode_time_s"] == pytest.approx(2.2)
     assert metrics["tokens_per_sec"] == pytest.approx(150.0)
+
+    handoff = ace_step_build_preprocess_handoff_perf(
+        timings_ms=[
+            ("five_hz_lm_generate", 5000.0),
+            ("handler_preprocess", 1200.0),
+            ("dit_denoise_loop", 700.0),
+        ],
+        params={"lm_num_tokens": 250, "lm_gen_time_s": 0.0},
+        phase_a_wall_ms=28000.0,
+    )
+    assert handoff["timings_ms"] == [
+        ("five_hz_lm_generate", 5000.0),
+        ("handler_preprocess", 1200.0),
+    ]
+    assert handoff["phase_a_wall_ms"] == pytest.approx(28000.0)
+    assert handoff["params"]["lm_num_tokens"] == 250
+    assert handoff["params"]["lm_gen_time_s"] == pytest.approx(6.2)
+    recorder = AceStepPerfRecorder(enabled=False)
+    recorder.begin_run(summary_label="demo_total", record=False)
+    ace_step_apply_preprocess_handoff_perf(recorder, handoff)
+    merged = ace_step_extract_key_metrics(
+        recorder.timings_ms,
+        wall_ms=ace_step_effective_wall_ms(12000.0, handoff),
+        params=recorder.params,
+    )
+    assert merged["wall_time_s"] == pytest.approx(40.0)
+    assert merged["lm_total_time_s"] == pytest.approx(6.2)
+    assert merged["tokens_per_sec"] == pytest.approx(250 / 6.2)
+
+    metrics_zero_gen = ace_step_extract_key_metrics(
+        [("five_hz_lm_generate", 5000.0)],
+        wall_ms=10000.0,
+        params={"lm_num_tokens": 100, "lm_gen_time_s": 0.0},
+    )
+    assert metrics_zero_gen["lm_total_time_s"] == pytest.approx(5.0)
+    assert metrics_zero_gen["tokens_per_sec"] == pytest.approx(20.0)
 
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_tile_physical_m_dim
 

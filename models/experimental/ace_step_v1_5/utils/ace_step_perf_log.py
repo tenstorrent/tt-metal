@@ -125,6 +125,11 @@ class AceStepPerfRecorder:
         if self.enabled and getattr(self, "_run_recording", True):
             _emit_line(label, elapsed_ms)
 
+    def apply_preprocess_handoff(self, preprocess_perf: Optional[Dict[str, Any]]) -> None:
+        """Restore Phase-A LM/preprocess timings + params after BH mesh re-exec handoff."""
+        self._handoff_preprocess_perf = preprocess_perf
+        ace_step_apply_preprocess_handoff_perf(self, preprocess_perf)
+
     @contextmanager
     def timed(self, label: str, *, device: Any = None) -> Iterator[None]:
         """Time a block; sync *device* before/after when provided."""
@@ -196,33 +201,52 @@ class AceStepPerfRecorder:
             return
 
         print("[ace_step_v1_5][perf] module breakdown:", flush=True)
+        handoff_perf = getattr(self, "_handoff_preprocess_perf", None)
+        phase_a_ms = ace_step_phase_a_wall_ms(handoff_perf)
+        effective_wall_ms = ace_step_effective_wall_ms(total_ms, handoff_perf)
+        wall_denominator_ms = effective_wall_ms if phase_a_ms > 0.0 else total_ms
         accounted = 0.0
         for name, ms in self.timings_ms:
             if name == label:
                 continue
             accounted += ms
-            pct = (ms / total_ms * 100.0) if total_ms > 0 else 0.0
+            pct = (ms / wall_denominator_ms * 100.0) if wall_denominator_ms > 0 else 0.0
             row = f"[ace_step_v1_5][perf]   {name:40s} {ms:10.2f} ms  ({pct:5.1f}%)"
             print(row, flush=True)
-        unaccounted = max(0.0, total_ms - accounted)
+        unaccounted = max(0.0, wall_denominator_ms - accounted)
         if unaccounted > 0.5:
-            pct = unaccounted / total_ms * 100.0 if total_ms > 0 else 0.0
+            pct = unaccounted / wall_denominator_ms * 100.0 if wall_denominator_ms > 0 else 0.0
             print(
                 f"[ace_step_v1_5][perf]   {'(other/overhead)':40s} {unaccounted:10.2f} ms  ({pct:5.1f}%)",
                 flush=True,
             )
-        print(f"[ace_step_v1_5][perf]   {'TOTAL (wall)':40s} {total_ms:10.2f} ms", flush=True)
-        _emit_rtf_per_step(wall_ms=total_ms, params=self.params)
+        print(f"[ace_step_v1_5][perf]   {'TOTAL (wall)':40s} {effective_wall_ms:10.2f} ms", flush=True)
+        if phase_a_ms > 0.0:
+            print(
+                f"[ace_step_v1_5][perf]   {'  Phase-A (LM+preprocess)':40s} {phase_a_ms:10.2f} ms",
+                flush=True,
+            )
+            print(
+                f"[ace_step_v1_5][perf]   {'  Phase-B (DiT+VAE)':40s} {total_ms:10.2f} ms",
+                flush=True,
+            )
+        _emit_rtf_per_step(wall_ms=effective_wall_ms, params=self.params)
         module_timings = [pair for pair in self.timings_ms if pair[0] != label]
+        module_timings = ace_step_merge_handoff_module_timings(module_timings, handoff_perf)
+        summary_params = dict(self.params)
+        if isinstance(handoff_perf, dict):
+            handoff_params = handoff_perf.get("params") or {}
+            if handoff_params:
+                summary_params.update(handoff_params)
         emit_benchmark_wall_breakdown(
             module_timings,
-            wall_ms=total_ms,
-            params=self.params,
+            wall_ms=effective_wall_ms,
+            params=summary_params,
         )
         emit_key_metrics(
             module_timings,
-            wall_ms=total_ms,
-            params=self.params,
+            wall_ms=effective_wall_ms,
+            params=summary_params,
         )
         _perf_banner("end perf summary")
 
@@ -244,6 +268,104 @@ _BENCHMARK_INIT_LABELS = frozenset(
     {"handler_init", "qwen_encoder_init", "dit_pipeline_init", "vae_init", "five_hz_lm_init"}
 )
 _BENCHMARK_WALL_LABELS = frozenset({"demo_total", "e2e_total"})
+_PHASE_A_HANDOFF_EXCLUDE_LABELS = (
+    _BENCHMARK_WALL_LABELS | _BENCHMARK_DIT_LABELS | _BENCHMARK_VAE_LABELS | _BENCHMARK_AUDIO_SAVE_LABELS
+)
+_PREPROCESS_HANDOFF_TIMING_LABELS = frozenset(_BENCHMARK_LLM_LABELS)
+_PREPROCESS_HANDOFF_PARAM_KEYS = (
+    "lm_num_tokens",
+    "lm_gen_time_s",
+    "lm_phase1_time_s",
+    "lm_phase2_time_s",
+)
+
+
+def ace_step_phase_a_wall_ms(preprocess_perf: Optional[Dict[str, Any]]) -> float:
+    """Return Phase-A wall time carried across BH mesh re-exec handoff (0 when absent)."""
+    if not preprocess_perf:
+        return 0.0
+    try:
+        return max(0.0, float(preprocess_perf.get("phase_a_wall_ms") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ace_step_effective_wall_ms(
+    phase_b_wall_ms: float,
+    preprocess_perf: Optional[Dict[str, Any]] = None,
+) -> float:
+    """End-to-end wall = Phase-A handoff wall + Phase-B measured wall."""
+    return float(phase_b_wall_ms) + ace_step_phase_a_wall_ms(preprocess_perf)
+
+
+def ace_step_build_preprocess_handoff_perf(
+    *,
+    timings_ms: List[Tuple[str, float]],
+    params: Optional[Dict[str, Any]] = None,
+    lm_perf: Optional[Dict[str, Any]] = None,
+    phase_a_wall_ms: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Serialize Phase-A preprocess perf for :func:`ace_step_reexec_for_dit_mesh` handoff."""
+    lookup = _ms_lookup(timings_ms)
+    out_timings = [
+        (label, lookup[label])
+        for label in sorted(lookup.keys())
+        if label not in _PHASE_A_HANDOFF_EXCLUDE_LABELS and lookup.get(label, 0.0) > 0.0
+    ]
+    lm_lookup_ms = sum(float(lookup.get(lbl, 0.0)) for lbl in _PREPROCESS_HANDOFF_TIMING_LABELS)
+    out_params: Dict[str, Any] = {}
+    if params:
+        for key in _PREPROCESS_HANDOFF_PARAM_KEYS:
+            if key in params and params[key] is not None:
+                out_params[key] = params[key]
+    if isinstance(lm_perf, dict):
+        for key in _PREPROCESS_HANDOFF_PARAM_KEYS:
+            if key in lm_perf and lm_perf[key] is not None:
+                out_params[key] = lm_perf[key]
+    if lm_lookup_ms > 0.0:
+        try:
+            gen_s = float(out_params.get("lm_gen_time_s") or 0.0)
+        except (TypeError, ValueError):
+            gen_s = 0.0
+        if gen_s <= 0.0:
+            out_params["lm_gen_time_s"] = lm_lookup_ms / 1000.0
+    out: Dict[str, Any] = {"timings_ms": out_timings, "params": out_params}
+    if phase_a_wall_ms is not None:
+        try:
+            wall_ms = float(phase_a_wall_ms)
+            if wall_ms > 0.0:
+                out["phase_a_wall_ms"] = wall_ms
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def ace_step_apply_preprocess_handoff_perf(
+    recorder: AceStepPerfRecorder,
+    preprocess_perf: Optional[Dict[str, Any]],
+) -> None:
+    """Inject handoff preprocess stats into the Phase-B perf recorder (silent, no re-print)."""
+    if preprocess_perf is None:
+        return
+    handoff_params = preprocess_perf.get("params") or {}
+    if handoff_params:
+        recorder.set_params(**handoff_params)
+    for label, ms in preprocess_perf.get("timings_ms") or []:
+        recorder.timings_ms.append((str(label), float(ms)))
+
+
+def ace_step_merge_handoff_module_timings(
+    module_timings: List[Tuple[str, float]],
+    preprocess_perf: Optional[Dict[str, Any]],
+) -> List[Tuple[str, float]]:
+    """Merge Phase-A handoff module lines into a Phase-B module list (dedupe by label, keep max ms)."""
+    if not preprocess_perf:
+        return module_timings
+    merged = _ms_lookup(module_timings)
+    for label, ms in preprocess_perf.get("timings_ms") or []:
+        lbl = str(label)
+        merged[lbl] = max(float(merged.get(lbl, 0.0)), float(ms))
+    return sorted(merged.items(), key=lambda kv: kv[0])
 
 
 def ace_step_rtf_per_step(
@@ -321,7 +443,9 @@ def ace_step_extract_key_metrics(
     lm_time_s = lm_ms / 1000.0
     if params and params.get("lm_gen_time_s") is not None:
         try:
-            lm_time_s = float(params["lm_gen_time_s"])
+            gen_s = float(params["lm_gen_time_s"])
+            if gen_s > 0.0:
+                lm_time_s = gen_s
         except (TypeError, ValueError):
             pass
 
@@ -342,6 +466,14 @@ def ace_step_extract_key_metrics(
                 if n_tok > 0 and gen_s > 0.0:
                     metrics["lm_num_tokens"] = n_tok
                     metrics["tokens_per_sec"] = float(n_tok) / gen_s
+            except (TypeError, ValueError):
+                pass
+        if metrics.get("tokens_per_sec") is None and num_tokens is not None:
+            try:
+                n_tok = int(num_tokens)
+                if n_tok > 0 and lm_time_s > 0.0:
+                    metrics["lm_num_tokens"] = n_tok
+                    metrics["tokens_per_sec"] = float(n_tok) / float(lm_time_s)
             except (TypeError, ValueError):
                 pass
     return metrics

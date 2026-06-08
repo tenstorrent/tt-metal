@@ -99,8 +99,9 @@ def dit_init_latents_fp32_tile(
 ) -> ttnn.Tensor:
     """Initialize DiT latent noise as FLOAT32 TILE on device.
 
-    On multi-device meshes use :func:`dit_init_latents_host_f32` with the host latent sampler
-    (``ace_step_mesh_use_host_latent_sampler``); device-side latent init is not supported there.
+    On multi-device meshes latents are uploaded from host Gaussian noise when ``ttnn.randn``
+    is unavailable; latents then stay on device for TTNN APG/ADG + Euler (see
+    ``ACE_STEP_MESH_HOST_EULER=1`` for the legacy host sampler).
     """
     from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_device_num_chips
 
