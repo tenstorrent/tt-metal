@@ -181,3 +181,130 @@ def test_kv_cache_table(
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]
         assert_equal(chunk_torch, expected_chunk)
+
+
+# sp x tp
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_kv_cache_table(
+    request,
+    mesh_device,
+    seq_len,
+    variant,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+):
+    """
+    Readback test for the Kimi (non-balanced / sequential) KV chunk address table.
+
+    Runs Kimi MLA (variant kimi_k2_6) to fill a sequentially laid-out KVPE cache,
+    builds the table with create_kv_chunk_address_table_kimi, then reads every chunk
+    back through the table and checks it against the gathered cache. The sequential
+    gather is already position-continuous, so no chunk reorder is needed.
+    """
+    config, weights = request.getfixturevalue("random_weights")
+
+    assert config.num_attention_heads == 64, f"Not Kimi config: {config.num_attention_heads} heads"
+
+    logger.info(f"model={variant.name} num_heads={config.num_attention_heads} hidden={config.hidden_size}")
+
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    config.max_seq_len = seq_len
+
+    # Test forward pass comparison
+    logger.info("=" * 80)
+    logger.info(f"Testing forward pass comparison (seq_len={seq_len})")
+    logger.info("=" * 80)
+
+    # Initialize KVPE cache
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
+
+    num_kvpe_cache_layers = 1
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_cache_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_kvpe_cache_layers,
+    )
+
+    # Create and populate KV chunk address table using utility function
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_kvpe_cache_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+
+    lookup_table = create_kv_chunk_address_table_kimi(
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+    )
+
+    # Run MLA inference using utility function
+    # Fill first layer with actual kv cache
+    # Layer 1 remains zeros
+    run_mla_inference(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=topology,
+        tt_kvpe_cache=tt_kvpe_cache,
+    )
+
+    tt_kvpe_cache_torch = ttnn.to_torch(
+        tt_kvpe_cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)
+
+    # remember layer0 results
+    tt_kvpe_cache_torch_layer0 = tt_kvpe_cache_torch[:1, :1, :, :]
+
+    # Walk every chunk in layer 0, read it back via the address table, and compare
+    # against the corresponding 32-token slice of the gathered cache.
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+        expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]
+        assert_equal(chunk_torch, expected_chunk)
