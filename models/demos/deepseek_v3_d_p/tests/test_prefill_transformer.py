@@ -22,6 +22,7 @@ Parametrized over:
 import gc
 import json
 import os
+import time
 
 import pytest
 import torch
@@ -78,7 +79,7 @@ TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
-DETERMINISM_PCC_THRESHOLD = 0.9999
+DETERMINISM_PCC_THRESHOLD = 1.0
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
@@ -533,6 +534,7 @@ def run_model(
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
     for i in range(num_iterations):
+        start = time.time()
         logger.info(f"Starting iteration: {i}")
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
@@ -544,6 +546,8 @@ def run_model(
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
+        end = time.time()
+        logger.info(f"Iteration {i} completed in {end - start} seconds.")
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
