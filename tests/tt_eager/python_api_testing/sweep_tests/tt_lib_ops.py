@@ -607,27 +607,6 @@ def eltwise_softplus(
 
 
 @setup_host_and_device
-def conv(
-    x,
-    y,
-    conv_params,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_tt_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-    # t2 = ttnn.experimental.tensor.conv(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
-    t2 = ttnn.conv2d(t0, t1, conv_params, 0, 0, 0, 0, 0, conv_params[0])
-
-    return tt2torch_tensor(t2)
-
-
-@setup_host_and_device
 def layernorm_noweights(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.layer_norm(t0, epsilon=1e-5, weight=None, bias=None, memory_config=output_mem_config)

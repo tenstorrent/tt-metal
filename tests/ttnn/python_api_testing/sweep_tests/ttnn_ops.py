@@ -1179,48 +1179,6 @@ def layernorm_noweights(
     return ttnn_tensor_to_torch(t1)
 
 
-def attention_softmax_nomask(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t2 = ttnn.transformer.attention_softmax(t0, head_size=None, attention_mask=None, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t2)
-
-
-def attention_softmax(
-    x,
-    y,
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    y[y <= 0.50] = 0
-    y[y > 0.50] = 1
-
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    if scalar < 0:
-        scalar = -scalar
-
-    t2 = ttnn.transformer.attention_softmax(t0, head_size=scalar, attention_mask=t1, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t2)
-
-
 def rmsnorm(
     x,
     y,
@@ -2334,44 +2292,6 @@ def concat(
     return ttnn_tensor_to_torch(t2)
 
 
-def global_avg_pool2d(
-    x,
-    *args,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    input_tensor = torch.permute(x, (0, 2, 3, 1))
-    input_tensor = ttnn.from_torch(
-        input_tensor, dtype=dtype[0], layout=layout[0], device=device, memory_config=input_mem_config[0]
-    )
-    output_tensor = ttnn.global_avg_pool2d(input_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-
-    return output_tensor.to(torch.float32)
-
-
-def upsample(
-    x,
-    *args,
-    scale_factor,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.upsample(t0, scale_factor=scale_factor, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t1)
-
-
 def l1_loss_sum(
     x,
     y,
@@ -2827,58 +2747,6 @@ def empty(
     return ttnn_tensor_to_torch(t1)
 
 
-def attention_softmax_nomask_2(
-    x,
-    y,
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    y[y <= 0.50] = 0
-    y[y > 0.50] = 1
-
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    if scalar < 0:
-        scalar = -scalar
-
-    t2 = ttnn.transformer.attention_softmax_(t0, head_size=scalar, attention_mask=None)
-
-    return ttnn_tensor_to_torch(t2)
-
-
-def attention_softmax_2(
-    x,
-    y,
-    *args,
-    scalar,
-    device,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
-    **kwargs,
-):
-    y[y <= 0.50] = 0
-    y[y > 0.50] = 1
-
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
-
-    if scalar < 0:
-        scalar = -scalar
-
-    t2 = ttnn.transformer.attention_softmax_(t0, head_size=scalar, attention_mask=t1)
-
-    return ttnn_tensor_to_torch(t2)
-
-
 def zeros(
     x,
     *args,
@@ -3190,27 +3058,6 @@ def std(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 def var(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.var(t0, dim)
-
-    return ttnn_tensor_to_torch(t1)
-
-
-def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    batch_size = x.shape[0]
-    input_height = x.shape[2]
-    input_width = x.shape[3]
-
-    m = ttnn.MaxPool2d(
-        kernel_size=3,
-        stride=2,
-        device=device,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        reader_patterns_cache={},
-    )
-
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = m(t0)
 
     return ttnn_tensor_to_torch(t1)
 

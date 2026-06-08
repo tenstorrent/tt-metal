@@ -60,9 +60,6 @@ ttnn.concat
 ttnn.concat_bw
 ttnn.conj
 ttnn.conj_bw
-ttnn.Conv1d
-ttnn.conv2d
-ttnn.conv_transpose2d
 ttnn.copy
 ttnn.copy_host_to_device_tensor
 ttnn.cos
@@ -109,7 +106,6 @@ ttnn.experimental.attn_matmul
 ttnn.experimental.attn_matmul_from_cache
 ttnn.experimental.bias_gelu
 ttnn.experimental.concatenate_heads
-ttnn.experimental.convert_to_chw
 ttnn.experimental.create_qkv_heads
 ttnn.experimental.create_qkv_heads_from_separate_tensors
 ttnn.experimental.div
@@ -166,7 +162,6 @@ ttnn.floor_bw
 ttnn.floor_div
 ttnn.fmod
 ttnn.fmod_bw
-ttnn.fold
 ttnn.frac
 ttnn.frac_bw
 ttnn.from_device
@@ -180,7 +175,6 @@ ttnn.geglu
 ttnn.gelu
 ttnn.gelu_bw
 ttnn.gez
-ttnn.global_avg_pool2d
 ttnn.glu
 ttnn.group_norm
 ttnn.gt
@@ -267,7 +261,6 @@ ttnn.mac
 ttnn.matmul
 ttnn.max
 ttnn.max_bw
-ttnn.max_pool2d
 ttnn.maximum
 ttnn.mean
 ttnn.min
@@ -449,13 +442,7 @@ ttnn.to_layout
 ttnn.to_memory_config
 ttnn.to_torch
 ttnn.topk
-ttnn.transformer.attention_softmax
-ttnn.transformer.attention_softmax_
-ttnn.transformer.chunked_scaled_dot_product_attention
 ttnn.transformer.concatenate_heads
-ttnn.transformer.paged_scaled_dot_product_attention_decode
-ttnn.transformer.scaled_dot_product_attention
-ttnn.transformer.scaled_dot_product_attention_decode
 ttnn.transformer.split_query_key_value_and_split_heads
 ttnn.transpose
 ttnn.tril
@@ -468,10 +455,8 @@ ttnn.uniform
 ttnn.unsqueeze
 ttnn.unsqueeze_to_4D
 ttnn.untilize
-ttnn.untilize_with_halo_v2
 ttnn.untilize_with_unpadding
 ttnn.update_cache
-ttnn.upsample
 ttnn.var
 ttnn.var_hw
 ttnn.view

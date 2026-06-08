@@ -15,7 +15,6 @@ from . import test_losses_examples as losses
 from . import test_reduction_examples as reduction
 from . import test_normalization_examples as normalization
 from . import test_embedding_examples as embedding
-from . import test_pooling_examples as pooling
 
 FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Core
@@ -412,32 +411,13 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     # Transformers
     # "ttnn.transformer.split_query_key_value_and_split_heads": transformer.test_split_query_key_value_and_split_heads, # Lack of example
     # "ttnn.transformer.concatenate_heads": transformer.test_concatenate_heads, # Lack of example
-    # "ttnn.transformer.attention_softmax": transformer.test_attention_softmax, # Lack of example
-    # "ttnn.transformer.attention_softmax_": transformer.test_attention_softmax_, # Lack of example
     # "ttnn.experimental.rotary_embedding": transformer.test_rotary_embedding, # Lack of example
-    # "ttnn.transformer.scaled_dot_product_attention": transformer.test_scaled_dot_product_attention, # Lack of example
-    # "ttnn.transformer.scaled_dot_product_attention_decode": transformer.test_scaled_dot_product_attention_decode, # Lack of example
     # CCL
     # "ttnn.all_gather": ccl.test_all_gather, # Non-working example
     # "ttnn.reduce_scatter": ccl.test_reduce_scatter, # Non-working example
     # "ttnn.all_reduce": ccl.test_all_reduce, # Non-working example
     # Embedding
     "ttnn.embedding": embedding.test_embedding,
-    # Convolution
-    # "ttnn.conv1d": convolution.test_conv1d, # Lack of example
-    # "ttnn.conv2d": convolution.test_conv2d, # Lack of example
-    # "ttnn.experimental.conv3d": convolution.test_conv3d, # Lack of example
-    # "ttnn.conv_transpose2d": convolution.test_conv_transpose2d, # Lack of example
-    # "ttnn.prepare_conv_weights": convolution.test_prepare_conv_weights, # Lack of example
-    # "ttnn.prepare_conv_bias": convolution.test_prepare_conv_bias, # Lack of example
-    # "ttnn.prepare_conv_transpose2d_weights": convolution.test_prepare_conv_transpose2d_weights, # Lack of example
-    # "ttnn.prepare_conv_transpose2d_bias": convolution.test_prepare_conv_transpose2d_bias, # Lack of example
-    # Pooling
-    "ttnn.global_avg_pool2d": pooling.test_global_avg_pool2d,
-    "ttnn.max_pool2d": pooling.test_max_pool2d,
-    "ttnn.avg_pool2d": pooling.test_avg_pool2d,
-    # Vision
-    # "ttnn.upsample": vision.test_upsample, # Lack of example
     # KV Cache
     # "ttnn.kv_cache.fill_cache_for_user_":kv_cache.test_fill_cache_for_user_, # Lack of example
     # "ttnn.kv_cache.update_cache_for_token_":kv_cache.test_update_cache_for_token_, # Lack of example

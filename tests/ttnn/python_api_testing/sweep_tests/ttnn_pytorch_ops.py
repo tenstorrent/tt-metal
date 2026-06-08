@@ -76,33 +76,6 @@ def layernorm_noweights(x, *args, **kwargs):
     return torch_output_tensor
 
 
-def attention_softmax_nomask(x, *args, **kwargs):
-    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
-    torch_output_tensor = golden_function(
-        x,
-        head_size=None,
-        attention_mask=None,
-    )
-
-    return torch_output_tensor
-
-
-def attention_softmax(x, y, *args, scalar, **kwargs):
-    y[y <= 0.50] = 0
-    y[y > 0.50] = 1
-    if scalar < 0:
-        scalar = -scalar
-
-    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
-    torch_output_tensor = golden_function(
-        x,
-        head_size=None,
-        attention_mask=y,
-    )
-
-    return torch_output_tensor
-
-
 def transformer_concatenate_heads(x, *args, **kwargs):
     golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
     return golden_function(x)

@@ -110,32 +110,6 @@
   owner_id: U09BX3N0N95 # Mateusz Nowak
   merge_gate: false
 
-- name: "ttnn conv group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
-  skus:
-    wh_n300_civ2:
-      timeout: 40
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  team: ttnn
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  merge_gate: false
-
-- name: "ttnn pool group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
-  skus:
-    wh_n300_civ2:
-      timeout: 40
-    bh_p100:
-      timeout: 40
-    bh_p150b_civ2:
-      timeout: 40
-  team: ttnn
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  merge_gate: false
-
 - name: "ttnn matmul group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
   skus:
@@ -186,19 +160,6 @@
       timeout: 40
   team: ttnn
   owner_id: U08JFM3CFA4 # Gongyu Wang
-  merge_gate: false
-
-- name: "ttnn sdpa group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
-  skus:
-    wh_n300_civ2:
-      timeout: 15
-    bh_p100:
-      timeout: 15
-    bh_p150b_civ2:
-      timeout: 15
-  team: ttnn
-  owner_id: U085GDCAZTN # Pavle Josipovic
   merge_gate: false
 
 - name: "ttnn reduce group"
