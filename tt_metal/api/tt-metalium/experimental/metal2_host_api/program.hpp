@@ -48,6 +48,20 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
 void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args);
 
+// Fast-path partial update: re-apply ONLY the dynamic (hash-excluded) named runtime args of an
+// existing Program — the named-scalar analog of UpdateTensorArgs. For each KernelRunArgs entry,
+// the named RTAs in runtime_arg_values (per node) and the named CRTAs in common_runtime_arg_values
+// are written in place into the cached program's dispatch buffers; everything else is left as the
+// most recent SetProgramRunArgs call set it. Unnamed/vararg args and DFB params are ignored.
+//
+// PRE-CONDITION: SetProgramRunArgs must have been called previously.
+//
+// USE CASE: cache-hit re-application of values an op deliberately excluded from the program hash
+// (e.g. an RNG seed, an [from,to) range, an optimizer lr/step) so that two calls differing only in
+// those values cache-hit yet still run with the current values. This is the Metal 2.0 replacement
+// for the descriptor-era apply_dynamic_runtime_args shim.
+void ApplyDynamicArgs(Program& program, const ProgramRunArgs& dynamic_args);
+
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunArgsView is a non-owning view into the Program's command buffers,
 // enabling in-place modification of mutable Program parameters.

@@ -184,9 +184,38 @@ private:
         }
     };
 
+    // Metal 2.0 analog of DirectDescriptorFactory: forwards the tiered factory methods
+    // (create_program_spec + the static/dynamic run-arg builders) from the device operation, so a
+    // bare create_program_spec op routes to the ProgramSpec adapter without a program_factory_t.
+    struct DirectProgramSpecFactory {
+        static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            return DeviceOperation::create_program_spec(attrs, tensor_args, tensor_return_value);
+        }
+        static tt::tt_metal::experimental::ProgramRunArgs create_static_args(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            return DeviceOperation::create_static_args(attrs, tensor_args, tensor_return_value);
+        }
+        static tt::tt_metal::experimental::ProgramRunArgs create_dynamic_args(
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt) {
+            return DeviceOperation::create_dynamic_args(
+                attrs, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+        }
+    };
+
     template <typename T, typename = void>
     struct resolve_program_factory {
-        using type = std::variant<DirectDescriptorFactory>;
+        using type = std::conditional_t<
+            HasDirectProgramSpec<T>,
+            std::variant<DirectProgramSpecFactory>,
+            std::variant<DirectDescriptorFactory>>;
     };
     template <typename T>
     struct resolve_program_factory<T, std::void_t<typename T::program_factory_t>> {
@@ -247,7 +276,12 @@ public:
 
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+        if constexpr (requires { DeviceOperation::extract_immutable_info(attrs, tensor_args); }) {
+            // Metal 2.0 ImmutableInfo: the cache key is the SAME immutable projection that feeds
+            // create_program_spec, so mutable values (e.g. an RNG seed) cannot leak into the key.
+            return ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::extract_immutable_info(attrs, tensor_args));
+        } else if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
         } else {
             return ttsl::hash::hash_objects_with_default_seed(
@@ -700,36 +734,81 @@ public:
             return bindings;
         }
 
+        // Merge a per-call static ProgramRunArgs (Tier 2) with a per-coordinate dynamic ProgramRunArgs
+        // (Tier 3) into the complete set SetProgramRunArgs expects on a cache miss. Static supplies the
+        // work-split scalars; dynamic supplies the hash-excluded values (RNG seed, range) and tensor args.
+        static tt::tt_metal::experimental::ProgramRunArgs merge_run_args(
+            const tt::tt_metal::experimental::ProgramRunArgs& static_args,
+            const tt::tt_metal::experimental::ProgramRunArgs& dynamic_args) {
+            tt::tt_metal::experimental::ProgramRunArgs merged = static_args;
+            for (const auto& d_kernel : dynamic_args.kernel_run_args) {
+                auto k_it =
+                    std::find_if(merged.kernel_run_args.begin(), merged.kernel_run_args.end(), [&](const auto& k) {
+                        return k.kernel_spec_name == d_kernel.kernel_spec_name;
+                    });
+                if (k_it == merged.kernel_run_args.end()) {
+                    merged.kernel_run_args.push_back(d_kernel);
+                    continue;
+                }
+                for (const auto& [name, value] : d_kernel.common_runtime_arg_values) {
+                    k_it->common_runtime_arg_values[name] = value;
+                }
+                for (const auto& d_node : d_kernel.runtime_arg_values) {
+                    auto n_it = std::find_if(
+                        k_it->runtime_arg_values.begin(), k_it->runtime_arg_values.end(), [&](const auto& n) {
+                            return n.node == d_node.node;
+                        });
+                    if (n_it == k_it->runtime_arg_values.end()) {
+                        k_it->runtime_arg_values.push_back(d_node);
+                    } else {
+                        for (const auto& [name, value] : d_node.args) {
+                            n_it->args[name] = value;
+                        }
+                    }
+                }
+            }
+            merged.tensor_args = dynamic_args.tensor_args;
+            return merged;
+        }
+
         static auto create_mesh_workload(
             const operation_attributes_t& attrs,
             const ttnn::MeshCoordinateRangeSet& tensor_coords,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            // Metal 2.0's MakeProgramFromSpec needs a MeshDevice; pull from the
-            // first device tensor reachable from tensor_args. Op factories
-            // satisfying this concept are tensor-driven, so first_tensor is
-            // always populated for current callers.
+            // MakeProgramFromSpec needs a MeshDevice. Generator ops (e.g. rand) carry no input tensor,
+            // so fall back to the output(s) in tensor_return_value when tensor_args has none.
             auto first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_args);
+            if (!first_tensor.has_value()) {
+                first_tensor = ttsl::reflection::get_first_object_of_type<tt::tt_metal::Tensor>(tensor_return_value);
+            }
             TT_FATAL(
                 first_tensor.has_value(),
-                "ProgramSpec factory adapter requires at least one Tensor in tensor_args to source the MeshDevice");
+                "ProgramSpec factory adapter requires at least one Tensor in tensor_args or tensor_return_value to "
+                "source the MeshDevice");
             auto* mesh_device = first_tensor.value().device();
-            TT_FATAL(mesh_device != nullptr, "First tensor in tensor_args must be allocated on a MeshDevice");
+            TT_FATAL(mesh_device != nullptr, "Sourcing Tensor must be allocated on a MeshDevice");
 
-            // The factory produces a single ProgramArtifacts; the adapter stamps it
-            // across all coordinate ranges. Bindings derive from the (single) set of
-            // factory tensor_args and are identical for every stamped program; copy
-            // per range into the cached shared state.
-            auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            // Tier 1 (immutable spec) and Tier 2 (static run-args) are per-call. Tier 3 (dynamic
+            // run-args) is computed per coordinate range so per-device values (e.g. an RNG seed
+            // offset on a sharded mesh) can vary across the mesh.
+            auto spec = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            auto static_args = ProgramSpecFactory::create_static_args(attrs, tensor_args, tensor_return_value);
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
-            auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-                shared_variables.emplace(range, shared_variables_t{.bindings = bindings});
+                const std::optional<ttnn::MeshCoordinate> coord(*range.begin());
+                auto dynamic_args =
+                    ProgramSpecFactory::create_dynamic_args(attrs, tensor_args, tensor_return_value, coord);
+                auto run_params = merge_run_args(static_args, dynamic_args);
+
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, run_params);
+
+                auto bindings = resolve_bindings(dynamic_args.tensor_args, io_mesh_tensors);
+                shared_variables.emplace(range, shared_variables_t{.bindings = std::move(bindings)});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
@@ -742,12 +821,20 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& /*attrs*/,
+            const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+
+                // Re-apply Tier 3 (dynamic run-args) for this coordinate: the hash-excluded scalars
+                // (seed/range) via ApplyDynamicArgs, then the tensor addresses via UpdateTensorArgs.
+                const std::optional<ttnn::MeshCoordinate> coord(*coordinate_range.begin());
+                auto dynamic_args =
+                    ProgramSpecFactory::create_dynamic_args(attrs, tensor_args, tensor_return_value, coord);
+                tt::tt_metal::experimental::ApplyDynamicArgs(program, dynamic_args);
+
                 std::vector<TensorArgument> fresh_tensor_args;
                 fresh_tensor_args.reserve(sv.bindings.size());
                 for (const auto& b : sv.bindings) {
@@ -765,7 +852,11 @@ public:
         const tensor_args_t& tensor_args) {
         ttsl::hash::hash_t hash;
 
-        if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
+        if constexpr (requires { DeviceOperation::extract_immutable_info(attrs, tensor_args); }) {
+            // Metal 2.0 ImmutableInfo: structural cache key (same projection that builds the spec).
+            hash = ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::extract_immutable_info(attrs, tensor_args));
+        } else if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             hash = DeviceOperation::compute_program_hash(attrs, tensor_args);
         } else {
             hash =
