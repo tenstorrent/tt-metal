@@ -64,44 +64,27 @@ def lm_state():
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 def test_e2e_lm_hidden_state_pcc(mesh_device, vv_config, lm_state):
-    """LM last_hidden_state PCC >= 0.99 after prefill on synthetic tokens."""
+    """LM last_hidden_state PCC >= 0.99 after prefill on synthetic tokens.
+
+    Reference is the **full VibeVoice model's own language_model** (the actual
+    Qwen2 instance built from VibeVoice's decoder_config with the checkpoint
+    weights) — not a hand-built Qwen2Config — so config/weights exactly match.
+    """
     torch.manual_seed(0)
 
     cfg = vv_config.decoder
     input_ids = torch.randint(0, cfg.vocab_size, (1, SEQ_LEN), dtype=torch.long)
 
-    # Reference: Qwen2 last hidden state
-    from transformers import Qwen2Model, Qwen2Config
+    # Reference: the real VibeVoice model, use its language_model's last hidden state.
+    from vibevoice.modular.modeling_vibevoice_inference import VibeVoiceForConditionalGenerationInference
 
-    hf_cfg = Qwen2Config(
-        hidden_size=cfg.hidden_size,
-        num_hidden_layers=cfg.num_hidden_layers,
-        num_attention_heads=cfg.num_attention_heads,
-        num_key_value_heads=cfg.num_key_value_heads,
-        intermediate_size=cfg.intermediate_size,
-        vocab_size=cfg.vocab_size,
-        rope_theta=cfg.rope_theta,
-        rms_norm_eps=cfg.rms_norm_eps,
-        max_position_embeddings=cfg.max_position_embeddings,
+    ref_model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+        MODEL_PATH, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa"
     )
-    ref_model = Qwen2Model(hf_cfg)
-    hf_state = {}
-    for k, v in lm_state.items():
-        hk = k.replace("tok_embeddings.", "embed_tokens.")
-        hk = hk.replace(".attention.wq", ".self_attn.q_proj")
-        hk = hk.replace(".attention.wk", ".self_attn.k_proj")
-        hk = hk.replace(".attention.wv", ".self_attn.v_proj")
-        hk = hk.replace(".attention.wo", ".self_attn.o_proj")
-        hk = hk.replace(".feed_forward.w1", ".mlp.gate_proj")
-        hk = hk.replace(".feed_forward.w3", ".mlp.up_proj")
-        hk = hk.replace(".feed_forward.w2", ".mlp.down_proj")
-        hk = hk.replace(".attention_norm", ".input_layernorm")
-        hk = hk.replace(".ffn_norm", ".post_attention_layernorm")
-        hf_state[hk] = v
-    ref_model.load_state_dict(hf_state, strict=False)
     ref_model.eval()
+    ref_lm = ref_model.model.language_model
     with torch.no_grad():
-        ref_out = ref_model(input_ids).last_hidden_state  # [1, S, hidden]
+        ref_out = ref_lm(input_ids=input_ids).last_hidden_state  # [1, S, hidden]
 
     # TT
     weights = preprocess_lm_weights(lm_state, mesh_device, cfg)
