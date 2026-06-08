@@ -93,6 +93,9 @@ void kernel_main() {
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -149,7 +152,7 @@ void kernel_main() {
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
 
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
@@ -160,6 +163,7 @@ void kernel_main() {
     // Ring setup
     //-------------------------------------------------------------------------
     constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
+    constexpr uint32_t w2_blocks_per_a2a_iter_shared_expert = Cfg::w2_blocks_per_shared_expert / Cfg::num_a2a_iters;
 
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
@@ -350,7 +354,10 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 uint32_t w2_k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter; ++block_id) {
+                const auto w2_blocks_per_a2a_iter_using = (expert_id >= num_experts - num_shared_experts)
+                                                              ? w2_blocks_per_a2a_iter_shared_expert
+                                                              : w2_blocks_per_a2a_iter;
+                for (uint32_t block_id = 0; block_id < w2_blocks_per_a2a_iter_using; ++block_id) {
                     cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
                     for (uint32_t k = 0; k < w2_tiles_per_block; k += w2_tiles_per_iter_w) {
                         if constexpr (has_bias) {

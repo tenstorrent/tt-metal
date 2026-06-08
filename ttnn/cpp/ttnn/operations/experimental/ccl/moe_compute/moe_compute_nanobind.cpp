@@ -241,7 +241,15 @@ void bind_moe_compute_utils(nb::module_& mod) {
         Callers own the device → shared-expert mapping and produce the
         pre-arranged ``shared_w*`` tensors.
 
-        Returns ``(output_w0, output_w1, output_w2)`` in TILE_LAYOUT, each the result of
+        The shared experts are tensor-parallel split on the intermediate dim across
+        ``1 - cluster_axis`` (via ``mesh_partition``). For W0/W1 the per-device real
+        columns are interleaved with zero padding in ``num_cores`` equal chunks so
+        each matmul core sees ``tp_n / num_cores`` real columns then zeros; W2 keeps
+        its real rows front-packed (the kernel reads fewer row blocks for shared
+        experts). ``num_cores`` is the matmul core count the W0/W1 intermediate dim
+        is sharded across (``len(get_weight_core_shard_maps(...).w0_w1_shard_map)``).
+
+        Returns ``(output_w0, output_w1, output_w2)``, each the result of
         concatenating routed + shared along dim 1.
         )doc",
         &ttnn::experimental::add_shared_expert_weights,
@@ -250,7 +258,8 @@ void bind_moe_compute_utils(nb::module_& mod) {
         nb::arg("routed_w2").noconvert(),
         nb::arg("shared_w0").noconvert(),
         nb::arg("shared_w1").noconvert(),
-        nb::arg("shared_w2").noconvert());
+        nb::arg("shared_w2").noconvert(),
+        nb::arg("cluster_axis"));
 
     ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
         mod,

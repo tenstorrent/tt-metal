@@ -29,10 +29,12 @@ void kernel_main() {
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
-    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias>;
-
-    // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
+
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     // Number of physical DRAM banks the HEIGHT_SHARDED weight tensor lives on. WH=12 (1:1
     // with ring N=12). BH=8 always; ring N can be 8, 12, or 16. When N exceeds num_banks
@@ -341,7 +343,10 @@ void kernel_main() {
             //-------------------------------------------------------------------------
             uint32_t w2_global_page = w2_slice_first_global_page;
 
-            for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
+            const auto w2_blocks_per_expert = (expert_id >= num_experts - num_shared_experts)
+                                                  ? Cfg::w2_blocks_per_shared_expert
+                                                  : Cfg::w2_blocks_per_expert;
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
                 noc_async_read_set_trid(trid_to_issue);
 
                 // First transaction:

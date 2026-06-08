@@ -626,22 +626,6 @@ class TTMoEDecodeConfig(BaseModel):
             elif isinstance(dispatch_data, BaseModel) and getattr(dispatch_data, "shared_expert_ids", None) is None:
                 data["dispatch"] = dispatch_data.model_copy(update={"shared_expert_ids": shared_ids})
 
-        # The YAML/input `reduce.shared_expert_scale` is the LOGICAL scale (single
-        # contribution per token). Each replica device emits the shared-expert output
-        # independently and reduce-scatter sums them, so the kernel-ready scale is
-        # `logical / num_replicated`. Apply here so the stored field == what the
-        # kernel sees; callers that need to round-trip must un-scale first
-        # (`with_mesh_shape` does this).
-        num_replicated = adoptable["mesh_shape"][1 - adoptable["cluster_axis"]]
-        if num_replicated > 1:
-            reduce_data = data.get("reduce")
-            if isinstance(reduce_data, dict) and reduce_data.get("shared_expert_scale") is not None:
-                reduce_data["shared_expert_scale"] = reduce_data["shared_expert_scale"] / num_replicated
-            elif isinstance(reduce_data, BaseModel) and getattr(reduce_data, "shared_expert_scale", None) is not None:
-                data["reduce"] = reduce_data.model_copy(
-                    update={"shared_expert_scale": reduce_data.shared_expert_scale / num_replicated}
-                )
-
         return data
 
     # ---- Test-only mesh slicing ----
@@ -700,30 +684,7 @@ class TTMoEDecodeConfig(BaseModel):
         # the new num_routed_experts.
         if isinstance(data.get("dispatch"), dict):
             data["dispatch"].pop("shared_expert_ids", None)
-        # The dumped `reduce.shared_expert_scale` is the kernel-ready value
-        # (logical / old_num_replicated). Restore the logical value so the
-        # pre-validator can re-divide by the new num_replicated.
-        self._unscale_shared_expert_scale(data)
         return type(self).model_validate(data)
-
-    def _unscale_shared_expert_scale(self, data: dict) -> None:
-        """In-place: convert a dumped `reduce.shared_expert_scale` from the stored
-        kernel-ready value (logical / num_replicated) back to the logical value.
-
-        The pre-validator divides the logical input by `num_replicated` so the
-        stored field matches what the kernel sees. Any path that feeds dumped data
-        back through `model_validate` (mesh slicing, YAML round-trip) must undo that
-        first, otherwise the pre-validator divides a second time and under-scales.
-
-        TODO (AM): This is only necessary because the moe_compute flow does not properly TP shard the shared expert yet
-        https://github.com/tenstorrent/tt-metal/issues/45060
-
-        """
-        num_replicated = self.mesh_shape[1 - self.cluster_axis]
-        if num_replicated > 1 and isinstance(data.get("reduce"), dict):
-            reduce_data = data["reduce"]
-            if reduce_data.get("shared_expert_scale") is not None:
-                reduce_data["shared_expert_scale"] *= num_replicated
 
     @staticmethod
     def _drop_derived_fields(data: dict) -> None:
@@ -746,7 +707,6 @@ class TTMoEDecodeConfig(BaseModel):
         import yaml
 
         data = self.model_dump(mode="json", exclude_defaults=exclude_defaults, exclude_none=exclude_none, **dump_kwargs)
-        self._unscale_shared_expert_scale(data)
         self._drop_derived_fields(data)
         return yaml.safe_dump(data, sort_keys=False)
 

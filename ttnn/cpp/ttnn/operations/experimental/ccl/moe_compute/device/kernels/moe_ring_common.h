@@ -8,6 +8,8 @@
 
 #include "../hostdevcommon/config.hpp"
 
+namespace moe_ring {
+
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 
@@ -17,8 +19,6 @@ constexpr uint32_t div_up() {
 }
 
 }  // namespace detail
-
-namespace moe_ring {
 
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
 constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
@@ -98,10 +98,20 @@ constexpr ShardLUT<n_cores> make_w2_offset_lut() {
     return lut;
 }
 
+template <uint32_t Nt, bool has_bias, uint32_t W2TilesPerExpertW, uint32_t SharedExpertTp = 1>
+constexpr uint32_t get_w2_blocks_per_expert() {
+    constexpr uint32_t TpNt = moe_ring::detail::div_up<Nt, SharedExpertTp>();
+    constexpr uint32_t w2_dram_tiles_h = has_bias ? TpNt + 1 : TpNt;
+    constexpr uint32_t w2_tiles_per_expert_h =
+        ((w2_dram_tiles_h + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) * W2_TILES_PER_A2A_ITER_H;
+
+    return W2TilesPerExpertW * w2_tiles_per_expert_h / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);
+}
+
 //-----------------------------------------------------------------------------
 // Derived ring constants — single source of truth for compute, dm0, dm1.
 //-----------------------------------------------------------------------------
-template <uint32_t Ht, uint32_t Nt, uint32_t num_cores, bool has_bias>
+template <uint32_t Ht, uint32_t Nt, uint32_t num_cores, bool has_bias, uint32_t SharedExpertTp = 1>
 struct MoeRingConfig {
     // W0/W1
     static constexpr uint32_t w0_w1_dram_tiles_h = has_bias ? Ht + 1 : Ht;
@@ -115,11 +125,9 @@ struct MoeRingConfig {
     static constexpr uint32_t num_a2a_iters =
         (max_w2_tiles_per_core + W2_TILES_PER_A2A_ITER_W - 1) / W2_TILES_PER_A2A_ITER_W;
     static constexpr uint32_t w2_tiles_per_expert_w = num_a2a_iters * W2_TILES_PER_A2A_ITER_W;
-    static constexpr uint32_t w2_dram_tiles_h = has_bias ? Nt + 1 : Nt;
-    static constexpr uint32_t w2_tiles_per_expert_h =
-        ((w2_dram_tiles_h + W2_TILES_PER_A2A_ITER_H - 1) / W2_TILES_PER_A2A_ITER_H) * W2_TILES_PER_A2A_ITER_H;
-    static constexpr uint32_t w2_blocks_per_expert =
-        w2_tiles_per_expert_w * w2_tiles_per_expert_h / (W2_TXNS_PER_BLOCK * W2_TILES_PER_TXN);
+    static constexpr uint32_t w2_blocks_per_expert = get_w2_blocks_per_expert<Nt, has_bias, w2_tiles_per_expert_w>();
+    static constexpr uint32_t w2_blocks_per_shared_expert =
+        get_w2_blocks_per_expert<Nt, has_bias, w2_tiles_per_expert_w, SharedExpertTp>();
 };
 
 }  // namespace moe_ring

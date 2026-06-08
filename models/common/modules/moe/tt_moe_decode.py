@@ -392,7 +392,13 @@ class _TTMoEDecodeExpertState:
             )
             routed_w0, routed_w1, routed_w2 = tt_w0, tt_w1, tt_w2
             tt_w0, tt_w1, tt_w2 = ttnn.experimental.add_shared_expert_weights(
-                routed_w0, routed_w1, routed_w2, tt_shared_w0, tt_shared_w1, tt_shared_w2
+                routed_w0,
+                routed_w1,
+                routed_w2,
+                tt_shared_w0,
+                tt_shared_w1,
+                tt_shared_w2,
+                cluster_axis=cluster_axis,
             )
             for t in (routed_w0, routed_w1, routed_w2, tt_shared_w0, tt_shared_w1, tt_shared_w2):
                 ttnn.deallocate(t)
