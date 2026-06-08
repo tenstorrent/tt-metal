@@ -19,7 +19,8 @@ constexpr std::uint32_t CONFIG_SIZE    = 2; // Unpacker configuration size in dw
 constexpr std::uint32_t NUM_UNPACKERS  = 2; // Number of unpackers
 
 // Unpack tile descriptor
-struct unpack_tile_descriptor_t{
+struct unpack_tile_descriptor_t
+{
     // word 0
     std::uint32_t in_data_format : DATA_FORMAT_BIT_COUNT;
     std::uint32_t uncompressed       : 1;
@@ -48,7 +49,8 @@ typedef union
 } unpack_tile_descriptor_u;
 
 // Unpack config
-struct unpack_config_t{
+struct unpack_config_t
+{
     // word 0
     std::uint32_t out_data_format : DATA_FORMAT_BIT_COUNT;
     std::uint32_t throttle_mode             : 2;
@@ -86,7 +88,8 @@ typedef union
 } unpack_config_u;
 
 // ALU config
-struct alu_config_t{
+struct alu_config_t
+{
     std::uint32_t ALU_ROUNDING_MODE_Fpu_srnd_en     : 1;
     std::uint32_t ALU_ROUNDING_MODE_Gasket_srnd_en  : 1;
     std::uint32_t ALU_ROUNDING_MODE_Packer_srnd_en  : 1;

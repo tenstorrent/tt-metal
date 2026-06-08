@@ -12,7 +12,8 @@
 namespace ckernel
 {
 
-struct risc_compact_mov_instrn_t{
+struct risc_compact_mov_instrn_t
+{
     std::uint32_t instrn          : 8;
     std::uint32_t src_offset_addr : 8;
     std::uint32_t dst_addr        : 8;

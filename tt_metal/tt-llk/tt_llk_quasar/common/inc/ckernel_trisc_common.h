@@ -56,7 +56,8 @@ buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* co
 
 constexpr std::uint32_t NUM_WORDS_TILE_CNT = 8;
 
-struct tile_counter_t{
+struct tile_counter_t
+{
     std::uint32_t reserved0                    : 32;
     std::uint32_t reset                        : 32;
     std::uint32_t posted                       : 32;

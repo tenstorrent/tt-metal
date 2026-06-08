@@ -28,7 +28,8 @@ constexpr static std::uint32_t TRISC_ID = 1;
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 
-struct alu_config_t{
+struct alu_config_t
+{
     // word 0
     std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_val        : 8;
     std::uint32_t ALU_FORMAT_SPEC_REG_SrcA_override   : 1;

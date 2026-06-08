@@ -24,11 +24,14 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 constexpr std::uint32_t NUM_PACKERS = 1;        // Number of packers
 
 // Pack config
-
-struct pack_config_t{
+struct pack_config_t
+{
+    //word 0
     std::uint32_t row_ptr_section_size : 16;
     std::uint32_t exp_section_size     : 16;
+    //word 1
     std::uint32_t l1_dest_addr : 32;
+    //word 2
     std::uint32_t uncompress              : 1;
     std::uint32_t add_l1_dest_addr_offset : 1;
     std::uint32_t disable_pack_zero_flag  : 1;
@@ -67,7 +70,8 @@ typedef union
 } pack_config_u;
 
 // Relu Config
-struct relu_config_t{
+struct relu_config_t
+{
     std::uint32_t ALU_ACC_CTRL_Zero_Flag_disabled_src      : 1;
     std::uint32_t ALU_ACC_CTRL_Zero_Flag_disabled_dst      : 1;
     std::uint32_t STACC_RELU_ApplyRelu                     : 4;
@@ -89,7 +93,8 @@ typedef union
 } relu_config_u;
 
 // Dest rd control
-struct dest_rd_ctrl_t{
+struct dest_rd_ctrl_t
+{
     std::uint32_t PCK_DEST_RD_CTRL_Read_32b_data  : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Read_unsigned  : 1;
     std::uint32_t PCK_DEST_RD_CTRL_Read_int8      : 1;
@@ -114,7 +119,8 @@ typedef union
 // TILE_ROW_SET_MAPPING[0:3] have 2 bits for each row inside a face that determine which PACK_EDGE_OFFSET_SEC[0:3] mask is used.
 // Only PACK_EDGE_OFFSET_SEC0 register has higher 16b configured to determine TILE_ROW_SET_MAPPING[0:3] registers used for each packer.
 // Other PACK_EDGE_OFFSET_SEC[1:3] registers are used only for the masks in the lower 16b.
-struct pck_edge_offset_t{
+struct pck_edge_offset_t
+{
     std::uint32_t mask                      : 16;
     std::uint32_t mode                      : 1;
     std::uint32_t tile_row_set_select_pack0 : 2;
@@ -133,7 +139,8 @@ typedef union
 } pck_edge_offset_u;
 
 // Pack counters
-struct pack_counters_t{
+struct pack_counters_t
+{
     std::uint32_t pack_per_xy_plane        : 8;
     std::uint32_t pack_reads_per_xy_plane  : 8;
     std::uint32_t pack_xys_per_til         : 7;
