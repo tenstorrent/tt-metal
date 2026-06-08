@@ -1056,8 +1056,10 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     configure_pgd_psd_host_alignment_constraints(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
-    return solve_topology_mapping(
+    auto mapping_result = solve_topology_mapping(
         grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+
+    return mapping_result;
 }
 
 bool is_flattened(const GroupingInfo& grouping) {

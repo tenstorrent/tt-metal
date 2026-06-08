@@ -45,7 +45,7 @@ struct GroupingItemInfo {
 
     ItemType type;
     tt::tt_metal::ASICLocation asic_location{0};  // Only valid if type == ASIC_LOCATION
-    tt::tt_metal::TrayID tray_id{0};              // Tray ID (1-4) if available, 0 otherwise
+    tt::tt_metal::TrayID tray_id{0};              // From optional instance tray_id (asic_location only); 0 = UNSET
 
     std::string grouping_name;   // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
@@ -59,7 +59,7 @@ struct GroupingItemInfo {
 // Grouping information
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
-    std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
+    std::string type;  // Type of grouping (e.g., "MESH", "tray", "meshes", "pods")
     // items[node_id] is the item for graph node node_id. Flattened meshes may use non-contiguous IDs;
     // in that case size is max_node_id+1 (only indices present in adjacency_graph are meaningful).
     std::vector<GroupingItemInfo> items;

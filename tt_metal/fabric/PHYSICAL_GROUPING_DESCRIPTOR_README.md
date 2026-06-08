@@ -30,8 +30,8 @@ Files use **protobuf text format** (`.textproto`) with schema validation. The sc
 groupings {
   name: "trays"
   items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
     # ... through ASIC_LOCATION_8
   ]
 }
@@ -85,20 +85,65 @@ The physical grouping descriptor uses protobuf text format with schema validatio
 
 See [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto) for the complete schema definition.
 
+### Tray identity (`tray_id` and custom tray groupings)
+
+Trays are **not** `TRAY_1`–`TRAY_4` preset grouping types anymore. Each tray layout is a **custom grouping** with its own `custom_type` (for example `"tray_1"`, `"tray_2"`). Other groupings reference that tray with `grouping_ref` only:
+
+```protobuf
+# Define tray_1 as a custom grouping
+groupings {
+  name: "tray_1"
+  custom_type: "tray_1"
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_5 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_6 tray_id: TRAY_1 } },
+    # ... remaining ASIC locations with the same tray_id in each location { ... }
+  ]
+  row_major_mesh { dims: [2, 4] }
+}
+
+# Reference tray_1 from HOSTS — no tray_id on grouping_ref instances
+groupings {
+  name: "BH_galaxy_hosts"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 grouping_ref { custom_type: "tray_3" } },
+    { id: 1 grouping_ref { custom_type: "tray_4" } },
+    { id: 2 grouping_ref { custom_type: "tray_1" } },
+    { id: 3 grouping_ref { custom_type: "tray_2" } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+```
+
+**`location` and `tray_id`** (physical instances use `location { asic_location; tray_id }`):
+
+| Field | Applies to | Default when omitted |
+|--------|------------|----------------------|
+| `location` | Physical ASIC slot (`asic_location` + optional `tray_id`) | — |
+| `tray_id` | Inside `location` only | `TRAY_ID_UNSET` — no tray constraint for that node |
+| `grouping_ref` | References to other groupings | Do **not** set `tray_id`; use `grouping_ref { custom_type: "tray_1" }` instead |
+
+When `tray_id` is set on one `location` in a full-tray leaf grouping, unset siblings inherit that tray at parse time for PSD matching. Galaxy tray descriptors set `tray_id` on every instance explicitly.
+
+**Preset keywords** that remain: `HOSTS`, `MESH` (see `GroupingKeyword` in the proto). Tray selection is entirely via custom grouping types and optional `tray_id` inside `location`.
+
+Example cluster files: [`tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto`](../../tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto), [`wh_galaxy_physical_grouping_descriptor.textproto`](../../tests/tt_metal/tt_fabric/physical_groupings/wh_galaxy_physical_grouping_descriptor.textproto).
+
 ## Groupings Explained
 
 ### Physical Groupings
 
 **ASIC Locations**: Predefined constants (`ASIC_LOCATION_1` through `ASIC_LOCATION_8`) representing individual ASIC positions within a tray. These are defined as enum values in the protobuf schema and are always available.
 
-**Trays**: Contains all 8 ASIC locations. Defined using ASIC location enum values.
+**Trays**: Full 8-ASIC layouts defined as custom groupings (`custom_type: "tray_1"`, etc.). PSD tray constraints come from optional `tray_id` inside each instance's `location`, not from preset types or `tray_id` on references.
 
 ```protobuf
 groupings {
   name: "trays"
   items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
     # ... through ASIC_LOCATION_8
   ]
 }
@@ -126,7 +171,7 @@ groupings {
     { grouping_ref { grouping_name: "hosts" count: 1 } }  # Each mesh contains 1 host (meshes can have 1 item)
     # OR { grouping_ref { grouping_name: "hosts" count: 4 } }  # Each mesh contains 4 hosts
     # OR { grouping_ref { grouping_name: "trays" count: 16 } }  # 16 trays per mesh
-    # OR { asic_location: ASIC_LOCATION_1 }, { asic_location: ASIC_LOCATION_2 }, ...  # Direct ASIC locations
+    # OR { location { asic_location: ASIC_LOCATION_1 } }, { location { asic_location: ASIC_LOCATION_1 } }, ...  # Direct ASIC locations
   ]
 }
 ```
@@ -137,10 +182,10 @@ groupings {
 groupings {
   name: "meshes"
   items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
+    { location { asic_location: ASIC_LOCATION_3 } },
+    { location { asic_location: ASIC_LOCATION_4 } }
   ]
   # Only using 4 ASIC locations from each tray instead of all 8
 }
@@ -194,10 +239,10 @@ groupings {
   # Define a custom grouping called "halftray" - first definition
   name: "halftray"
   items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
+    { location { asic_location: ASIC_LOCATION_3 } },
+    { location { asic_location: ASIC_LOCATION_4 } }
   ]  # Lower half
 }
 
@@ -205,10 +250,10 @@ groupings {
   # Same name, different ASIC locations - second definition
   name: "halftray"
   items: [
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+    { location { asic_location: ASIC_LOCATION_5 } },
+    { location { asic_location: ASIC_LOCATION_6 } },
+    { location { asic_location: ASIC_LOCATION_7 } },
+    { location { asic_location: ASIC_LOCATION_8 } }
   ]  # Upper half
 }
 
@@ -230,7 +275,7 @@ groupings {
 - `{ grouping_ref { grouping_name: "meshes" count: 2 } }` → Each pod contains 2 meshes
 
 **Items List**: Each grouping contains an `items` list where each item is either:
-- An ASIC location: `{ asic_location: ASIC_LOCATION_1 }`
+- An ASIC location: `{ location { asic_location: ASIC_LOCATION_1 } }`
 - A grouping reference: `{ grouping_ref { grouping_name: "hosts" count: 4 } }`
 
 **Important**: Do not use numbered lists for instances (e.g., `meshes: [0, 1]` or `pods: [0, 1, 2]`). Only use counts to define the structure.
@@ -243,7 +288,7 @@ groupings {
 4. **Count Validation**:
    - If `name == "meshes"`: `count >= 1` (meshes can have 1 item)
    - All groupings: `count >= 1` (all groupings must have at least 1 item)
-5. **Grouping Structure**: Each item in `items` must be either `asic_location` or `grouping_ref` (enforced by oneof in schema)
+5. **Grouping Structure**: Each instance must be either `location` or `grouping_ref` (enforced by oneof in schema)
 
 ## Complete Example
 
@@ -253,14 +298,14 @@ groupings {
 groupings {
   name: "trays"
   items: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 },
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
+    { location { asic_location: ASIC_LOCATION_3 } },
+    { location { asic_location: ASIC_LOCATION_4 } },
+    { location { asic_location: ASIC_LOCATION_5 } },
+    { location { asic_location: ASIC_LOCATION_6 } },
+    { location { asic_location: ASIC_LOCATION_7 } },
+    { location { asic_location: ASIC_LOCATION_8 } }
   ]
 }
 

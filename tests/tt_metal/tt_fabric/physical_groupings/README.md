@@ -21,8 +21,8 @@ The groupings file uses an **adjacency graph format** with instances and connect
 groupings {
   custom_name: "trays"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
     # ... through ASIC_LOCATION_8
   ]
 }
@@ -89,27 +89,25 @@ groupings {
   }
 }
 
-# Using predefined keywords
+# Tray as a custom grouping; tray_id only inside location { ... }
 groupings {
-  preset_name: TRAY_1
+  name: "tray_1"
+  custom_type: "tray_1"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_1 } },
     # ... through ASIC_LOCATION_8
   ]
+  row_major_mesh { dims: [2, 4] }
 }
 
 groupings {
-  preset_name: MESH
+  preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { preset_name: TRAY_1 } },
-    { id: 1 grouping_ref { preset_name: TRAY_2 } }
+    { id: 0 grouping_ref { custom_type: "tray_1" } },
+    { id: 1 grouping_ref { custom_type: "tray_2" } }
   ]
-  connections {
-    row_major_mesh {
-      dims: [2, 1]
-    }
-  }
+  row_major_mesh { dims: [2, 1] }
 }
 ```
 
@@ -122,42 +120,38 @@ The physical groupings file uses protobuf text format with schema validation. Ke
 - **Adjacency Graph Format**: Groupings are defined as graphs with instances and connections
 - **Instances**: Each grouping contains a list of instances, each with a unique ID
 - **Instance IDs**: Each instance must have a unique `id` field within its grouping (used for connections)
-- **Grouping Names**: Can use either predefined keywords (`preset_name`) or custom names (`custom_name`)
-  - `preset_name`: Predefined keyword enum values (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
-  - `custom_name`: Custom string names (e.g., "pods", "meshes", "superpods", "clusters")
+- **Grouping types**: `preset_type` (`HOSTS`, `MESH`) or `custom_type` (e.g., `"tray_1"`, `"pods"`, `"meshes"`)
+- **`tray_id`**: Optional on `asic_location` instances only (`TRAY_ID_UNSET` when omitted). Not used on `grouping_ref` instances — reference trays via `grouping_ref { custom_type: "tray_1" }`.
 - **Connections**: Separate section that defines how instances connect and their topology using connection types (all-to-all, row-major-mesh, or custom)
 - **Topology**: Topology (mesh dimensions, dimension types) is defined in the connections section, not on individual instances
 
-### Predefined Keywords
+### Predefined keywords and trays
 
-The schema supports predefined keywords that represent preset groups:
+**Preset types** (via `preset_type`): `HOSTS`, `MESH`.
 
-- **TRAY_1, TRAY_2, TRAY_3, TRAY_4**: Predefined tray groupings
-- **MESH**: Predefined mesh grouping
-
-These keywords can be used with `preset_name` instead of defining custom names. For example:
+**Trays** are custom groupings, one per layout variant. Example:
 
 ```protobuf
 groupings {
-  preset_name: TRAY_1
+  name: "tray_1"
+  custom_type: "tray_1"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    # ... through ASIC_LOCATION_8
+    { id: 0 location { asic_location: ASIC_LOCATION_5 tray_id: TRAY_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_6 tray_id: TRAY_1 } },
+    # ...
   ]
+  row_major_mesh { dims: [2, 4] }
 }
 
 groupings {
-  preset_name: MESH
+  preset_type: HOSTS
   instances: [
-    { id: 0 grouping_ref { preset_name: TRAY_1 } },
-    { id: 1 grouping_ref { preset_name: TRAY_2 } }
+    { id: 0 grouping_ref { custom_type: "tray_1" } },
+    { id: 1 grouping_ref { custom_type: "tray_2" } },
+    { id: 2 grouping_ref { custom_type: "tray_3" } },
+    { id: 3 grouping_ref { custom_type: "tray_4" } }
   ]
-  connections {
-    row_major_mesh {
-      dims: [2, 1]
-    }
-  }
+  row_major_mesh { dims: [2, 2] }
 }
 ```
 - **ASIC Locations as Constants**: ASIC locations 1-8 are predefined as enum constants (`ASIC_LOCATION_1` through `ASIC_LOCATION_8`)
@@ -180,8 +174,8 @@ See `tt_metal/fabric/protobuf/physical_grouping_descriptor.proto` for the comple
 groupings {
   custom_name: "trays"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
     # ... through ASIC_LOCATION_8
   ]
 }
@@ -190,8 +184,8 @@ groupings {
 groupings {
   preset_name: TRAY_1
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
     # ... through ASIC_LOCATION_8
   ]
 }
@@ -225,7 +219,7 @@ groupings {
     # { id: 2 grouping_ref { custom_name: "hosts" } },
     # { id: 3 grouping_ref { custom_name: "hosts" } }  # Each mesh contains 4 hosts
     # OR { id: 0 grouping_ref { custom_name: "trays" } }, ...  # Multiple trays per mesh
-    # OR { id: 0 asic_location: ASIC_LOCATION_1 }, { id: 1 asic_location: ASIC_LOCATION_2 }, ...  # Direct ASIC locations
+    # OR { id: 0 location { asic_location: ASIC_LOCATION_1 } }, { id: 0 location { asic_location: ASIC_LOCATION_1 } }, ...  # Direct ASIC locations
   ]
   # If multiple instances, define topology in connections:
   # connections {
@@ -256,10 +250,10 @@ groupings {
 groupings {
   custom_name: "meshes"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } }
   ]
   # Only using 4 ASIC locations from each tray instead of all 8
 }
@@ -400,10 +394,10 @@ groupings {
   # Define a custom grouping called "halftray" - first definition
   custom_name: "halftray"
   instances: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
+    { location { asic_location: ASIC_LOCATION_3 } },
+    { location { asic_location: ASIC_LOCATION_4 } }
   ]  # Lower half
 }
 
@@ -411,10 +405,10 @@ groupings {
   # Same name, different ASIC locations - second definition
   custom_name: "halftray"
   instances: [
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+    { location { asic_location: ASIC_LOCATION_5 } },
+    { location { asic_location: ASIC_LOCATION_6 } },
+    { location { asic_location: ASIC_LOCATION_7 } },
+    { location { asic_location: ASIC_LOCATION_8 } }
   ]  # Upper half
 }
 
@@ -443,7 +437,7 @@ groupings {
 **Instances List**: Each grouping contains an `instances` list where each instance must have:
 - A unique `id` field within the grouping (used for connections)
 - Either an ASIC location or a grouping reference:
-  - An ASIC location: `{ id: 0 asic_location: ASIC_LOCATION_1 }`
+  - An ASIC location: `{ id: 0 location { asic_location: ASIC_LOCATION_1 } }`
   - A grouping reference: `{ id: 0 grouping_ref { custom_name: "hosts" } }` or `{ id: 0 grouping_ref { preset_name: TRAY_1 } }`
 
 **Connections**: Separate `connections` section (distinct from `instances`) defines how instances connect and their topology:
@@ -480,14 +474,14 @@ groupings {
 groupings {
   custom_name: "trays"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 },
-    { id: 1 asic_location: ASIC_LOCATION_2 },
-    { id: 2 asic_location: ASIC_LOCATION_3 },
-    { id: 3 asic_location: ASIC_LOCATION_4 },
-    { id: 4 asic_location: ASIC_LOCATION_5 },
-    { id: 5 asic_location: ASIC_LOCATION_6 },
-    { id: 6 asic_location: ASIC_LOCATION_7 },
-    { id: 7 asic_location: ASIC_LOCATION_8 }
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { asic_location: ASIC_LOCATION_5 } },
+    { id: 5 location { asic_location: ASIC_LOCATION_6 } },
+    { id: 6 location { asic_location: ASIC_LOCATION_7 } },
+    { id: 7 location { asic_location: ASIC_LOCATION_8 } }
   ]
 }
 
@@ -820,7 +814,7 @@ Shows meshes defined directly at the ASIC location level using enum constants.
 groupings {
   custom_name: "meshes"
   instances: [
-    { id: 0 asic_location: ASIC_LOCATION_1 }  # Each mesh uses 1 ASIC location (smaller mesh example)
+    { id: 0 location { asic_location: ASIC_LOCATION_1 } }  # Each mesh uses 1 ASIC location (smaller mesh example)
   ]
 }
 ```
@@ -837,20 +831,20 @@ Demonstrates defining custom groupings (halftray) to represent subsets of ASIC l
 groupings {
   custom_name: "halftray"
   instances: [
-    { asic_location: ASIC_LOCATION_1 },
-    { asic_location: ASIC_LOCATION_2 },
-    { asic_location: ASIC_LOCATION_3 },
-    { asic_location: ASIC_LOCATION_4 }
+    { location { asic_location: ASIC_LOCATION_1 } },
+    { location { asic_location: ASIC_LOCATION_2 } },
+    { location { asic_location: ASIC_LOCATION_3 } },
+    { location { asic_location: ASIC_LOCATION_4 } }
   ]  # Lower half (locations 1-4)
 }
 
 groupings {
   custom_name: "halftray"
   instances: [
-    { asic_location: ASIC_LOCATION_5 },
-    { asic_location: ASIC_LOCATION_6 },
-    { asic_location: ASIC_LOCATION_7 },
-    { asic_location: ASIC_LOCATION_8 }
+    { location { asic_location: ASIC_LOCATION_5 } },
+    { location { asic_location: ASIC_LOCATION_6 } },
+    { location { asic_location: ASIC_LOCATION_7 } },
+    { location { asic_location: ASIC_LOCATION_8 } }
   ]  # Upper half (locations 5-8)
 }
 

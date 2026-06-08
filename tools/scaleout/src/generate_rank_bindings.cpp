@@ -72,8 +72,12 @@ PhysicalSystemDescriptor run_psd_discovery() {
  *
  * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
  * Architecture and cluster type are obtained from MetalContext.
+ *
+ * For Blackhole Galaxy the tray wiring differs between Rev A/B and Rev C (trays 2 and 3 are
+ * physically swapped on Rev C), so a revision-specific PGD file is selected via is_bh_galaxy_rev_c.
  */
-PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
+PhysicalGroupingDescriptor find_and_load_pgd(
+    const std::optional<std::string>& pgd_path = std::nullopt, bool is_bh_galaxy_rev_c = false) {
     // Check for explicit PGD path from argument first
     if (pgd_path.has_value() && !pgd_path->empty()) {
         std::filesystem::path explicit_path(*pgd_path);
@@ -140,7 +144,13 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
     } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
-        arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
+        arch_cluster_filename = is_bh_galaxy_rev_c ? "bh_galaxy_rev_c_physical_grouping_descriptor.textproto"
+                                                   : "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        log_info(
+            tt::LogFabric,
+            "Blackhole Galaxy detected as {}; selecting PGD: {}",
+            is_bh_galaxy_rev_c ? "Rev C" : "Rev A/B",
+            arch_cluster_filename);
     } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
         arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
     } else {
@@ -188,12 +198,121 @@ void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) 
     }
 }
 
+namespace {
+
+// Resolve a PGD (tray_id, asic_location) slot to PSD AsicID / UMD chip id when present.
+std::optional<std::pair<tt::tt_metal::AsicID, int>> lookup_psd_slot(
+    const PhysicalSystemDescriptor& psd, tt::tt_metal::TrayID tray_id, tt::tt_metal::ASICLocation asic_location) {
+    std::optional<std::pair<tt::tt_metal::AsicID, int>> match;
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        if (desc.tray_id != tray_id || desc.asic_location != asic_location) {
+            continue;
+        }
+        if (match.has_value()) {
+            log_warning(
+                tt::LogFabric,
+                "Multiple PSD ASICs match tray_id={} asic_location={} (using first AsicID {}, also saw AsicID {})",
+                *tray_id,
+                *asic_location,
+                *match->first,
+                *asic_id);
+            return match;
+        }
+        match = std::make_pair(asic_id, static_cast<int>(desc.umd_unique_id));
+    }
+    return match;
+}
+
+void print_grouping_slot_locations(
+    const PhysicalGroupingDescriptor& pgd, const PhysicalSystemDescriptor& psd, const MeshGraphDescriptor& mgd) {
+    const ValidGroupingsMap valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+    log_info(tt::LogFabric, "Physical grouping slot map (PGD tray_id / asic_location, before binding):");
+
+    for (const auto& [instance_type, groupings_by_name] : valid_groupings) {
+        for (const auto& [instance_name, groupings] : groupings_by_name) {
+            for (size_t variant_idx = 0; variant_idx < groupings.size(); ++variant_idx) {
+                const GroupingInfo& grouping = groupings[variant_idx];
+                log_info(
+                    tt::LogFabric,
+                    "  MGD {}/{} -> grouping '{}' (type '{}', variant {}, {} ASICs):",
+                    instance_type,
+                    instance_name,
+                    grouping.name,
+                    grouping.type,
+                    variant_idx,
+                    grouping.asic_count);
+
+                for (const uint32_t node_id : grouping.adjacency_graph.get_nodes()) {
+                    if (node_id >= grouping.items.size()) {
+                        continue;
+                    }
+                    const GroupingItemInfo& item = grouping.items[node_id];
+                    if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+                        continue;
+                    }
+                    const auto psd_slot = lookup_psd_slot(psd, item.tray_id, item.asic_location);
+                    if (psd_slot.has_value()) {
+                        log_info(
+                            tt::LogFabric,
+                            "    node {}: tray_id={} asic_location={} AsicID={} umd_id={}",
+                            node_id,
+                            *item.tray_id,
+                            *item.asic_location,
+                            *psd_slot->first,
+                            psd_slot->second);
+                    } else {
+                        log_info(
+                            tt::LogFabric,
+                            "    node {}: tray_id={} asic_location={} (no matching PSD ASIC)",
+                            node_id,
+                            *item.tray_id,
+                            *item.asic_location);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void print_physical_mesh_psd_slots(
+    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& psd) {
+    const auto& asic_descs = psd.get_asic_descriptors();
+    log_info(tt::LogFabric, "Physical mesh ASIC slots (PSD tray_id / asic_location per graph node, before binding):");
+
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        log_info(tt::LogFabric, "  Physical mesh {}:", mesh_id.get());
+        for (const tt::tt_metal::AsicID& asic_id : graph.get_nodes()) {
+            const auto desc_it = asic_descs.find(asic_id);
+            if (desc_it == asic_descs.end()) {
+                log_info(tt::LogFabric, "    AsicID {}: (not in PSD)", *asic_id);
+                continue;
+            }
+            log_info(
+                tt::LogFabric,
+                "    AsicID {}: tray_id={} asic_location={} umd_id={} host={}",
+                *asic_id,
+                *desc_it->second.tray_id,
+                *desc_it->second.asic_location,
+                desc_it->second.umd_unique_id,
+                desc_it->second.host_name);
+        }
+    }
+}
+
+}  // namespace
+
 /**
  * @brief Print physical multi-mesh adjacency map
  */
 void print_physical_adjacency_map(
-    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& /*physical_system_descriptor*/) {
+    const PhysicalMultiMeshGraph& multi_mesh_graph,
+    const PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
+    const MeshGraphDescriptor& mgd) {
     log_info(tt::LogFabric, "Physical Multi-Mesh Adjacency Map:");
+
+    print_grouping_slot_locations(pgd, psd, mgd);
+    print_physical_mesh_psd_slots(multi_mesh_graph, psd);
 
     // Print adjacency maps using topology solver's print functions (includes degree histograms)
     multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
@@ -231,7 +350,7 @@ TopologyMappingResult run_topology_mapping(
 
     // Print adjacency maps
     print_logical_adjacency_map(logical_graph);
-    print_physical_adjacency_map(physical_graph, psd);
+    print_physical_adjacency_map(physical_graph, psd, pgd, mgd);
 
     // Configure topology mapping
     TopologyMappingConfig config;
@@ -352,15 +471,16 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         bucket.mesh_host_rank = mesh_host_rank;
     }
 
-    // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
+    // Build flat list of (mesh_id, hostname, chip_ids, asic_ids, mesh_host_rank, psd_rank) for canonical ordering
     // Order after sort: mesh_id ascending (rank 0 is first/lowest mesh), then mesh_host_rank, hostname,
     // PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; psd_mpi_rank field keeps PSD identity
-    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
+    using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, std::vector<AsicID>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
         for (const auto& [hostname, rank_map] : hostname_map) {
             for (const auto& [_, asic_data] : rank_map) {
                 const auto& chip_ids = asic_data.chip_ids;
+                const auto& asic_ids = asic_data.asic_ids;
                 const auto& mesh_host_rank = asic_data.mesh_host_rank;
                 if (!mesh_host_rank.has_value()) {
                     continue;
@@ -373,7 +493,12 @@ std::vector<RankBindingConfig> extract_rank_bindings(
                         tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
                 }
                 entries.emplace_back(
-                    mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
+                    mesh_id,
+                    hostname,
+                    chip_ids,
+                    asic_ids,
+                    static_cast<int>(*mesh_host_rank.value()),
+                    static_cast<int>(psd_rank));
             }
         }
     }
@@ -382,14 +507,14 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
-        if (std::get<3>(a) != std::get<3>(b)) {
-            return std::get<3>(a) < std::get<3>(b);
+        if (std::get<4>(a) != std::get<4>(b)) {
+            return std::get<4>(a) < std::get<4>(b);
         }
         if (std::get<1>(a) != std::get<1>(b)) {
             return std::get<1>(a) < std::get<1>(b);
         }
         // PSD rank last for deterministic ties only
-        return std::get<4>(a) < std::get<4>(b);
+        return std::get<5>(a) < std::get<5>(b);
     });
 
     // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
@@ -397,7 +522,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     std::map<std::string, int> host_slot_counters;
 
     for (size_t i = 0; i < entries.size(); ++i) {
-        const auto& [mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank] = entries[i];
+        const auto& [mesh_id, hostname, chip_ids, asic_ids, mesh_host_rank, psd_rank] = entries[i];
 
         RankBindingConfig binding;
         // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous,
@@ -620,7 +745,8 @@ int main(int argc, char** argv) {
 
         // Stage: Load Physical Grouping Descriptor
         log_info(tt::LogFabric, "Stage: Loading Physical Grouping Descriptor...");
-        PhysicalGroupingDescriptor pgd = find_and_load_pgd(args.physical_grouping_descriptor_path);
+        PhysicalGroupingDescriptor pgd =
+            find_and_load_pgd(args.physical_grouping_descriptor_path, psd.is_bh_galaxy_rev_c());
         log_info(tt::LogFabric, "Physical Grouping Descriptor loaded");
 
         // Get current rank - only rank 0 performs topology mapping and file generation
