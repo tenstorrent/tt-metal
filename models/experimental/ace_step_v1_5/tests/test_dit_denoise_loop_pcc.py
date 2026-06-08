@@ -83,7 +83,7 @@ def _run_torch_denoise_production(
     return xt.float()
 
 
-@pytest.mark.parametrize("frames,label", [(375, "15s"), (750, "30s")])
+@pytest.mark.parametrize("frames,label", [(375, "15s"), (750, "30s"), (1500, "60s")])
 def test_dit_denoise_loop_pcc_vs_torch(frames: int, label: str):
     """Compare full Euler denoise final latents: TTNN vs PyTorch (no CFG)."""
     safetensors = _checkpoint_paths()
@@ -110,11 +110,22 @@ def test_dit_denoise_loop_pcc_vs_torch(frames: int, label: str):
     duration_sec = float(frames) / 25.0
 
     if int(frames) >= 750:
+        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+            ace_step_configure_dit_long_clip_quality,
+            ace_step_configure_dit_ultra_long_clip_quality,
+        )
+
         ace_step_configure_dit_long_clip_quality(
             latent_frames=int(frames),
             duration_sec=duration_sec,
             mesh_sku="BH_QB",
         )
+        if int(frames) >= 1125:
+            ace_step_configure_dit_ultra_long_clip_quality(
+                latent_frames=int(frames),
+                duration_sec=duration_sec,
+                mesh_sku="BH_QB",
+            )
 
     torch_pipe = AceStepV15TorchPipeline(
         checkpoint_safetensors_path=str(safetensors),
@@ -185,7 +196,7 @@ def test_dit_denoise_loop_pcc_vs_torch(frames: int, label: str):
 
         pcc = _pearson_pcc(ref.numpy(), tt_np)
         mad = float(np.max(np.abs(ref.numpy() - tt_np)))
-        min_pcc = 0.90 if int(frames) >= 750 else 0.92
+        min_pcc = 0.88 if int(frames) >= 1500 else (0.90 if int(frames) >= 750 else 0.92)
         print_pcc_result(f"dit_denoise_loop_{label}_no_cfg", pcc, threshold=min_pcc)
         print(
             f"[ace_step_v1_5][PCC] dit_denoise_loop_{label}_no_cfg_detail: "

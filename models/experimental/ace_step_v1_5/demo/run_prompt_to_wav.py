@@ -262,6 +262,7 @@ def _log_duration_preprocess_health(
 ) -> None:
     """Log LM code count vs duration — short code streams pad with silence and sound noisy."""
     from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import find_degenerate_code_prefix_len
 
     expected_codes = max(1, int(round(float(duration_sec) * 5.0)))
     n_codes = len(parse_audio_code_string(str(audio_code_string or "")))
@@ -276,13 +277,355 @@ def _log_duration_preprocess_health(
         print(
             f"[ace_step_v1_5] WARNING: LM produced only {n_codes}/{expected_codes} audio codes; "
             "hint tail is silence-padded → expect muddy/noisy audio after "
-            f"~{n_codes / 5.0:.1f}s",
+            f"~{n_codes / 5.0:.1f}s — check LM logs / try --pytorch-lm if persistent",
+            flush=True,
+        )
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_detok_chunk_n
+
+    chunk_n = ace_step_detok_chunk_n()
+    if n_codes > chunk_n:
+        print(
+            f"[ace_step_v1_5] note: {n_codes} audio codes > TTNN L1 chunk {chunk_n}; "
+            "preprocess uses HF PyTorch detokenizer (global attention)",
+            flush=True,
+        )
+    if n_codes >= 50:
+        codes = parse_audio_code_string(str(audio_code_string or ""))
+        if len(codes) >= 50:
+            win = 25
+            head_u = len(set(codes[:win])) / win
+            tail_u = len(set(codes[-win:])) / win
+            print(
+                f"[ace_step_v1_5] LM code diversity: head({win})={head_u:.2f} tail({win})={tail_u:.2f}",
+                flush=True,
+            )
+            if tail_u < max(0.08, head_u * 0.35) and head_u > 0.15:
+                print(
+                    f"[ace_step_v1_5] WARNING: LM tail codes collapsed (musical content may end "
+                    f"~{find_degenerate_code_prefix_len(codes) or win}/5 s) — hint tail repair applied if eligible",
+                    flush=True,
+                )
+            reps = 0
+            for i in range(0, len(codes) - win, win):
+                block = codes[i : i + win]
+                for j in range(i + win, len(codes) - win + 1, win):
+                    if codes[j : j + win] == block:
+                        reps += 1
+                        break
+            if reps >= 2:
+                print(
+                    f"[ace_step_v1_5] WARNING: LM code stream has {reps} repeated {win}-code blocks "
+                    "(audible loop/repeat)",
+                    flush=True,
+                )
+
+
+def _mesh_effective_lm_repetition_penalty(*, split_device: bool, duration_sec: float) -> float:
+    """Light rep penalty on long mesh clips reduces filler codes after the musical prefix."""
+    if split_device and float(duration_sec) >= 45.0:
+        return 1.08
+    return 1.0
+
+
+def _mesh_effective_audio_cover_strength(
+    *,
+    split_device: bool,
+    duration_sec: float,
+    has_lm_codes: bool,
+    lm_hint_frames: int | None = None,
+    total_frames: int | None = None,
+) -> float:
+    """Official turbo path: early denoise steps follow LM hints, later steps text2music (silence ctx)."""
+    if not (split_device and has_lm_codes and float(duration_sec) >= 45.0):
+        return 1.0
+    if lm_hint_frames is not None and total_frames is not None and int(total_frames) > 0:
+        if int(lm_hint_frames) < int(0.85 * int(total_frames)):
+            print(
+                f"[ace_step_v1_5] LM hints cover {int(lm_hint_frames) / 25.0:.1f}s of "
+                f"{int(total_frames) / 25.0:.1f}s — keeping cover_strength=1.0 (skip non-cover switch)",
+                flush=True,
+            )
+            return 1.0
+    raw = os.environ.get("ACE_STEP_AUDIO_COVER_STRENGTH", "1.0")
+    return max(0.0, min(1.0, float(raw)))
+
+
+def _prepare_non_cover_condition_host(
+    dit_handler: Any,
+    payload: dict[str, Any],
+) -> tuple[Any, Any, Any] | None:
+    pass
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
+        build_non_cover_condition_payload,
+        handler_prepare_condition_from_payload,
+    )
+
+    nc_payload = build_non_cover_condition_payload(payload)
+    if nc_payload is None:
+        return None
+    enc_hs, enc_mask, ctx_lat, _, _null = handler_prepare_condition_from_payload(
+        dit_handler,
+        nc_payload,
+        frames=int(nc_payload["src_latents"].shape[1]),
+    )
+    return enc_hs, enc_mask, ctx_lat
+
+
+def _stage_non_cover_denoise_tensors(
+    *,
+    dev: Any,
+    mem: Any,
+    do_cfg: bool,
+    null_emb: Any,
+    enc_hs_nc: Any,
+    enc_mask_nc: Any,
+    ctx_lat_nc: Any,
+    enc_hs_tt_nc: Any | None = None,
+    ctx_tt_nc: Any | None = None,
+    null_emb_tt: Any | None = None,
+    condition_tensors_on_device: bool,
+) -> tuple[Any, Any, np.ndarray, Any | None]:
+    """Build non-cover enc/ctx device pipes for mid-denoise cover→text2music switch."""
+    import torch
+
+    import ttnn
+    from models.experimental.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
+        bf16_row_from_numpy_bc,
+        concat_duplicate_batch,
+    )
+
+    def _as_host_numpy_f32(t: torch.Tensor) -> np.ndarray:
+        return np.asarray(t.detach().cpu().numpy(), dtype=np.float32)
+
+    enc_mask_np = np.asarray(enc_mask_nc.detach().cpu().numpy(), dtype=np.float32)
+    if condition_tensors_on_device and enc_hs_tt_nc is not None and ctx_tt_nc is not None:
+        if do_cfg:
+            if null_emb_tt is None:
+                raise RuntimeError("non-cover CFG staging requires null_emb_tt on device")
+            s_enc = int(enc_hs_tt_nc.shape[1])
+            d_enc = int(enc_hs_tt_nc.shape[-1])
+            null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
+            null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
+            null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+            enc_pipe = ttnn.concat([enc_hs_tt_nc, null_rep], dim=0)
+            ctx_pipe = concat_duplicate_batch(ctx_tt_nc)
+            for _t in (null_4d, null_rep_4d, null_rep):
+                try:
+                    ttnn.deallocate(_t)
+                except Exception:
+                    pass
+        else:
+            enc_pipe = enc_hs_tt_nc
+            ctx_pipe = ctx_tt_nc
+        return enc_pipe, ctx_pipe, enc_mask_np, None
+
+    if do_cfg:
+        enc_pipe = bf16_row_from_numpy_bc(
+            np.concatenate([_as_host_numpy_f32(enc_hs_nc), _as_host_numpy_f32(null_emb.expand_as(enc_hs_nc))], axis=0),
+            device=dev,
+            dram=mem,
+        )
+        ctx_row = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat_nc), device=dev, dram=mem)
+        ctx_pipe = concat_duplicate_batch(ctx_row)
+        try:
+            ttnn.deallocate(ctx_row)
+        except Exception:
+            pass
+    else:
+        enc_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs_nc), device=dev, dram=mem)
+        ctx_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat_nc), device=dev, dram=mem)
+    return enc_pipe, ctx_pipe, enc_mask_np, None
+
+
+def _resolve_lm_repetition_penalty(
+    *,
+    cli_value: float | None,
+    split_device: bool,
+    duration_sec: float,
+) -> float:
+    if cli_value is not None and float(cli_value) > 0:
+        return float(cli_value)
+    return _mesh_effective_lm_repetition_penalty(
+        split_device=split_device,
+        duration_sec=float(duration_sec),
+    )
+
+
+def _mesh_effective_clarity(*, clarity_cli: bool, split_device: bool, duration_sec: float) -> bool:
+    """Mesh clarity preset: explicit ``--clarity`` or auto for >=45 s on multi-device BH runs."""
+    if bool(clarity_cli):
+        return True
+    return bool(split_device) and float(duration_sec) >= 45.0
+
+
+def _log_mesh_decode_quality_health(
+    *,
+    duration_sec: float,
+    frames: int,
+    mesh_sku: str | None,
+    clarity: bool,
+    use_trace: bool,
+    vae_overlap_cli: int,
+    vae_chunk_cli: int = 32,
+    condition_backend: str = "ttnn",
+    dit_backend: str = "ttnn",
+) -> None:
+    """Log downstream decode path — LM can be healthy while DiT/VAE quality presets are still off."""
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_detok_chunk_n,
+        ace_step_cond_long_clip_quality_active,
+        ace_step_dit_long_clip_quality_active,
+        ace_step_dit_ultra_long_clip_quality_active,
+        ace_step_vae_bfloat8_activations_enabled,
+        ace_step_vae_quality_decode_enabled,
+    )
+    from models.experimental.ace_step_v1_5.utils.tt_device import (
+        ace_step_needs_split_device,
+        ace_step_resolve_vae_tiling,
+    )
+
+    on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
+    if not on_mesh and float(duration_sec) < 30.0:
+        return
+
+    dit_lc = ace_step_dit_long_clip_quality_active()
+    dit_ultra = ace_step_dit_ultra_long_clip_quality_active()
+    cond_lc = ace_step_cond_long_clip_quality_active()
+    vae_q = ace_step_vae_quality_decode_enabled(
+        latent_frames=int(frames),
+        mesh_sku=mesh_sku,
+        duration_sec=float(duration_sec),
+        clarity_mode=bool(clarity),
+    )
+    vae_bfp8 = ace_step_vae_bfloat8_activations_enabled(
+        latent_frames=int(frames),
+        mesh_sku=mesh_sku,
+        duration_sec=float(duration_sec),
+    )
+    vae_cs, vae_ov = ace_step_resolve_vae_tiling(
+        frames=int(frames),
+        mesh_sku=mesh_sku,
+        chunk_cli=int(vae_chunk_cli),
+        overlap_cli=int(vae_overlap_cli),
+    )
+    detok_chunk = ace_step_detok_chunk_n()
+    expected_codes = max(1, int(round(float(duration_sec) * 5.0)))
+    vae_mode = "bf16" if vae_q and not vae_bfp8 else ("bfp8" if vae_bfp8 else "default")
+
+    print(
+        f"[ace_step_v1_5] decode quality: condition={condition_backend} dit={dit_backend} "
+        f"dit_long_clip={'on' if dit_lc else 'OFF'} dit_ultra={'on' if dit_ultra else 'off'} "
+        f"cond_long={'on' if cond_lc else 'off'} trace={'on' if use_trace else 'off'} "
+        f"vae={vae_mode} vae_tile={vae_cs}/{vae_ov} clarity={bool(clarity)}",
+        flush=True,
+    )
+    if on_mesh and float(duration_sec) >= 30.0:
+        if not dit_lc:
+            print(
+                "[ace_step_v1_5] WARNING: DiT long-clip quality OFF for >=30s mesh "
+                "(check ACE_STEP_DIT_LONG_CLIP_QUALITY=0 — expect muddy/noisy audio)",
+                flush=True,
+            )
+        if not vae_q:
+            print(
+                "[ace_step_v1_5] WARNING: VAE BF16 quality OFF for long mesh clip "
+                "(expect overlap-add hiss in tiled decode)",
+                flush=True,
+            )
+        if use_trace:
+            print(
+                "[ace_step_v1_5] WARNING: trace ON for >=30s mesh — DiT body trace drifts at long patch_seq",
+                flush=True,
+            )
+    if expected_codes > detok_chunk:
+        print(
+            f"[ace_step_v1_5] decode quality: expect~{expected_codes} audio codes → HF PyTorch detokenizer "
+            f"(TTNN L1 chunk {detok_chunk})",
             flush=True,
         )
 
 
+def _run_pytorch_dit_denoise_mesh(
+    *,
+    demo_session: Any,
+    safetensors_path: str,
+    timesteps_host: np.ndarray,
+    t_schedule: list[float],
+    frames: int,
+    enc_hs: torch.Tensor,
+    ctx_lat: torch.Tensor,
+    null_emb: torch.Tensor,
+    do_cfg: bool,
+    use_adg: bool,
+    gs: float,
+    cfg_lo: float,
+    cfg_hi: float,
+    seed: int,
+    torch_dev: torch.device,
+    perf: Any,
+) -> torch.Tensor:
+    """HF PyTorch DiT Euler loop — reference-quality denoise for long mesh clips."""
+    import torch
+    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+        MomentumBuffer,
+    )
+    from models.experimental.ace_step_v1_5.torch_ref.e2e_model import run_torch_denoise_loop
+    from models.experimental.ace_step_v1_5.torch_ref.full_pipeline import AceStepV15TorchPipeline
+    from models.experimental.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
+        adg_guidance_velocity_host,
+        apg_guidance_velocity_host,
+    )
+
+    ts_key = tuple(float(x) for x in np.asarray(timesteps_host, dtype=np.float32).reshape(-1))
+    pipe_key = (str(safetensors_path), ts_key)
+    if demo_session.torch_dit_pipe is None or demo_session.torch_dit_pipe_key != pipe_key:
+        with perf.timed("dit_pytorch_init"):
+            demo_session.torch_dit_pipe = AceStepV15TorchPipeline(
+                checkpoint_safetensors_path=str(safetensors_path),
+                timesteps_host=np.asarray(timesteps_host, dtype=np.float32),
+                device=torch_dev,
+                dtype=torch.bfloat16,
+            )
+            demo_session.torch_dit_pipe.eval()
+        demo_session.torch_dit_pipe_key = pipe_key
+    torch_pipe = demo_session.torch_dit_pipe
+
+    enc_t = enc_hs.to(device=torch_dev, dtype=torch.bfloat16)
+    ctx_t = ctx_lat.to(device=torch_dev, dtype=torch.bfloat16)
+    null_t = null_emb.expand_as(enc_hs).to(device=torch_dev, dtype=torch.bfloat16) if do_cfg else None
+    momentum = MomentumBuffer() if do_cfg and not use_adg else None
+
+    def _cfg_fn(
+        step_idx: int,
+        t_curr: float,
+        xt: torch.Tensor,
+        vt_cond: torch.Tensor,
+        vt_uncond: torch.Tensor,
+    ) -> torch.Tensor:
+        del step_idx
+        if not (cfg_lo <= t_curr <= cfg_hi):
+            return vt_cond
+        if use_adg:
+            return adg_guidance_velocity_host(xt, vt_cond, vt_uncond, t_curr, gs)
+        return apg_guidance_velocity_host(vt_cond, vt_uncond, gs, momentum_buffer=momentum, dims=[1])
+
+    with perf.timed("dit_denoise_loop"):
+        return run_torch_denoise_loop(
+            pipe=torch_pipe,
+            t_schedule=list(t_schedule),
+            frames=int(frames),
+            enc_hs=enc_t,
+            ctx_lat=ctx_t,
+            null_emb=null_t,
+            do_cfg=bool(do_cfg),
+            seed=int(seed),
+            cfg_fn=_cfg_fn if do_cfg else None,
+        )
+
+
 def _configure_vae_quality(*, frames: int, mesh_sku: str | None, duration_sec: float, clarity: bool = False) -> None:
-    """Use BF16 VAE compute/weights for long mesh clips (≥30 s with ``--clarity``, else ≥40 s)."""
+    """Use BF16 VAE compute/weights for long mesh clips (>=30 s / >=750 frames on mesh)."""
     from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
 
     os.environ["ACE_STEP_VAE_LATENT_FRAMES"] = str(int(frames))
@@ -464,6 +807,15 @@ def main() -> None:
     ap.add_argument("--infer_steps", type=int, default=None, help="Default: 8 turbo, 50 base.")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument(
+        "--lm-repetition-penalty",
+        type=float,
+        default=None,
+        help=(
+            "5 Hz LM repetition penalty during audio-code generation (1.0=off). "
+            "Default: auto 1.15 for >=45s mesh, 1.10 for >=30s. Raise (e.g. 1.2) if music loops."
+        ),
+    )
+    ap.add_argument(
         "--guidance_scale",
         type=float,
         default=None,
@@ -588,6 +940,8 @@ def main() -> None:
         ace_step_mesh_use_adg,
         ace_step_mesh_use_host_latent_sampler,
         ace_step_mesh_use_host_temb_precompute,
+        ace_step_mesh_use_pytorch_condition,
+        ace_step_mesh_use_pytorch_dit,
         ace_step_mesh_use_sequential_cfg,
         ace_step_mesh_use_split_ttnn_preprocess,
         ace_step_needs_split_device,
@@ -606,9 +960,61 @@ def main() -> None:
     split_device = ace_step_needs_split_device(mesh_sku)
 
     _predicted_latent_frames = max(1, int(round(float(args.duration_sec) * 25.0)))
-    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_configure_dit_long_clip_quality
+    use_pytorch_condition = ace_step_mesh_use_pytorch_condition(
+        mesh_sku=mesh_sku,
+        duration_sec=float(args.duration_sec),
+        latent_frames=int(_predicted_latent_frames),
+    )
+    if use_pytorch_condition and split_device:
+        print(
+            "[ace_step_v1_5] debug: PyTorch HF prepare_condition (ACE_STEP_PYTORCH_CONDITION=1)",
+            flush=True,
+        )
+    use_pytorch_dit = ace_step_mesh_use_pytorch_dit(
+        mesh_sku=mesh_sku,
+        duration_sec=float(args.duration_sec),
+        latent_frames=int(_predicted_latent_frames),
+    )
+    if use_pytorch_dit and split_device:
+        print(
+            "[ace_step_v1_5] debug: PyTorch HF DiT denoise (ACE_STEP_PYTORCH_DIT=1)",
+            flush=True,
+        )
 
-    if ace_step_configure_dit_long_clip_quality(
+    _cond_backend = "pytorch" if use_pytorch_condition else "ttnn"
+    _dit_backend = "pytorch" if use_pytorch_dit else "ttnn"
+    if split_device and float(args.duration_sec) >= 30.0:
+        print(
+            f"[ace_step_v1_5] QUALITY PATH (>=30s mesh): condition={_cond_backend} dit={_dit_backend} "
+            f"vae={'torch' if bool(getattr(args, 'torch_vae', False)) else 'ttnn'}",
+            flush=True,
+        )
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_configure_audio_code_limits,
+        ace_step_configure_cond_long_clip_quality,
+        ace_step_configure_dit_long_clip_quality,
+        ace_step_configure_dit_ultra_long_clip_quality,
+    )
+
+    ace_step_configure_audio_code_limits(float(args.duration_sec))
+
+    ace_step_configure_cond_long_clip_quality(
+        latent_frames=_predicted_latent_frames,
+        duration_sec=float(args.duration_sec),
+        mesh_sku=mesh_sku,
+    )
+    if ace_step_configure_dit_ultra_long_clip_quality(
+        latent_frames=_predicted_latent_frames,
+        duration_sec=float(args.duration_sec),
+        mesh_sku=mesh_sku,
+    ) and bool(args.use_trace):
+        print(
+            "[ace_step_v1_5] ultra-long clip (>=45s on mesh): forcing --no-use-trace "
+            "(DiT body trace is not bit-accurate at long patch_seq)",
+            flush=True,
+        )
+        args.use_trace = False
+    elif ace_step_configure_dit_long_clip_quality(
         latent_frames=_predicted_latent_frames,
         duration_sec=float(args.duration_sec),
         mesh_sku=mesh_sku,
@@ -624,14 +1030,30 @@ def main() -> None:
     vae_chunk_latents = 32
     vae_overlap_latents = 4
 
-    cfg_interval_start = 0.0
-    cfg_interval_end = 1.0
-    if bool(args.clarity) and split_device:
-        vae_overlap_latents = 12
+    effective_clarity = _mesh_effective_clarity(
+        clarity_cli=bool(args.clarity),
+        split_device=bool(split_device),
+        duration_sec=float(args.duration_sec),
+    )
+    if effective_clarity and not bool(args.clarity) and split_device:
         print(
-            "[ace_step_v1_5] --clarity: mesh ADG (default), VAE overlap≥12, BF16 VAE at ≥30 s",
+            "[ace_step_v1_5] auto clarity preset for >=45s mesh clip " "(VAE overlap≥12, ACE_STEP_VAE_CLARITY=1)",
             flush=True,
         )
+    _mesh_audio_cover_strength = _mesh_effective_audio_cover_strength(
+        split_device=bool(split_device),
+        duration_sec=float(args.duration_sec),
+        has_lm_codes=True,
+    )
+    cfg_interval_start = 0.0
+    cfg_interval_end = 1.0
+    if effective_clarity and split_device:
+        vae_overlap_latents = 12
+        if bool(args.clarity):
+            print(
+                "[ace_step_v1_5] --clarity: mesh ADG (default), VAE overlap≥12, BF16 VAE at ≥30 s",
+                flush=True,
+            )
     host_only_preprocess = bool(split_device)
     mesh_ttnn_preprocess = host_only_preprocess and ace_step_mesh_use_split_ttnn_preprocess(mesh_sku)
     dev: Any = None
@@ -670,7 +1092,7 @@ def main() -> None:
     gs = float(gs)
 
     cli_use_adg = args.use_adg
-    if bool(args.clarity) and split_device and cli_use_adg is None:
+    if effective_clarity and split_device and cli_use_adg is None:
         cli_use_adg = True
     use_adg = ace_step_mesh_use_adg(
         mesh_sku=mesh_sku,
@@ -705,6 +1127,10 @@ def main() -> None:
             "use_adg": bool(use_adg),
             "seed": int(args.seed),
             "ttnn_condition": True,
+            "condition_backend": _cond_backend,
+            "dit_backend": _dit_backend,
+            "pytorch_condition": bool(use_pytorch_condition),
+            "pytorch_dit": bool(use_pytorch_dit),
             "torch_vae": bool(args.torch_vae),
             "use_trace": bool(args.use_trace),
             "ttnn_5hz_lm": bool(use_ttnn_5hz_lm),
@@ -837,10 +1263,29 @@ def main() -> None:
         return
 
     condition_tensors_on_device = False
+    enc_hs_nc: Any | None = None
+    ctx_lat_nc: Any | None = None
+    enc_mask_nc: Any | None = None
+    enc_hs_tt_nc: Any | None = None
+    ctx_tt_nc: Any | None = None
+
     condition_encoder = None
     enc_hs_tt_one = None
     ctx_tt_one = None
     null_emb_tt = None
+    payload_for_mesh_condition = None
+    defer_condition_to_dit_mesh = (
+        bool(mesh_ttnn_preprocess)
+        and split_device
+        and not use_pytorch_condition
+        and int(_predicted_latent_frames) >= 750
+    )
+    if defer_condition_to_dit_mesh:
+        print(
+            "[ace_step_v1_5] defer TTNN condition encoder to DiT mesh "
+            "(avoids 1x1 preprocess readback drift on long clips)",
+            flush=True,
+        )
 
     # --- 5 Hz LM + AceStepHandler batching + prepare_condition (precomputed LM hints) ---
     ref_root = _ensure_acestep_on_path()
@@ -962,7 +1407,18 @@ def main() -> None:
             frames=frames,
             mesh_sku=mesh_sku,
             duration_sec=float(args.duration_sec),
-            clarity=bool(args.clarity),
+            clarity=bool(effective_clarity),
+        )
+        _log_mesh_decode_quality_health(
+            duration_sec=float(args.duration_sec),
+            frames=int(frames),
+            mesh_sku=mesh_sku,
+            clarity=bool(effective_clarity),
+            use_trace=bool(args.use_trace),
+            vae_overlap_cli=int(vae_overlap_latents),
+            vae_chunk_cli=int(vae_chunk_latents),
+            condition_backend="pytorch" if use_pytorch_condition else "ttnn",
+            dit_backend="pytorch" if use_pytorch_dit else "ttnn",
         )
         condition_tensors_on_device = False
         enc_hs_tt_one = None
@@ -984,6 +1440,11 @@ def main() -> None:
             inference_steps=int(infer_steps),
             guidance_scale=gs,
             lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
+            lm_repetition_penalty=_resolve_lm_repetition_penalty(
+                cli_value=getattr(args, "lm_repetition_penalty", None),
+                split_device=bool(split_device),
+                duration_sec=float(args.duration_sec),
+            ),
             use_adg=use_adg,
             cfg_interval_start=cfg_interval_start,
             cfg_interval_end=cfg_interval_end,
@@ -991,6 +1452,7 @@ def main() -> None:
             thinking=True,
             use_constrained_decoding=True,
             timesteps=None,
+            audio_cover_strength=float(_mesh_audio_cover_strength),
         )
         config = GenerationConfig(
             batch_size=1,
@@ -1078,10 +1540,8 @@ def main() -> None:
         try:
             from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
                 condition_encode_payload_tt,
+                handler_prepare_condition_from_payload,
                 release_preprocess_device_traces,
-            )
-            from models.experimental.ace_step_v1_5.ttnn_impl.condition_encoder import (
-                TtAceStepInstrumentalConditionEncoder,
             )
 
             use_trace = bool(args.use_trace)
@@ -1093,12 +1553,38 @@ def main() -> None:
                 frames=int(frames),
                 audio_code_string=str(filtered.get("audio_code_string") or ""),
             )
+            _hints = payload.get("precomputed_lm_hints_25Hz")
+            _hint_t = int(_hints.shape[1]) if _hints is not None and hasattr(_hints, "shape") else 0
+            _mesh_audio_cover_strength = _mesh_effective_audio_cover_strength(
+                split_device=bool(split_device),
+                duration_sec=float(args.duration_sec),
+                has_lm_codes=True,
+                lm_hint_frames=int(_hint_t),
+                total_frames=int(frames),
+            )
+            if _mesh_audio_cover_strength < 1.0 and split_device:
+                print(
+                    f"[ace_step_v1_5] audio_cover_strength={_mesh_audio_cover_strength:g} "
+                    f"(early denoise: LM hints; later: text2music silence ctx)",
+                    flush=True,
+                )
             perf.set_params(frames=int(frames))
             _configure_vae_quality(
                 frames=int(frames),
                 mesh_sku=mesh_sku,
                 duration_sec=float(args.duration_sec),
-                clarity=bool(args.clarity),
+                clarity=bool(effective_clarity),
+            )
+            _log_mesh_decode_quality_health(
+                duration_sec=float(args.duration_sec),
+                frames=int(frames),
+                mesh_sku=mesh_sku,
+                clarity=bool(effective_clarity),
+                use_trace=bool(args.use_trace),
+                vae_overlap_cli=int(vae_overlap_latents),
+                vae_chunk_cli=int(vae_chunk_latents),
+                condition_backend="pytorch" if use_pytorch_condition else "ttnn",
+                dit_backend="pytorch" if use_pytorch_dit else "ttnn",
             )
             if use_trace:
                 release_preprocess_device_traces(
@@ -1106,63 +1592,133 @@ def main() -> None:
                     tt_qwen_encoder=qwen_tt_encoder,
                     tt_audio_detokenizer=audio_code_detokenizer,
                 )
-            condition_encoder = TtAceStepInstrumentalConditionEncoder(
-                device=dev,
-                checkpoint_safetensors_path=str(safetensors_path),
-                dtype=getattr(ttnn, "bfloat16", None),
-            )
-            with perf.timed("condition_encoder", device=dev):
-                enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
-                    condition_encoder,
-                    payload,
-                    use_trace=use_trace,
-                )
-            enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
-                enc_hs_tt_one,
-                condition_encoder,
-                dev,
-                use_trace=use_trace,
-                ctx_tt=ctx_tt_one,
-            )
-            if mesh_ttnn_preprocess:
-                with perf.timed("preprocess_readback", device=dev):
-                    enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                    ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
-                    null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
-                enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
-                for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
-                    if _maybe_tt is not None:
-                        try:
-                            ttnn.deallocate(_maybe_tt)
-                        except Exception:
-                            pass
-                enc_hs_tt_one = None
-                ctx_tt_one = None
-                null_emb_tt = None
-                condition_tensors_on_device = False
-            else:
-                enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
-                condition_tensors_on_device = True
-            if use_trace:
+            enc_hs_tt_one = None
+            ctx_tt_one = None
+            null_emb_tt = None
+            condition_tensors_on_device = False
+            if use_pytorch_condition:
+                with perf.timed("handler_prepare_condition"):
+                    enc_hs, enc_mask, ctx_lat, frames, null_emb = handler_prepare_condition_from_payload(
+                        dit_handler,
+                        payload,
+                        frames=int(frames),
+                    )
                 print(
-                    "[condition] backend=ttnn trace+2cq official "
-                    "(lyric 8L + timbre 4L + text+concat + ctx concat trace)",
+                    "[condition] backend=pytorch HF prepare_condition "
+                    "(lyric+timbre+text+ctx; long mesh clip quality path)",
                     flush=True,
                 )
-                print(
-                    "[preprocess] qwen caption + lyric embed + audio detokenizer + "
-                    "5Hz LM prefill+decode trace enabled",
-                    flush=True,
-                )
+                if _mesh_audio_cover_strength < 1.0:
+                    nc_host = _prepare_non_cover_condition_host(dit_handler, payload)
+                    if nc_host is not None:
+                        enc_hs_nc, enc_mask_nc, ctx_lat_nc = nc_host
+                        print("[condition] non-cover text2music ctx encoded (pytorch)", flush=True)
             else:
-                print("[condition] backend=ttnn official lyric+timbre+text+context (eager)", flush=True)
+                from models.experimental.ace_step_v1_5.ttnn_impl.condition_encoder import (
+                    TtAceStepInstrumentalConditionEncoder,
+                )
+
+                if defer_condition_to_dit_mesh:
+                    payload_for_mesh_condition = payload
+                    print(
+                        "[condition] backend=ttnn deferred to DiT mesh "
+                        "(payload ready; lyric+timbre+ctx after device transition)",
+                        flush=True,
+                    )
+                else:
+                    condition_encoder = TtAceStepInstrumentalConditionEncoder(
+                        device=dev,
+                        checkpoint_safetensors_path=str(safetensors_path),
+                        dtype=getattr(ttnn, "bfloat16", None),
+                    )
+                    with perf.timed("condition_encoder", device=dev):
+                        enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
+                            condition_encoder,
+                            payload,
+                            use_trace=use_trace,
+                        )
+                    enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
+                        enc_hs_tt_one,
+                        condition_encoder,
+                        dev,
+                        use_trace=use_trace,
+                        ctx_tt=ctx_tt_one,
+                    )
+                    if mesh_ttnn_preprocess:
+                        with perf.timed("preprocess_readback", device=dev):
+                            enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                            ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                            null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+                        enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
+                        for _maybe_tt in (enc_hs_tt_one, ctx_tt_one, null_emb_tt):
+                            if _maybe_tt is not None:
+                                try:
+                                    ttnn.deallocate(_maybe_tt)
+                                except Exception:
+                                    pass
+                        enc_hs_tt_one = None
+                        ctx_tt_one = None
+                        null_emb_tt = None
+                    else:
+                        enc_mask = torch.from_numpy(enc_mask_np).to(dtype=torch.float32)
+                        condition_tensors_on_device = True
+                    if use_trace:
+                        print(
+                            "[condition] backend=ttnn trace+2cq official "
+                            "(lyric 8L + timbre 4L + text+concat + ctx concat trace)",
+                            flush=True,
+                        )
+                        print(
+                            "[preprocess] qwen caption + lyric embed + audio detokenizer + "
+                            "5Hz LM prefill+decode trace enabled",
+                            flush=True,
+                        )
+                    else:
+                        print("[condition] backend=ttnn official lyric+timbre+text+context (eager)", flush=True)
+                    if _mesh_audio_cover_strength < 1.0:
+                        from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
+                            build_non_cover_condition_payload,
+                        )
+
+                        nc_payload = build_non_cover_condition_payload(payload)
+                        if nc_payload is not None:
+                            with perf.timed("condition_encoder_non_cover", device=dev):
+                                enc_hs_tt_nc, enc_mask_nc_np, ctx_tt_nc, _ = condition_encode_payload_tt(
+                                    condition_encoder,
+                                    nc_payload,
+                                    use_trace=use_trace,
+                                )
+                            if mesh_ttnn_preprocess or not condition_tensors_on_device:
+                                with perf.timed("preprocess_readback_non_cover", device=dev):
+                                    enc_hs_nc = ace_step_ttnn_to_torch(
+                                        enc_hs_tt_nc, mesh_device=dev, dtype=torch.float32
+                                    ).cpu()
+                                    ctx_lat_nc = ace_step_ttnn_to_torch(
+                                        ctx_tt_nc, mesh_device=dev, dtype=torch.float32
+                                    ).cpu()
+                                enc_mask_nc = torch.from_numpy(np.asarray(enc_mask_nc_np, dtype=np.float32))
+                                for _t in (enc_hs_tt_nc, ctx_tt_nc):
+                                    try:
+                                        ttnn.deallocate(_t)
+                                    except Exception:
+                                        pass
+                                enc_hs_tt_nc = None
+                                ctx_tt_nc = None
+                            else:
+                                enc_mask_nc = torch.from_numpy(enc_mask_nc_np).to(dtype=torch.float32)
+                            print("[condition] non-cover text2music ctx encoded (ttnn)", flush=True)
+                        else:
+                            print(
+                                "[ace_step_v1_5] WARNING: audio_cover_strength<1 but non_cover text missing in payload",
+                                flush=True,
+                            )
         finally:
             _restore_infer_txt()
             if hasattr(qwen_tt_encoder, "release_trace"):
                 qwen_tt_encoder.release_trace()
             if hasattr(audio_code_detokenizer, "release_trace"):
                 audio_code_detokenizer.release_trace()
-        if not condition_tensors_on_device:
+        if not condition_tensors_on_device and payload_for_mesh_condition is None:
             demo_session.store_preprocess(
                 prompt=run_prompt,
                 duration_sec=float(args.duration_sec),
@@ -1243,6 +1799,77 @@ def main() -> None:
         if split_device:
             print(f"[ace_step_v1_5] opened DiT mesh for SKU={mesh_sku}", flush=True)
 
+    if payload_for_mesh_condition is not None and not use_pytorch_condition:
+        from models.experimental.ace_step_v1_5.ttnn_impl.condition_encoder import (
+            TtAceStepInstrumentalConditionEncoder,
+        )
+        from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import condition_encode_payload_tt
+
+        condition_encoder = TtAceStepInstrumentalConditionEncoder(
+            device=dev,
+            checkpoint_safetensors_path=str(safetensors_path),
+            dtype=getattr(ttnn, "bfloat16", None),
+        )
+        with perf.timed("condition_encoder", device=dev):
+            enc_hs_tt_one, enc_mask_np, ctx_tt_one, null_emb_tt = condition_encode_payload_tt(
+                condition_encoder,
+                payload_for_mesh_condition,
+                use_trace=False,
+            )
+        enc_hs_tt_one, ctx_tt_one = _finalize_condition_trace_tensors(
+            enc_hs_tt_one,
+            condition_encoder,
+            dev,
+            use_trace=False,
+            ctx_tt=ctx_tt_one,
+        )
+        enc_mask = torch.from_numpy(np.asarray(enc_mask_np, dtype=np.float32))
+        condition_tensors_on_device = True
+        with perf.timed("preprocess_readback", device=dev):
+            enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+            ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+            null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+        demo_session.store_preprocess(
+            prompt=run_prompt,
+            duration_sec=float(args.duration_sec),
+            seed=int(args.seed),
+            frames=int(frames),
+            enc_hs=enc_hs,
+            enc_mask=enc_mask,
+            ctx_lat=ctx_lat,
+            null_emb=null_emb,
+        )
+        print(
+            "[condition] backend=ttnn on DiT mesh (lyric+timbre+text+ctx; device-native, no 1x1 round-trip)",
+            flush=True,
+        )
+        if _mesh_audio_cover_strength < 1.0:
+            from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
+                build_non_cover_condition_payload,
+            )
+
+            nc_payload = build_non_cover_condition_payload(payload_for_mesh_condition or payload)
+            if nc_payload is not None:
+                with perf.timed("condition_encoder_non_cover", device=dev):
+                    enc_hs_tt_nc, enc_mask_nc_np, ctx_tt_nc, _ = condition_encode_payload_tt(
+                        condition_encoder,
+                        nc_payload,
+                        use_trace=False,
+                    )
+                enc_mask_nc = torch.from_numpy(np.asarray(enc_mask_nc_np, dtype=np.float32))
+                with perf.timed("preprocess_readback_non_cover", device=dev):
+                    enc_hs_nc = ace_step_ttnn_to_torch(enc_hs_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
+                    ctx_lat_nc = ace_step_ttnn_to_torch(ctx_tt_nc, mesh_device=dev, dtype=torch.float32).cpu()
+                for _t in (enc_hs_tt_nc, ctx_tt_nc):
+                    try:
+                        ttnn.deallocate(_t)
+                    except Exception:
+                        pass
+                enc_hs_tt_nc = None
+                ctx_tt_nc = None
+                print("[condition] non-cover text2music ctx encoded on DiT mesh (ttnn)", flush=True)
+        payload_for_mesh_condition = None
+
     mem = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
     if mem is None:
         raise RuntimeError("TTNN build missing DRAM_MEMORY_CONFIG.")
@@ -1262,27 +1889,38 @@ def main() -> None:
     wav_bct_cpu: Any = None
 
     try:
-        if demo_session.pipe is None or demo_session.dit_frames != int(frames):
-            with perf.timed("dit_pipeline_init", device=dev):
-                demo_session.pipe = AceStepV15TTNNPipeline(
-                    device=dev,
-                    checkpoint_safetensors_path=str(safetensors_path),
-                    timesteps_host=timesteps_host,
-                    expected_input_length=int(frames),
-                )
-            demo_session.dit_frames = int(frames)
-        pipe = demo_session.pipe
-        if ace_step_device_num_chips(dev) > 1:
-            ace_step_synchronize_device(ttnn, dev)
-        print("[ace_step_v1_5] DiT pipeline init complete", flush=True)
+        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+            ace_step_dit_long_clip_quality_active,
+            ace_step_vae_quality_decode_enabled,
+        )
+
+        dit_pipe_key = (int(frames), bool(ace_step_dit_long_clip_quality_active()))
+        pipe = None
+        if not use_pytorch_dit:
+            if demo_session.pipe is None or demo_session.dit_pipe_key != dit_pipe_key:
+                with perf.timed("dit_pipeline_init", device=dev):
+                    demo_session.pipe = AceStepV15TTNNPipeline(
+                        device=dev,
+                        checkpoint_safetensors_path=str(safetensors_path),
+                        timesteps_host=timesteps_host,
+                        expected_input_length=int(frames),
+                    )
+                demo_session.dit_frames = int(frames)
+                demo_session.dit_pipe_key = dit_pipe_key
+            pipe = demo_session.pipe
+            if ace_step_device_num_chips(dev) > 1:
+                ace_step_synchronize_device(ttnn, dev)
+            print("[ace_step_v1_5] DiT pipeline init complete", flush=True)
+        else:
+            print("[ace_step_v1_5] skipping TTNN DiT init (PyTorch HF denoise path)", flush=True)
 
         defer_vae_init = ace_step_device_num_chips(dev) > 1
-        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
 
         vae_quality_on = ace_step_vae_quality_decode_enabled(
             latent_frames=int(frames),
             mesh_sku=mesh_sku,
             duration_sec=float(args.duration_sec),
+            clarity_mode=bool(effective_clarity),
         )
         vae_init_key = (int(frames), bool(vae_quality_on))
         if demo_session.tt_vae is not None and demo_session.vae_init_key != vae_init_key:
@@ -1341,526 +1979,665 @@ def main() -> None:
 
         frames_i = int(frames)
         c_lat = 64
-        use_host_latent_sampler = ace_step_mesh_use_host_latent_sampler(dev, use_trace=bool(args.use_trace))
-        use_seq_cfg = ace_step_mesh_use_sequential_cfg(dev, do_cfg=do_cfg)
-        if use_host_latent_sampler:
-            print(
-                "[ace_step_v1_5] multi-device eager: latents + Euler/CFG on host CPU; DiT forward on mesh",
-                flush=True,
-            )
-
         xt_tt: Any = None
-        xt_host: torch.Tensor | None = None
-        encoder_attn_1d_bk_np: Any = None
-        if not bool(args.use_trace):
-            if use_host_latent_sampler:
-                print("[ace_step_v1_5] initializing latent noise on host CPU …", flush=True)
-                xt_host = dit_init_latents_host_f32(
-                    batch=1,
-                    frames=frames_i,
-                    channels=c_lat,
-                    seed=int(args.seed),
-                )
-                print("[ace_step_v1_5] latent noise ready (host CPU)", flush=True)
-            else:
-                xt_tt = dit_init_latents_fp32_tile(
-                    batch=1,
-                    frames=frames_i,
-                    channels=c_lat,
-                    device=dev,
-                    dram=mem,
-                    seed=int(args.seed),
-                )
-                print("[ace_step_v1_5] latent noise ready", flush=True)
 
-            encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
-            if encoder_keep_np_single.ndim != 2:
-                raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
-            encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
-            encoder_attn_1d_bk_np = (
-                np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
-                if do_cfg
-                else encoder_keep_np_single
+        if use_pytorch_dit:
+            pred_latents = _run_pytorch_dit_denoise_mesh(
+                demo_session=demo_session,
+                safetensors_path=str(safetensors_path),
+                timesteps_host=timesteps_host,
+                t_schedule=t_schedule,
+                frames=int(frames_i),
+                enc_hs=enc_hs,
+                ctx_lat=ctx_lat,
+                null_emb=null_emb,
+                do_cfg=bool(do_cfg),
+                use_adg=bool(use_adg),
+                gs=float(gs),
+                cfg_lo=float(cfg_lo),
+                cfg_hi=float(cfg_hi),
+                seed=int(args.seed),
+                torch_dev=torch_dev,
+                perf=perf,
             )
+            print("[ace_step_v1_5] PyTorch HF DiT denoise complete", flush=True)
+        else:
+            use_host_latent_sampler = ace_step_mesh_use_host_latent_sampler(dev, use_trace=bool(args.use_trace))
+            use_seq_cfg = ace_step_mesh_use_sequential_cfg(dev, do_cfg=do_cfg)
+            if use_host_latent_sampler:
+                print(
+                    "[ace_step_v1_5] multi-device eager: latents + Euler/CFG on host CPU; DiT forward on mesh",
+                    flush=True,
+                )
 
-        if ace_step_device_num_chips(dev) > 1:
-            ace_step_synchronize_device(ttnn, dev)
-        print("[ace_step_v1_5] staging encoder/context tensors on device …", flush=True)
-
-        if condition_tensors_on_device:
-            if enc_hs_tt_one is None or ctx_tt_one is None:
-                raise RuntimeError("Internal error: TTNN condition path did not produce device tensors.")
-            if do_cfg:
-                if null_emb_tt is None:
-                    raise RuntimeError("Internal error: TTNN condition path missing null condition embedding.")
-                s_enc = int(enc_hs_tt_one.shape[1])
-                d_enc = int(enc_hs_tt_one.shape[-1])
-                null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
-                null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
-                null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
-
-                # Eager CFG batch setup: traced replay was not bit-accurate vs eager (audible noise).
-                enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
-                ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
-                try:
-                    ttnn.deallocate(enc_hs_tt_one)
-                    ttnn.deallocate(null_4d)
-                    ttnn.deallocate(null_rep_4d)
-                    ttnn.deallocate(null_rep)
-                    ttnn.deallocate(ctx_tt_one)
-                    ttnn.deallocate(null_emb_tt)
-                except Exception:
-                    pass
-                enc_hs_tt_one = None
-                ctx_tt_one = None
-                null_emb_tt = None
-            else:
-                if bool(args.use_trace) and hasattr(ttnn, "clone"):
-                    enc_tt_pipe = ttnn.clone(enc_hs_tt_one)
+            xt_host: torch.Tensor | None = None
+            encoder_attn_1d_bk_np: Any = None
+            if not bool(args.use_trace):
+                if use_host_latent_sampler:
+                    print("[ace_step_v1_5] initializing latent noise on host CPU …", flush=True)
+                    xt_host = dit_init_latents_host_f32(
+                        batch=1,
+                        frames=frames_i,
+                        channels=c_lat,
+                        seed=int(args.seed),
+                    )
+                    print("[ace_step_v1_5] latent noise ready (host CPU)", flush=True)
                 else:
-                    enc_tt_pipe = enc_hs_tt_one
-                ctx_tt_pipe = ctx_tt_one
-                enc_hs_tt_one = None
-                ctx_tt_one = None
-                if null_emb_tt is not None:
+                    xt_tt = dit_init_latents_fp32_tile(
+                        batch=1,
+                        frames=frames_i,
+                        channels=c_lat,
+                        device=dev,
+                        dram=mem,
+                        seed=int(args.seed),
+                    )
+                    print("[ace_step_v1_5] latent noise ready", flush=True)
+
+                encoder_keep_np_single = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32)
+                if encoder_keep_np_single.ndim != 2:
+                    raise ValueError(f"encoder_attention_mask must be rank-2 [B,S], got {encoder_keep_np_single.shape}")
+                encoder_keep_np_single = (encoder_keep_np_single > np.float32(0.0)).astype(np.bool_)
+                encoder_attn_1d_bk_np = (
+                    np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
+                    if do_cfg
+                    else encoder_keep_np_single
+                )
+
+            if ace_step_device_num_chips(dev) > 1:
+                ace_step_synchronize_device(ttnn, dev)
+            print("[ace_step_v1_5] staging encoder/context tensors on device …", flush=True)
+
+            if condition_tensors_on_device:
+                if enc_hs_tt_one is None or ctx_tt_one is None:
+                    raise RuntimeError("Internal error: TTNN condition path did not produce device tensors.")
+                if do_cfg:
+                    if null_emb_tt is None:
+                        raise RuntimeError("Internal error: TTNN condition path missing null condition embedding.")
+                    s_enc = int(enc_hs_tt_one.shape[1])
+                    d_enc = int(enc_hs_tt_one.shape[-1])
+                    null_4d = ttnn.reshape(null_emb_tt, (1, 1, 1, d_enc))
+                    null_rep_4d = ttnn.repeat(null_4d, (1, 1, s_enc, 1))
+                    null_rep = ttnn.reshape(null_rep_4d, (1, s_enc, d_enc))
+
+                    # Eager CFG batch setup: traced replay was not bit-accurate vs eager (audible noise).
+                    enc_tt_pipe = ttnn.concat([enc_hs_tt_one, null_rep], dim=0)
+                    ctx_tt_pipe = concat_duplicate_batch(ctx_tt_one)
                     try:
+                        ttnn.deallocate(enc_hs_tt_one)
+                        ttnn.deallocate(null_4d)
+                        ttnn.deallocate(null_rep_4d)
+                        ttnn.deallocate(null_rep)
+                        ttnn.deallocate(ctx_tt_one)
                         ttnn.deallocate(null_emb_tt)
                     except Exception:
                         pass
+                    enc_hs_tt_one = None
+                    ctx_tt_one = None
                     null_emb_tt = None
-        elif do_cfg:
-            print("[ace_step_v1_5] staging encoder hidden states …", flush=True)
-            enc_tt_pipe = bf16_row_from_numpy_bc(
-                np.concatenate(
-                    [_as_host_numpy_f32(enc_hs), _as_host_numpy_f32(null_emb.expand_as(enc_hs))],
-                    axis=0,
-                ),
-                device=dev,
-                dram=mem,
-            )
-            print("[ace_step_v1_5] staging context latents …", flush=True)
-            ctx_row_one = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
-            ctx_tt_pipe = concat_duplicate_batch(ctx_row_one)
-            try:
-                ttnn.deallocate(ctx_row_one)
-            except Exception:
-                pass
-        else:
-            enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
-            ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
-
-        print("[ace_step_v1_5] condition tensors ready; starting denoise loop …", flush=True)
-
-        temb_per_step: list[Any] | None = None
-        tp_per_step: list[Any] | None = None
-        temb_on_host = False
-        if use_host_latent_sampler or use_seq_cfg or ace_step_device_num_chips(dev) > 1:
-            _temb_batch = 1 if use_seq_cfg or use_host_latent_sampler else (2 if do_cfg else 1)
-            if not ace_step_mesh_use_host_temb_precompute(dev):
-                print(
-                    f"[ace_step_v1_5] precomputing timestep embeddings ({num_steps} steps, B={_temb_batch}) …",
-                    flush=True,
-                )
-            temb_per_step, tp_per_step, temb_on_host = precompute_dit_temb_steps(
-                pipe,
-                num_steps=num_steps,
-                target_batch=int(_temb_batch),
-                device=dev,
-                checkpoint_safetensors_path=str(safetensors_path),
-                timesteps_host=timesteps_host,
-            )
-            if not temb_on_host:
-                print("[ace_step_v1_5] timestep embeddings ready", flush=True)
-
-        if bool(args.use_trace):
-            # --- Trace + 2CQ path (DiT body trace only when fused_M <= 16) ----------------------
-            from models.experimental.ace_step_v1_5.ttnn_impl.e2e_model_tt import _E2EDenoiseTrace, run_ttnn_denoise_loop
-            from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
-                ace_step_dit_body_trace_safe,
-                ace_step_dit_fused_m_tiles,
-            )
-
-            def _trace_progress(step_idx: int, n_steps: int, t_curr: float, euler_dt: float) -> None:
-                if step_idx >= n_steps - 1:
-                    print(f"[ttnn] final t={t_curr:.5f}", flush=True)
                 else:
-                    print(
-                        f"[ttnn] step {step_idx + 1}/{n_steps - 1} t={t_curr:.5f} dt={euler_dt:.5f}",
-                        flush=True,
-                    )
-
-            patch_sz = int(pipe.patch_embed.config.patch_size)
-            patch_seq = (int(frames_i) + patch_sz - 1) // patch_sz
-            pipe_batch = ace_step_dit_pipe_batch_size(dev, do_cfg=do_cfg)
-            if demo_session.trace_state is not None and demo_session.trace_state.has_buffers():
-                if not demo_session.trace_state.matches_shape(
-                    frames=int(frames_i),
-                    pipe_batch=int(pipe_batch),
-                    c_lat=64,
-                    do_cfg=bool(do_cfg),
-                ):
-                    demo_session.trace_state.release(dev)
-                    demo_session.trace_state = None
-            if demo_session.trace_state is None:
-                if ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq):
-                    demo_session.trace_state = _E2EDenoiseTrace(use_full_step=False)
-                else:
-                    fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
-                    print(
-                        f"[ttnn] DiT body trace disabled (fused_M={fused_m}>16): "
-                        "eager denoise + DRAM activations for clean audio on long clips",
-                        flush=True,
-                    )
-                    demo_session.trace_state = None
-            trace_state = demo_session.trace_state
-            _step_prog = make_denoise_progress_fn(perf, num_steps=len(t_schedule))
-            _temb_dev = temb_per_step
-            _tp_dev = tp_per_step
-            if temb_on_host and temb_per_step is not None and tp_per_step is not None:
-                print("[ace_step_v1_5] uploading host temb to device for trace denoise …", flush=True)
-                _temb_dev, _tp_dev = stage_host_temb_steps_to_device(
-                    temb_per_step,
-                    tp_per_step,
+                    if bool(args.use_trace) and hasattr(ttnn, "clone"):
+                        enc_tt_pipe = ttnn.clone(enc_hs_tt_one)
+                    else:
+                        enc_tt_pipe = enc_hs_tt_one
+                    ctx_tt_pipe = ctx_tt_one
+                    enc_hs_tt_one = None
+                    ctx_tt_one = None
+                    if null_emb_tt is not None:
+                        try:
+                            ttnn.deallocate(null_emb_tt)
+                        except Exception:
+                            pass
+                        null_emb_tt = None
+            elif do_cfg:
+                print("[ace_step_v1_5] staging encoder hidden states …", flush=True)
+                enc_tt_pipe = bf16_row_from_numpy_bc(
+                    np.concatenate(
+                        [_as_host_numpy_f32(enc_hs), _as_host_numpy_f32(null_emb.expand_as(enc_hs))],
+                        axis=0,
+                    ),
                     device=dev,
                     dram=mem,
                 )
-
-            enc_row = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32).reshape(1, -1)
-            encoder_keep_np_single = (enc_row > np.float32(0.0)).astype(np.bool_)
-            trace_enc_attn_1d_bk = (
-                np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
-                if do_cfg
-                else encoder_keep_np_single
-            )
-            mask_tt = None
-            b_mask = 2 if do_cfg else 1
-            xt_dummy = ttnn.zeros(
-                (b_mask, int(frames_i), 64),
-                device=dev,
-                dtype=act_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=mem,
-            )
-            with perf.timed("dit_mask_prep", device=dev):
-                mask_tt = pipe.build_encoder_attention_mask_b1qk_optional(
-                    xt_bt64=xt_dummy,
-                    context_latents_bt128=ctx_tt_pipe,
-                    encoder_hidden_states_btd=enc_tt_pipe,
-                    encoder_attention_mask_1d_bk=trace_enc_attn_1d_bk,
-                )
-            try:
-                ttnn.deallocate(xt_dummy)
-            except Exception:
-                pass
-
-            try:
-                with perf.timed("dit_denoise_loop", device=dev):
-                    _trace_loop_kw = dict(
-                        pipe=pipe,
-                        device=dev,
-                        act_dtype=act_dtype,
-                        mem=mem,
-                        t_schedule=t_schedule,
-                        frames=int(frames),
-                        do_cfg=do_cfg,
-                        seed=int(args.seed),
-                        use_adg=use_adg,
-                        guidance_scale=float(gs),
-                        cfg_interval_start=cfg_interval_start,
-                        cfg_interval_end=cfg_interval_end,
-                        enc_tt_pipe=enc_tt_pipe,
-                        ctx_tt_pipe=ctx_tt_pipe,
-                        return_device_latents=(tt_vae is not None or not bool(args.torch_vae)),
-                        progress_fn=_step_prog if _step_prog is not None else _trace_progress,
-                        trace_state=trace_state,
-                        temb_per_step=_temb_dev,
-                        tp_per_step=_tp_dev,
-                        deallocate_encoder_mask=False,
-                    )
-                    if mask_tt is None:
-                        _trace_loop_kw["enc_mask"] = enc_mask
-                    else:
-                        _trace_loop_kw["enc_mask"] = None
-                        _trace_loop_kw["encoder_attention_mask_b1qk"] = mask_tt
-                    _trace_result = run_ttnn_denoise_loop(**_trace_loop_kw)
-            finally:
-                if trace_state is not None:
-                    trace_state.release(dev)
-
-            # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
-            # mark them consumed so the bottom-of-block cleanup does not double-free.
-            enc_tt_pipe = None
-            ctx_tt_pipe = None
-
-            if not bool(args.torch_vae):
-                # TTNN VAE path: device TILE latents (VAE init may still be deferred on mesh).
-                xt_tt = _trace_result
+                print("[ace_step_v1_5] staging context latents …", flush=True)
+                ctx_row_one = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
+                ctx_tt_pipe = concat_duplicate_batch(ctx_row_one)
+                try:
+                    ttnn.deallocate(ctx_row_one)
+                except Exception:
+                    pass
             else:
-                xt_tt = None
-                pred_latents = _trace_result
-        else:
-            # --- Legacy eager DiT loop (single CQ, no trace) -----------------------------------
-            if use_host_latent_sampler:
-                if xt_host is None:
-                    raise RuntimeError("Internal error: host latent sampler enabled without xt_host.")
-                if temb_per_step is None or tp_per_step is None:
-                    raise RuntimeError("Internal error: temb precompute missing for host latent sampler.")
-                momentum_host = MomentumBuffer() if do_cfg and not use_adg else None
-                _xt_tile_buf: Any = None
+                enc_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(enc_hs), device=dev, dram=mem)
+                ctx_tt_pipe = bf16_row_from_numpy_bc(_as_host_numpy_f32(ctx_lat), device=dev, dram=mem)
 
-                def _diffusion_iterate_host(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
-                    nonlocal xt_host, _xt_tile_buf
-                    if step_idx == 0:
-                        print(
-                            "[ace_step_v1_5] denoise step 1: staging xt (first step may compile kernels) …", flush=True
-                        )
-                    xt_f32_tile, _xt_tile_buf = refresh_fp32_tile_from_host(
-                        xt_host, device=dev, dram=mem, buf=_xt_tile_buf
+            enc_tt_pipe_nc: Any | None = None
+            ctx_tt_pipe_nc: Any | None = None
+            enc_mask_nc_np: np.ndarray | None = None
+            mask_tt_nc: Any | None = None
+            if (
+                float(_mesh_audio_cover_strength) < 1.0
+                and enc_hs_nc is not None
+                and enc_mask_nc is not None
+                and ctx_lat_nc is not None
+            ):
+                enc_tt_pipe_nc, ctx_tt_pipe_nc, enc_mask_nc_np, _ = _stage_non_cover_denoise_tensors(
+                    dev=dev,
+                    mem=mem,
+                    do_cfg=bool(do_cfg),
+                    null_emb=null_emb,
+                    enc_hs_nc=enc_hs_nc,
+                    enc_mask_nc=enc_mask_nc,
+                    ctx_lat_nc=ctx_lat_nc,
+                    enc_hs_tt_nc=enc_hs_tt_nc,
+                    ctx_tt_nc=ctx_tt_nc,
+                    null_emb_tt=null_emb_tt,
+                    condition_tensors_on_device=bool(
+                        condition_tensors_on_device and enc_hs_tt_nc is not None and ctx_tt_nc is not None
+                    ),
+                )
+                if enc_tt_pipe_nc is not None and ctx_tt_pipe_nc is not None:
+                    nc_row = np.asarray(enc_mask_nc_np, dtype=np.float32).reshape(1, -1)
+                    nc_keep = (nc_row > np.float32(0.0)).astype(np.bool_)
+                    nc_attn_1d_bk = np.concatenate([nc_keep, nc_keep], axis=0) if do_cfg else nc_keep
+                    b_mask_nc = 2 if do_cfg else 1
+                    xt_dummy_nc = ttnn.zeros(
+                        (b_mask_nc, int(frames_i), 64),
+                        device=dev,
+                        dtype=act_dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=mem,
                     )
-                    xt_row = fp32_tile_to_bf16_tile_l1(xt_f32_tile, dram=mem)
-                    if xt_f32_tile is not _xt_tile_buf:
-                        try:
-                            ttnn.deallocate(xt_f32_tile)
-                        except Exception:
-                            pass
+                    mask_tt_nc = pipe.build_encoder_attention_mask_b1qk_optional(
+                        xt_bt64=xt_dummy_nc,
+                        context_latents_bt128=ctx_tt_pipe_nc,
+                        encoder_hidden_states_btd=enc_tt_pipe_nc,
+                        encoder_attention_mask_1d_bk=nc_attn_1d_bk,
+                    )
+                    try:
+                        ttnn.deallocate(xt_dummy_nc)
+                    except Exception:
+                        pass
 
-                    if temb_on_host:
-                        if step_idx == 0:
-                            print("[ace_step_v1_5] denoise step 1: staging temb/tp …", flush=True)
-                        temb_tt, tp_tt = stage_host_temb_tp_row(
-                            temb_per_step[int(step_idx)],
-                            tp_per_step[int(step_idx)],
-                            device=dev,
-                            dram=mem,
-                        )
+            print("[ace_step_v1_5] condition tensors ready; starting denoise loop …", flush=True)
+
+            temb_per_step: list[Any] | None = None
+            tp_per_step: list[Any] | None = None
+            temb_on_host = False
+            if use_host_latent_sampler or use_seq_cfg or ace_step_device_num_chips(dev) > 1:
+                _temb_batch = 1 if use_seq_cfg or use_host_latent_sampler else (2 if do_cfg else 1)
+                if not ace_step_mesh_use_host_temb_precompute(dev):
+                    print(
+                        f"[ace_step_v1_5] precomputing timestep embeddings ({num_steps} steps, B={_temb_batch}) …",
+                        flush=True,
+                    )
+                temb_per_step, tp_per_step, temb_on_host = precompute_dit_temb_steps(
+                    pipe,
+                    num_steps=num_steps,
+                    target_batch=int(_temb_batch),
+                    device=dev,
+                    checkpoint_safetensors_path=str(safetensors_path),
+                    timesteps_host=timesteps_host,
+                )
+                if not temb_on_host:
+                    print("[ace_step_v1_5] timestep embeddings ready", flush=True)
+
+            if bool(args.use_trace):
+                # --- Trace + 2CQ path (DiT body trace only when fused_M <= 16) ----------------------
+                from models.experimental.ace_step_v1_5.ttnn_impl.e2e_model_tt import (
+                    _E2EDenoiseTrace,
+                    run_ttnn_denoise_loop,
+                )
+                from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+                    ace_step_dit_body_trace_safe,
+                    ace_step_dit_fused_m_tiles,
+                )
+
+                def _trace_progress(step_idx: int, n_steps: int, t_curr: float, euler_dt: float) -> None:
+                    if step_idx >= n_steps - 1:
+                        print(f"[ttnn] final t={t_curr:.5f}", flush=True)
                     else:
-                        temb_tt = temb_per_step[int(step_idx)]
-                        tp_tt = tp_per_step[int(step_idx)]
+                        print(
+                            f"[ttnn] step {step_idx + 1}/{n_steps - 1} t={t_curr:.5f} dt={euler_dt:.5f}",
+                            flush=True,
+                        )
 
-                    if use_seq_cfg:
-                        if step_idx == 0:
-                            print("[ace_step_v1_5] denoise step 1: sequential B=1 CFG DiT forwards …", flush=True)
-                        vpc_rm, vpu_rm = run_mesh_sequential_cfg_forwards(
+                patch_sz = int(pipe.patch_embed.config.patch_size)
+                patch_seq = (int(frames_i) + patch_sz - 1) // patch_sz
+                pipe_batch = ace_step_dit_pipe_batch_size(dev, do_cfg=do_cfg)
+                if demo_session.trace_state is not None and demo_session.trace_state.has_buffers():
+                    if not demo_session.trace_state.matches_shape(
+                        frames=int(frames_i),
+                        pipe_batch=int(pipe_batch),
+                        c_lat=64,
+                        do_cfg=bool(do_cfg),
+                    ):
+                        demo_session.trace_state.release(dev)
+                        demo_session.trace_state = None
+                if demo_session.trace_state is None:
+                    if ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq):
+                        demo_session.trace_state = _E2EDenoiseTrace(use_full_step=False)
+                    else:
+                        fused_m = ace_step_dit_fused_m_tiles(batch_size=pipe_batch, seq_len=patch_seq)
+                        print(
+                            f"[ttnn] DiT body trace disabled (fused_M={fused_m}>16): "
+                            "eager denoise + DRAM activations for clean audio on long clips",
+                            flush=True,
+                        )
+                        demo_session.trace_state = None
+                trace_state = demo_session.trace_state
+                _step_prog = make_denoise_progress_fn(perf, num_steps=len(t_schedule))
+                _temb_dev = temb_per_step
+                _tp_dev = tp_per_step
+                if temb_on_host and temb_per_step is not None and tp_per_step is not None:
+                    print("[ace_step_v1_5] uploading host temb to device for trace denoise …", flush=True)
+                    _temb_dev, _tp_dev = stage_host_temb_steps_to_device(
+                        temb_per_step,
+                        tp_per_step,
+                        device=dev,
+                        dram=mem,
+                    )
+
+                enc_row = np.asarray(enc_mask.detach().cpu().numpy(), dtype=np.float32).reshape(1, -1)
+                encoder_keep_np_single = (enc_row > np.float32(0.0)).astype(np.bool_)
+                trace_enc_attn_1d_bk = (
+                    np.concatenate([encoder_keep_np_single, encoder_keep_np_single], axis=0)
+                    if do_cfg
+                    else encoder_keep_np_single
+                )
+                mask_tt = None
+                b_mask = 2 if do_cfg else 1
+                xt_dummy = ttnn.zeros(
+                    (b_mask, int(frames_i), 64),
+                    device=dev,
+                    dtype=act_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=mem,
+                )
+                with perf.timed("dit_mask_prep", device=dev):
+                    mask_tt = pipe.build_encoder_attention_mask_b1qk_optional(
+                        xt_bt64=xt_dummy,
+                        context_latents_bt128=ctx_tt_pipe,
+                        encoder_hidden_states_btd=enc_tt_pipe,
+                        encoder_attention_mask_1d_bk=trace_enc_attn_1d_bk,
+                    )
+                try:
+                    ttnn.deallocate(xt_dummy)
+                except Exception:
+                    pass
+
+                try:
+                    with perf.timed("dit_denoise_loop", device=dev):
+                        _trace_loop_kw = dict(
                             pipe=pipe,
-                            xt_b1=xt_row,
+                            device=dev,
+                            act_dtype=act_dtype,
+                            mem=mem,
+                            t_schedule=t_schedule,
+                            frames=int(frames),
+                            do_cfg=do_cfg,
+                            seed=int(args.seed),
+                            use_adg=use_adg,
+                            guidance_scale=float(gs),
+                            cfg_interval_start=cfg_interval_start,
+                            cfg_interval_end=cfg_interval_end,
                             enc_tt_pipe=enc_tt_pipe,
                             ctx_tt_pipe=ctx_tt_pipe,
-                            temb_bd=temb_tt,
-                            timestep_proj_b6d=tp_tt,
-                            encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
-                            device=dev,
+                            return_device_latents=(tt_vae is not None or not bool(args.torch_vae)),
+                            progress_fn=_step_prog if _step_prog is not None else _trace_progress,
+                            trace_state=trace_state,
+                            temb_per_step=_temb_dev,
+                            tp_per_step=_tp_dev,
+                            deallocate_encoder_mask=False,
+                            audio_cover_strength=float(_mesh_audio_cover_strength),
+                            enc_tt_pipe_non_cover=enc_tt_pipe_nc,
+                            ctx_tt_pipe_non_cover=ctx_tt_pipe_nc,
+                            encoder_attention_mask_b1qk_non_cover=mask_tt_nc,
+                            enc_mask_non_cover=enc_mask_nc if mask_tt_nc is None else None,
                         )
-                        try:
-                            ttnn.deallocate(xt_row)
-                        except Exception:
-                            pass
-                    elif do_cfg:
-                        xt_pipe_in = concat_duplicate_batch(xt_row)
-                        try:
-                            ttnn.deallocate(xt_row)
-                        except Exception:
-                            pass
-                        acoustic = pipe.forward_with_temb_tp(
+                        if mask_tt is None:
+                            _trace_loop_kw["enc_mask"] = enc_mask
+                        else:
+                            _trace_loop_kw["enc_mask"] = None
+                            _trace_loop_kw["encoder_attention_mask_b1qk"] = mask_tt
+                        _trace_result = run_ttnn_denoise_loop(**_trace_loop_kw)
+                finally:
+                    if trace_state is not None:
+                        trace_state.release(dev)
+
+                # ``run_ttnn_denoise_loop`` deallocated ``enc_tt_pipe`` / ``ctx_tt_pipe`` on exit;
+                # mark them consumed so the bottom-of-block cleanup does not double-free.
+                enc_tt_pipe = None
+                ctx_tt_pipe = None
+                enc_tt_pipe_nc = None
+                ctx_tt_pipe_nc = None
+
+                if not bool(args.torch_vae):
+                    # TTNN VAE path: device TILE latents (VAE init may still be deferred on mesh).
+                    xt_tt = _trace_result
+                else:
+                    xt_tt = None
+                    pred_latents = _trace_result
+            else:
+                # --- Legacy eager DiT loop (single CQ, no trace) -----------------------------------
+                if use_host_latent_sampler:
+                    if xt_host is None:
+                        raise RuntimeError("Internal error: host latent sampler enabled without xt_host.")
+                    if temb_per_step is None or tp_per_step is None:
+                        raise RuntimeError("Internal error: temb precompute missing for host latent sampler.")
+                    momentum_host = MomentumBuffer() if do_cfg and not use_adg else None
+                    _xt_tile_buf: Any = None
+                    _cover_steps = (
+                        int(num_steps * float(_mesh_audio_cover_strength))
+                        if float(_mesh_audio_cover_strength) < 1.0 and enc_tt_pipe_nc is not None
+                        else 0
+                    )
+                    _switched_to_non_cover = False
+
+                    def _maybe_switch_non_cover_host(*, step_idx: int) -> None:
+                        nonlocal enc_tt_pipe, ctx_tt_pipe, encoder_attn_1d_bk_np, _switched_to_non_cover
+                        if _switched_to_non_cover or _cover_steps <= 0:
+                            return
+                        if int(step_idx) < _cover_steps:
+                            return
+                        _switched_to_non_cover = True
+                        enc_tt_pipe = enc_tt_pipe_nc
+                        ctx_tt_pipe = ctx_tt_pipe_nc
+                        if enc_mask_nc_np is not None:
+                            nc_row = np.asarray(enc_mask_nc_np, dtype=np.float32).reshape(1, -1)
+                            nc_keep = (nc_row > np.float32(0.0)).astype(np.bool_)
+                            encoder_attn_1d_bk_np = np.concatenate([nc_keep, nc_keep], axis=0) if do_cfg else nc_keep
+                        print(
+                            f"[ace_step_v1_5] denoise: switched to non-cover ctx at step {int(step_idx) + 1}/{num_steps}",
+                            flush=True,
+                        )
+
+                    def _diffusion_iterate_host(
+                        *, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str
+                    ) -> None:
+                        nonlocal xt_host, _xt_tile_buf
+                        _maybe_switch_non_cover_host(step_idx=int(step_idx))
+                        if step_idx == 0:
+                            print(
+                                "[ace_step_v1_5] denoise step 1: staging xt (first step may compile kernels) …",
+                                flush=True,
+                            )
+                        xt_f32_tile, _xt_tile_buf = refresh_fp32_tile_from_host(
+                            xt_host, device=dev, dram=mem, buf=_xt_tile_buf
+                        )
+                        xt_row = fp32_tile_to_bf16_tile_l1(xt_f32_tile, dram=mem)
+                        if xt_f32_tile is not _xt_tile_buf:
+                            try:
+                                ttnn.deallocate(xt_f32_tile)
+                            except Exception:
+                                pass
+
+                        if temb_on_host:
+                            if step_idx == 0:
+                                print("[ace_step_v1_5] denoise step 1: staging temb/tp …", flush=True)
+                            temb_tt, tp_tt = stage_host_temb_tp_row(
+                                temb_per_step[int(step_idx)],
+                                tp_per_step[int(step_idx)],
+                                device=dev,
+                                dram=mem,
+                            )
+                        else:
+                            temb_tt = temb_per_step[int(step_idx)]
+                            tp_tt = tp_per_step[int(step_idx)]
+
+                        if use_seq_cfg:
+                            if step_idx == 0:
+                                print("[ace_step_v1_5] denoise step 1: sequential B=1 CFG DiT forwards …", flush=True)
+                            vpc_rm, vpu_rm = run_mesh_sequential_cfg_forwards(
+                                pipe=pipe,
+                                xt_b1=xt_row,
+                                enc_tt_pipe=enc_tt_pipe,
+                                ctx_tt_pipe=ctx_tt_pipe,
+                                temb_bd=temb_tt,
+                                timestep_proj_b6d=tp_tt,
+                                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+                                device=dev,
+                            )
+                            try:
+                                ttnn.deallocate(xt_row)
+                            except Exception:
+                                pass
+                        elif do_cfg:
+                            xt_pipe_in = concat_duplicate_batch(xt_row)
+                            try:
+                                ttnn.deallocate(xt_row)
+                            except Exception:
+                                pass
+                            acoustic = pipe.forward_with_temb_tp(
+                                xt_bt64=xt_pipe_in,
+                                context_latents_bt128=ctx_tt_pipe,
+                                encoder_hidden_states_btd=enc_tt_pipe,
+                                temb_bd=temb_tt,
+                                timestep_proj_b6d=tp_tt,
+                                attention_mask_1d_bt=None,
+                                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+                            )
+                            apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+                            vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
+                            vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+                            try:
+                                ttnn.deallocate(acoustic)
+                                ttnn.deallocate(xt_pipe_in)
+                            except Exception:
+                                pass
+                        else:
+                            acoustic = pipe.forward_with_temb_tp(
+                                xt_bt64=xt_row,
+                                context_latents_bt128=ctx_tt_pipe,
+                                encoder_hidden_states_btd=enc_tt_pipe,
+                                temb_bd=temb_tt,
+                                timestep_proj_b6d=tp_tt,
+                                attention_mask_1d_bt=None,
+                                encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
+                            )
+                            try:
+                                ttnn.deallocate(xt_row)
+                            except Exception:
+                                pass
+                            vpc_rm = acoustic
+                            vpu_rm = None
+
+                        if temb_on_host:
+                            try:
+                                ttnn.deallocate(temb_tt)
+                                ttnn.deallocate(tp_tt)
+                            except Exception:
+                                pass
+
+                        if do_cfg:
+                            apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+                            vpc = _readback_ttnn(vpc_rm)
+                            vpu = _readback_ttnn(vpu_rm) if vpu_rm is not None else None
+                            try:
+                                ttnn.deallocate(vpc_rm)
+                                if vpu_rm is not None:
+                                    ttnn.deallocate(vpu_rm)
+                            except Exception:
+                                pass
+                            if apply_cfg_now:
+                                if use_adg:
+                                    vt = adg_guidance_velocity_host(
+                                        xt_host,
+                                        vpc,
+                                        vpu,
+                                        float(t_curr_f),
+                                        float(gs),
+                                    )
+                                else:
+                                    vt = apg_guidance_velocity_host(
+                                        vpc,
+                                        vpu,
+                                        float(gs),
+                                        momentum_buffer=momentum_host,
+                                        dims=[1],
+                                    )
+                            else:
+                                vt = vpc
+                        else:
+                            vt = _readback_ttnn(vpc_rm)
+                            try:
+                                ttnn.deallocate(vpc_rm)
+                            except Exception:
+                                pass
+
+                        xt_host = euler_subtract_v_dt_host(xt=xt_host, vt=vt, dt=float(euler_dt))
+                        print(log_line, flush=True)
+
+                    with perf.timed("dit_denoise_loop", device=dev):
+                        for step_idx in range(num_steps - 1):
+                            t_curr_f = float(t_schedule[step_idx])
+                            t_next_f = float(t_schedule[step_idx + 1])
+                            dt = t_curr_f - t_next_f
+                            _diffusion_iterate_host(
+                                step_idx=step_idx,
+                                t_curr_f=t_curr_f,
+                                euler_dt=dt,
+                                log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
+                            )
+
+                        t_curr_final = float(t_schedule[-1])
+                        _diffusion_iterate_host(
+                            step_idx=num_steps - 1,
+                            t_curr_f=t_curr_final,
+                            euler_dt=t_curr_final,
+                            log_line=f"[ttnn] final t={t_curr_final:.5f}",
+                        )
+                    pred_latents = xt_host
+                else:
+                    momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
+                    _cover_steps = (
+                        int(num_steps * float(_mesh_audio_cover_strength))
+                        if float(_mesh_audio_cover_strength) < 1.0 and enc_tt_pipe_nc is not None
+                        else 0
+                    )
+                    _switched_to_non_cover = False
+
+                    def _maybe_switch_non_cover_eager(*, step_idx: int) -> None:
+                        nonlocal enc_tt_pipe, ctx_tt_pipe, encoder_attn_1d_bk_np, _switched_to_non_cover
+                        if _switched_to_non_cover or _cover_steps <= 0:
+                            return
+                        if int(step_idx) < _cover_steps:
+                            return
+                        _switched_to_non_cover = True
+                        enc_tt_pipe = enc_tt_pipe_nc
+                        ctx_tt_pipe = ctx_tt_pipe_nc
+                        if enc_mask_nc_np is not None:
+                            nc_row = np.asarray(enc_mask_nc_np, dtype=np.float32).reshape(1, -1)
+                            nc_keep = (nc_row > np.float32(0.0)).astype(np.bool_)
+                            encoder_attn_1d_bk_np = np.concatenate([nc_keep, nc_keep], axis=0) if do_cfg else nc_keep
+                        print(
+                            f"[ace_step_v1_5] denoise: switched to non-cover ctx at step {int(step_idx) + 1}/{num_steps}",
+                            flush=True,
+                        )
+
+                    def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
+                        nonlocal xt_tt
+                        _maybe_switch_non_cover_eager(step_idx=int(step_idx))
+                        xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
+                        if do_cfg:
+                            xt_pipe_in = concat_duplicate_batch(xt_row)
+                            try:
+                                ttnn.deallocate(xt_row)
+                            except Exception:
+                                pass
+                        else:
+                            xt_pipe_in = xt_row
+
+                        acoustic = pipe.forward(
                             xt_bt64=xt_pipe_in,
                             context_latents_bt128=ctx_tt_pipe,
+                            timestep_index=int(step_idx),
                             encoder_hidden_states_btd=enc_tt_pipe,
-                            temb_bd=temb_tt,
-                            timestep_proj_b6d=tp_tt,
                             attention_mask_1d_bt=None,
                             encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
                         )
-                        apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
-                        vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
-                        vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+
+                        if do_cfg:
+                            apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
+                            vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
+                            vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
+                            if apply_cfg_now:
+                                if use_adg:
+                                    vt_tt = adg_guidance_velocity_ttnn(
+                                        xt_tt,
+                                        vpc_rm,
+                                        vpu_rm,
+                                        float(t_curr_f),
+                                        float(gs),
+                                        device=dev,
+                                        dram=mem,
+                                    )
+                                else:
+                                    vt_tt = apg_guidance_velocity_ttnn(
+                                        vpc_rm,
+                                        vpu_rm,
+                                        float(gs),
+                                        momentum_buffer=momentum_ttnn,
+                                        dims=[1],
+                                        dram=mem,
+                                    )
+                            else:
+                                try:
+                                    ttnn.deallocate(vpu_rm)
+                                except Exception:
+                                    pass
+                                vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
+                        else:
+                            vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
+
                         try:
-                            ttnn.deallocate(acoustic)
                             ttnn.deallocate(xt_pipe_in)
                         except Exception:
                             pass
-                    else:
-                        acoustic = pipe.forward_with_temb_tp(
-                            xt_bt64=xt_row,
-                            context_latents_bt128=ctx_tt_pipe,
-                            encoder_hidden_states_btd=enc_tt_pipe,
-                            temb_bd=temb_tt,
-                            timestep_proj_b6d=tp_tt,
-                            attention_mask_1d_bt=None,
-                            encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
-                        )
                         try:
-                            ttnn.deallocate(xt_row)
-                        except Exception:
-                            pass
-                        vpc_rm = acoustic
-                        vpu_rm = None
-
-                    if temb_on_host:
-                        try:
-                            ttnn.deallocate(temb_tt)
-                            ttnn.deallocate(tp_tt)
+                            ttnn.deallocate(acoustic)
                         except Exception:
                             pass
 
-                    if do_cfg:
-                        apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
-                        vpc = _readback_ttnn(vpc_rm)
-                        vpu = _readback_ttnn(vpu_rm) if vpu_rm is not None else None
+                        xt_old = xt_tt
+                        xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
                         try:
-                            ttnn.deallocate(vpc_rm)
-                            if vpu_rm is not None:
-                                ttnn.deallocate(vpu_rm)
+                            ttnn.deallocate(vt_tt)
                         except Exception:
                             pass
-                        if apply_cfg_now:
-                            if use_adg:
-                                vt = adg_guidance_velocity_host(
-                                    xt_host,
-                                    vpc,
-                                    vpu,
-                                    float(t_curr_f),
-                                    float(gs),
-                                )
-                            else:
-                                vt = apg_guidance_velocity_host(
-                                    vpc,
-                                    vpu,
-                                    float(gs),
-                                    momentum_buffer=momentum_host,
-                                    dims=[1],
-                                )
-                        else:
-                            vt = vpc
-                    else:
-                        vt = _readback_ttnn(vpc_rm)
                         try:
-                            ttnn.deallocate(vpc_rm)
+                            ttnn.deallocate(xt_old)
                         except Exception:
                             pass
+                        print(log_line, flush=True)
 
-                    xt_host = euler_subtract_v_dt_host(xt=xt_host, vt=vt, dt=float(euler_dt))
-                    print(log_line, flush=True)
+                    with perf.timed("dit_denoise_loop", device=dev):
+                        for step_idx in range(num_steps - 1):
+                            t_curr_f = float(t_schedule[step_idx])
+                            t_next_f = float(t_schedule[step_idx + 1])
+                            dt = t_curr_f - t_next_f
+                            _diffusion_iterate(
+                                step_idx=step_idx,
+                                t_curr_f=t_curr_f,
+                                euler_dt=dt,
+                                log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
+                            )
 
-                with perf.timed("dit_denoise_loop", device=dev):
-                    for step_idx in range(num_steps - 1):
-                        t_curr_f = float(t_schedule[step_idx])
-                        t_next_f = float(t_schedule[step_idx + 1])
-                        dt = t_curr_f - t_next_f
-                        _diffusion_iterate_host(
-                            step_idx=step_idx,
-                            t_curr_f=t_curr_f,
-                            euler_dt=dt,
-                            log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
-                        )
-
-                    t_curr_final = float(t_schedule[-1])
-                    _diffusion_iterate_host(
-                        step_idx=num_steps - 1,
-                        t_curr_f=t_curr_final,
-                        euler_dt=t_curr_final,
-                        log_line=f"[ttnn] final t={t_curr_final:.5f}",
-                    )
-                pred_latents = xt_host
-            else:
-                momentum_ttnn = TtnnMomentumBufferApg() if do_cfg and not use_adg else None
-
-                def _diffusion_iterate(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
-                    nonlocal xt_tt
-                    xt_row = fp32_tile_to_bf16_tile_l1(xt_tt, dram=mem)
-                    if do_cfg:
-                        xt_pipe_in = concat_duplicate_batch(xt_row)
-                        try:
-                            ttnn.deallocate(xt_row)
-                        except Exception:
-                            pass
-                    else:
-                        xt_pipe_in = xt_row
-
-                    acoustic = pipe.forward(
-                        xt_bt64=xt_pipe_in,
-                        context_latents_bt128=ctx_tt_pipe,
-                        timestep_index=int(step_idx),
-                        encoder_hidden_states_btd=enc_tt_pipe,
-                        attention_mask_1d_bt=None,
-                        encoder_attention_mask_1d_bk=encoder_attn_1d_bk_np,
-                    )
-
-                    if do_cfg:
-                        apply_cfg_now = cfg_lo <= t_curr_f <= cfg_hi
-                        vpc_rm = slice_batch_btc(acoustic, 0, 1, frames_i, c_lat)
-                        vpu_rm = slice_batch_btc(acoustic, 1, 2, frames_i, c_lat)
-                        if apply_cfg_now:
-                            if use_adg:
-                                vt_tt = adg_guidance_velocity_ttnn(
-                                    xt_tt,
-                                    vpc_rm,
-                                    vpu_rm,
-                                    float(t_curr_f),
-                                    float(gs),
-                                    device=dev,
-                                    dram=mem,
-                                )
-                            else:
-                                vt_tt = apg_guidance_velocity_ttnn(
-                                    vpc_rm,
-                                    vpu_rm,
-                                    float(gs),
-                                    momentum_buffer=momentum_ttnn,
-                                    dims=[1],
-                                    dram=mem,
-                                )
-                        else:
-                            try:
-                                ttnn.deallocate(vpu_rm)
-                            except Exception:
-                                pass
-                            vt_tt = typecast_bf16_any_to_fp32_tile(vpc_rm, dram=mem)
-                    else:
-                        vt_tt = typecast_bf16_any_to_fp32_tile(acoustic, dram=mem)
-
-                    try:
-                        ttnn.deallocate(xt_pipe_in)
-                    except Exception:
-                        pass
-                    try:
-                        ttnn.deallocate(acoustic)
-                    except Exception:
-                        pass
-
-                    xt_old = xt_tt
-                    xt_tt = euler_subtract_v_dt(xt=xt_tt, vt=vt_tt, dt=float(euler_dt), dram=mem)
-                    try:
-                        ttnn.deallocate(vt_tt)
-                    except Exception:
-                        pass
-                    try:
-                        ttnn.deallocate(xt_old)
-                    except Exception:
-                        pass
-                    print(log_line, flush=True)
-
-                with perf.timed("dit_denoise_loop", device=dev):
-                    for step_idx in range(num_steps - 1):
-                        t_curr_f = float(t_schedule[step_idx])
-                        t_next_f = float(t_schedule[step_idx + 1])
-                        dt = t_curr_f - t_next_f
+                        t_curr_final = float(t_schedule[-1])
                         _diffusion_iterate(
-                            step_idx=step_idx,
-                            t_curr_f=t_curr_f,
-                            euler_dt=dt,
-                            log_line=f"[ttnn] step {step_idx+1}/{num_steps-1} t={t_curr_f:.5f} dt={dt:.5f}",
+                            step_idx=num_steps - 1,
+                            t_curr_f=t_curr_final,
+                            euler_dt=t_curr_final,
+                            log_line=f"[ttnn] final t={t_curr_final:.5f}",
                         )
-
-                    t_curr_final = float(t_schedule[-1])
-                    _diffusion_iterate(
-                        step_idx=num_steps - 1,
-                        t_curr_f=t_curr_final,
-                        euler_dt=t_curr_final,
-                        log_line=f"[ttnn] final t={t_curr_final:.5f}",
-                    )
-            if not use_host_latent_sampler and momentum_ttnn is not None:
-                momentum_ttnn.reset()
+                if not use_host_latent_sampler and momentum_ttnn is not None:
+                    momentum_ttnn.reset()
 
         if tt_vae is None and not bool(args.torch_vae):
+            _configure_vae_quality(
+                frames=int(frames),
+                mesh_sku=mesh_sku,
+                duration_sec=float(args.duration_sec),
+                clarity=bool(effective_clarity),
+            )
             from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
                 ace_step_vae_activation_storage_dtype,
                 ace_step_vae_bfloat8_activations_enabled,
@@ -2015,6 +2792,26 @@ def main() -> None:
         with perf.timed("audio_save"):
             _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
         print(f"Wrote: {out_path}", flush=True)
+
+    if split_device and float(args.duration_sec) >= 30.0:
+        _timing_labels = {label for label, _ms in perf.timings_ms}
+        if use_pytorch_dit and "dit_pipeline_init" in _timing_labels:
+            print(
+                "[ace_step_v1_5] ERROR: PyTorch DiT was selected but TTNN dit_pipeline_init ran — "
+                "stale demo script or broken branch; audio quality will be poor",
+                flush=True,
+            )
+        if use_pytorch_condition and "condition_encoder" in _timing_labels:
+            print(
+                "[ace_step_v1_5] ERROR: PyTorch condition was selected but TTNN condition_encoder ran — "
+                "stale demo script or broken branch; audio quality will be poor",
+                flush=True,
+            )
+        if not use_pytorch_dit and "dit_pytorch_init" in _timing_labels:
+            print(
+                "[ace_step_v1_5] ERROR: TTNN DiT selected but dit_pytorch_init ran — " "check ACE_STEP_PYTORCH_DIT env",
+                flush=True,
+            )
 
     perf.emit_summary(label="demo_total")
     from loguru import logger

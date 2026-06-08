@@ -74,15 +74,10 @@ def _build_fsq_codebook_np() -> np.ndarray:
 
 
 def _detok_chunk_n() -> int:
-    """Max audio-code count per detokenizer forward (global attention within each chunk).
+    """Max audio-code count per TTNN detokenizer forward (L1 budget; see ``ace_step_detok_chunk_n``)."""
+    from .math_perf_env import ace_step_detok_chunk_n
 
-    Default 200 matches ``ACE_STEP_MAX_AUDIO_CODES``: 30 s @ 5 Hz = 150 codes must stay in
-    one graph (128 caused a 128+22 split with no cross-chunk attention and bad 30 s quality).
-    """
-    try:
-        return max(1, int(os.environ.get("ACE_STEP_DETOK_CHUNK_CODES", "200")))
-    except ValueError:
-        return 200
+    return ace_step_detok_chunk_n()
 
 
 def _as_weight(weights_np: Dict[str, np.ndarray], key: str, *, device, dtype, mem, mapper):

@@ -150,10 +150,50 @@ def test_dit_long_clip_quality_defaults(monkeypatch):
     monkeypatch.delenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", raising=False)
     assert m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
     assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=375, duration_sec=15.0, mesh_sku="BH_QB")
+    assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=250, duration_sec=10.0, mesh_sku="BH_QB")
     assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku=None)
 
     monkeypatch.setenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", "0")
     assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+
+
+def test_audio_code_limit_for_duration():
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ace_step_audio_code_limit_for_duration,
+        ace_step_expected_audio_code_count,
+    )
+
+    assert ace_step_expected_audio_code_count(60.0) == 300
+    assert ace_step_audio_code_limit_for_duration(60.0) == 350
+    assert ace_step_audio_code_limit_for_duration(15.0) == 200
+
+
+def test_configure_audio_code_limits_sets_env(monkeypatch):
+    from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_MAX_AUDIO_CODES", raising=False)
+    monkeypatch.delenv("ACE_STEP_DETOK_CHUNK_CODES", raising=False)
+    assert m.ace_step_configure_audio_code_limits(60.0) == 350
+    assert os.environ["ACE_STEP_MAX_AUDIO_CODES"] == "350"
+    assert "ACE_STEP_DETOK_CHUNK_CODES" not in os.environ
+    assert m.ace_step_detok_chunk_n() == m.ACE_STEP_DETOK_L1_CHUNK_CODES
+
+
+def test_detok_chunk_n_default():
+    from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import (
+        ACE_STEP_DETOK_L1_CHUNK_CODES,
+        ace_step_detok_chunk_n,
+    )
+
+    assert ace_step_detok_chunk_n() == ACE_STEP_DETOK_L1_CHUNK_CODES
+
+
+def test_configure_audio_code_limits_respects_existing_env(monkeypatch):
+    from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.setenv("ACE_STEP_MAX_AUDIO_CODES", "400")
+    monkeypatch.setenv("ACE_STEP_DETOK_CHUNK_CODES", "400")
+    assert m.ace_step_configure_audio_code_limits(60.0) == 400
 
 
 def test_configure_dit_long_clip_quality_sets_env(monkeypatch):
@@ -190,6 +230,12 @@ def test_vae_quality_clarity_30s_on_mesh():
         clarity_mode=False,
     )
     assert ace_step_vae_quality_decode_enabled(
+        latent_frames=750,
+        mesh_sku="BH_QB",
+        duration_sec=30.0,
+        clarity_mode=False,
+    )
+    assert ace_step_vae_quality_decode_enabled(
         latent_frames=1000,
         mesh_sku="BH_QB",
         duration_sec=40.0,
@@ -206,7 +252,122 @@ def test_resolve_vae_tiling_mesh_long_clip():
     assert overlap30 >= 14
     chunk2, overlap2 = ace_step_resolve_vae_tiling(frames=1500, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
     assert chunk2 == 32
-    assert overlap2 >= 14
+    assert overlap2 >= 15
+
+
+def test_mesh_use_pytorch_dit_opt_in(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_mesh_use_pytorch_dit
+
+    assert not ace_step_mesh_use_pytorch_dit(mesh_sku="BH_QB", duration_sec=60.0, latent_frames=1500)
+    assert not ace_step_mesh_use_pytorch_dit(mesh_sku="BH_QB", duration_sec=30.0, latent_frames=750)
+    assert not ace_step_mesh_use_pytorch_dit(mesh_sku="BH_QB", duration_sec=15.0, latent_frames=375)
+    monkeypatch.setenv("ACE_STEP_PYTORCH_DIT", "1")
+    assert ace_step_mesh_use_pytorch_dit(mesh_sku="BH_QB", duration_sec=60.0, latent_frames=1500)
+
+
+def test_mesh_use_pytorch_condition_opt_in(monkeypatch):
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_mesh_use_pytorch_condition
+
+    assert not ace_step_mesh_use_pytorch_condition(mesh_sku="BH_QB", duration_sec=60.0, latent_frames=1500)
+    assert not ace_step_mesh_use_pytorch_condition(mesh_sku="BH_QB", duration_sec=30.0, latent_frames=750)
+    assert not ace_step_mesh_use_pytorch_condition(mesh_sku="BH_QB", duration_sec=15.0, latent_frames=375)
+    assert not ace_step_mesh_use_pytorch_condition(mesh_sku=None, duration_sec=60.0, latent_frames=1500)
+    monkeypatch.setenv("ACE_STEP_PYTORCH_CONDITION", "1")
+    assert ace_step_mesh_use_pytorch_condition(mesh_sku="BH_QB", duration_sec=60.0, latent_frames=1500)
+    assert ace_step_mesh_use_pytorch_condition(mesh_sku="P150", duration_sec=15.0, latent_frames=375)
+
+
+def test_mesh_audio_cover_strength_defaults(monkeypatch):
+    from models.experimental.ace_step_v1_5.demo.run_prompt_to_wav import _mesh_effective_audio_cover_strength
+
+    monkeypatch.delenv("ACE_STEP_AUDIO_COVER_STRENGTH", raising=False)
+    assert _mesh_effective_audio_cover_strength(split_device=True, duration_sec=60.0, has_lm_codes=True) == 1.0
+    assert _mesh_effective_audio_cover_strength(split_device=False, duration_sec=60.0, has_lm_codes=True) == 1.0
+    assert _mesh_effective_audio_cover_strength(split_device=True, duration_sec=30.0, has_lm_codes=True) == 1.0
+    # Short LM hints → keep full cover (no non-cover switch that drops guitar timbre).
+    assert (
+        _mesh_effective_audio_cover_strength(
+            split_device=True,
+            duration_sec=60.0,
+            has_lm_codes=True,
+            lm_hint_frames=250,
+            total_frames=1500,
+        )
+        == 1.0
+    )
+    monkeypatch.setenv("ACE_STEP_AUDIO_COVER_STRENGTH", "0.5")
+    assert _mesh_effective_audio_cover_strength(split_device=True, duration_sec=60.0, has_lm_codes=True) == 0.5
+
+
+def test_repair_degenerate_lm_hint_tail():
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import (
+        find_degenerate_code_prefix_len,
+        repair_degenerate_lm_hint_tail,
+    )
+
+    head = list(range(80))
+    tail = [head[-1]] * 220
+    codes = head + tail
+    prefix = find_degenerate_code_prefix_len(codes)
+    assert prefix is not None and prefix >= 70
+
+    hints = torch.randn(1, 1500, 64)
+    sil = torch.zeros(1, 1500, 64)
+    payload = {"precomputed_lm_hints_25Hz": hints.clone(), "silence_latent": sil}
+    code_str = "".join(f"<|audio_code_{c}|>" for c in codes)
+    repair_degenerate_lm_hint_tail(payload, code_str, 1500)
+    assert int(payload["precomputed_lm_hints_25Hz"].shape[1]) == 1500
+    good_frames = int(prefix * 5)
+    assert torch.allclose(payload["precomputed_lm_hints_25Hz"][:, good_frames:, :], sil[:, : 1500 - good_frames, :])
+
+
+def test_build_non_cover_condition_payload():
+    import torch
+
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import build_non_cover_condition_payload
+
+    src = torch.randn(1, 100, 64)
+    sil = torch.randn(1, 256, 64)
+    nc_text = torch.randn(1, 32, 1024)
+    payload = {
+        "src_latents": src,
+        "silence_latent": sil,
+        "is_covers": torch.ones(1, dtype=torch.long),
+        "non_cover_text_hidden_states": nc_text,
+        "non_cover_text_attention_masks": torch.ones(1, 32),
+        "precomputed_lm_hints_25Hz": torch.randn(1, 100, 64),
+    }
+    nc = build_non_cover_condition_payload(payload)
+    assert nc is not None
+    assert nc["precomputed_lm_hints_25Hz"] is None
+    assert int(nc["is_covers"].sum()) == 0
+    assert nc["text_hidden_states"] is nc_text
+
+
+def test_configure_dit_ultra_long_clip_quality(monkeypatch):
+    from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_DIT_ULTRA_LONG_CLIP_QUALITY", raising=False)
+    monkeypatch.delenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", raising=False)
+    monkeypatch.delenv("ACE_STEP_COND_LONG_CLIP_QUALITY", raising=False)
+    assert m.ace_step_configure_dit_ultra_long_clip_quality(latent_frames=1500, duration_sec=60.0, mesh_sku="BH_QB")
+    assert m.ace_step_dit_ultra_long_clip_quality_active()
+    assert m.ace_step_dit_long_clip_quality_active()
+    assert m.ace_step_cond_long_clip_quality_active()
+    monkeypatch.delenv("ACE_STEP_DIT_ULTRA_LONG_CLIP_QUALITY", raising=False)
+    assert not m.ace_step_dit_ultra_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+
+
+def test_configure_cond_long_clip_quality(monkeypatch):
+    from models.experimental.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_COND_LONG_CLIP_QUALITY", raising=False)
+    assert m.ace_step_configure_cond_long_clip_quality(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+    assert m.ace_step_cond_long_clip_quality_active()
+    monkeypatch.delenv("ACE_STEP_COND_LONG_CLIP_QUALITY", raising=False)
+    assert not m.ace_step_cond_long_clip_quality_enabled(latent_frames=375, duration_sec=15.0, mesh_sku="BH_QB")
 
 
 def test_mesh_perf_log_default():
