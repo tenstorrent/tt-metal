@@ -106,7 +106,8 @@ void kernel_main() {
 
     constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
 
-    mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+    matmul_init(cb_q_in, cb_k_in);
 
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);

@@ -14,6 +14,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -128,7 +129,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // read FP32 score from L1, add the DST tile (mask) in FP32, write back FP32. Score
         // stays at full FP32 precision the whole time — no DST→SRC conversion truncation
         // to TF32.
-        mm_block_init_short(
+        matmul_block_init(
             cb_query,
             cb_key,
             /* transpose */ 1,
@@ -198,7 +199,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
         constexpr uint32_t matmul_accum_reg = 0U;
         for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-            mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
             tile_regs_acquire();
             for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
                 matmul_tiles(
@@ -327,7 +328,8 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_query, cb_key, cb_attention_weights);
+    matmul_init(cb_query, cb_key);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 

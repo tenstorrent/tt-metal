@@ -517,11 +517,12 @@ void kernel_main() {
     // thread). Same total compute, better pipelining.
     silu_tile_init();
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        mm_block_init(
+        matmul_block_init(
             cb_in0_x,
             cb_in1_gate,
-            cb_partials_gu,
             /*transpose=*/0,
             gu_out_subblock_w,
             gu_out_subblock_h,
@@ -558,10 +559,9 @@ void kernel_main() {
         (void)cb_up_intermed;
 
         // Phase 4: down matmul, output to cb_out.
-        mm_block_init(
+        matmul_block_init(
             cb_in0_down_full,
             cb_in1_down,
-            cb_partials_d,
             /*transpose=*/0,
             d_out_subblock_w,
             d_out_subblock_h,

@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -77,7 +78,8 @@ void kernel_main() {
 #endif
 
     cb_wait_front(trans_mat_cb, onetile);
-    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, rotated_in_interm_cb);
+    matmul_init(in_cb, trans_mat_cb);
     // Binary ops (mul, add) below need their own init path; without this the
     // math-thread register routing stays in matmul mode and mixed-precision
     // binaries (e.g. bf16 x bfp8) produce incorrect results.
@@ -88,7 +90,7 @@ void kernel_main() {
         cb_wait_front(in_cb, onetile);
         reconfig_data_format(in_cb, trans_mat_cb);
         pack_reconfig_data_format(rotated_in_interm_cb);
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_cb, trans_mat_cb);
 
         tile_regs_acquire();
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);

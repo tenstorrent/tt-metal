@@ -139,7 +139,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
+    matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
@@ -217,7 +217,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
+    matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
@@ -297,7 +297,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
+    matmul_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
@@ -391,7 +391,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
     reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
-    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
+    matmul_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, 0);
     matmul_tiles(
         cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
@@ -472,6 +472,7 @@ void kernel_main() {
 
     init_sfpu(cb_x_hat_idx, cb_dx_idx);
     binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         // Wait for rstd and mean (per row)

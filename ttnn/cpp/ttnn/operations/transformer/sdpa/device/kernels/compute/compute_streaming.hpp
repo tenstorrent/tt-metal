@@ -717,7 +717,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
-            mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
+            matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.

@@ -41,14 +41,14 @@ void kernel_main() {
     binary_dest_reuse_tiles_init(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
-    mm_init(cb_in0, cb_in1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
-
-    mm_block_init_short(cb_in1, cb_in0);
+    matmul_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
-    mm_block_init(cb_in0, cb_in1, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    matmul_block_init(cb_in1, cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+
+    matmul_block_init(cb_in0, cb_in1);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
 
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));

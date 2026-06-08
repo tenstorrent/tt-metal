@@ -156,7 +156,8 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
-    mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+    matmul_init(cb_q_in, cb_k_in);
 
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
     CircularBuffer cb_mask_in_obj(cb_mask_in);
