@@ -23,7 +23,7 @@ Things to remember:
    - [SemaphoreSpec](#semaphorespec)
    - [TensorParameter](#tensorparameter)
    - [WorkUnitSpec](#workunitspec)
-   - [ProgramRunArgs](#programrunparams)
+   - [ProgramRunArgs](#programrunargs)
 5. [Device-Side Migration](#device-side-migration)
    - [Circular Buffers → Dataflow Buffers](#circular-buffers--dataflow-buffers)
    - [TensorAccessor](#tensoraccessor)
@@ -300,11 +300,11 @@ KernelSpec consumer{ /* ... */
 
 **Spec-validator: every DFB needs ≥1 PRODUCER and ≥1 CONSUMER binding.** The host validator rejects programs where a DFB has only producers or only consumers across the kernels that bind it. When kernels have asymmetric conditional usage of the same DFB (e.g., a reader unconditionally produces a tile but a compute kernel only conditionally needs it), satisfy the constraint by declaring the conditional-side `DFBBinding` unconditionally on the host. Do not modify the kernel's `wait_front` / `pop_front` patterns to "balance" the topology: per-execution DFB state is reinitialized at each program enqueue, so a tile produced and never consumed is harmless.
 
-**Spec-validator: `unpack_to_dest_mode` required for Float32 DFB consumers on `fp32_dest_acc_en` compute kernels.** When a compute `KernelSpec` sets `ComputeConfigSpec::fp32_dest_acc_en = true`, every Float32-formatted DFB it consumes must appear in `ComputeConfigSpec::unpack_to_dest_mode` with an explicit `UnpackToDestMode` entry. Legacy `ComputeConfig` defaulted silently; Metal 2.0's validator requires the choice to be made explicit. Use `{DFB_UNIQUE_ID, UnpackToDestMode::Default}` to preserve legacy semantics; pick a non-default mode only when the kernel needs it. Symptom of forgetting: the validator complains at program-spec build time with a message pointing at the FP32 DFB.
+**Spec-validator: `unpack_to_dest_mode` required for Float32 DFB consumers on `fp32_dest_acc_en` compute kernels.** When a compute `KernelSpec` sets `ComputeHardwareConfig::fp32_dest_acc_en = true`, every Float32-formatted DFB it consumes must appear in `ComputeHardwareConfig::unpack_to_dest_mode` (a `Table<DFBSpecName, UnpackToDestMode>`) with an explicit entry. Legacy `ComputeConfig` defaulted silently; Metal 2.0's validator requires the choice to be made explicit. Use `{DFB_UNIQUE_ID, UnpackToDestMode::Default}` to preserve legacy semantics; pick a non-default mode only when the kernel needs it. Symptom of forgetting: the validator complains at program-spec build time with a message pointing at the FP32 DFB.
 
 **Borrowed-memory DFBs.** A DFB can be built on top of an existing `Buffer`'s memory rather than allocating its own L1 storage — the Metal 2.0 form of the legacy "dynamic circular buffer." Set `DataflowBufferSpec::borrowed_from` to the name of a `TensorParameter` whose buffer backs the DFB; the DFB's L1 address resolves at runtime from the corresponding `TensorArgument` in `ProgramRunArgs::tensor_args`.
 
-**Aliased DFBs.** Two or more DFBs can share backing L1 memory via `DataflowBufferSpec::alias_with`. The aliased DFBs are logically distinct (each has its own `unique_id` and bindings) but physically occupy the same L1 region. Useful when two same-shape DFBs are produced and consumed in non-overlapping phases of the kernel — the L1 footprint collapses. All aliased DFBs must have the same total size (`num_entries * entry_size`), must be bound to the same kernels, and must mutually declare each other in `alias_with`. Aliased DFBs offer no guarantee against data clobbering between the logical buffers; correctness is the kernel author's responsibility.
+**Aliased DFBs.** Two or more DFBs can share backing L1 memory via `DataflowBufferSpec::advanced_options.alias_with` (the field lives on `DFBAdvancedOptions`). The aliased DFBs are logically distinct (each has its own `unique_id` and bindings) but physically occupy the same L1 region. Useful when two same-shape DFBs are produced and consumed in non-overlapping phases of the kernel — the L1 footprint collapses. All aliased DFBs must have the same total size (`num_entries * entry_size`), must be bound to the same kernels, and must mutually declare each other in `alias_with`. Aliased DFBs offer no guarantee against data clobbering between the logical buffers; correctness is the kernel author's responsibility.
 
 Remote DFBs spanning nodes are described in `dataflow_buffer_spec.hpp` but are not yet supported.
 
@@ -544,17 +544,23 @@ params.kernel_run_args = {{
 SetProgramRunArgs(program, params); // temporary free function
 ```
 
-Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape:
+Vararg form — for kernels with a genuinely dynamic argument tail (loop-retrieved on the device side). The canonical fit is a CTA-bound count plus a per-element payload, e.g. an N-dimensional shape. Vararg counts live on `KernelAdvancedOptions` (schema side); vararg values live on `AdvancedKernelRunArgs` (per-execution side, nested under each `KernelRunArgs` entry's `.advanced_options`):
 
 ```cpp
-// Schema:
+// Schema (on KernelSpec::advanced_options, which is KernelAdvancedOptions):
 .compile_time_args = {{"rank", rank}},
-.runtime_arg_schema = {
+.advanced_options = {
     .num_runtime_varargs = rank,  // shape: one entry per dimension
 },
 
-// Values:
-.runtime_varargs = {{NodeCoord{0, 0}, shape_dims}},  // shape_dims.size() == rank
+// Values (on the matching KernelRunArgs entry's .advanced_options, which is AdvancedKernelRunArgs):
+//   .runtime_varargs is Table<NodeCoord, std::vector<uint32_t>>
+params.kernel_run_args = {{
+    .kernel = MY_KERNEL,
+    .advanced_options = {
+        .runtime_varargs = {{NodeCoord{0, 0}, shape_dims}},  // shape_dims.size() == rank
+    },
+}};
 ```
 
 Named and vararg forms can coexist on the same kernel. Vararg indices are stable across schema changes — promoting a named RTA to a CRTA, or adding/removing named args, does not shift vararg indices. Common runtime varargs (`num_common_runtime_varargs`, retrieved on the device via `get_common_vararg(i)`) work analogously, broadcast across all nodes.
@@ -796,27 +802,33 @@ The semaphore-ID RTA is gone.
 
 **Multi-kernel access to the same resource.** The named-binding design makes resource identity singular at the program level. Legacy: each kernel reads the same tensor's address as an independent RTA; divergence between those RTAs was a silent failure mode. Metal 2.0: one `TensorParameter`, multiple `TensorBinding`s — each with its own per-kernel `accessor_name`. The accessor names are local aliases; the binding declarations are the single source of truth.
 
-**Optional resources.** A binding may be declared conditionally on the host (omitted from `KernelSpec::dfb_bindings` / `tensor_bindings` when the path isn't taken), and the kernel gates **both the wrapper declaration and uses** with `if constexpr` on a CTA:
+**Optional resources.** A binding may be declared conditionally on the host (omitted from `KernelSpec::dfb_bindings` / `tensor_bindings` when the path isn't taken). On the kernel side, the gate has to happen at the **preprocessor** level: Metal 2.0's `dfb::<name>` namespace is generated from the actual host bindings — `dfb::cb_scaled` exists only when the host actually binds it — and `if constexpr` in non-template `kernel_main` still performs name lookup on the discarded branch, so `if constexpr (false) { … dfb::cb_scaled … }` fails to compile at parse time. The host emits a matching `#define` via `KernelSpec::compiler_options.defines`; the kernel `#ifdef`-gates both the binding's `constexpr` alias and every expression referencing it.
 
 ```cpp
 // Host side:
 KernelSpec compute{
-    .compile_time_args = {{"do_scale", do_scale ? 1u : 0u}, /* ... */},
+    .compile_time_args = { /* ... */ },
+    .compiler_options = {.defines = do_scale
+        ? Table<std::string, std::string>{{"DO_SCALE", "1"}}
+        : Table<std::string, std::string>{}},
     .dfb_bindings = do_scale
         ? Group<DFBBinding>{INPUT, OUTPUT, SCALED}
         : Group<DFBBinding>{INPUT, OUTPUT},
 };
 
 // Kernel side:
-constexpr auto do_scale = get_arg(args::do_scale);
-if constexpr (do_scale) {
-    experimental::DataflowBuffer cb_scaled(dfb::cb_scaled);  // wrapper inside the gate
-    cb_scaled.wait_front(...);
-    // ... all uses of cb_scaled
-}
+#ifdef DO_SCALE
+constexpr uint32_t cb_scaled_id = dfb::cb_scaled;
+#endif
+
+#ifdef DO_SCALE
+experimental::DataflowBuffer cb_scaled(dfb::cb_scaled);
+cb_scaled.wait_front(...);
+// ... all uses of cb_scaled
+#endif
 ```
 
-The "always bind and gate only the uses" pattern (wrapper declared outside the `if constexpr`) is an anti-pattern: it pays L1 unnecessarily for an unused buffer. See the [patterns catalog](metal2_port_patterns.md) for the full discussion.
+The full discussion (file-scope ternaries, preprocessor-stage parsing) is in [Pattern: Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings). The "always bind and gate only the uses" alternative — wrapper declared unconditionally — is wrong on two counts: it pays L1 unnecessarily for an unused buffer, *and* `if constexpr` doesn't gate name lookup in a non-template kernel even if you reached for it.
 
 ---
 
@@ -1202,6 +1214,6 @@ When a build error or spec-validator failure doesn't make the fix obvious, searc
 | Linker: `undefined reference to 'dfb::...'` (e.g. `dfb::cb_scaled`) inside a kernel TU | Kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`; `args::*` lives in `kernel_args_generated.h`. | Remove any explicit include of either generated header. The only include a ported kernel adds is `experimental/kernel_args.h` — the framework injects both. |
 | Spec-validator: DataflowBuffer with 0 producers / 0 consumers | Host-side topology mismatch — the DFB was declared but only one end of its pipeline binds it. The other end is bound to a different DFB, missing entirely, or doesn't appear in any kernel's `kernel_bindings`. | Fix on the host: add the missing binding. **Do not** modify the kernel's `wait_front` / `pop_front` calls to mask the imbalance — per-execution DFB state is reinitialized, so a tile produced and never consumed is harmless. |
 | Spec-validator: TensorParameter with 0 TensorBindings | TensorParameter declared but no kernel binds it. | Bind the tensor on the kernel(s) that use it, or remove the parameter. |
-| Spec-validator: `unpack_to_dest_mode` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `fp32_dest_acc_en = true` and consumes a `DataType::Float32` DFB, but no `UnpackToDestMode` was set on that consumer binding. | On the consuming `DataflowBufferSpec::kernel_bindings` entry, set `unpack_to_dest_mode = UnpackToDestMode::UnpackToDestFp32`. |
-| Spec-validator: aliased-DFB rule failure (`dfb_node_set` / strict-clique / borrowed-memory consistency) | The set of nodes declared in `aliased_dfbs` violates one of the three legality rules. | The error names which rule fails. Most common case: a node was added on one DFB's alias list but missed on the other(s) — the alias group must be a strict clique. |
+| Spec-validator: `unpack_to_dest_mode` required (or LLK-side dest-accumulator dtype assert) | Compute kernel sets `fp32_dest_acc_en = true` and consumes a `DataType::Float32` DFB, but no `UnpackToDestMode` was set for that DFB on the compute kernel's `ComputeHardwareConfig`. | On the compute kernel's `hw_config` (a `ComputeHardwareConfig`), add an entry to the `unpack_to_dest_mode` table keyed by the DFB's `DFBSpecName`: `unpack_to_dest_mode = {{DFB_NAME, UnpackToDestMode::UnpackToDestFp32}}`. |
+| Spec-validator: aliased-DFB rule failure (size / strict-clique / borrowed-memory consistency) | The DFBs declared via `advanced_options.alias_with` violate one of the three legality rules. | The error names which rule fails. Most common case: a DFB was added on one member's alias list but missed on the other(s) — `advanced_options.alias_with` must form a strict clique (every member names every other member). |
 | `UpdateTensorArgs` `TensorSpec` legality check fires — typically on a fast-path program-cache hit | The op defines a custom `compute_program_hash` that doesn't fold `TensorSpec` into the hash key. The program cache reports a hit, but the cached `ProgramSpec` was built for a different `TensorSpec`. Metal 2.0's `UpdateTensorArgs` legality check (intentionally kept on) catches the resulting mismatch. | **Do not** attempt to update the custom hash to include `TensorSpec`. Revert the op to use the default TTNN hash (reflection-based, naturally folds in `TensorSpec`). Note the revert in `METAL2_PORT_REPORT.md` under "Open items" so the op author can decide whether to reintroduce a corrected custom hash later. The unnecessary cache misses incurred by reverting are the right trade-off vs. silently-incorrect cache hits. |
