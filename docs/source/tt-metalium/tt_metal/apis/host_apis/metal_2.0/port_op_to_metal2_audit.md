@@ -2,7 +2,7 @@
 
 > This is the first of two documents covering the Metal 2.0 op port workflow. **This document covers the feasibility audit only — the gate that decides whether a given op can be ported today.** The port recipe (inventory, planning, construction, verification) lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) and is loaded only after the audit clears with explicit user go-ahead.
 >
-> **Last validated against main**: commit `37853c2e411` (2026-05-23). Appendix A entries reflect Metal 2.0 feature support as of that commit. If you observe a feature in the codebase whose Appendix A status seems stale — particularly an `UNSUPPORTED` entry whose API has clearly landed in the framework headers — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override rule.
+> If you encounter a feature in the framework headers whose Appendix A status looks stale — most commonly, an `UNSUPPORTED` entry whose API has clearly landed — see [§Maintenance: keeping Appendix A current](#maintenance-keeping-appendix-a-current) for the override procedure.
 
 ## Read this first
 
@@ -144,7 +144,7 @@ Some legacy-API features are not yet supported in Metal 2.0. If the op uses any 
 
 **Run Step 0.2 regardless of Step 0.1's outcome.** Each Appendix A entry's recognition signals work against both ProgramDescriptor-form and imperative-`host_api.hpp`-form code — see the per-entry recognition bullets. Even when Step 0.1 RED's the op, Step 0.2 still surfaces which features it uses; that's the data point the human reader needs to plan downstream work.
 
-For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (red action: refuse and wait for support), `DISCOURAGED` (yellow action: ask the user; respect the override), or `LANDED` (green: feature is supported in Metal 2.0 as of the doc's "Last validated against main" commit; no port gate).
+For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (red action: refuse and wait for support), `DISCOURAGED` (yellow action: ask the user; respect the override), or `LANDED` (green: feature is supported in Metal 2.0; no port gate).
 
 - **Green**: no entry's recognition signals fire.
 - **Yellow**: either a `DISCOURAGED` entry's signals match, **or** an `UNSUPPORTED` entry's signals match ambiguously (you cannot be sure whether the feature is in use). Ask the user. On override, proceed per the entry's guidance.
@@ -497,11 +497,11 @@ This appendix lists legacy-API features that gate the port. Each entry falls int
 
 - **UNSUPPORTED** — Metal 2.0 does not currently support this feature. Action: refuse the port and report (red). Each entry's **Status** field describes the future path: most entries will be supported as-is when implemented; a few will only be addressable via a redesigned, semantically different construct (and may require a runtime-team consultation before re-attempting). Always check the Status field before telling the user "wait and revisit."
 - **DISCOURAGED** — Metal 2.0 supports the feature today, but its use is discouraged in favor of a planned alternative. Action: report yellow and ask the user; if the user overrides, proceed per the entry's guidance.
-- **LANDED** — Metal 2.0 supports the feature as of the doc's "Last validated against main" commit. Action: no port gate; the feature is supported. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form.
+- **LANDED** — Metal 2.0 supports the feature today. Action: no port gate; the feature is supported. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form.
 
 ### Maintenance: keeping Appendix A current
 
-Appendix A entries reflect Metal 2.0 feature support as of the **Last validated against main** commit declared at the top of this document. When the framework changes Metal 2.0 feature support, the doc maintainer updates the relevant entry — typically by changing the tier (e.g., from `UNSUPPORTED` to `LANDED`), rewriting the Status / Action paragraphs to reference the new construct, and bumping the doc's `Last validated against main` commit hash.
+Appendix A is actively maintained as Metal 2.0's feature surface evolves. When framework changes touch a feature listed here, the doc maintainer updates the relevant entry — typically changing the tier (e.g., from `UNSUPPORTED` to `LANDED`) and rewriting the Status / Action paragraphs to reference the new construct.
 
 **Staleness override for porting AIs.** If during the audit you observe a feature in the codebase whose Appendix A entry is marked `UNSUPPORTED` but the framework headers clearly show the API has landed (e.g., the spec/field/method the legacy construct would need to translate to is *visibly present* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`), this likely means the audit doc is stale. Do not refuse the port reflexively. Instead:
 
@@ -509,7 +509,7 @@ Appendix A entries reflect Metal 2.0 feature support as of the **Last validated 
 2. In the report's Questions for the user section, flag the apparent discrepancy: cite the Appendix A row, name the framework header / commit that contradicts it, and ask the user to confirm whether the feature is now supported.
 3. Respect the user's answer; if they confirm support, proceed with the port using the new construct. The doc maintainer will update Appendix A separately.
 
-This override mechanism exists because Metal 2.0 is moving fast and the audit doc lags reality. Do not invent it for entries that are clearly still unsupported (no API surface present); only for cases where the codebase contradicts the doc.
+This override mechanism is a safety net for the brief windows between a framework merge and the audit-doc update. Do not invent it for entries that are clearly still unsupported (no API surface present); only for cases where the codebase contradicts the doc.
 
 When scanning during Step 0.2 of the feature compatibility check, match each feature's recognition signals against the op's source. If any signal matches, take the action declared in the entry.
 
