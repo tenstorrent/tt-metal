@@ -18,29 +18,64 @@ add_compile_options("$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>")
 # Extends common PCH with frequently used TTNN headers to speed up compilation
 ##################################################
 
-add_library(ttnn_pch STATIC)
-add_library(TTNN::PCH ALIAS ttnn_pch)
-file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp CONTENT "/*dummy ttnn pch file*/\n")
-target_sources(ttnn_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch.cpp)
-
-# Reuse the stable PCH from TT::CommonPCH (STL + fmt + json) rather than
-# re-declaring an identical header list. TT::CommonPCH is compiled once;
-# ttnn_pch consumers share the same precompiled binary.
-# NOTE: REUSE_FROM requires compatible compile flags between the two targets.
-#       If CI reveals incompatibility, revert to declaring headers explicitly.
-target_precompile_headers(ttnn_pch REUSE_FROM TT::CommonPCH)
-
+# ── Lean PCH: STL + fmt + json only — immune to TT::Metalium header churn ─────
+# Backed by TT::CommonPCH so it shares the same compiled .pch binary.
+# Use for targets whose sources do NOT include device_operation.hpp/operation.hpp.
+add_library(ttnn_pch_lean STATIC)
+add_library(TTNN::PCHLean ALIAS ttnn_pch_lean)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp CONTENT "/*dummy ttnn lean pch file*/\n")
+target_sources(ttnn_pch_lean PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_lean.cpp)
+target_precompile_headers(ttnn_pch_lean REUSE_FROM TT::CommonPCH)
 target_link_libraries(
-    ttnn_pch
+    ttnn_pch_lean
     PUBLIC
         TT::Metalium
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+target_include_directories(ttnn_pch_lean PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+# tt_disable_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
 
-target_include_directories(ttnn_pch PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-# tt_disable_ccache_for_pch is already applied to TT::CommonPCH (metal_common_pch)
-# in the root CMakeLists.txt; no need to apply it again here.
+# ── Full PCH: lean + volatile TT headers — for targets with device operations ──
+# Invalidated on any TT::Metalium change; only use for targets that actually
+# include device_operation.hpp or operation.hpp.
+add_library(ttnn_pch_full STATIC)
+add_library(TTNN::PCHFull ALIAS ttnn_pch_full)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_full.cpp CONTENT "/*dummy ttnn full pch file*/\n")
+target_sources(ttnn_pch_full PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttnn_pch_full.cpp)
+target_precompile_headers(
+    ttnn_pch_full
+    PUBLIC
+        <fmt/core.h>
+        <fmt/format.h>
+        <nlohmann/json.hpp>
+        <algorithm>
+        <cstddef>
+        <cstdint>
+        <functional>
+        <map>
+        <memory>
+        <tuple>
+        <unordered_map>
+        <variant>
+        <vector>
+        # Volatile TTNN headers — only for targets that actually include these
+        <ttnn/device_operation.hpp>
+        <ttnn/operation.hpp>
+)
+target_link_libraries(
+    ttnn_pch_full
+    PUBLIC
+        TT::Metalium
+        nlohmann_json::nlohmann_json
+        fmt::fmt-header-only
+)
+target_include_directories(ttnn_pch_full PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttnn_pch_full)
+endif()
+
+# NOTE: Legacy TTNN::PCH alias removed — all consumers migrated to PCHLean or PCHFull.
 
 ##################################################
 # Set options
@@ -61,7 +96,7 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-tt_reuse_precompile_headers(ttnn_core TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_core TTNN::PCHFull)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -150,7 +185,7 @@ add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-tt_reuse_precompile_headers(ttnncpp TTNN::PCH)
+tt_reuse_precompile_headers(ttnncpp TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(
