@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::generic::program {
-
 using namespace tt::tt_metal;
 
 tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
@@ -25,7 +24,8 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
                 return desc;
             }
         }
-        TT_FATAL(false, "generic_op: no mesh_program entry contains mesh coordinate {}", coord);
+        // No mesh_program covers this coordinate. Return an empty descriptor
+        return tt::tt_metal::ProgramDescriptor{};
     }
 
     TT_FATAL(
@@ -34,5 +34,4 @@ tt::tt_metal::ProgramDescriptor GenericMeshDescriptorFactory::create_descriptor(
         mesh_programs.size());
     return mesh_programs.front().second;
 }
-
 }  // namespace ttnn::operations::generic::program
