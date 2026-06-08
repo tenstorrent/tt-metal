@@ -1,0 +1,58 @@
+# this file contains the time budgets allocated for merge gate and pr gate tests for each sku.
+# the calculations are based on deciding to allocate 50% of available machine hours to merge gate and pr gate tests.
+# merge gate sees an average of 15 full runs per hour during peak (13:00-21:00 UTC). Runs roughly 3x per merge.
+# pr gate sees an average of 20 full runs per hour during peak. Runs roughly 4x per merge.
+# from pools.yaml, we decide that 50% of available machine hours per week are allocated to merge gate and pr gate tests.
+# below we list the total machine hours allocated per run
+# the formula is: for each sku in pools.yaml, divide by 7 and 24 to get available machine hours per hour (or effective number of machines)
+# then divide by 2 for the total merge gate + pr gate allocation.
+# then choose to dedicate 60% of the total allocation to merge gate and 40% to pr gate.
+# divide the merge gate allocation by 15 to get the time budget per run.
+# divide the pr gate allocation by 20 to get the time budget per run.
+
+# sku: merge_gate_budget, pr_gate_budget
+
+# ── Wormhole CIv2 ──────────────────────────────────────────
+wh_n150_civ2: 15.06, 7.53
+wh_n300_civ2: 52.56, 26.28
+wh_llmbox_civ2: 4.62, 2.31
+
+# ── Blackhole CIv2 ─────────────────────────────────────────
+bh_p100a_civ2_viommu: 0.67, 0.34
+bh_p150b_civ2_viommu: 9.14, 4.57
+bh_p150b_civ2: 19.99, 9.99
+bh_loudbox_civ2_viommu: 0.00, 0.00
+
+# ── Wormhole CIv1 ──────────────────────────────────────────
+wh_n150: 6.14, 3.07
+wh_n300: 4.88, 2.44
+wh_n300_perf: 0.50, 0.25
+wh_llmbox: 4.89, 2.44
+wh_llmbox_perf: 1.59, 0.79
+wh_llmbox_perf_release: 0.32, 0.16
+wh_galaxy: 0.94, 0.47
+wh_galaxy_perf: 2.08, 1.04
+wh_galaxy_release: 0.51, 0.25
+wh_galaxy_perf_release: 0.00, 0.00
+
+# ── Blackhole CIv1 ─────────────────────────────────────────
+bh_p100: 2.55, 1.28
+bh_p100_perf: 0.00, 0.00
+bh_p150: 1.50, 0.75
+bh_p150_perf: 0.27, 0.14
+bh_llmbox: 1.37, 0.69
+bh_loudbox: 3.59, 1.79
+bh_p300: 1.35, 0.67
+bh_p300_viommu: 0.00, 0.00
+bh_quietbox: 2.48, 1.24
+bh_quietbox_perf: 0.04, 0.02
+bh_quietbox_2: 0.76, 0.38
+bh_deskbox: 2.96, 1.48
+bh_galaxy: 0.27, 0.14
+bh_galaxy_perf: 0.11, 0.05
+bh_galaxy_release: 0.00, 0.00
+bh_galaxy_perf_release: 0.00, 0.00
+
+# ── Blackhole Superpods ────────────────────────────────────
+bh_sp1: 0.00, 0.00
+bh_sp4: 0.00, 0.00

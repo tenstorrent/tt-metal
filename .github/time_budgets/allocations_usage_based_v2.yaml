@@ -1,0 +1,272 @@
+# Fractional allocation per SKU per team — usage-based v2 (Snowflake wall-clock actuals).
+# Generated from Snowflake TTDATASF.SW_TEST.CICD_JOB, 28-day window (Apr 2026).
+#
+# Coverage: pipeline_reorg jobs AND all legacy (bucket-2) workflows that run on
+# dedicated hardware. CPU-only build jobs (ubuntu-latest / large-stable runners)
+# and release pipelines (build-test-publish, in-release) are excluded.
+#
+# Keys match .github/sku_config.yaml exactly. All SKUs in the same hardware pool
+# share the same team fractions (Snowflake data was aggregated at pool level).
+#
+# ─── Snowflake query ─────────────────────────────────────────────────────────
+#
+#   SELECT SPLIT_PART(j.NAME, ' / ', 1) AS workflow_prefix,
+#          j.JOB_LABEL,
+#          SUM(j.JOB_EXECUTION_TIME) / 28.0 * 7 / 3600  AS weekly_hours
+#   FROM   TTDATASF.SW_TEST.CICD_JOB  j
+#   JOIN   TTDATASF.SW_TEST.CICD_PIPELINE p ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
+#   WHERE  p.PROJECT = 'tt-metal'
+#     AND  p.PIPELINE_START_TS >= DATEADD('day', -28, CURRENT_TIMESTAMP())
+#     AND  j.JOB_EXECUTION_TIME > 0
+#   GROUP BY 1, 2
+#   HAVING weekly_hours > 5
+#
+# Unlike timeout-based models, all numbers here are ACTUAL wall-clock execution
+# time averaged over 28 days and scaled to one week.
+#
+# ─── SKU → pool mapping ──────────────────────────────────────────────────────
+#
+#   wh_n150*, wh_n150_civ2                → N150 pool
+#   wh_n300*, wh_n300_civ2, wh_n300_perf  → N300 pool
+#   wh_llmbox*, wh_llmbox_civ2            → LLMBOX pool
+#   wh_galaxy*                            → galaxy pool
+#   bh_p100*, bh_p150*, bh_p150b_civ2*,
+#     bh_llmbox, bh_loudbox*, bh_quietbox (non-2),
+#     bh_deskbox, bh_sp1, bh_sp4         → p150b pool
+#   bh_p300*, bh_quietbox_2              → p300b pool
+#   bh_galaxy*                           → galaxy pool (no Snowflake data;
+#                                            fractions from wh_galaxy)
+#
+# ─── Team attribution (pool totals, Apr 2026) ────────────────────────────────
+#
+#   N150    2,697 h/wk:  models 30%, ttnn 23%, runtime 41%, llk 6%
+#   N300   19,308 h/wk:  models 70%, ttnn 16%, runtime 14%
+#   LLMBOX  1,435 h/wk:  models 17%, ttnn  2%, runtime 81%
+#   galaxy  2,632 h/wk:  models 67%, ttnn 19%, scaleout 14%
+#   p150b   4,514 h/wk:  models  8%, ttnn 24%, runtime 64%, scaleout 1%, llk 3%
+#   p300b     440 h/wk:  models 15%, runtime 85%
+#
+# ─── Team attribution notes ──────────────────────────────────────────────────
+#
+#   models:   fd-nightly, single-card-*, galaxy-demo/model-perf, models-unit/e2e/perf,
+#             vllm-tests, blackhole-demo-tests, tt-train-*, t3000-demo-tests
+#   ttnn:     ttnn-unit/smoke/basic/merge-gate/sweeps, galaxy-perf/e2e/unit/sanity/integration
+#   runtime:  blackhole-multi-card, tt-metal-l2, t3000-unit/e2e/integration/perf/apc-fast,
+#             metalium/cpp/ops/sd/tt-cnn unit-tests, triage, profiler, sanity-debug, didt
+#   scaleout: multi-host-glx-2x/4x, multi-host-bh-lb-2x, Galaxy-DeepSeek-tests
+#   llk:      llk-test-wormhole, llk-test-blackhole
+#
+# ─── Fractions ───────────────────────────────────────────────────────────────
+
+# ── Wormhole N150 ──────────────────────────────────────────────────────────
+wh_n150:
+  models   : 0.30
+  ttnn     : 0.23
+  runtime  : 0.41
+  llk      : 0.06
+
+wh_n150_civ2:
+  models   : 0.30
+  ttnn     : 0.23
+  runtime  : 0.41
+  llk      : 0.06
+
+# ── Wormhole N300 ──────────────────────────────────────────────────────────
+wh_n300:
+  models   : 0.70
+  ttnn     : 0.16
+  runtime  : 0.14
+
+wh_n300_civ2:
+  models   : 0.70
+  ttnn     : 0.16
+  runtime  : 0.14
+
+wh_n300_perf:
+  models   : 0.70
+  ttnn     : 0.16
+  runtime  : 0.14
+
+# ── Wormhole LLMBOX (T3000) ────────────────────────────────────────────────
+wh_llmbox:
+  models   : 0.17
+  ttnn     : 0.02
+  runtime  : 0.81
+
+wh_llmbox_civ2:
+  models   : 0.17
+  ttnn     : 0.02
+  runtime  : 0.81
+
+wh_llmbox_perf:
+  models   : 0.17
+  ttnn     : 0.02
+  runtime  : 0.81
+
+wh_llmbox_perf_release:
+  models   : 0.17
+  ttnn     : 0.02
+  runtime  : 0.81
+
+# ── Wormhole Galaxy ────────────────────────────────────────────────────────
+wh_galaxy:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+wh_galaxy_perf:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+wh_galaxy_release:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+wh_galaxy_perf_release:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+# ── Blackhole P150b family (CIv1) ─────────────────────────────────────────
+bh_p100:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_p100_perf:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_p150:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_p150_perf:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_llmbox:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_loudbox:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_quietbox:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_quietbox_perf:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_deskbox:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+# ── Blackhole P300b family (CIv1) ─────────────────────────────────────────
+bh_p300:
+  models   : 0.15
+  runtime  : 0.85
+
+bh_p300_viommu:
+  models   : 0.15
+  runtime  : 0.85
+
+bh_quietbox_2:
+  models   : 0.15
+  runtime  : 0.85
+
+# ── Blackhole Galaxy (CIv1) — no Snowflake data; fractions from wh_galaxy ──
+bh_galaxy:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+bh_galaxy_perf:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+bh_galaxy_release:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+bh_galaxy_perf_release:
+  models   : 0.67
+  ttnn     : 0.19
+  scaleout : 0.14
+
+# ── Blackhole P150b family (CIv2) ─────────────────────────────────────────
+bh_p100a_civ2_viommu:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_p150b_civ2:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_p150b_civ2_viommu:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_loudbox_civ2_viommu:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+# ── Blackhole Superpods ────────────────────────────────────────────────────
+bh_sp1:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
+
+bh_sp4:
+  models   : 0.08
+  ttnn     : 0.24
+  runtime  : 0.64
+  scaleout : 0.01
+  llk      : 0.03
