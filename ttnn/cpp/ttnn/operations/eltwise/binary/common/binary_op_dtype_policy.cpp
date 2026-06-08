@@ -30,9 +30,9 @@ std::span<const DataType> supported_input_dtypes(BinaryOpType op) {
         case BinaryOpType::DIV:
         case BinaryOpType::REMAINDER:
         case BinaryOpType::FMOD:
-        case BinaryOpType::MAXIMUM:
-        case BinaryOpType::MINIMUM:
         case BinaryOpType::ISCLOSE: return float_and_int32;
+        case BinaryOpType::MAXIMUM:
+        case BinaryOpType::MINIMUM: return maximum_minimum;
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR:

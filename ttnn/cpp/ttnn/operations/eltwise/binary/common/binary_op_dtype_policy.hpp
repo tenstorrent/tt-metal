@@ -20,6 +20,9 @@ inline constexpr std::array float_only{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B,
 
 inline constexpr std::array float_and_int32{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::INT32};
 
+inline constexpr std::array maximum_minimum{
+    DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::INT32};
+
 inline constexpr std::array int32_only{DT::INT32};
 
 inline constexpr std::array bitwise_shift{DT::UINT32, DT::UINT16, DT::INT32};
@@ -33,8 +36,8 @@ inline constexpr std::array arithmetic_fpu{
 inline constexpr std::array relational{
     DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT8, DT::UINT16, DT::INT32};
 
-// SFPU where kernel: where_tile<DataFormat::...> for bf16, fp32, uint32, int32.
-inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::UINT32, DT::INT32};
+// SFPU where kernel: explicit Int32/UInt32/Float32; other floats use Float16_b tile path.
+inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::INT32};
 
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};
