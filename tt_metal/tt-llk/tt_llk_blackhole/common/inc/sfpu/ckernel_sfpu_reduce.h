@@ -484,7 +484,7 @@ inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset, std
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim)
 {
     constexpr std::uint32_t RESULT_ROWS[8] = {0, 4, 8, 12, 32, 36, 40, 44};
@@ -513,8 +513,9 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, 1);
         }
 
-        // Final, packer-visible store: use mode 9 (SFPSTORE_MOD0_FMT_LO16) for UInt16 in 32-bit dest.
-        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        // Final, packer-visible store: use mode 9 (SFPSTORE_MOD0_FMT_LO16) only when the OUTPUT is
+        // UInt16 in a 32-bit dest (pack_low16); a 32-bit output keeps the plain INSTRUCTION_MODE store.
+        constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
         TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
         TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
@@ -531,10 +532,10 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  */
-template <bool clear_high_bits = false>
+template <bool clear_high_bits = false, bool pack_low16 = false>
 inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, std::uint32_t block_ct_dim)
 {
-    max_first_columns_across_tiles<InstrModLoadStore::INT32, clear_high_bits>(tile_row_base, block_ct_dim);
+    max_first_columns_across_tiles<InstrModLoadStore::INT32, clear_high_bits, pack_low16>(tile_row_base, block_ct_dim);
 }
 
 /**
@@ -548,7 +549,7 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim)
 {
     constexpr bool is_int32 = (INSTRUCTION_MODE == InstrModLoadStore::INT32);
@@ -562,10 +563,10 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
 
     record_horizontal_reduce_max();
 
-    // Single column tile => per-tile store is the final packer-visible result (mode 9 for UInt16 in
-    // 32-bit dest); otherwise it is intermediate and stays in the low 16 bits.
-    const std::uint32_t tile_store_mode =
-        (clear_high_bits && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+    // Single column tile => per-tile store is the final packer-visible result, which uses mode 9 only
+    // when the OUTPUT is UInt16 in a 32-bit dest (pack_low16); otherwise it is intermediate and stays
+    // in the low 16 bits via INSTRUCTION_MODE.
+    const std::uint32_t tile_store_mode = (pack_low16 && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
     for (std::uint32_t i = 0; i < block_rt_dim; i++)
     {
@@ -588,11 +589,11 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
         {
             if constexpr (is_int32)
             {
-                max_first_columns_across_tiles_int32(tile_row_offset, block_ct_dim);
+                max_first_columns_across_tiles_int32<clear_high_bits, pack_low16>(tile_row_offset, block_ct_dim);
             }
             else
             {
-                max_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits>(tile_row_offset, block_ct_dim);
+                max_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits, pack_low16>(tile_row_offset, block_ct_dim);
             }
         }
     }
@@ -1039,8 +1040,9 @@ inline void calculate_reduce_max_min_int32()
  * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
  * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in 32-bit dest)
+ * @tparam pack_low16 Whether the final packer-visible store uses mode 9 (true for UInt16 OUTPUT in 32-bit dest)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits, bool pack_low16>
 inline void calculate_reduce_max_min_uint16()
 {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
@@ -1059,8 +1061,9 @@ inline void calculate_reduce_max_min_uint16()
 
     // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
     // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
-    // mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low 16 bits of the dest word.
-    constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+    // mode 9 (SFPSTORE_MOD0_FMT_LO16) when the OUTPUT is UInt16 in a 32-bit dest (pack_low16), so the
+    // packer reads the low 16 bits of the dest word.
+    constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
 
     for (std::uint32_t j = 0; j < 2; j++)
     {
@@ -1133,7 +1136,7 @@ inline void calculate_reduce_max_min_uint16()
  * @param block_height The number of tiles in the vertical block to reduce (default is 1 for single tile).
  *                     For example, block_height=4 means reduce across 4 vertically stacked tiles (128 rows total).
  */
-template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void calculate_reduce_max_min(const std::uint32_t block_height)
 {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
@@ -1184,10 +1187,10 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Store results to first row.
-    // For UInt16 in 32-bit dest the reduced value lives in the low 16 bits of the LREG, but the
-    // packer reads the high 16 bits of the dest word. SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16)
-    // writes the low 16 bits into the half the packer consumes.
-    constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+    // For UInt16 OUTPUT in a 32-bit dest the reduced value lives in the low 16 bits of the LREG, but
+    // the packer reads the high 16 bits of the dest word. SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16)
+    // writes the low 16 bits into the half the packer consumes; a 32-bit output keeps the plain store.
+    constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
     TTI_SFPSTORE(p_sfpu::LREG4, STORE_MODE, ADDR_MOD_7, 0);
     TTI_SFPSTORE(p_sfpu::LREG5, STORE_MODE, ADDR_MOD_7, 2);
     TTI_SFPSTORE(p_sfpu::LREG6, STORE_MODE, ADDR_MOD_7, 16);
@@ -1348,7 +1351,7 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
             static_assert(
                 INSTRUCTION_MODE == InstrModLoadStore::FP32 || INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::FP16B,
                 "Row MAX reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
-            perform_reduce_row_max<INSTRUCTION_MODE, clear_high_bits>(block_ct_dim, block_rt_dim);
+            perform_reduce_row_max<INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
         }
         else if constexpr (format == DataFormat::Int32)
         {
@@ -1357,11 +1360,11 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
         else if constexpr (clear_high_bits)
         {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
-            calculate_reduce_max_min_uint16<INSTRUCTION_MODE, pool_type, reduce_dim, clear_high_bits>();
+            calculate_reduce_max_min_uint16<INSTRUCTION_MODE, pool_type, reduce_dim, clear_high_bits, pack_low16>();
         }
         else
         {
-            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false>(block_rt_dim);
+            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);
         }
     }
     else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
