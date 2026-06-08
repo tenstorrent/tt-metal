@@ -277,10 +277,9 @@ void mask_and_topk() {
             input_cb.pop_front(2);
             release_dst();
 
+            // Transpose masked input and index tiles, then locally sort into k groups.
             acquire_dst();
-            // local sort into k groups
             masked_input_cb.wait_front(2);
-
             reconfig_data_format_srca(masked_input_cb_index);
             transpose_wh_init_short(masked_input_cb_index);
             transpose_wh_tile(masked_input_cb_index, 0, 0);
