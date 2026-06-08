@@ -402,6 +402,43 @@ def run_inference(session: BenchmarkSession, audio: torch.Tensor,
     }
 
 
+def _run_chunked_ttnn_batched(session, z_p_batch, har_batch, g_batch, num_frames, batch):
+    n_chunks = (num_frames + MAX_CHUNK_FRAMES - 1) // MAX_CHUNK_FRAMES
+    t_flow_total = 0.0
+    t_gen_total = 0.0
+    audio_segments: List[torch.Tensor] = []
+    for c in range(n_chunks):
+        nom_start = c * MAX_CHUNK_FRAMES
+        nom_end = min(nom_start + MAX_CHUNK_FRAMES, num_frames)
+        ext_start = max(0, nom_start - OVERLAP)
+        ext_end = min(num_frames, nom_end + OVERLAP)
+        ext_len = ext_end - ext_start
+        z_p_chunk = z_p_batch[:, :, ext_start:ext_end]
+        har_chunk = har_batch[:, :, ext_start * UPP:ext_end * UPP]
+        if ext_len < TARGET_LEN:
+            pad_len = TARGET_LEN - ext_len
+            z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
+            har_chunk = F.pad(har_chunk, (0, pad_len * UPP))
+        tf = time.time()
+        try:
+            z_chunk = session.flow(z_p_chunk, g_batch)
+            t_flow_total += time.time() - tf
+            tg = time.time()
+            audio_chunk = session.gen(z_chunk, har_chunk, g_batch)
+            t_gen_total += time.time() - tg
+        except RuntimeError as e:
+            raise FallbackError(
+                f"chunk {c} at B={batch} (T={nom_end - nom_start}, "
+                f"ext={ext_len}): TTNN raised {type(e).__name__}: {str(e)[:200]}"
+            ) from e
+        audio_chunk = audio_chunk[:, :, :ext_len * UPP]
+        lt = (nom_start - ext_start) * UPP
+        rt = (ext_end - nom_end) * UPP
+        nominal_audio = audio_chunk[:, :, lt:audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
+        audio_segments.append(nominal_audio)
+    return torch.cat(audio_segments, dim=2), t_flow_total, t_gen_total, n_chunks
+
+
 def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
                           batch: int, speaker_ids: Optional[List[int]] = None,
                           f0_up_key: int = 0) -> dict:
@@ -463,42 +500,8 @@ def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
         har_batch = torch.cat(hars, dim=0)
         g_batch = torch.cat(gs, dim=0)
 
-        n_chunks = (num_frames + MAX_CHUNK_FRAMES - 1) // MAX_CHUNK_FRAMES
-        t_flow_total = 0.0
-        t_gen_total = 0.0
-        audio_segments: List[torch.Tensor] = []
-        for c in range(n_chunks):
-            nom_start = c * MAX_CHUNK_FRAMES
-            nom_end = min(nom_start + MAX_CHUNK_FRAMES, num_frames)
-            ext_start = max(0, nom_start - OVERLAP)
-            ext_end = min(num_frames, nom_end + OVERLAP)
-            ext_len = ext_end - ext_start
-            z_p_chunk = z_p_batch[:, :, ext_start:ext_end]
-            har_chunk = har_batch[:, :, ext_start * UPP:ext_end * UPP]
-            if ext_len < TARGET_LEN:
-                pad_len = TARGET_LEN - ext_len
-                z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
-                har_chunk = F.pad(har_chunk, (0, pad_len * UPP))
-            tf = time.time()
-            try:
-                z_chunk = session.flow(z_p_chunk, g_batch)
-                t_flow_total += time.time() - tf
-                tg = time.time()
-                audio_chunk = session.gen(z_chunk, har_chunk, g_batch)
-                t_gen_total += time.time() - tg
-            except RuntimeError as e:
-                raise FallbackError(
-                    f"chunk {c} at B={batch} (T={nom_end - nom_start}, "
-                    f"ext={ext_len}): TTNN raised {type(e).__name__}: {str(e)[:200]}"
-                ) from e
-
-            audio_chunk = audio_chunk[:, :, :ext_len * UPP]
-            lt = (nom_start - ext_start) * UPP
-            rt = (ext_end - nom_end) * UPP
-            nominal_audio = audio_chunk[:, :, lt:audio_chunk.shape[2] - rt if rt > 0 else audio_chunk.shape[2]]
-            audio_segments.append(nominal_audio)
-
-        audio_out = torch.cat(audio_segments, dim=2)
+        audio_out, t_flow_total, t_gen_total, n_chunks = _run_chunked_ttnn_batched(
+            session, z_p_batch, har_batch, g_batch, num_frames, batch)
         timings["flow"] = t_flow_total
         timings["generator"] = t_gen_total
         timings["ttnn_total"] = t_flow_total + t_gen_total
@@ -517,6 +520,90 @@ def run_inference_batched(session: BenchmarkSession, audio: torch.Tensor,
         "n_chunks": n_chunks,
         "num_frames": num_frames,
         "timings": timings,
+    }
+
+
+def run_inference_batched_overlapped(session: BenchmarkSession, audio: torch.Tensor,
+                                      batch: int, speaker_ids: Optional[List[int]] = None,
+                                      f0_up_key: int = 0) -> dict:
+    """B>=2 batched inference with CPU/TTNN pipeline overlap. Splits batch
+    into two micro-batches; mb2 preprocess runs in worker procs while main
+    thread runs TTNN on mb1. Closes Stage 3 cross-stage pipeline gap for
+    the batched path."""
+    if batch < 2:
+        raise ValueError(f"overlapped path requires batch >= 2, got {batch}")
+    if speaker_ids is None:
+        speaker_ids = [i % 109 for i in range(batch)]
+    if len(speaker_ids) != batch:
+        raise ValueError(f"speaker_ids length {len(speaker_ids)} != batch {batch}")
+    pool = session.proc_pool()
+    if pool is None:
+        raise RuntimeError("overlapped path requires session.start_proc_pool() first")
+
+    half = (batch + 1) // 2
+    mb1_ids = speaker_ids[:half]
+    mb2_ids = speaker_ids[half:]
+    timings: dict = {}
+    t_wall0 = time.time()
+
+    with torch.no_grad():
+        mb1_futures = [pool.submit(_worker_preprocess, (audio, sp_id, f0_up_key)) for sp_id in mb1_ids]
+        mb2_futures = [pool.submit(_worker_preprocess, (audio, sp_id, f0_up_key)) for sp_id in mb2_ids]
+
+        t_mb1_pre0 = time.time()
+        mb1_res = [f.result() for f in mb1_futures]
+        t_mb1_pre = time.time() - t_mb1_pre0
+
+        zs_p_1 = [r[0] for r in mb1_res]; hars_1 = [r[1] for r in mb1_res]; gs_1 = [r[2] for r in mb1_res]
+        num_frames = mb1_res[0][3]
+        z_p_1 = torch.cat(zs_p_1, dim=0); har_1 = torch.cat(hars_1, dim=0); g_1 = torch.cat(gs_1, dim=0)
+
+        t_mb1_ttnn0 = time.time()
+        audio_1, t_flow_1, t_gen_1, n_chunks = _run_chunked_ttnn_batched(
+            session, z_p_1, har_1, g_1, num_frames, len(mb1_ids))
+        t_mb1_ttnn = time.time() - t_mb1_ttnn0
+
+        t_mb2_pre0 = time.time()
+        mb2_res = [f.result() for f in mb2_futures]
+        t_mb2_pre_observed = time.time() - t_mb2_pre0
+
+        zs_p_2 = [r[0] for r in mb2_res]; hars_2 = [r[1] for r in mb2_res]; gs_2 = [r[2] for r in mb2_res]
+        z_p_2 = torch.cat(zs_p_2, dim=0); har_2 = torch.cat(hars_2, dim=0); g_2 = torch.cat(gs_2, dim=0)
+
+        t_mb2_ttnn0 = time.time()
+        audio_2, t_flow_2, t_gen_2, _ = _run_chunked_ttnn_batched(
+            session, z_p_2, har_2, g_2, num_frames, len(mb2_ids))
+        t_mb2_ttnn = time.time() - t_mb2_ttnn0
+
+        audio_out = torch.cat([audio_1, audio_2], dim=0)
+
+    wall = time.time() - t_wall0
+    timings["wall"] = wall
+    timings["mb1_preprocessing"] = t_mb1_pre
+    timings["mb1_ttnn"] = t_mb1_ttnn
+    timings["mb2_preprocessing_observed"] = t_mb2_pre_observed  # 0 if hidden by mb1 TTNN
+    timings["mb2_ttnn"] = t_mb2_ttnn
+    timings["preprocessing"] = t_mb1_pre + t_mb2_pre_observed
+    timings["preprocessing_per_sample"] = timings["preprocessing"] / batch
+    timings["preprocessing_workers"] = min(batch, os.cpu_count() or 1)
+    timings["preprocessing_mode"] = "proc_pool_overlapped"
+    timings["flow"] = t_flow_1 + t_flow_2
+    timings["generator"] = t_gen_1 + t_gen_2
+    timings["ttnn_total"] = t_mb1_ttnn + t_mb2_ttnn
+    timings["ttnn_per_sample"] = timings["ttnn_total"] / batch
+
+    if not torch.isfinite(audio_out).all():
+        raise AssertionError(f"overlapped output contains NaN or Inf at B={batch}")
+    if audio_out.abs().max() > 1.0:
+        raise AssertionError(f"overlapped output exceeds [-1, 1] at B={batch}")
+
+    return {
+        "audio_out": audio_out,
+        "batch": batch,
+        "n_chunks": n_chunks,
+        "num_frames": num_frames,
+        "timings": timings,
+        "micro_batches": [len(mb1_ids), len(mb2_ids)],
     }
 
 
@@ -558,9 +645,15 @@ def main():
                              "the batched path (per-row correctness covered "
                              "by tests/test_production_shapes.py::"
                              "test_generator_batched_matches_individual_b1_calls).")
+    parser.add_argument("--overlap", action="store_true",
+                        help="Use pipeline-overlapped batched path: split B into "
+                             "two micro-batches so CPU preprocess of mb2 overlaps "
+                             "with TTNN compute of mb1 (requires --batch >= 2).")
     args = parser.parse_args()
     if args.batch < 1:
         parser.error("--batch must be >= 1")
+    if args.overlap and args.batch < 2:
+        parser.error("--overlap requires --batch >= 2")
 
     print("=" * 72)
     print("RVC TTNN End-to-End Benchmark — Real Demo Path")
@@ -655,17 +748,19 @@ def main():
             print(f"  Note: 'First-run' is NOT a cold-JIT run unless cache is wiped — see /root/.cache/ttnn")
             print("=" * 72)
         else:
-            print(f"\n--- First-run batched timings (n={args.warmup}, B={args.batch}, JIT cache may be pre-warmed) ---")
+            bench_fn = run_inference_batched_overlapped if args.overlap else run_inference_batched
+            path_label = "overlapped" if args.overlap else "sequential"
+            print(f"\n--- First-run batched timings (n={args.warmup}, B={args.batch}, path={path_label}, JIT cache may be pre-warmed) ---")
             for i in range(args.warmup):
                 t0 = time.time()
-                _ = run_inference_batched(session, audio, batch=args.batch)
+                _ = bench_fn(session, audio, batch=args.batch)
                 print(f"  first_{i}: wall={_fmt(time.time() - t0)}")
 
-            print(f"\n--- Warm steady-state batched runs (n={args.runs}, B={args.batch}) ---")
+            print(f"\n--- Warm steady-state batched runs (n={args.runs}, B={args.batch}, path={path_label}) ---")
             warm_results = []
             for i in range(args.runs):
                 t0 = time.time()
-                res = run_inference_batched(session, audio, batch=args.batch)
+                res = bench_fn(session, audio, batch=args.batch)
                 res["wall"] = time.time() - t0
                 warm_results.append(res)
                 n_workers = res["timings"]["preprocessing_workers"]
@@ -677,13 +772,19 @@ def main():
             output_secs = warm_results[0]["audio_out"].shape[2] / SR_TARGET
             warm_ttnn_per_sample = statistics.mean(r["timings"]["ttnn_per_sample"] for r in warm_results)
             warm_pre_per_sample = statistics.mean(r["timings"]["preprocessing_per_sample"] for r in warm_results)
-            full_rtf = (warm_ttnn_per_sample + warm_pre_per_sample) / output_secs
+            warm_wall_per_sample = statistics.mean(r["wall"] / args.batch for r in warm_results)
+            # For overlapped path, sequential sums overcount (CPU and TTNN run
+            # in parallel) — use wall-time directly. For sequential path, wall
+            # equals preproc + ttnn so both numbers agree.
+            full_rtf = warm_wall_per_sample / output_secs if args.overlap else \
+                       (warm_ttnn_per_sample + warm_pre_per_sample) / output_secs
 
             print("\n" + "=" * 72)
-            print(f"HEADLINE — B={args.batch} concurrent  per-sample audio={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}")
+            print(f"HEADLINE — B={args.batch} concurrent  per-sample audio={output_secs:.2f}s  chunks={warm_results[0]['n_chunks']}  path={path_label}")
             print("=" * 72)
             print(f"  Per-sample TTNN:                       {_fmt(warm_ttnn_per_sample)}")
             print(f"  Per-sample preprocess ({warm_results[0]['timings']['preprocessing_mode']}):  {_fmt(warm_pre_per_sample)}  (using {warm_results[0]['timings']['preprocessing_workers']} workers)")
+            print(f"  Per-sample wall (overlap-corrected):   {_fmt(warm_wall_per_sample)}")
             print(f"  Per-sample RTF (TTNN only):            {warm_ttnn_per_sample / output_secs:.4f}")
             print(f"  Per-sample RTF (full pipeline):        {full_rtf:.4f}")
             print(f"  Bounty stretched goal RTF < 0.2:       {'MET' if full_rtf < 0.2 else f'not met (need {0.2:.2f})'}")
