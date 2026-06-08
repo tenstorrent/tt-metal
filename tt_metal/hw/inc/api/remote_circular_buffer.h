@@ -566,7 +566,7 @@ public:
      * @param noc The NoC to use for the remote pointer update
      * @param page_size The new page size
      * @param noc_mode The NoC mode to use for the remote pointer update
-     * @param posted Whether to use posted semaphore inc
+     * @param posted Whether to use posted semaphore inc (default: true)
      * @param cmd_buf The command buffer to use for the remote pointer update
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
@@ -574,14 +574,14 @@ public:
         Noc& noc,
         uint32_t page_size,
         uint8_t noc_mode = detail::default_noc_mode,
-        Noc::ResponseMode response_mode = Noc::ResponseMode::POSTED,
+        bool posted = true,
         uint8_t cmd_buf = detail::default_cmd_buf) {
         resize_remote_sender_cb_interface<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
             page_size,
             noc.get_noc_id(),
             noc_mode,
-            response_mode == Noc::ResponseMode::POSTED,
+            posted,
             cmd_buf);
     }
 

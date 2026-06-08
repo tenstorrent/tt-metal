@@ -89,8 +89,8 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     uint32_t mean_rstd_height = 0;
     uint32_t mean_rstd_width = 0;
 
-    if (mean_has_value) {
-        const auto mean_rstd_shape_without_padding = mean->logical_shape();
+    if (mean_has_value || rstd_has_value) {
+        const auto mean_rstd_shape_without_padding = mean_has_value ? mean->logical_shape() : rstd->logical_shape();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
     }

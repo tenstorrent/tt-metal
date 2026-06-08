@@ -23,7 +23,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
@@ -39,7 +39,6 @@ namespace tt::tt_metal {
 namespace {
 
 using namespace experimental;
-using namespace experimental::metal2_host_api;
 
 constexpr const char* ALIAS_PRODUCER_KERNEL =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/alias_dfb_producer.cpp";
@@ -112,109 +111,110 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
-    const DataMovementConfiguration producer_cfg{
-        .gen1_data_movement_config =
-            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
+    const DataMovementHardwareConfig producer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_config =
+            DataMovementHardwareConfig::Gen2Config{
+                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
     };
-    const DataMovementConfiguration consumer_cfg{
-        .gen1_data_movement_config =
-            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{.disable_implicit_sync_for = {"dfb_a", "dfb_b"}},
+    const DataMovementHardwareConfig consumer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
+        .gen2_config =
+            DataMovementHardwareConfig::Gen2Config{
+                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
     };
 
     DataflowBufferSpec dfb_a{
-        .unique_id = "dfb_a",
+        .unique_id = experimental::DFBSpecName{"dfb_a"},
         .entry_size = entry_size_a,
         .num_entries = num_entries_a,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_b"}},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {experimental::DFBSpecName{"dfb_b"}}},
     };
     DataflowBufferSpec dfb_b{
-        .unique_id = "dfb_b",
+        .unique_id = experimental::DFBSpecName{"dfb_b"},
         .entry_size = entry_size_b,
         .num_entries = num_entries_b,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_a"}},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {experimental::DFBSpecName{"dfb_a"}}},
     };
 
     KernelSpec producer{
-        .unique_id = "producer",
+        .unique_id = experimental::KernelSpecName{"producer"},
         .source = ALIAS_PRODUCER_KERNEL,
         .num_threads = num_producers,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_a",
-                 .local_accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_a"},
+                 .accessor_name = "out_a",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_b",
-                 .local_accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_b"},
+                 .accessor_name = "out_b",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
             {
-                {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
-                {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
+                {.tensor_parameter_name = experimental::TensorParamName{"in_tensor_a"}, .accessor_name = "src_a"},
+                {.tensor_parameter_name = experimental::TensorParamName{"in_tensor_b"}, .accessor_name = "src_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer_a", epp_a},
                 {"num_entries_per_producer_b", epp_b},
                 {"num_producers", static_cast<uint32_t>(num_producers)},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config_spec = producer_cfg,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .hw_config = producer_cfg,
     };
 
     KernelSpec consumer{
-        .unique_id = "consumer",
+        .unique_id = experimental::KernelSpecName{"consumer"},
         .source = ALIAS_CONSUMER_KERNEL,
         .num_threads = num_consumers,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_a",
-                 .local_accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_a"},
+                 .accessor_name = "in_a",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_b",
-                 .local_accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_b"},
+                 .accessor_name = "in_b",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
             {
-                {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
-                {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
+                {.tensor_parameter_name = experimental::TensorParamName{"out_tensor_a"}, .accessor_name = "dst_a"},
+                {.tensor_parameter_name = experimental::TensorParamName{"out_tensor_b"}, .accessor_name = "dst_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_consumer_a", epc_a},
                 {"num_entries_per_consumer_b", epc_b},
                 {"num_consumers", static_cast<uint32_t>(num_consumers)},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config_spec = consumer_cfg,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .hw_config = consumer_cfg,
     };
 
     ProgramSpec spec{
-        .program_id       = "alias_dfb",
-        .kernels          = {producer, consumer},
+        .name = "alias_dfb",
+        .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_a, dfb_b},
-        .tensor_parameters = {
-            {.unique_id = "in_tensor_a",  .spec = in_a.tensor_spec()},
-            {.unique_id = "in_tensor_b",  .spec = in_b.tensor_spec()},
-            {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
-            {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
-        },
+        .tensor_parameters =
+            {
+                {.unique_id = experimental::TensorParamName{"in_tensor_a"}, .spec = in_a.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"in_tensor_b"}, .spec = in_b.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"out_tensor_a"}, .spec = out_a.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"out_tensor_b"}, .spec = out_b.tensor_spec()},
+            },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
-            .kernels      = {"producer", "consumer"},
+            .name = "wu",
+            .kernels = {experimental::KernelSpecName{"producer"}, experimental::KernelSpecName{"consumer"}},
             .target_nodes = node,
         }},
     };
@@ -240,32 +240,34 @@ void run_alias_dfb_program(
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
-            node,
-            {{"chunk_offset_a",     0u},
-             {"chunk_offset_b",     0u},
-             {"entries_per_core_a", epc_a},
-             {"entries_per_core_b", epc_b}}}};
+        return RuntimeArgValues{
+            {node,
+             {{"chunk_offset_a", 0u},
+              {"chunk_offset_b", 0u},
+              {"entries_per_core_a", epc_a},
+              {"entries_per_core_b", epc_b}}}};
     };
 
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = "producer",
-            .named_runtime_args = rtas(num_entries_a, num_entries_b)},
-        ProgramRunParams::KernelRunParams{
-            .kernel_spec_name = "consumer",
-            .named_runtime_args = rtas(num_entries_a, num_entries_b)},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"producer"},
+            .runtime_arg_values = rtas(num_entries_a, num_entries_b),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"consumer"},
+            .runtime_arg_values = rtas(num_entries_a, num_entries_b),
+        },
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
-        {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
-        {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     // Generate random inputs.
     const uint32_t words_a = num_entries_a * entry_size_a / sizeof(uint32_t);
@@ -323,118 +325,119 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     MeshTensor ring  = MeshTensor::allocate_on_device(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    const DataMovementConfiguration producer_cfg{
-        .gen1_data_movement_config =
-            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
+    const DataMovementHardwareConfig producer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
+        .gen2_config =
+            DataMovementHardwareConfig::Gen2Config{
+                .disable_implicit_sync_for =
+                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
     };
-    const DataMovementConfiguration consumer_cfg{
-        .gen1_data_movement_config =
-            DataMovementConfiguration::Gen1DataMovementConfig{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_data_movement_config =
-            DataMovementConfiguration::Gen2DataMovementConfig{
-                .disable_implicit_sync_for = {"dfb_borrowed", "dfb_alias"}},
+    const DataMovementHardwareConfig consumer_cfg{
+        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
+        .gen2_config =
+            DataMovementHardwareConfig::Gen2Config{
+                .disable_implicit_sync_for =
+                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
     };
 
     // dfb_borrowed: backed by ring_tensor (L1)
     DataflowBufferSpec dfb_borrowed{
-        .unique_id = "dfb_borrowed",
+        .unique_id = experimental::DFBSpecName{"dfb_borrowed"},
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = "ring_tensor",
-        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_alias"}},
+        .borrowed_from = experimental::TensorParamName{"ring_tensor"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {experimental::DFBSpecName{"dfb_alias"}}},
     };
     DataflowBufferSpec dfb_alias_spec{
-        .unique_id = "dfb_alias",
+        .unique_id = experimental::DFBSpecName{"dfb_alias"},
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
-        .borrowed_from = "ring_tensor",
-        .advanced_options = DFBAdvancedOptions{.alias_with = {"dfb_borrowed"}},
+        .borrowed_from = experimental::TensorParamName{"ring_tensor"},
+        .advanced_options = DFBAdvancedOptions{.alias_with = {experimental::DFBSpecName{"dfb_borrowed"}}},
     };
 
     KernelSpec producer{
-        .unique_id = "producer",
+        .unique_id = experimental::KernelSpecName{"producer"},
         .source = ALIAS_PRODUCER_KERNEL,
         .num_threads = 1,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_borrowed",
-                 .local_accessor_name = "out_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_borrowed"},
+                 .accessor_name = "out_a",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_alias",
-                 .local_accessor_name = "out_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::PRODUCER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_alias"},
+                 .accessor_name = "out_b",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
             {
-                {.tensor_parameter_name = "in_tensor_a", .accessor_name = "src_a"},
-                {.tensor_parameter_name = "in_tensor_b", .accessor_name = "src_b"},
+                {.tensor_parameter_name = experimental::TensorParamName{"in_tensor_a"}, .accessor_name = "src_a"},
+                {.tensor_parameter_name = experimental::TensorParamName{"in_tensor_b"}, .accessor_name = "src_b"},
                 // ring_tensor must be bound to at least one kernel even though the
                 // kernel doesn't access it directly (required by TensorParameter rules).
-                {.tensor_parameter_name = "ring_tensor", .accessor_name = "ring"},
+                {.tensor_parameter_name = experimental::TensorParamName{"ring_tensor"}, .accessor_name = "ring"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_producer_a", epp},
                 {"num_entries_per_producer_b", epp},
                 {"num_producers", 1u},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config_spec = producer_cfg,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .hw_config = producer_cfg,
     };
 
     KernelSpec consumer{
-        .unique_id = "consumer",
+        .unique_id = experimental::KernelSpecName{"consumer"},
         .source = ALIAS_CONSUMER_KERNEL,
         .num_threads = 1,
         .dfb_bindings =
             {
-                {.dfb_spec_name = "dfb_borrowed",
-                 .local_accessor_name = "in_a",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_borrowed"},
+                 .accessor_name = "in_a",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
-                {.dfb_spec_name = "dfb_alias",
-                 .local_accessor_name = "in_b",
-                 .endpoint_type = KernelSpec::DFBEndpointType::CONSUMER,
+                {.dfb_spec_name = experimental::DFBSpecName{"dfb_alias"},
+                 .accessor_name = "in_b",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
                  .access_pattern = DFBAccessPattern::STRIDED},
             },
         .tensor_bindings =
             {
-                {.tensor_parameter_name = "out_tensor_a", .accessor_name = "dst_a"},
-                {.tensor_parameter_name = "out_tensor_b", .accessor_name = "dst_b"},
+                {.tensor_parameter_name = experimental::TensorParamName{"out_tensor_a"}, .accessor_name = "dst_a"},
+                {.tensor_parameter_name = experimental::TensorParamName{"out_tensor_b"}, .accessor_name = "dst_b"},
             },
-        .compile_time_arg_bindings =
+        .compile_time_args =
             {
                 {"num_entries_per_consumer_a", epc},
                 {"num_entries_per_consumer_b", epc},
                 {"num_consumers", 1u},
             },
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
-        .config_spec = consumer_cfg,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"chunk_offset_a", "chunk_offset_b", "entries_per_core_a", "entries_per_core_b"}},
+        .hw_config = consumer_cfg,
     };
 
     ProgramSpec spec{
-        .program_id        = "alias_borrowed_dfb",
-        .kernels           = {producer, consumer},
-        .dataflow_buffers  = {dfb_borrowed, dfb_alias_spec},
-        .tensor_parameters = {
-            {.unique_id = "in_tensor_a",  .spec = in_a.tensor_spec()},
-            {.unique_id = "in_tensor_b",  .spec = in_b.tensor_spec()},
-            {.unique_id = "out_tensor_a", .spec = out_a.tensor_spec()},
-            {.unique_id = "out_tensor_b", .spec = out_b.tensor_spec()},
-            {.unique_id = "ring_tensor",  .spec = ring.tensor_spec()},
-        },
+        .name = "alias_borrowed_dfb",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {dfb_borrowed, dfb_alias_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = experimental::TensorParamName{"in_tensor_a"}, .spec = in_a.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"in_tensor_b"}, .spec = in_b.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"out_tensor_a"}, .spec = out_a.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"out_tensor_b"}, .spec = out_b.tensor_spec()},
+                {.unique_id = experimental::TensorParamName{"ring_tensor"}, .spec = ring.tensor_spec()},
+            },
         .work_units = {WorkUnitSpec{
-            .unique_id    = "wu",
-            .kernels      = {"producer", "consumer"},
+            .name = "wu",
+            .kernels = {experimental::KernelSpecName{"producer"}, experimental::KernelSpecName{"consumer"}},
             .target_nodes = node,
         }},
     };
@@ -575,28 +578,34 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
-            node,
-            {{"chunk_offset_a",     0u},
-             {"chunk_offset_b",     0u},
-             {"entries_per_core_a", kNumEntries},
-             {"entries_per_core_b", kNumEntries}}}};
+        return RuntimeArgValues{
+            {node,
+             {{"chunk_offset_a", 0u},
+              {"chunk_offset_b", 0u},
+              {"entries_per_core_a", kNumEntries},
+              {"entries_per_core_b", kNumEntries}}}};
     };
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .named_runtime_args = rtas()},
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .named_runtime_args = rtas()},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"producer"},
+            .runtime_arg_values = rtas(),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"consumer"},
+            .runtime_arg_values = rtas(),
+        },
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
-        {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
-        {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
+        {experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     const uint32_t id_borrowed = program.impl().get_dfb_handle("dfb_borrowed");
     const uint32_t id_alias    = program.impl().get_dfb_handle("dfb_alias");
@@ -627,28 +636,34 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    using NodeNamedRTAs = ProgramRunParams::KernelRunParams::NodeNamedRTAs;
+    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return std::vector<NodeNamedRTAs>{NodeNamedRTAs{
-            node,
-            {{"chunk_offset_a",     0u},
-             {"chunk_offset_b",     0u},
-             {"entries_per_core_a", kNumEntries},
-             {"entries_per_core_b", kNumEntries}}}};
+        return RuntimeArgValues{
+            {node,
+             {{"chunk_offset_a", 0u},
+              {"chunk_offset_b", 0u},
+              {"entries_per_core_a", kNumEntries},
+              {"entries_per_core_b", kNumEntries}}}};
     };
-    ProgramRunParams run_params;
-    run_params.kernel_run_params = {
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "producer", .named_runtime_args = rtas()},
-        ProgramRunParams::KernelRunParams{.kernel_spec_name = "consumer", .named_runtime_args = rtas()},
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"producer"},
+            .runtime_arg_values = rtas(),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{"consumer"},
+            .runtime_arg_values = rtas(),
+        },
     };
     run_params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor_a",  .tensor = std::cref(in_a)},
-        {.tensor_parameter_name = "in_tensor_b",  .tensor = std::cref(in_b)},
-        {.tensor_parameter_name = "out_tensor_a", .tensor = std::cref(out_a)},
-        {.tensor_parameter_name = "out_tensor_b", .tensor = std::cref(out_b)},
-        {.tensor_parameter_name = "ring_tensor",  .tensor = std::cref(ring)},
+        {experimental::TensorParamName{"in_tensor_a"}, TensorArgument{in_a}},
+        {experimental::TensorParamName{"in_tensor_b"}, TensorArgument{in_b}},
+        {experimental::TensorParamName{"out_tensor_a"}, TensorArgument{out_a}},
+        {experimental::TensorParamName{"out_tensor_b"}, TensorArgument{out_b}},
+        {experimental::TensorParamName{"ring_tensor"}, TensorArgument{ring}},
     };
-    SetProgramRunParameters(program, run_params);
+    SetProgramRunArgs(program, run_params);
 
     const uint32_t words = kNumEntries * kEntrySize / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, words);

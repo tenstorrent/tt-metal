@@ -317,6 +317,9 @@ class RunTimeOptions {
     // Dispatch kernel progress update period in milliseconds (default 100ms)
     uint32_t dispatch_progress_update_ms = 100;
 
+    // Disable dispatch telemetry
+    bool dispatch_telemetry_disabled = false;
+
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
@@ -328,6 +331,9 @@ class RunTimeOptions {
 
     // Store command queues in device DRAM
     bool dram_backed_cq = false;
+
+    // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
+    bool simulator_direct_tensor_writes = false;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -774,6 +780,9 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
+
+    bool get_dispatch_telemetry_disabled() const { return dispatch_telemetry_disabled; }
+
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -783,6 +792,9 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     bool get_dram_backed_cq() const { return dram_backed_cq; }
+    void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
+
+    bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

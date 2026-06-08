@@ -42,22 +42,23 @@ tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
         }
     }
 
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
-    const uint32_t num_input_units = W;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t num_input_units = W;
     auto* src_buffer = input.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const uint32_t page_alignment =
         src_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t aligned_input_page_size = tt::align(num_input_units * input_unit_size, page_alignment);
+    uint32_t aligned_input_page_size = tt::align(num_input_units * input_unit_size, page_alignment);
 
-    // When the input is sharded, bind the CB to the input buffer for dynamic CB
-    // address re-application on cache hit; otherwise the CB is plain L1 scratch
-    // and the buffer address is supplied through the runtime arg.
+    // When the input is sharded, bind the CB to the input buffer so the framework
+    // can re-apply the globally-allocated address on a program-cache hit. For the
+    // interleaved path the CB is plain L1 scratch and the buffer address is passed
+    // through the reader runtime arg instead.
     desc.cbs.push_back(CBDescriptor{
         .total_size = aligned_input_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = aligned_input_page_size,
         }}},
@@ -76,10 +77,12 @@ tt::tt_metal::ProgramDescriptor PlusOneProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    const auto cores = corerange_to_cores(all_cores, num_cores, true);
-    reader_desc.runtime_args.reserve(cores.size());
+    auto cores = corerange_to_cores(all_cores, num_cores, true);
+
+    // Pass Buffer* (not address) so the framework's cache-hit path can re-patch
+    // the runtime arg without rebuilding the descriptor.
     for (const auto& core : cores) {
-        reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{src_buffer->address()});
+        reader_desc.emplace_runtime_args(core, {src_buffer});
     }
 
     desc.kernels.push_back(std::move(reader_desc));

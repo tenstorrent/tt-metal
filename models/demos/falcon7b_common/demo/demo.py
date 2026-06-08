@@ -20,7 +20,8 @@ from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
-from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data  # , verify_perf
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -130,6 +131,10 @@ def run_falcon_demo_kv(
     perf_mode=False,  # Option to measure perf using max seq length (with invalid outputs)
     greedy_sampling=False,  # Option to use greedy decoding instead of top-k/p
     expected_perf_metrics=None,  # Expected perf (t/s) for prefill and decode in perf mode
+    model_name=None,
+    sku=None,
+    target_batch_size=None,
+    target_seq_len=None,
     expected_greedy_output_path=None,  # Path for expected outputs for greedy decoding
     save_generated_text_path=None,  # If provided, save generated text to this path (e.g. set to expected_greedy_output_path to update expected output)
     json_perf_targets={},  # Optional perf targets for CSV output
@@ -144,7 +149,7 @@ def run_falcon_demo_kv(
         assert (
             not perf_mode and greedy_sampling
         ), "Output verification only supported for greedy sampling in default mode!"
-    elif expected_perf_metrics is not None:
+    elif expected_perf_metrics is not None or (model_name and sku):
         assert perf_mode, "Performance verification is only supported for perf mode!"
 
     # Set up warmup iterations and targets dicts for saving benchmark data
@@ -556,12 +561,23 @@ def run_falcon_demo_kv(
 
     # Verify output or perf if expected values are provided
     assert expected_perf_metrics is None or expected_greedy_output_path is None
-    if expected_perf_metrics is not None:
-        pass  # see issue #31939
-    #     if num_devices == 32:  # set higher margin to 20% for Galaxy due to larger variance on CI
-    #         verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.20)
-    #     else:
-    #         verify_perf(measurements, expected_perf_metrics)
+    if sku is None:
+        sku = get_current_device_sku_name()
+    if expected_perf_metrics is not None or (model_name and sku):
+        expected_measurements = {
+            "prefill_t/s": True,
+            "decode_t/s": True,
+            "decode_t/s/u": True,
+        }
+        verify_perf(
+            measurements,
+            expected_perf_metrics=expected_perf_metrics,
+            expected_measurements=expected_measurements,
+            model_name=model_name,
+            sku=sku,
+            batch_size=target_batch_size,
+            seq_len=target_seq_len,
+        )
     elif expected_greedy_output_path is not None:
         if token_check_does_pass:
             logger.info("Output Check Passed!")

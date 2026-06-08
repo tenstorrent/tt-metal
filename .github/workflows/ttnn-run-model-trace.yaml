@@ -78,6 +78,7 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
 
@@ -195,21 +196,26 @@ jobs:
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
           echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     name: Build
-    needs: [validate-inputs]
+    needs: [check-harbor, validate-inputs]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
-    needs: [validate-inputs, build-artifact]
+    needs: [check-harbor, validate-inputs, build-artifact]
     strategy:
       fail-fast: false
       matrix:
@@ -249,6 +255,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -606,6 +613,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ github.sha }}
 

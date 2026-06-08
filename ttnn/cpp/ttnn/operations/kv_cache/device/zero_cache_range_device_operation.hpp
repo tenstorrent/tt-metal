@@ -6,8 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "zero_cache_range_device_operation_types.hpp"
-#include "zero_cache_range_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -16,7 +16,14 @@ struct ZeroCacheRangeOperation {
     using tensor_args_t = ZeroCacheRangeInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ZeroCacheRangeProgramFactory>;
+
+    // Direct descriptor (no program_factory_t / select_program_factory): single program path,
+    // built declaratively via create_descriptor. The framework handles caching, CB address
+    // patching, and runtime arg copy on cache hits.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(

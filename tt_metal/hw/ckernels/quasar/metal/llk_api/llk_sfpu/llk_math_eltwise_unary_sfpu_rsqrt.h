@@ -23,7 +23,6 @@ template <
     [[maybe_unused]] bool legacy_compat = false,
     int ITERATIONS = SFPU_ITERATIONS>
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index) {
-    static_assert(is_fp32_dest_acc_en == false, "Non-default is_fp32_dest_acc_en (true) not supported in Quasar rsqrt");
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar rsqrt");
     static_assert(legacy_compat == false, "Non-default legacy_compat (true) not supported in Quasar rsqrt");
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_rsqrt, dst_index, ITERATIONS);

@@ -185,7 +185,6 @@ inline void setup_remote_cb_interfaces(
         const bool is_sender = l1_remote_cb_config_addr[0];
         uint32_t num_receivers = l1_remote_cb_config_addr[1];
         uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];
-        uint32_t fifo_size = l1_remote_cb_config_addr[3];
         uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
         uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
         uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];

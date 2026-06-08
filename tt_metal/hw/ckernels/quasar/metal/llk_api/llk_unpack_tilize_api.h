@@ -25,10 +25,8 @@ inline void llk_unpack_tilize_init(
     const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    // TODO: Once narrow-tile is supported c_dim_faces will be variable.
-    constexpr std::uint32_t c_dim_faces = 2;
-
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE, c_dim_faces>(operand_id, full_ct_dim, block_ct_dim);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
 }
 
 /**
@@ -45,11 +43,8 @@ inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const bool narrow_tile = get_operand_narrow_tile(operand_id);
-    const std::uint32_t R_DIM_FACES = (num_faces == 2 && !narrow_tile) ? 1 : 2;
-    const std::uint32_t faces_per_entry = R_DIM_FACES * face_r_dim;
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;

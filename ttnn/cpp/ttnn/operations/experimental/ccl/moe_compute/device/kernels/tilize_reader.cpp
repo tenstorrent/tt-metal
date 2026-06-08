@@ -287,6 +287,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -402,8 +404,6 @@ void kernel_main() {
 
     // Constants
     constexpr uint32_t one_page = 1;
-
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
 
     // Size of e_t buffer for all experts (for multicast)
     constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
@@ -754,7 +754,7 @@ void kernel_main() {
         // ========== Write expert_activation buffer to DRAM ==========
         // Write to DRAM: activated rows (num_activated_tokens) rows
         uint32_t expert_activation_write_size = num_activated_tokens * aligned_activation_row_bytes;
-        uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
+        uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
         if (num_activated_tokens > 0) {
             noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
@@ -952,7 +952,7 @@ void kernel_main() {
                 uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
+                    input_tensor_addr_gen.get_noc_addr(token_id) + global_subtoken_offset,
                     get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
                     subtoken_size);
             }
