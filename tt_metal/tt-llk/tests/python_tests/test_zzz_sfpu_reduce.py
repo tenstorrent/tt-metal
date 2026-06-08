@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from datetime import datetime
+
 import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -40,6 +43,38 @@ from helpers.utils import passed_test
 
 max_tiles = 4
 
+FAILURE_DUMP_DIR = os.path.join(os.path.dirname(__file__), "failure_dumps")
+
+
+def dump_failure(name_parts, params, inputs, outputs):
+    """Dump input/output data to a file. Called only when a test case fails."""
+    os.makedirs(FAILURE_DUMP_DIR, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe_name = "_".join(str(p) for p in name_parts).replace("/", "-").replace(" ", "")
+    dump_path = os.path.join(FAILURE_DUMP_DIR, f"{safe_name}_{timestamp}.txt")
+
+    with open(dump_path, "w") as f:
+        f.write("=" * 100 + "\n")
+        f.write("TEST PARAMETERS\n")
+        f.write("=" * 100 + "\n")
+        for key, value in params.items():
+            f.write(f"{key:<22}: {value}\n")
+
+        f.write("\n" + "-" * 100 + "\n")
+        f.write("INPUT DATA\n")
+        f.write("-" * 100 + "\n")
+        for key, value in inputs.items():
+            f.write(f"{key}:\n{value}\n\n")
+
+        f.write("-" * 100 + "\n")
+        f.write("OUTPUT DATA\n")
+        f.write("-" * 100 + "\n")
+        for key, value in outputs.items():
+            f.write(f"{key}:\n{value}\n\n")
+
+    return dump_path
+
+
 dimension_combinations = [
     [m, n]
     for m in range(TILE_DIM, max_tiles * TILE_DIM + 1, TILE_DIM)
@@ -63,19 +98,50 @@ def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
     return [MathOperation.ReduceColumn]
 
 
-def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
-    """Pick the I/O data format for a given reduce operation.
+# Relative precision (unit roundoff) of the floating-point dest/output formats.
+# bf16 has 7 explicit mantissa bits, fp16 has 10, fp32 has 23.
+_FLOAT_FORMAT_EPS = {
+    DataFormat.Float16_b: 2.0**-8,
+    DataFormat.Float16: 2.0**-11,
+    DataFormat.Float32: 2.0**-24,
+}
 
-    A reduce-sum accumulates many input values into a single output element and
-    can exceed the 16-bit range (e.g. a 128-wide row sum of values up to ~1000
-    reaches ~128k), which would silently wrap a UInt16 output. To keep the full
-    sum we keep UInt16 inputs but widen only the output to UInt32. Min/Max/Average
-    reduce at most 32 values per output column and therefore cannot overflow the
-    16-bit output, so they stay UInt16 on both sides.
+
+def get_reduce_sum_atol(
+    output_format, reduce_pool, mathop, input_dimensions, input_bounds
+):
+    """Absolute tolerance for accumulating float reductions (Sum/Average).
+
+    Summing N values of magnitude up to M in a low-precision float format accumulates
+    rounding error that scales like sqrt(N) * M * eps (the partial sums grow ~sqrt(N)*M
+    and each store rounds by ~eps). On rows whose terms nearly cancel, this absolute
+    error dwarfs the tiny true result, so a fixed atol/rtol spuriously fails even though
+    the hardware reduction is correct (PCC stays ~0.99999). We size atol to that bound
+    (with a 2x safety margin) so cancellation rows pass while genuine errors still fail.
+
+    Returns None for non-accumulating ops (Max/Min) and integer formats, leaving the
+    default exact/loose tolerances in place.
     """
-    if reduce_pool == ReducePool.Sum:
-        return [InputOutputFormat(DataFormat.UInt16, DataFormat.UInt32)]
-    return input_output_formats([DataFormat.UInt16], same=True)
+    if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
+        return None
+
+    eps = _FLOAT_FORMAT_EPS.get(output_format)
+    if eps is None:  # integer formats reduce exactly; keep exact comparison
+        return None
+
+    max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
+    # Number of terms accumulated per output element.
+    num_terms = input_dimensions[1] if mathop == MathOperation.ReduceRow else TILE_DIM
+
+    safety_factor = 2.0
+    atol = safety_factor * max_term * eps * (num_terms**0.5)
+
+    # Average divides the accumulated sum by the reduced extent, shrinking the error too.
+    if reduce_pool == ReducePool.Average:
+        atol /= num_terms
+
+    # Keep at least the baseline absolute tolerance used elsewhere.
+    return max(0.05, atol)
 
 
 def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
@@ -99,9 +165,18 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
 
 
 @parametrize(
-    formats=lambda reduce_pool: get_reduce_formats(reduce_pool),
+    formats=input_output_formats(
+        [
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+            DataFormat.Float16_b,
+        ],
+        same=True,
+    ),
     mathop=lambda reduce_pool: get_supported_reduce_axioms(reduce_pool),
-    dest_acc=[DestAccumulation.Yes],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=lambda formats: get_format_input_bounds(formats),
     reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
     dimension_combinations=lambda mathop, dest_acc, formats: [
@@ -131,19 +206,6 @@ def test_sfpu_reduce(
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
-    print("\n" + "=" * 100)
-    print("[DEBUG] TEST PARAMETERS")
-    print("=" * 100)
-    print(f"[DEBUG] formats            : {formats}")
-    print(f"[DEBUG]   input_format     : {formats.input_format}")
-    print(f"[DEBUG]   output_format    : {formats.output_format}")
-    print(f"[DEBUG] mathop             : {mathop}")
-    print(f"[DEBUG] reduce_pool        : {reduce_pool}")
-    print(f"[DEBUG] dest_acc           : {dest_acc}")
-    print(f"[DEBUG] input_bounds       : {input_bounds}")
-    print(f"[DEBUG] input_dimensions   : {input_dimensions}")
-    print(f"[DEBUG] torch_format       : {torch_format}")
-
     # STIMULI GENERATION
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
 
@@ -156,11 +218,6 @@ def test_sfpu_reduce(
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )
-
-    print(f"[DEBUG] tile_cnt           : {tile_cnt}")
-    print(f"[DEBUG] num_blocks         : {num_blocks}")
-    print(f"[DEBUG] num_tiles_in_block : {num_tiles_in_block}")
-    print(f"[DEBUG] ELEMENTS_PER_TILE  : {ELEMENTS_PER_TILE}")
 
     # STIMULI GENERATION
     src_A = torch.randint(
@@ -179,25 +236,12 @@ def test_sfpu_reduce(
         else input_dimensions
     )
 
-    print("\n" + "-" * 100)
-    print("[DEBUG] STIMULI")
-    print("-" * 100)
-    print(f"[DEBUG] dst_dim                : {dst_dim}")
-    print(f"[DEBUG] src_A (pre-tilize) shape: {tuple(src_A.shape)}")
-    print(
-        f"[DEBUG] src_A (pre-tilize) unique values: {torch.unique(src_A).tolist()[:16]}"
-    )
-
     src_A = tilize_block(
         src_A, dst_dim, stimuli_format=formats.input_format
     ).flatten()  # Input tensor is tilized in dst register
     src_A_untilized = untilize_block(
         src_A, formats.input_format, dst_dim
     )  # Passed into golden since PyTorch library has no concept of tilization
-
-    print(f"[DEBUG] src_A (tilized) shape   : {tuple(src_A.shape)}")
-    print(f"[DEBUG] src_A_untilized shape   : {tuple(src_A_untilized.shape)}")
-    print(f"[DEBUG] src_A_untilized:\n{src_A_untilized}")
 
     golden_tensor = get_golden_generator(UnarySFPUGolden)(
         mathop,
@@ -240,19 +284,7 @@ def test_sfpu_reduce(
     res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
-
-    print("\n" + "-" * 100)
-    print("[DEBUG] RESULTS")
-    print("-" * 100)
-    print(f"[DEBUG] raw res_from_L1 len     : {len(res_from_L1)}")
-    print(f"[DEBUG] res_tensor (tilized) shape: {tuple(res_tensor.shape)}")
-
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
-
-    print(f"[DEBUG] golden_tensor shape     : {tuple(golden_tensor.shape)}")
-    print(f"[DEBUG] res_tensor   shape      : {tuple(res_tensor.shape)}")
-    print(f"[DEBUG] golden_tensor:\n{golden_tensor}")
-    print(f"[DEBUG] res_tensor:\n{res_tensor}")
 
     if mathop == MathOperation.ReduceColumn:
         golden_slice = golden_tensor[0]
@@ -263,16 +295,57 @@ def test_sfpu_reduce(
     else:
         raise ValueError(f"Unsupported math operation: {mathop}")
 
-    print("\n" + "-" * 100)
-    print("[DEBUG] COMPARED SLICE (golden vs result)")
-    print("-" * 100)
-    print(f"[DEBUG] golden_slice : {golden_slice.tolist()}")
-    print(f"[DEBUG] res_slice    : {res_slice.tolist()}")
-    diff_idx = (golden_slice != res_slice).nonzero(as_tuple=True)[0].tolist()
-    print(f"[DEBUG] mismatch indices ({len(diff_idx)}): {diff_idx}")
-    for i in diff_idx:
-        print(
-            f"[DEBUG]   idx {i:>4}: golden={golden_slice[i].item()} != res={res_slice[i].item()}"
-        )
+    # Accumulating float reductions lose precision proportional to the number of summed
+    # terms; size the absolute tolerance accordingly (PCC still guards correctness).
+    reduce_atol = get_reduce_sum_atol(
+        formats.output_format, reduce_pool, mathop, input_dimensions, input_bounds
+    )
 
-    assert passed_test(golden_slice, res_slice, formats.output_format)
+    if passed_test(
+        golden_slice, res_slice, formats.output_format, custom_atol=reduce_atol
+    ):
+        return
+
+    # On failure, dump all input/output data to a file for debugging.
+    diff_idx = (golden_slice != res_slice).nonzero(as_tuple=True)[0].tolist()
+    mismatches = "\n".join(
+        f"  idx {i:>4}: golden={golden_slice[i].item()} != res={res_slice[i].item()}"
+        for i in diff_idx
+    )
+    dump_path = dump_failure(
+        name_parts=[
+            formats.input_format,
+            mathop,
+            reduce_pool,
+            dest_acc,
+            f"{input_dimensions[0]}x{input_dimensions[1]}",
+        ],
+        params={
+            "formats": formats,
+            "input_format": formats.input_format,
+            "output_format": formats.output_format,
+            "mathop": mathop,
+            "reduce_pool": reduce_pool,
+            "dest_acc": dest_acc,
+            "input_bounds": input_bounds,
+            "input_dimensions": input_dimensions,
+            "torch_format": torch_format,
+            "tile_cnt": tile_cnt,
+            "num_blocks": num_blocks,
+            "num_tiles_in_block": num_tiles_in_block,
+            "dst_dim": dst_dim,
+        },
+        inputs={
+            "src_A_untilized": src_A_untilized,
+        },
+        outputs={
+            "golden_tensor": golden_tensor,
+            "res_tensor": res_tensor,
+            "golden_slice": golden_slice.tolist(),
+            "res_slice": res_slice.tolist(),
+            f"mismatch indices ({len(diff_idx)})": diff_idx,
+            "mismatches": mismatches,
+        },
+    )
+
+    pytest.fail(f"Reduce test failed. Input/output data dumped to: {dump_path}")

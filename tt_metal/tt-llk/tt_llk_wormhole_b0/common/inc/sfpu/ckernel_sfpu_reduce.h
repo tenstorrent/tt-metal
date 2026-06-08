@@ -140,6 +140,22 @@ inline void perform_int_average()
         TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6); // Negate LREG0 if condition is true
         TTI_SFPENCC(0, 0, 0, 0);                            // Clear condition codes
     }
+    else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP)
+    {
+        // Two's-complement signed divide-by-32 (round toward zero). SFPABS clears the sign bit and is
+        // only correct for sign-magnitude, so for 2's-complement we take the magnitude via a conditional
+        // negate (0 - x), logical-shift, then restore the sign with a second conditional negate.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);     // Save original (2's-complement) value for sign check
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, 4);               // cc if sign bit == 0 (non-negative)
+        TTI_SFPCOMPC(0, 0, 0, 0);                           // Invert -> cc if negative
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6); // LREG0 = -LREG0 (magnitude) when negative
+        TTI_SFPENCC(0, 0, 0, 0);
+        TTI_SFPSHFT(-AVG_SHIFT_AMOUNT & AVG_SHIFT_MASK, p_sfpu::LREG0, p_sfpu::LREG0, 0b01); // |x| >> 5 (divide by 32)
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, 4);                                                // cc if original sign bit == 0 (non-negative)
+        TTI_SFPCOMPC(0, 0, 0, 0);                                                            // Invert -> cc if original was negative
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 6);                                  // Restore sign (2's-complement negate) when negative
+        TTI_SFPENCC(0, 0, 0, 0);
+    }
     else
     {
         // For unsigned formats (UInt32), just use logical shift directly since they can't be negative
@@ -1149,8 +1165,11 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
 {
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs; Int32 MAX/MIN use INT32_2S_COMP for SFPSWAP
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN))
+    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates
+    // on two's-complement values. Int32 MAX/MIN keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX)
+    // is a float/sign-magnitude comparator and orders sign-magnitude integers correctly, whereas
+    // two's-complement negatives would be mis-ordered.
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG))
                                                        ? InstrModLoadStore::INT32_2S_COMP
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
@@ -1217,14 +1236,12 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
     // Determine InstrModLoadStore from llk_defs.
-    // Column MAX/MIN with Int32 uses INT32_2S_COMP for the LOADMACRO-based compare-and-swap pipeline.
-    // Row MAX with Int32 uses plain INT32 (sign-magnitude) for direct SFPLOAD/SFPSTORE: dest stores
-    // integers in sign-magnitude format, and SFPSWAP(mod1=VEC_MIN_MAX) compares sign-magnitude
-    // values correctly without two's-complement conversion.
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_COL)
-            ? InstrModLoadStore::INT32_2S_COMP
-            : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
+    // Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on two's-complement values. Int32 MAX/MIN
+    // (both dims) keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX) is a float/sign-magnitude
+    // comparator that orders sign-magnitude integers correctly; two's-complement negatives are
+    // mis-ordered (max of negatives would return the most-negative value).
+    constexpr bool int32_sum_avg                 = (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
+    constexpr InstrModLoadStore INSTRUCTION_MODE = int32_sum_avg ? InstrModLoadStore::INT32_2S_COMP : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word
     // (driven by INPUT format).
