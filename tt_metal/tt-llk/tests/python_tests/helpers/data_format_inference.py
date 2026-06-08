@@ -115,6 +115,7 @@ def is_format_combination_outlier(
 
 _SRCAB_ONLY_FORMATS = {DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B}
 
+
 def infer_unpack_out(
     input_format: DataFormat,
     output_format: DataFormat,
@@ -141,7 +142,7 @@ def infer_unpack_out(
             instead of the default. Only valid when input_format == MxFp4; the hint is
             compatible with any output_format (output_format is not constrained here).
             The exponent family it implies for downstream math/pack is derived in
-            infer_data_formats via _peel_srcab_only (2x_A -> Float16, 2x_B -> Float16_b).
+            infer_data_formats via infer_downstream_unpack_out (2x_A -> Float16, 2x_B -> Float16_b).
 
     Returns:
         The inferred output data format for unpacking to registers
@@ -326,7 +327,7 @@ def infer_downstream_unpack_out(unpack_out: DataFormat) -> DataFormat:
     # inference historically models the unpacked payload as BFP8_b.
     if unpack_out in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
-   
+
     # Map a 2x-packed SrcA/SrcB-only register format back to its paired non-2x family member,
     # used to derive a math/pack format (those fields cannot hold the 2x format itself).
     if unpack_out == DataFormat.MxFp4_2x_A:
@@ -550,7 +551,7 @@ def data_formats(
                               unpack_A_dst / unpack_B_dst become the hint instead of the default (e.g. for MxFp4 input, Float16_b). Honored
                               by the inference path only; must be paired with `disable_format_inference=False`. Currently valid only when
                               `input_format == DataFormat.MxFp4`; the hint is compatible with any `output_format`. The exponent family it
-                              implies for downstream math/pack is derived via _peel_srcab_only (2x_A -> Float16, 2x_B -> Float16_b).
+                              implies for downstream math/pack is derived via infer_downstream_unpack_out (2x_A -> Float16, 2x_B -> Float16_b).
     Returns:
         A list of FormatConfig objects of length num_iterations
     """
