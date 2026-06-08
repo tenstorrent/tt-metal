@@ -252,11 +252,6 @@ void mask_and_topk() {
         input_transposed_cb.reserve_back(Wt);
         index_transposed_cb.reserve_back(Wt);
 
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = false;
-        input_transposed_cb.reserve_back(Wt);
-        index_transposed_cb.reserve_back(Wt);
-
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
             input_cb.wait_front(2);
