@@ -471,7 +471,7 @@ void dispatch_option2_spec_hash(
     // resources). Bindings aren't stored — Option 2 re-runs the factory on
     // every dispatch — so this is a check-only pass.
     auto io_mesh_tensors = mesh_device_operation_t::collect_io_mesh_tensors(tensor_args, tensor_return_value);
-    for (const auto& tensor_arg : artifacts.run_params.tensor_args) {
+    for (const auto& tensor_arg : artifacts.run_args.tensor_args) {
         const auto* target = &tensor_arg.tensor.get();
         const bool reachable =
             std::any_of(io_mesh_tensors.begin(), io_mesh_tensors.end(), [target](const auto& wrapped) {
@@ -513,7 +513,7 @@ void dispatch_option2_spec_hash(
         auto& cached_program_factory = program_cache.get(program_hash);
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
         for (auto& [coordinate_range, program] : cached_mesh_workload.workload.get_programs()) {
-            tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+            tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_args);
         }
         enqueue_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload, true);
@@ -537,7 +537,7 @@ void dispatch_option2_spec_hash(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& range : tensor_coords.ranges()) {
         auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-        tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+        tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_args);
         shared_variables.emplace(range, shared_variables_t{});
         mesh_workload.add_program(range, std::move(program));
     }

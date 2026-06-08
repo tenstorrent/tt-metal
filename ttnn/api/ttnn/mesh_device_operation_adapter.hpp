@@ -836,8 +836,8 @@ public:
             // constraints, move any op-owned tensors into the cache entry, and
             // resolve the (identical-across-ranges) bindings once.
             auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-            assert_no_dfb_size_overrides(artifacts.run_params);
-            assert_no_common_runtime_args(artifacts.run_params);
+            assert_no_dfb_size_overrides(artifacts.run_args);
+            assert_no_common_runtime_args(artifacts.run_args);
 
             // Move op-owned tensors into the cache entry FIRST, then enumerate
             // against the post-move storage; otherwise the bindings would index
@@ -845,12 +845,12 @@ public:
             shared_variables_t shared_variables{.mesh_tensors = std::move(artifacts.mesh_tensors), .bindings = {}};
             const auto mesh_tensors = MeshDeviceOperationAdapter::collect_all_mesh_tensors(
                 tensor_args, tensor_return_value, shared_variables.mesh_tensors);
-            shared_variables.bindings = resolve_bindings(artifacts.run_params.tensor_args, mesh_tensors);
+            shared_variables.bindings = resolve_bindings(artifacts.run_args.tensor_args, mesh_tensors);
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             for (const auto& range : tensor_coords.ranges()) {
                 auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_args);
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
@@ -1053,10 +1053,10 @@ public:
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             for (auto& precursor : artifacts.program_precursors) {
-                assert_no_dfb_size_overrides(precursor.artifacts.run_params);
+                assert_no_dfb_size_overrides(precursor.artifacts.run_args);
                 auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, precursor.artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, precursor.artifacts.run_params);
-                auto bindings = resolve_bindings(precursor.artifacts.run_params.tensor_args, mesh_tensor_refs);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, precursor.artifacts.run_args);
+                auto bindings = resolve_bindings(precursor.artifacts.run_args.tensor_args, mesh_tensor_refs);
                 shared_variables.bindings_per_range.emplace(precursor.range, std::move(bindings));
                 mesh_workload.add_program(precursor.range, std::move(program));
             }

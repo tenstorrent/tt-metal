@@ -54,7 +54,7 @@ struct ProgramArtifacts {
     std::vector<tt::tt_metal::MeshTensor> mesh_tensors;
 
     tt::tt_metal::experimental::ProgramSpec spec;
-    tt::tt_metal::experimental::ProgramRunArgs run_params;
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
 };
 
 /**

@@ -256,7 +256,7 @@ enum class ProgramCachingStrategy {
 // path actually matters for this op's workload — the factory body stays the
 // same, only the declaration (and the framework's dispatch path) changes.
 //
-// (The longer-term API direction is to make this a runtime choice — the
+// (The longer-term API direction could even make this a runtime choice — the
 // optimal strategy is more a property of the workload than of the op — but
 // the compile-time form is the right starting point and doesn't paint into
 // a corner that would prevent the runtime version later.)
@@ -267,10 +267,7 @@ concept HasMinimizeCacheHitCostOptIn = requires {
 };
 
 // Umbrella over the four Metal 2.0 factory leaves. "Exactly one of the four
-// forms is satisfied" is enforced by sum-equals-1 (the same pattern Diego uses
-// for outer-factory disambiguation in AllFactoriesValid below). A factory that
-// accidentally exposes two shapes is rejected at the concept level rather than
-// silently picked apart by adapter precedent order.
+// forms is satisfied" is enforced by sum-equals-1.
 template <typename T>
 concept Metal2FactoryConcept =
     ((ProgramSpecFactoryConcept<T> + AdvancedProgramSpecFactoryConcept<T> + WorkloadSpecFactoryConcept<T> +
