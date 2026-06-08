@@ -58,14 +58,12 @@ struct VariableMatmulParams {
     //   Runtime arg — different values hit the same cached program.
     uint32_t effective_M_tiles = 0;
 
-    // On-device offsets (EP). When set, dataflow kernels read the offsets tensor at
-    // runtime and derive the row/K offsets:
-    //   OutputRow: offsets[start] → output write-at-offset row.
-    //   InputRow:  offsets[start..start+2] → input-row range + effective_M + per-core
-    //              M_start/M_end/M_blocks_per_core (dm_in0_sender publishes the latter
-    //              via cb_ctrl so compute can override RT args).
-    //   InputK:    offsets[start] → in0_k_offset_tiles.
-    //   WeightK:   offsets[start] → in1_k_offset_tiles.
+    // On-device offsets (EP). Dataflow kernels read offsets[start..start+2] at runtime and
+    // derive the role-appropriate ranges:
+    //   InputAndOutputRow: offsets[start..start+2] → input-row range + output write-at-offset
+    //                      row + per-core M_start/M_end/M_blocks_per_core (dm_in0_sender
+    //                      publishes the latter via cb_ctrl so compute can override RT args).
+    //   InputAndWeightK:   offsets[start..start+2] → in0 K-slice + in1 K-slice (same range).
     OffsetsRole offsets_role = OffsetsRole::InputAndOutputRow;
     uint32_t offsets_start_index = 0;
 };

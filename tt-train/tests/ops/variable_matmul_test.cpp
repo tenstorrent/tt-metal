@@ -79,57 +79,16 @@ protected:
     }
 };
 
-// Debug repro for moe_ffn pattern: input M_parent > actual_eff_M (from offsets),
-// output_tensor pre-zeroed. The OutputRow override should bound writes to actual
-// rows, leaving the rest of parent_out at its pre-zero value.
-
-// Multiple OutputRow calls with different offsets_start_index to the SAME parent_out
-// (moe_ffn down_proj pattern). Each call writes a per-expert range; pad/slack rows
-// between/after expert ranges must stay zero.
-
-// moe_ffn fwd gate_proj pattern: pre-zero output_tensor [upper*32, I], InputRow
-// reads a sub-range of grouped, matmul writes to rows [0:actual*32] of output.
-// Rows [actual*32 : upper*32] must remain zero (from pre-zero).
-
-// moe-ffn fwd pattern with zero-input pad rows: grouped has counts<padded so trailing
-// rows within an expert's range are zero. Matmul output for those rows should be zero.
-// Mirrors expert 2 in MoeFfnSwigluBackwardTest (counts={32,16,48}): per-expert padded
-// range is 64 rows but only first 48 have real data; rows 48..63 of the per-expert
-// matmul output should be exactly zero (silu(0)*0 in fwd, propagating to dgrouped pad).
-
-// Mimics moe_ffn bwd dX_via_gate matmul: in0 has real rows + trailing zero rows
-// within the OutputRow-selected M range. Matmul output for zero-input rows MUST
-// be zero — this test exposes whether OutputRow's M_tiles override correctly
-// produces zero output for zero input across cores.
-
-// Both transposes simultaneously.
-
 // ---------------------------------------------------------------------------
 // HiFi4-vs-HiFi4 minimal_matmul parity tests. variable_matmul is a superset of
 // minimal_matmul; with matched fidelity (HiFi4 + fp32 dst + packer_l1_acc), matched
-// block sizes / grid, and none of variable_matmul's extra features exercised (no
-// on-device offsets, no write-at-offset), the two MUST produce bit-identical output —
-// same algorithm, same reduction order, same FPU ops. Any deviation is a regression in
-// variable_matmul's core path.
+// block sizes / grid, and the EP path's offsets reduced to a single trivial range, the
+// two MUST produce bit-identical output — same algorithm, same reduction order, same
+// FPU ops. Any deviation is a regression in variable_matmul's core path.
 // ---------------------------------------------------------------------------
 
-// Non-tile-aligned M (matches DeepSeek 16B with TP=8: moe_inter_dim=1408/8 = 176). The
-// TILE-layout physical storage rounds to ceil(176/32)*32 = 192; variable_matmul must
-// process all 6 M-tiles, write the same as minimal_matmul, and present logical_shape M=176
-// to the caller. Output's physical tile 5 has 16 valid rows + 16 padded zeros.
-
-// Production-scale parity at moe_ffn dW_down shape (transpose_a; K=1024).
-// Even at K=1024, two HiFi4 reductions in the same order should agree well within rtol=1e-2.
-
-// ---------------------------------------------------------------------------
-// K-axis OffsetsRole bit-exact parity. variable_matmul with a K-offset reads only the
-// K[a..b] tile range of the parent — that's the same math as pre-slicing the parent and
-// matmul-ing the slice. With matched HiFi4 settings, results MUST be bit-identical to
-// minimal_matmul on the slice. Covers both host-known offsets and on-device offsets.
-// ---------------------------------------------------------------------------
-
-// InputAndWeightK: both in0_k and in1_k overridden from the same offsets entry. Mirrors
-// the moe_ffn dW_down/dW_gate/dW_up backward call pattern.
+// InputAndWeightK: both in0 and in1 K-sliced from the same offsets entry. Mirrors the
+// moe_ffn dW_down/dW_gate/dW_up backward call pattern.
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     const uint32_t K_parent_in0 = 512, M = 128, K_parent_in1 = 512, N = 256;
     auto* device = &ttml::autograd::ctx().get_device();
