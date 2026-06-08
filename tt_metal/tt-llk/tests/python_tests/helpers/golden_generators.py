@@ -122,7 +122,7 @@ def apply_l1_accumulation(
     Simulate L1 accumulation by summing partial results.
 
     With L1 acc enabled, the packer accumulates into the same output tile
-    slots across multiple passes. For integer formats the hardware
+    slots across multiple passes. For sub-32-bit integer formats the hardware
     saturates at every step instead of wrapping, so the golden must
     clamp the running sum to the output range after each addition.
 
@@ -135,7 +135,7 @@ def apply_l1_accumulation(
     Returns:
         Element-wise sum of all partials (saturated per-step for integers).
     """
-    needs_saturation = data_format.is_integer()
+    needs_saturation = data_format.is_integer() and not data_format.is_32_bit()
 
     accumulated = partials[0].clone()
     for partial in partials[1:]:
@@ -2427,6 +2427,60 @@ class EltwiseBinaryGolden(FidelityMasking):
 
         return result
 
+    def _binary_int_op(self, op, t1, t2, data_format):
+        """Integer eltwise op in int32. Int8 operands cannot overflow int32."""
+        torch_format = format_dict[data_format]
+        t1_int32 = t1.to(torch.int32)
+        t2_int32 = t2.to(torch.int32)
+        if op == MathOperation.Elwadd:
+            res = t1_int32 + t2_int32
+        elif op == MathOperation.Elwsub:
+            res = t1_int32 - t2_int32
+        elif op == MathOperation.Elwmul:
+            res = t1_int32 * t2_int32
+        else:
+            raise ValueError(f"Unsupported integer eltwise operation: {op}")
+        return res.to(torch_format)
+
+    def _eltwise_integer(
+        self,
+        op,
+        operand1,
+        operand2,
+        data_format,
+        input_format,
+        acc_to_dest,
+        tile_shape,
+        num_tiles_per_accumulation,
+    ):
+
+        t1 = to_tensor(operand1, input_format)
+        t2 = to_tensor(operand2, input_format)
+
+        if acc_to_dest:
+            tile_size = tile_shape.total_tile_size()
+            num_total_tiles = t1.numel() // tile_size
+            num_blocks = num_total_tiles // num_tiles_per_accumulation
+
+            t1_tiles = t1.view(num_total_tiles, tile_size)
+            t2_tiles = t2.view(num_total_tiles, tile_size)
+
+            accumulated = []
+            for block in range(num_blocks):
+                partials = [
+                    self._binary_int_op(
+                        op,
+                        t1_tiles[block * num_tiles_per_accumulation + tile],
+                        t2_tiles[block * num_tiles_per_accumulation + tile],
+                        data_format,
+                    )
+                    for tile in range(num_tiles_per_accumulation)
+                ]
+                accumulated.append(apply_l1_accumulation(partials, data_format))
+            return torch.cat(accumulated)
+
+        return self._binary_int_op(op, t1, t2, data_format)
+
     def __call__(
         self,
         op,
@@ -2450,6 +2504,18 @@ class EltwiseBinaryGolden(FidelityMasking):
         # If explicitly passed as None, it means "already quantized, skip".
         if input_format_B is EltwiseBinaryGolden._UNSET:
             input_format_B = input_format
+
+        if input_format is not None and input_format.is_integer():
+            return self._eltwise_integer(
+                op,
+                operand1,
+                operand2,
+                data_format,
+                input_format,
+                acc_to_dest,
+                tile_shape,
+                num_tiles_per_accumulation,
+            )
 
         # On Quasar with IMPLIED_MATH_FORMAT=Yes, the HW dest register's
         # physical storage is implied from the SrcA tag: Float16 input →
