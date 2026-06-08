@@ -687,6 +687,299 @@ validate_job_name() {
     return 0
 }
 
+# Validates URLs (http/https only)
+# Blocks javascript:, file:, data:, ftp:, and other dangerous schemes.
+# Also rejects shell metacharacters and embedded newlines.
+# $1: URL to validate
+# $2: optional "--allow-http" to permit plain http (default: https only)
+validate_url() {
+    local url="$1"
+    local allow_http=false
+    if [[ "${2:-}" == "--allow-http" ]]; then
+        allow_http=true
+    fi
+
+    # Check empty
+    if [[ -z "${url}" ]]; then
+        validation_error "URL cannot be empty"
+        return 1
+    fi
+
+    # Check max length (2048 is a reasonable browser limit)
+    if [[ ${#url} -gt 2048 ]]; then
+        validation_error "URL exceeds maximum length of 2048 characters"
+        return 1
+    fi
+
+    # Reject control characters (newlines, tabs, null bytes)
+    if [[ "${url}" =~ [[:cntrl:]] ]]; then
+        validation_error "URL cannot contain control characters"
+        return 1
+    fi
+
+    # Reject shell metacharacters that could enable command injection.
+    # Note: '#' (fragment) is intentionally NOT blocked — it is safe inside double-quoted
+    # shell strings and is a legitimate part of URL fragment identifiers.
+    # Pattern stored in variable to prevent bash from consuming escape sequences.
+    local _url_metachar_pattern='[$`!<>|;&(){}"'"'"']'
+    if [[ "${url}" =~ ${_url_metachar_pattern} ]]; then
+        validation_error "URL contains forbidden shell metacharacters"
+        return 1
+    fi
+
+    # Reject spaces (would cause word splitting if unquoted)
+    if [[ "${url}" =~ [[:space:]] ]]; then
+        validation_error "URL cannot contain spaces"
+        return 1
+    fi
+
+    # Enforce scheme allowlist: only https (and http if explicitly allowed)
+    if [[ "${allow_http}" == true ]]; then
+        if [[ ! "${url}" =~ ^https?:// ]]; then
+            validation_error "URL must use https:// or http:// scheme"
+            return 1
+        fi
+    else
+        if [[ ! "${url}" =~ ^https:// ]]; then
+            validation_error "URL must use https:// scheme (use --allow-http to permit http)"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# Validates a network port number (1–65535)
+# Returns 0 if valid, 1 otherwise
+validate_port() {
+    local port="$1"
+
+    # Check empty
+    if [[ -z "${port}" ]]; then
+        validation_error "Port cannot be empty"
+        return 1
+    fi
+
+    # Must be purely numeric (no leading zeros, no negatives, no floats)
+    if [[ ! "${port}" =~ ^[0-9]+$ ]]; then
+        validation_error "Port must be a positive integer"
+        return 1
+    fi
+
+    # Reject leading zeros (e.g. "080" could be octal confusion)
+    if [[ "${#port}" -gt 1 && "${port}" =~ ^0 ]]; then
+        validation_error "Port cannot have leading zeros"
+        return 1
+    fi
+
+    # Range check: 1–65535
+    if [[ "${port}" -lt 1 || "${port}" -gt 65535 ]]; then
+        validation_error "Port must be between 1 and 65535"
+        return 1
+    fi
+
+    return 0
+}
+
+# Validates an IPv4 address (dotted-decimal, each octet 0–255, no leading zeros)
+# Returns 0 if valid, 1 otherwise
+validate_ipv4() {
+    local ip="$1"
+
+    # Check empty
+    if [[ -z "${ip}" ]]; then
+        validation_error "IPv4 address cannot be empty"
+        return 1
+    fi
+
+    # Reject control characters and shell metacharacters immediately
+    if [[ "${ip}" =~ [[:cntrl:]] ]]; then
+        validation_error "IPv4 address cannot contain control characters"
+        return 1
+    fi
+    local _ip_metachar_pattern='[$`!<>|;&(){}"'"'"'\\ ]'
+    if [[ "${ip}" =~ ${_ip_metachar_pattern} ]]; then
+        validation_error "IPv4 address contains forbidden characters"
+        return 1
+    fi
+
+    # Must match exactly 4 dot-separated tokens
+    if [[ ! "${ip}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        validation_error "IPv4 address must be in dotted-decimal format (e.g. 192.168.1.1)"
+        return 1
+    fi
+
+    # Validate each octet: no leading zeros, value 0–255
+    local IFS='.'
+    local octets
+    read -ra octets <<< "${ip}"
+
+    if [[ ${#octets[@]} -ne 4 ]]; then
+        validation_error "IPv4 address must have exactly 4 octets"
+        return 1
+    fi
+
+    local octet
+    for octet in "${octets[@]}"; do
+        # Reject leading zeros (e.g. "01", "001")
+        if [[ "${#octet}" -gt 1 && "${octet}" =~ ^0 ]]; then
+            validation_error "IPv4 octet cannot have leading zeros: ${octet}"
+            return 1
+        fi
+        # Reject empty octets
+        if [[ -z "${octet}" ]]; then
+            validation_error "IPv4 address has an empty octet"
+            return 1
+        fi
+        # Range check 0–255
+        if [[ "${octet}" -gt 255 ]]; then
+            validation_error "IPv4 octet out of range (0-255): ${octet}"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# Validates a GitHub repository reference in "owner/repo" format.
+# Enforces GitHub naming rules for both owner and repo components.
+# $1: repo reference (e.g. "tenstorrent/tt-metal")
+validate_github_repo() {
+    local repo_ref="$1"
+
+    # Check empty
+    if [[ -z "${repo_ref}" ]]; then
+        validation_error "GitHub repo reference cannot be empty"
+        return 1
+    fi
+
+    # Must contain exactly one slash that is not at the start or end
+    if [[ ! "${repo_ref}" =~ ^[^/]+/[^/]+$ ]]; then
+        validation_error "GitHub repo must be in 'owner/repo' format"
+        return 1
+    fi
+
+    local owner="${repo_ref%%/*}"
+    local repo="${repo_ref#*/}"
+
+    # Validate owner: GitHub username rules (max 39, alphanumeric + hyphen, no leading/trailing hyphen)
+    if [[ -z "${owner}" ]]; then
+        validation_error "GitHub repo owner cannot be empty"
+        return 1
+    fi
+    if [[ ${#owner} -gt ${MAX_USERNAME_LENGTH} ]]; then
+        validation_error "GitHub repo owner exceeds maximum length of ${MAX_USERNAME_LENGTH} characters"
+        return 1
+    fi
+    if [[ ! "${owner}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
+        validation_error "GitHub repo owner contains invalid characters"
+        return 1
+    fi
+    if [[ "${owner}" =~ -$ ]]; then
+        validation_error "GitHub repo owner cannot end with hyphen"
+        return 1
+    fi
+
+    # Validate repo name: alphanumeric, hyphen, underscore, dot; max 100 chars
+    if [[ -z "${repo}" ]]; then
+        validation_error "GitHub repo name cannot be empty"
+        return 1
+    fi
+    if [[ ${#repo} -gt 100 ]]; then
+        validation_error "GitHub repo name exceeds maximum length of 100 characters"
+        return 1
+    fi
+    if [[ ! "${repo}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        validation_error "GitHub repo name contains invalid characters (only alphanumerics, dots, hyphens, and underscores allowed)"
+        return 1
+    fi
+
+    return 0
+}
+
+# Validates a git ref (full refs/... or branch shorthand).
+# Accepts refs/heads/*, refs/tags/*, refs/pull/*/merge|head, or bare branch names.
+# Rejects path traversal, shell metacharacters, and dangerous git ref sequences.
+# $1: ref to validate (e.g. "refs/heads/main" or "main")
+validate_github_ref() {
+    local ref="$1"
+
+    # Check empty
+    if [[ -z "${ref}" ]]; then
+        validation_error "Git ref cannot be empty"
+        return 1
+    fi
+
+    # Check max length (git limits refs to 255 bytes)
+    if [[ ${#ref} -gt ${MAX_BRANCH_NAME_LENGTH} ]]; then
+        validation_error "Git ref exceeds maximum length of ${MAX_BRANCH_NAME_LENGTH} characters"
+        return 1
+    fi
+
+    # Reject control characters
+    if [[ "${ref}" =~ [[:cntrl:]] ]]; then
+        validation_error "Git ref cannot contain control characters"
+        return 1
+    fi
+
+    # Reject shell metacharacters
+    local _ref_metachar_pattern='[][$*?{}"'"'"'!#()<>`\\]'
+    if [[ "${ref}" =~ ${_ref_metachar_pattern} ]]; then
+        validation_error "Git ref cannot contain shell metacharacters"
+        return 1
+    fi
+
+    # Cannot start with hyphen (git flag injection)
+    if [[ "${ref}" =~ ^- ]]; then
+        validation_error "Git ref cannot start with hyphen"
+        return 1
+    fi
+
+    # Cannot start with dot
+    if [[ "${ref}" =~ ^\. ]]; then
+        validation_error "Git ref cannot start with dot"
+        return 1
+    fi
+
+    # Cannot end with dot
+    if [[ "${ref}" =~ \.$ ]]; then
+        validation_error "Git ref cannot end with dot"
+        return 1
+    fi
+
+    # Cannot end with slash
+    if [[ "${ref}" =~ /$ ]]; then
+        validation_error "Git ref cannot end with slash"
+        return 1
+    fi
+
+    # Reject double dots (path traversal / parent reference)
+    if [[ "${ref}" =~ \.\. ]]; then
+        validation_error "Git ref cannot contain consecutive dots (path traversal)"
+        return 1
+    fi
+
+    # Reject @{ sequence (reflog shorthand — can resolve to unexpected commits)
+    if [[ "${ref}" =~ @\{ ]]; then
+        validation_error "Git ref cannot contain '@{' sequence"
+        return 1
+    fi
+
+    # Reject tilde and caret (relative commit references)
+    if [[ "${ref}" =~ [~\^:] ]]; then
+        validation_error "Git ref cannot contain '~', '^', or ':' characters"
+        return 1
+    fi
+
+    # Reject spaces
+    if [[ "${ref}" =~ [[:space:]] ]]; then
+        validation_error "Git ref cannot contain spaces"
+        return 1
+    fi
+
+    return 0
+}
+
 # ============================================
 # Sanitization Functions
 # ============================================

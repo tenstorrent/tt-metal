@@ -1081,6 +1081,119 @@ assert_returns_1 "path: unicode division slash" validate_path "/tmp/a∕b"
 echo ""
 
 # ============================================
+# validate_url tests
+# ============================================
+echo "validate_url"
+
+assert_returns_0 "url: valid https"                  validate_url "https://example.com"
+assert_returns_1 "url: http rejected by default"      validate_url "http://example.com/path"
+assert_returns_0 "url: http accepted with --allow-http" validate_url "http://example.com/path" "--allow-http"
+assert_returns_0 "url: https with port"               validate_url "https://example.com:8080/path?q=1"
+assert_returns_0 "url: https with fragment"            validate_url "https://example.com/page#anchor"
+assert_returns_0 "url: github HTTPS URL"      validate_url "https://github.com/tenstorrent/tt-metal/releases/download/v1.0/artifact.tar.gz"
+assert_returns_1 "url: empty"                 validate_url ""
+assert_returns_1 "url: javascript scheme"     validate_url "javascript:alert(1)"
+assert_returns_1 "url: file scheme"           validate_url "file:///etc/passwd"
+assert_returns_1 "url: ftp scheme"            validate_url "ftp://example.com"
+assert_returns_1 "url: no scheme"             validate_url "example.com/path"
+assert_returns_1 "url: shell injection \$("   validate_url 'https://example.com/$(id)'
+assert_returns_1 "url: shell injection backtick" validate_url 'https://example.com/`id`'
+assert_returns_1 "url: newline injection"     validate_url $'https://example.com\necho injected'
+assert_returns_1 "url: space injection"       validate_url "https://example.com; rm -rf /"
+assert_returns_1 "url: data scheme"           validate_url "data:text/html,<script>alert(1)</script>"
+assert_returns_1 "url: too long (>2048)"      validate_url "https://$(python3 -c 'print("a"*2050)')"
+
+echo ""
+
+# ============================================
+# validate_port tests
+# ============================================
+echo "validate_port"
+
+assert_returns_0 "port: valid 1"              validate_port "1"
+assert_returns_0 "port: valid 80"             validate_port "80"
+assert_returns_0 "port: valid 443"            validate_port "443"
+assert_returns_0 "port: valid 8080"           validate_port "8080"
+assert_returns_0 "port: valid 65535"          validate_port "65535"
+assert_returns_1 "port: empty"                validate_port ""
+assert_returns_1 "port: 0"                    validate_port "0"
+assert_returns_1 "port: negative"             validate_port "-1"
+assert_returns_1 "port: 65536 (too high)"     validate_port "65536"
+assert_returns_1 "port: float"                validate_port "80.5"
+assert_returns_1 "port: alpha"                validate_port "http"
+assert_returns_1 "port: leading zeros"        validate_port "080"
+
+echo ""
+
+# ============================================
+# validate_ipv4 tests
+# ============================================
+echo "validate_ipv4"
+
+assert_returns_0 "ipv4: valid 0.0.0.0"        validate_ipv4 "0.0.0.0"
+assert_returns_0 "ipv4: valid 127.0.0.1"       validate_ipv4 "127.0.0.1"
+assert_returns_0 "ipv4: valid 192.168.1.1"     validate_ipv4 "192.168.1.1"
+assert_returns_0 "ipv4: valid 255.255.255.255" validate_ipv4 "255.255.255.255"
+assert_returns_0 "ipv4: valid 10.0.0.1"        validate_ipv4 "10.0.0.1"
+assert_returns_1 "ipv4: empty"                 validate_ipv4 ""
+assert_returns_1 "ipv4: octet > 255"           validate_ipv4 "256.0.0.1"
+assert_returns_1 "ipv4: only 3 octets"         validate_ipv4 "192.168.1"
+assert_returns_1 "ipv4: 5 octets"              validate_ipv4 "1.2.3.4.5"
+assert_returns_1 "ipv4: leading zeros"         validate_ipv4 "192.168.001.1"
+assert_returns_1 "ipv4: alpha chars"           validate_ipv4 "192.168.a.1"
+assert_returns_1 "ipv4: empty octet"           validate_ipv4 "192.168..1"
+assert_returns_1 "ipv4: shell injection"       validate_ipv4 '1.2.3.$(id)'
+assert_returns_1 "ipv4: negative octet"        validate_ipv4 "192.168.-1.1"
+
+echo ""
+
+# ============================================
+# validate_github_repo tests
+# ============================================
+echo "validate_github_repo"
+
+assert_returns_0 "github_repo: valid tenstorrent/tt-metal"    validate_github_repo "tenstorrent/tt-metal"
+assert_returns_0 "github_repo: valid actions/checkout"         validate_github_repo "actions/checkout"
+assert_returns_0 "github_repo: valid org123/repo-name"         validate_github_repo "org123/repo-name"
+assert_returns_0 "github_repo: underscores allowed"            validate_github_repo "my-org/my_repo"
+assert_returns_0 "github_repo: dots in repo name"              validate_github_repo "actions/runner.images"
+assert_returns_1 "github_repo: empty"                          validate_github_repo ""
+assert_returns_1 "github_repo: no slash"                       validate_github_repo "noowner"
+assert_returns_1 "github_repo: double slash"                   validate_github_repo "owner//repo"
+assert_returns_1 "github_repo: trailing slash"                 validate_github_repo "owner/repo/"
+assert_returns_1 "github_repo: leading slash"                  validate_github_repo "/owner/repo"
+assert_returns_1 "github_repo: shell injection owner"          validate_github_repo '$(id)/repo'
+assert_returns_1 "github_repo: shell injection repo"           validate_github_repo 'owner/$(id)'
+assert_returns_1 "github_repo: spaces"                         validate_github_repo "my org/my repo"
+assert_returns_1 "github_repo: owner too long (>39)"           validate_github_repo "$(python3 -c 'print("a"*40)')/repo"
+assert_returns_1 "github_repo: repo too long (>100)"           validate_github_repo "owner/$(python3 -c 'print("a"*101)')"
+
+echo ""
+
+# ============================================
+# validate_github_ref tests
+# ============================================
+echo "validate_github_ref"
+
+assert_returns_0 "github_ref: refs/heads/main"                validate_github_ref "refs/heads/main"
+assert_returns_0 "github_ref: refs/heads/feature/branch"      validate_github_ref "refs/heads/feature/branch"
+assert_returns_0 "github_ref: refs/tags/v1.0.0"               validate_github_ref "refs/tags/v1.0.0"
+assert_returns_0 "github_ref: refs/pull/123/merge"            validate_github_ref "refs/pull/123/merge"
+assert_returns_0 "github_ref: refs/pull/456/head"             validate_github_ref "refs/pull/456/head"
+assert_returns_0 "github_ref: branch shorthand main"           validate_github_ref "main"
+assert_returns_0 "github_ref: branch shorthand feature/foo"   validate_github_ref "feature/foo"
+assert_returns_1 "github_ref: empty"                           validate_github_ref ""
+assert_returns_1 "github_ref: control chars"                   validate_github_ref $'refs/heads/main\necho injected'
+assert_returns_1 "github_ref: shell metachar \$("             validate_github_ref 'refs/heads/$(id)'
+assert_returns_1 "github_ref: double dots"                     validate_github_ref "refs/heads/../../../etc/passwd"
+assert_returns_1 "github_ref: starts with hyphen"              validate_github_ref "-f /etc/passwd"
+assert_returns_1 "github_ref: @{ sequence"                     validate_github_ref "refs/heads/foo@{bad}"
+assert_returns_1 "github_ref: tilde"                           validate_github_ref "refs/heads/main~1"
+assert_returns_1 "github_ref: caret"                           validate_github_ref "refs/heads/main^"
+
+echo ""
+
+# ============================================
 # Summary
 # ============================================
 printf '%s\n' "============================================"
