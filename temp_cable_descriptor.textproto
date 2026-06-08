@@ -1,0 +1,36 @@
+graph_templates {
+  key: "1xbh_galaxy"
+  value {
+    children {
+      name: "node_0"
+      node_ref { node_descriptor: "BH_GALAXY_REV_C" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 1 } port_b { path: "node_0" tray_id: 3 port_id: 1 } }
+        connections { port_a { path: "node_0" tray_id: 2 port_id: 1 } port_b { path: "node_0" tray_id: 4 port_id: 1 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 2 } port_b { path: "node_0" tray_id: 3 port_id: 2 } }
+        connections { port_a { path: "node_0" tray_id: 2 port_id: 2 } port_b { path: "node_0" tray_id: 4 port_id: 2 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 3 } port_b { path: "node_0" tray_id: 2 port_id: 3 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 4 } port_b { path: "node_0" tray_id: 2 port_id: 4 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 9 } port_b { path: "node_0" tray_id: 2 port_id: 9 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 9 } port_b { path: "node_0" tray_id: 4 port_id: 9 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 3 } port_b { path: "node_0" tray_id: 4 port_id: 3 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 4 } port_b { path: "node_0" tray_id: 4 port_id: 4 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 13 } port_b { path: "node_0" tray_id: 2 port_id: 13 } }
+        connections { port_a { path: "node_0" tray_id: 3 port_id: 13 } port_b { path: "node_0" tray_id: 4 port_id: 13 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 10 } port_b { path: "node_0" tray_id: 3 port_id: 10 } }
+        connections { port_a { path: "node_0" tray_id: 2 port_id: 10 } port_b { path: "node_0" tray_id: 4 port_id: 10 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 14 } port_b { path: "node_0" tray_id: 3 port_id: 14 } }
+        connections { port_a { path: "node_0" tray_id: 2 port_id: 14 } port_b { path: "node_0" tray_id: 4 port_id: 14 } }
+        connections { port_a { path: "node_0" tray_id: 1 port_id: 5 } port_b { path: "node_0" tray_id: 3 port_id: 5 } }
+        connections { port_a { path: "node_0" tray_id: 2 port_id: 5 } port_b { path: "node_0" tray_id: 4 port_id: 5 } }
+      }
+    }
+  }
+}
+
+root_instance {
+  template_name: "1xbh_galaxy" child_mappings { key: "node_0" value { host_id: 0 } }
+}
