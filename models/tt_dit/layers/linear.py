@@ -449,6 +449,8 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "gelu_tanh":
         return gelu_tanh(t)
+    if activation_fn == "gelu_exact":
+        return ttnn.gelu(t, fast_and_approximate_mode=False)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
