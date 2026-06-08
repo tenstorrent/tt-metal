@@ -157,6 +157,12 @@ def cmd_init(args: argparse.Namespace) -> None:
         "kernel": args.kernel,
         "kernel_type": args.kernel_type,
         "arch": args.arch,
+        # Semantic version of the pipeline that produced this run. Optional and
+        # additive: callers that do not pass --version (e.g. the Quasar codegen
+        # orchestrator) get null, exactly as before. The issue solver passes its
+        # own issue-solver-local version. Rendered as a colored pill by the
+        # dashboard's renderVersionTag(); null shows the grey "unversioned" badge.
+        "version": args.version,
         "reference_arch": args.reference_arch,
         "reference_file": args.reference_file,
         "generated_file": args.generated_file,
@@ -511,6 +517,14 @@ def _build_parser() -> argparse.ArgumentParser:
     init.add_argument("--kernel", required=True)
     init.add_argument("--kernel-type", default="")
     init.add_argument("--arch", required=True)
+    init.add_argument(
+        "--version",
+        default=None,
+        help=(
+            "Semantic version (major.minor.patch) of the pipeline producing this "
+            "run. Optional; defaults to null. Quasar codegen omits it."
+        ),
+    )
     init.add_argument("--reference-arch", default=None)
     init.add_argument("--reference-file", default=None)
     init.add_argument("--generated-file", default=None)
