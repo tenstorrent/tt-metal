@@ -63,6 +63,15 @@ DeviceAddr pages_sent_drisc_l1_base(const GlobalCircularBuffer& gcb);
 // local pages_sent counter lives. Zero for worker-sender GCBs.
 DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 
+// DRISC L1 base of the per-GCB "sender state block" — the RemoteSenderCBInterface
+// bytes (including the fifo_wr_ptr that persists across requests), the sender config
+// block, and the receiver NOC XY table. Pre-written by the GCB constructor on every
+// (device, sender_core). The DRAM-core prefetcher kernel loads this block into its
+// static cb_interface slot on each request that targets this GCB, runs the chunk loop,
+// and writes fifo_wr_ptr back so the ring offset survives multi-GCB request switching.
+// Layout: tt_metal/impl/buffers/dram_sender_state_block.hpp. Zero for worker-sender GCBs.
+DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
+
 // Physical worker NOC XY for each sender's receivers. The DRISC kernel uses these as
 // runtime args. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);

@@ -69,6 +69,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/common_tensor_test_utils.cpp
     tensor/test_create_tensor.cpp
     tensor/test_create_tensor_multi_device.cpp
+    tensor/test_h2d_stream_service.cpp
     tensor/test_create_tensor_with_layout.cpp
     tensor/test_device_storage_ownership.cpp
     tensor/test_tensor_deallocation.cpp

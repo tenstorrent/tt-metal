@@ -89,6 +89,7 @@ jobs:
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -97,7 +98,7 @@ jobs:
         run: git config --global --add safe.directory ${{ github.workspace }}
 
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
       - id: compute-outputs
         shell: bash

@@ -56,7 +56,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 # Constants and Expected Metrics
 # =============================================================================
 
-# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only)
+# Expected accuracy metrics from centralized targets for Llama-3.1-8B (top1, top5 only)
 # Performance metrics (tok_s_u, ttft_ms) are collected dynamically by running
 # simple_text_demo.py with the corresponding test case to get real baseline values.
 # Higher is better for tok_s_u, top1, top5
@@ -93,7 +93,7 @@ def collect_baseline_from_simple_text_demo(
 
     This provides an accurate comparison by measuring TTTv1 MLP performance
     on the same hardware under the same conditions, rather than relying on
-    potentially outdated PERF.md values.
+    potentially outdated markdown reference values.
 
     Args:
         device_name: Device name (N150, N300, T3K)
@@ -290,7 +290,7 @@ def validate_metrics(measured: dict, expected: dict, tolerance: float = PERF_TOL
     Validate measured metrics against expected values with tolerance.
 
     For performance tests: expected comes from simple_text_demo.py baseline (tok_s_u, ttft_ms).
-    For accuracy tests: expected comes from PERF.md (top1, top5).
+    For accuracy tests: expected comes from centralized model targets (top1, top5).
 
     Returns:
         (passed, message) tuple
@@ -482,7 +482,7 @@ def test_mlp1d_llama_demo(
     1. Creates the TT model with MLP layers replaced by MLP1D
     2. Runs prefill and decode inference
     3. Measures performance (TTFT, tok/s/u) and/or accuracy (Top-1, Top-5)
-    4. Validates results against PERF.md targets
+    4. Validates results against centralized targets
     """
     test_id = request.node.callspec.id
 
@@ -778,16 +778,16 @@ def test_mlp1d_llama_demo(
 
     # --- Validate Against Baseline ---
     # Performance metrics (tok_s_u, ttft_ms): MUST come from simple_text_demo.py baseline.
-    # Accuracy metrics (top1, top5): ONLY from PERF.md (for token-accuracy tests).
+    # Accuracy metrics (top1, top5): centralized targets source for token-accuracy tests.
     # Baselines are collected at module load time, before any test opens mesh_device.
     baseline_metrics = _get_cached_baseline(device_name, batch_size, opt_mode)
 
     if measure_accuracy:
-        # Token-accuracy tests: use PERF.md for top1/top5 only
-        baseline_source = "PERF.md"
+        # Token-accuracy tests: use centralized targets for top1/top5 only
+        baseline_source = "models/model_targets.yaml"
         perf_md_metrics = EXPECTED_METRICS.get(opt_mode, {}).get(device_name, {})
         expected_for_validation = {k: v for k, v in perf_md_metrics.items() if k in ("top1", "top5")}
-        logger.info("Token-accuracy test runs without trace - validating top1/top5 from PERF.md only")
+        logger.info("Token-accuracy test runs without trace - validating top1/top5 from model_targets.yaml only")
     else:
         # Performance tests: MUST use baseline from simple_text_demo.py
         assert baseline_metrics is not None, (

@@ -287,6 +287,8 @@ void kernel_main() {
     constexpr uint32_t tokens = get_named_compile_time_arg_val("tokens");
     constexpr uint32_t remote_counts_entry_size = get_named_compile_time_arg_val("remote_counts_entry_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
+    constexpr uint32_t experts_per_device = get_named_compile_time_arg_val("experts_per_device");
+
     constexpr uint32_t selected_experts_k = get_named_compile_time_arg_val("selected_experts_k");
 
     // Chunk info
@@ -402,8 +404,6 @@ void kernel_main() {
 
     // Constants
     constexpr uint32_t one_page = 1;
-
-    constexpr uint32_t experts_per_device = (experts + num_devices - 1) / num_devices;
 
     // Size of e_t buffer for all experts (for multicast)
     constexpr uint32_t e_t_buffer_total_size = experts_per_device * (tokens + 1) * e_t_entry_size;
