@@ -315,6 +315,21 @@ class _E2EDenoiseTrace:
                 "mask buffer; call release() and let the next generate() re-capture for this prompt."
             )
 
+    def copy_condition_buffers(
+        self,
+        *,
+        enc_tt_pipe: ttnn.Tensor,
+        ctx_tt_pipe: ttnn.Tensor,
+        encoder_attention_mask_b1qk: Optional[ttnn.Tensor] = None,
+    ) -> None:
+        """Mid-loop cover→non-cover switch: refresh persistent enc/ctx (and mask) buffers."""
+        if not self.has_buffers():
+            return
+        ttnn.copy(enc_tt_pipe, self.enc_buf)
+        ttnn.copy(ctx_tt_pipe, self.ctx_buf)
+        if self.mask_buf is not None and encoder_attention_mask_b1qk is not None:
+            ttnn.copy(encoder_attention_mask_b1qk, self.mask_buf)
+
     def capture(
         self,
         *,
@@ -761,6 +776,11 @@ def run_ttnn_denoise_loop(
     trace_state: Optional[_E2EDenoiseTrace] = None,
     temb_per_step: Optional[list] = None,
     tp_per_step: Optional[list] = None,
+    audio_cover_strength: float = 1.0,
+    enc_tt_pipe_non_cover: Optional[ttnn.Tensor] = None,
+    ctx_tt_pipe_non_cover: Optional[ttnn.Tensor] = None,
+    encoder_attention_mask_b1qk_non_cover: Optional[ttnn.Tensor] = None,
+    enc_mask_non_cover: Optional[Union[torch.Tensor, np.ndarray]] = None,
 ) -> Union[torch.Tensor, ttnn.Tensor]:
     """Run the TTNN DiT denoising loop (latents stay on device; Euler + APG/ADG).
 
@@ -819,6 +839,13 @@ def run_ttnn_denoise_loop(
             of host-driven dispatch on every ``generate``.
         tp_per_step: Companion to *temb_per_step* — per-step ``timestep_proj_b6d`` device
             tensors (ROW_MAJOR layout, as :meth:`AceStepV15TTNNPipeline.compute_temb_tp` returns).
+        audio_cover_strength: Official turbo cover blend (0–1). When ``< 1.0`` and non-cover
+            tensors are provided, denoise switches from cover (LM hints) to text2music ctx at
+            ``int(num_steps * strength)``.
+        enc_tt_pipe_non_cover: Pre-built non-cover encoder hidden states (same layout as *enc_tt_pipe*).
+        ctx_tt_pipe_non_cover: Pre-built non-cover context latents (silence + SFT text).
+        encoder_attention_mask_b1qk_non_cover: Optional SDPA mask for non-cover conditioning.
+        enc_mask_non_cover: Host encoder mask ``[B,S]`` for non-cover when b1qk mask is not used.
 
     Returns:
 
@@ -1039,6 +1066,53 @@ def run_ttnn_denoise_loop(
     _trace_op_event = None  # set lazily on first replay or capture.
     xt_host: torch.Tensor | None = None
     _xt_tile_buf: ttnn.Tensor | None = None
+
+    cover_steps = 0
+    _switched_to_non_cover = False
+    _enc_cover_hold = enc_tt_pipe if prebuilt else None
+    _ctx_cover_hold = ctx_tt_pipe if prebuilt else None
+    _mask_cover_hold = encoder_attention_mask_b1qk
+    _enc_attn_np_cover = encoder_attn_1d_bk_np
+    if float(audio_cover_strength) < 1.0 and enc_tt_pipe_non_cover is not None and ctx_tt_pipe_non_cover is not None:
+        cover_steps = int(num_steps * float(audio_cover_strength))
+        if cover_steps > 0:
+            print(
+                f"[ace_step_v1_5] audio_cover_strength={float(audio_cover_strength):g}: "
+                f"cover ctx for steps 1–{cover_steps}, then text2music",
+                flush=True,
+            )
+
+    def _maybe_switch_to_non_cover(*, step_idx: int) -> None:
+        nonlocal enc_tt_pipe, ctx_tt_pipe, encoder_attention_mask_b1qk, encoder_attn_1d_bk_np
+        nonlocal _switched_to_non_cover
+        if _switched_to_non_cover or cover_steps <= 0:
+            return
+        if int(step_idx) < cover_steps:
+            return
+        _switched_to_non_cover = True
+        enc_tt_pipe = enc_tt_pipe_non_cover
+        ctx_tt_pipe = ctx_tt_pipe_non_cover
+        if encoder_attention_mask_b1qk_non_cover is not None:
+            encoder_attention_mask_b1qk = encoder_attention_mask_b1qk_non_cover
+        elif enc_mask_non_cover is not None:
+            if isinstance(enc_mask_non_cover, np.ndarray):
+                encoder_keep_nc = np.asarray(enc_mask_non_cover, dtype=np.float32)
+            else:
+                encoder_keep_nc = np.asarray(enc_mask_non_cover.detach().cpu().numpy(), dtype=np.float32)
+            encoder_keep_nc = (encoder_keep_nc > np.float32(0.0)).astype(np.bool_)
+            encoder_attn_1d_bk_np = (
+                np.concatenate([encoder_keep_nc, encoder_keep_nc], axis=0) if do_cfg else encoder_keep_nc
+            )
+        if trace_state is not None and trace_state.has_buffers():
+            trace_state.copy_condition_buffers(
+                enc_tt_pipe=enc_tt_pipe,
+                ctx_tt_pipe=ctx_tt_pipe,
+                encoder_attention_mask_b1qk=encoder_attention_mask_b1qk,
+            )
+        print(
+            f"[ace_step_v1_5] denoise: switched to non-cover ctx at step {int(step_idx) + 1}/{num_steps}",
+            flush=True,
+        )
 
     def _safe_dealloc_tt(t: ttnn.Tensor | None) -> None:
         if t is None:
@@ -1539,6 +1613,7 @@ def run_ttnn_denoise_loop(
         )
 
     def _iterate(*, step_idx: int, t_curr_f: float, euler_dt: float) -> None:
+        _maybe_switch_to_non_cover(step_idx=int(step_idx))
         if trace_state is None:
             _diffusion_iterate(step_idx=step_idx, t_curr_f=t_curr_f, euler_dt=euler_dt)
             return
@@ -1584,9 +1659,28 @@ def run_ttnn_denoise_loop(
     _ace_step_flush_device_profiler(device)
 
     try:
-        ttnn.deallocate(enc_tt_pipe)
+        if _enc_cover_hold is not None and _enc_cover_hold is not enc_tt_pipe:
+            ttnn.deallocate(_enc_cover_hold)
+        elif enc_tt_pipe is not None:
+            ttnn.deallocate(enc_tt_pipe)
+        if enc_tt_pipe_non_cover is not None and enc_tt_pipe_non_cover is not enc_tt_pipe:
+            ttnn.deallocate(enc_tt_pipe_non_cover)
         if deallocate_ctx_latents:
-            ttnn.deallocate(ctx_tt_pipe)
+            if _ctx_cover_hold is not None and _ctx_cover_hold is not ctx_tt_pipe:
+                ttnn.deallocate(_ctx_cover_hold)
+            elif ctx_tt_pipe is not None:
+                ttnn.deallocate(ctx_tt_pipe)
+            if ctx_tt_pipe_non_cover is not None and ctx_tt_pipe_non_cover is not ctx_tt_pipe:
+                ttnn.deallocate(ctx_tt_pipe_non_cover)
+        if _mask_cover_hold is not None and _mask_cover_hold is not encoder_attention_mask_b1qk:
+            if deallocate_encoder_mask:
+                ttnn.deallocate(_mask_cover_hold)
+        if (
+            encoder_attention_mask_b1qk_non_cover is not None
+            and encoder_attention_mask_b1qk_non_cover is not encoder_attention_mask_b1qk
+            and deallocate_encoder_mask
+        ):
+            ttnn.deallocate(encoder_attention_mask_b1qk_non_cover)
         if encoder_attention_mask_b1qk is not None and deallocate_encoder_mask:
             ttnn.deallocate(encoder_attention_mask_b1qk)
     except Exception:

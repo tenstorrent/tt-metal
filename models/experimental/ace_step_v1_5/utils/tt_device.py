@@ -78,6 +78,43 @@ def ace_step_mesh_use_host_cfg_euler(device: Any) -> bool:
     return ace_step_device_num_chips(device) > 1
 
 
+def ace_step_mesh_use_pytorch_dit(
+    *,
+    mesh_sku: str | None,
+    duration_sec: float,
+    latent_frames: int,
+) -> bool:
+    """Opt-in HF PyTorch DiT denoise (``ACE_STEP_PYTORCH_DIT=1``) for A/B vs TTNN.
+
+    Default demo path uses TTNN DiT with long/ultra-long clip quality presets on mesh.
+    """
+    del mesh_sku, duration_sec, latent_frames
+    import os
+
+    env = os.environ.get("ACE_STEP_PYTORCH_DIT", "")
+    return env.lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_mesh_use_pytorch_condition(
+    *,
+    mesh_sku: str | None,
+    duration_sec: float,
+    latent_frames: int,
+) -> bool:
+    """Opt-in HF ``prepare_condition`` (``ACE_STEP_PYTORCH_CONDITION=1``) for A/B vs TTNN."""
+    del mesh_sku, duration_sec, latent_frames
+    import os
+
+    env = os.environ.get("ACE_STEP_PYTORCH_CONDITION", "")
+    return env.lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_lm_hint_ctx_blend(*, latent_frames: int) -> float:
+    """Deprecated: hint blending removed; use ``audio_cover_strength`` denoise switch instead."""
+    del latent_frames
+    return 1.0
+
+
 def ace_step_resolve_vae_tiling(
     *,
     frames: int,
@@ -92,8 +129,8 @@ def ace_step_resolve_vae_tiling(
     on_mesh = mesh_sku is not None and ace_step_needs_split_device(mesh_sku)
     if on_mesh:
         # 15 s @ 25 Hz ≈ 375 frames → ~16 tiles at overlap=4; wider overlap reduces boundary artifacts.
-        if frames_i >= 1000 and overlap < 14:
-            overlap = 14
+        if frames_i >= 1000 and overlap < 15:
+            overlap = 15
         elif frames_i >= 750 and overlap < 14:
             overlap = 14
         elif frames_i >= 400 and overlap < 12:

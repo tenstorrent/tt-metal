@@ -1654,6 +1654,12 @@ class LocalFiveHzLMHandler:
                 logger.info("Phase 1: Using user-provided metadata (skipping generation)")
             metadata = {k: v for k, v in user_metadata.items() if v is not None}
 
+        # Caller-requested duration wins over CoT metadata so phase-2 code generation
+        # and the embedded CoT YAML stay aligned (avoids ~15 s / 75-code clips when
+        # CoT guessed a shorter duration than --duration_sec).
+        if target_duration is not None and float(target_duration) > 0:
+            metadata["duration"] = int(round(float(target_duration)))
+
         # When the caller did not supply an explicit target_duration, use the
         # duration that Phase 1 (CoT) produced so that Phase 2 code generation
         # is properly constrained.  Without this, a null API duration lets
@@ -1707,6 +1713,16 @@ class LocalFiveHzLMHandler:
         else:
             logger.info("Phase 2: Generating audio codes...")
         phase2_start = time.time()
+
+        if target_duration is not None and float(target_duration) > 0:
+            td = float(target_duration)
+            tc = int(td * 5)
+            print(
+                f"[ace_step_v1_5] Phase 2 audio codes: target_duration={td:g}s " f"(expect {tc} codes @ 5 Hz)",
+                flush=True,
+            )
+            if self.constrained_processor is not None:
+                self.constrained_processor.set_target_duration(td)
 
         # Format metadata as CoT using YAML (matching training format)
         cot_text = self._format_metadata_as_cot(metadata)

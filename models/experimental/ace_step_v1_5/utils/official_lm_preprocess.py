@@ -88,6 +88,114 @@ def condition_encode_tt(
     return condition_encoder.forward(text_hidden_tt, attn_mask_np)
 
 
+def _code_window_unique_ratio(codes: list[int], start: int, window: int) -> float:
+    chunk = codes[start : start + window]
+    if not chunk:
+        return 0.0
+    return float(len(set(chunk))) / float(len(chunk))
+
+
+def find_degenerate_code_prefix_len(codes: list[int], *, window: int = 25) -> int | None:
+    """Return code index where the stream collapses into filler/repeats; ``None`` if healthy."""
+    if len(codes) < 2 * window:
+        return None
+    head_ratio = _code_window_unique_ratio(codes, 0, window)
+    if head_ratio < 0.12:
+        return None
+    collapse_ratio = max(0.06, head_ratio * 0.35)
+    step = max(1, window // 2)
+    for start in range(window, len(codes) - window + 1, step):
+        cur = codes[start : start + window]
+        prev = codes[start - window : start]
+        if cur == prev:
+            return start
+        ratio = _code_window_unique_ratio(codes, start, window)
+        if ratio >= collapse_ratio:
+            continue
+        next_start = start + window
+        if next_start + window <= len(codes):
+            next_ratio = _code_window_unique_ratio(codes, next_start, window)
+            if next_ratio >= collapse_ratio:
+                continue
+        return max(window, start)
+    return None
+
+
+def repair_degenerate_lm_hint_tail(
+    payload: dict[str, Any],
+    code_string: str,
+    target_frames: int,
+    *,
+    min_good_codes: int = 50,
+) -> None:
+    """Silence-pad hint tail when LM fills to target with low-quality / repetitive codes."""
+    from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
+
+    hints = payload.get("precomputed_lm_hints_25Hz")
+    sil = payload.get("silence_latent")
+    if hints is None or sil is None:
+        return
+    codes = parse_audio_code_string(str(code_string or ""))
+    window = 25
+    if len(codes) < min_good_codes + window:
+        return
+    prefix_len = find_degenerate_code_prefix_len(codes)
+    if prefix_len is None or prefix_len < min_good_codes:
+        return
+    if prefix_len >= int(len(codes) * 0.85):
+        return
+
+    target = int(target_frames)
+    good_frames = int(prefix_len * 5)
+    if good_frames <= 0 or good_frames >= target:
+        return
+
+    if hints.dim() == 2:
+        hints = hints.unsqueeze(0)
+    pad = sil
+    if pad.dim() == 2:
+        pad = pad.unsqueeze(0)
+    pad_chunk = pad[:, : target - good_frames, :]
+    if pad_chunk.device != hints.device or pad_chunk.dtype != hints.dtype:
+        pad_chunk = pad_chunk.to(device=hints.device, dtype=hints.dtype)
+    repaired = torch.cat([hints[:, :good_frames, :], pad_chunk], dim=1)
+    if hasattr(repaired, "contiguous"):
+        repaired = repaired.contiguous()
+    payload["precomputed_lm_hints_25Hz"] = repaired
+    print(
+        f"[ace_step_v1_5] LM code stream degenerates after ~{prefix_len} codes "
+        f"(≈{prefix_len / 5.0:.1f}s): hint tail silence-padded "
+        f"({good_frames}→{target} frames) — garbage tail codes sound like noise in ctx",
+        flush=True,
+    )
+
+
+def build_non_cover_condition_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Mirror official turbo ``prepare_condition`` non-cover branch (silence ctx, SFT text prompt)."""
+    nc_text = payload.get("non_cover_text_hidden_states")
+    if nc_text is None:
+        return None
+    sil = payload.get("silence_latent")
+    src = payload["src_latents"]
+    if sil is None:
+        return None
+    sil_exp = sil[:, : src.shape[1], :].expand(src.shape[0], -1, -1)
+    if hasattr(sil_exp, "clone"):
+        sil_exp = sil_exp.clone()
+    is_covers = payload["is_covers"]
+    if hasattr(is_covers, "new_zeros"):
+        non_is_covers = is_covers.new_zeros(is_covers.shape)
+    else:
+        non_is_covers = np.zeros_like(np.asarray(is_covers))
+    nc_payload = dict(payload)
+    nc_payload["text_hidden_states"] = nc_text
+    nc_payload["text_attention_mask"] = payload["non_cover_text_attention_masks"]
+    nc_payload["src_latents"] = sil_exp
+    nc_payload["is_covers"] = non_is_covers
+    nc_payload["precomputed_lm_hints_25Hz"] = None
+    return nc_payload
+
+
 def condition_encode_payload_tt(
     condition_encoder: Any,
     payload: dict,
@@ -231,6 +339,20 @@ def attach_payload_preprocess_ttnn(
         return out.to(device=target_device, dtype=dtype)
 
     def _decode_replacement(code_str: str):
+        from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
+        from models.experimental.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_detok_chunk_n
+
+        n_codes = len(parse_audio_code_string(code_str or ""))
+        chunk_n = ace_step_detok_chunk_n()
+        if n_codes > chunk_n and orig_decode is not None:
+            # TTNN detokenizer cannot fit >chunk_n codes in L1; chunked TTNN has no cross-chunk
+            # attention. HF PyTorch path preserves global attention for 60 s+ clips.
+            print(
+                f"[ace_step_v1_5] detokenizer: {n_codes} audio codes > TTNN L1 chunk {chunk_n} "
+                "→ HF PyTorch detokenizer",
+                flush=True,
+            )
+            return orig_decode(code_str)
         if tt_audio_detokenizer is None:
             if orig_decode is None:
                 return None
@@ -393,11 +515,15 @@ def build_filtered_dit_kwargs_for_handler(
             time_sig_clean = time_signature.strip()
             if time_sig_clean.lower() not in ["n/a", ""]:
                 user_metadata["timesignature"] = time_sig_clean
+        requested_duration_sec: float | None = None
         if audio_duration is not None:
             try:
                 duration_value = float(audio_duration)
                 if duration_value > 0:
-                    user_metadata["duration"] = int(duration_value)
+                    requested_duration_sec = float(duration_value)
+                    # Pin duration only — do not pre-fill bpm/key/timesig or Phase 1 CoT is skipped
+                    # (has_all_metas) and caption/language refinement is lost vs the June benchmark path.
+                    user_metadata["duration"] = int(round(duration_value))
             except (ValueError, TypeError):
                 pass
         user_metadata_to_pass = user_metadata if user_metadata else None
@@ -431,7 +557,8 @@ def build_filtered_dit_kwargs_for_handler(
                 negative_prompt=params.lm_negative_prompt,
                 top_k=top_k_value,
                 top_p=top_p_value,
-                target_duration=audio_duration,
+                repetition_penalty=float(getattr(params, "lm_repetition_penalty", 1.0)),
+                target_duration=requested_duration_sec if requested_duration_sec is not None else audio_duration,
                 user_metadata=user_metadata_to_pass,
                 use_cot_caption=params.use_cot_caption,
                 use_cot_language=params.use_cot_language,
@@ -457,6 +584,30 @@ def build_filtered_dit_kwargs_for_handler(
                 audio_codes = result.get("audio_codes", "")
                 all_metadata_list.append(metadata)
                 all_audio_codes_list.append(audio_codes)
+
+            if requested_duration_sec is not None and infer_type == "llm_dit":
+                from models.experimental.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
+
+                codes_str = (
+                    all_audio_codes_list[-1]
+                    if all_audio_codes_list and isinstance(all_audio_codes_list[-1], str)
+                    else ""
+                )
+                n_codes = len(parse_audio_code_string(str(codes_str or "")))
+                expected_codes = max(1, int(round(requested_duration_sec * 5.0)))
+                print(
+                    f"[ace_step_v1_5] LM audio codes: {n_codes} (expect~{expected_codes} for "
+                    f"{requested_duration_sec:g}s)",
+                    flush=True,
+                )
+                if n_codes + 2 < expected_codes:
+                    print(
+                        f"[ace_step_v1_5] WARNING: LM produced only {n_codes}/{expected_codes} audio codes for "
+                        f"{requested_duration_sec:g}s — DiT duration will be clamped to ~{n_codes / 5.0:.1f}s. "
+                        "Check logs for 'Phase 1: Using user-provided metadata' and "
+                        f"'Phase 2 audio codes: target_duration={requested_duration_sec:g}s'.",
+                        flush=True,
+                    )
 
             lm_extra = result.get("extra_outputs", {})
             lm_chunk_time_costs = lm_extra.get("time_costs", {})
@@ -729,27 +880,25 @@ def handler_prepare_condition_payload(
     )
     processed = dit_handler.preprocess_batch(batch)
     payload = dit_handler._unpack_service_processed_data(processed)
+    payload["silence_latent"] = dit_handler.silence_latent
 
     frames = int(payload["src_latents"].shape[1])
+    repair_degenerate_lm_hint_tail(
+        payload,
+        str(filtered_generate_kwargs.get("audio_code_string") or ""),
+        int(frames),
+    )
     return payload, frames
 
 
-def handler_prepare_condition_tensors(
+def handler_prepare_condition_from_payload(
     dit_handler: Any,
-    filtered_generate_kwargs: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    frames: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
-    """
-    Run the same early path as ``AceStepHandler.generate_music`` through
-    ``preprocess_batch`` and ``model.prepare_condition`` (no diffusion).
-    """
-    payload, frames = handler_prepare_condition_payload(dit_handler, filtered_generate_kwargs)
-
-    dit_backend = (
-        "MLX (native)"
-        if (getattr(dit_handler, "use_mlx_dit", False) and getattr(dit_handler, "mlx_decoder", None) is not None)
-        else f"PyTorch ({dit_handler.device})"
-    )
-    logger.info(f"[service_generate] Generating audio... (DiT backend: {dit_backend})")
+    """PyTorch ``prepare_condition`` from an existing preprocess payload (no second LM pass)."""
+    frames_i = int(frames if frames is not None else payload["src_latents"].shape[1])
     with torch.inference_mode():
         enc_hs, enc_mask, ctx = dit_handler.model.prepare_condition(
             text_hidden_states=payload["text_hidden_states"],
@@ -781,4 +930,23 @@ def handler_prepare_condition_tensors(
     ctx = ctx.detach().float().cpu()
     null_emb = null_emb.detach().float().cpu()
 
-    return enc_hs, enc_mask, ctx, frames, null_emb
+    return enc_hs, enc_mask, ctx, frames_i, null_emb
+
+
+def handler_prepare_condition_tensors(
+    dit_handler: Any,
+    filtered_generate_kwargs: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
+    """
+    Run the same early path as ``AceStepHandler.generate_music`` through
+    ``preprocess_batch`` and ``model.prepare_condition`` (no diffusion).
+    """
+    payload, frames = handler_prepare_condition_payload(dit_handler, filtered_generate_kwargs)
+
+    dit_backend = (
+        "MLX (native)"
+        if (getattr(dit_handler, "use_mlx_dit", False) and getattr(dit_handler, "mlx_decoder", None) is not None)
+        else f"PyTorch ({dit_handler.device})"
+    )
+    logger.info(f"[service_generate] Generating audio... (DiT backend: {dit_backend})")
+    return handler_prepare_condition_from_payload(dit_handler, payload, frames=int(frames))

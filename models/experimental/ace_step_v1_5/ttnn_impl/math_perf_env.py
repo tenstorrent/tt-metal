@@ -1251,6 +1251,99 @@ def ace_step_init_hifi2_linear_fp32acc_compute_kernel_config(device: Any):
     )
 
 
+def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
+    """HiFi4 linear config — ultra-long DiT clip quality preset."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def ace_step_init_hifi4_linear_fp32acc_compute_kernel_config(device: Any):
+    """HiFi4 linears with fp32 dest accumulation — ultra-long (>=45s) DiT quality preset."""
+    import ttnn
+
+    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+    if not callable(init_ck):
+        return None
+    return init_ck(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+# Max audio codes per TTNN detokenizer forward on 1×1 BH (L1 budget). 30 s @ 5 Hz = 150 codes
+# fits; ~200 is the practical ceiling before SDPA/concat_heads OOM. Longer streams use the HF
+# PyTorch detokenizer (global attention) via ``official_lm_preprocess``.
+ACE_STEP_DETOK_L1_CHUNK_CODES = 200
+
+
+def ace_step_expected_audio_code_count(duration_sec: float) -> int:
+    """Approximate 5 Hz LM audio-code count for *duration_sec* (rounded)."""
+    return max(1, int(round(float(duration_sec) * 5.0)))
+
+
+def ace_step_audio_code_limit_for_duration(duration_sec: float) -> int:
+    """Trace/planning cap with headroom for CoT/metadata beyond strict duration×5."""
+    expected = ace_step_expected_audio_code_count(duration_sec)
+    return max(ACE_STEP_DETOK_L1_CHUNK_CODES, expected + 50)
+
+
+def ace_step_detok_chunk_n() -> int:
+    """Max audio codes per TTNN detokenizer forward (L1-safe; default 200)."""
+    try:
+        return max(1, int(os.environ.get("ACE_STEP_DETOK_CHUNK_CODES", str(ACE_STEP_DETOK_L1_CHUNK_CODES))))
+    except ValueError:
+        return ACE_STEP_DETOK_L1_CHUNK_CODES
+
+
+def ace_step_configure_audio_code_limits(duration_sec: float) -> int:
+    """Ensure ``ACE_STEP_MAX_AUDIO_CODES`` covers the LM stream for *duration_sec*.
+
+    Only ``ACE_STEP_MAX_AUDIO_CODES`` is auto-set. ``ACE_STEP_DETOK_CHUNK_CODES`` stays at
+    the L1-safe default (200): raising it causes TTNN OOM on ~300-code 60 s forwards.
+    Streams longer than the chunk cap use the HF PyTorch detokenizer instead.
+    """
+    limit = ace_step_audio_code_limit_for_duration(duration_sec)
+    configured = False
+    if "ACE_STEP_MAX_AUDIO_CODES" not in os.environ:
+        os.environ["ACE_STEP_MAX_AUDIO_CODES"] = str(limit)
+        configured = True
+    active = int(os.environ.get("ACE_STEP_MAX_AUDIO_CODES", str(limit)))
+    chunk = ace_step_detok_chunk_n()
+    expected = ace_step_expected_audio_code_count(duration_sec)
+    if configured:
+        print(
+            f"[ace_step_v1_5] audio code limits: ACE_STEP_MAX_AUDIO_CODES={active} "
+            f"(detok TTNN chunk={chunk}, duration={float(duration_sec):g}s)",
+            flush=True,
+        )
+        if expected > chunk:
+            print(
+                f"[ace_step_v1_5] note: expect~{expected} audio codes → HF PyTorch detokenizer "
+                f"(TTNN chunk cap {chunk} for L1)",
+                flush=True,
+            )
+    elif active < expected:
+        print(
+            f"[ace_step_v1_5] WARNING: ACE_STEP_MAX_AUDIO_CODES={active} may be low for "
+            f"{float(duration_sec):g}s (expect~{expected} codes); unset for auto config",
+            flush=True,
+        )
+    return active
+
+
 def ace_step_dit_long_clip_quality_active() -> bool:
     """True when :func:`ace_step_configure_dit_long_clip_quality` armed the process env."""
     return os.environ.get("ACE_STEP_DIT_LONG_CLIP_QUALITY", "").lower() in ("1", "true", "yes", "on")
@@ -1292,6 +1385,8 @@ def ace_step_configure_dit_long_clip_quality(
         mesh_sku=mesh_sku,
     ):
         return False
+    if ace_step_dit_long_clip_quality_active():
+        return True
     os.environ["ACE_STEP_DIT_LONG_CLIP_QUALITY"] = "1"
     os.environ.pop("ACE_STEP_DIT_BFLOAT4_WEIGHTS", None)
     os.environ.pop("ACE_STEP_DIT_BFLOAT8_ATTN_QO", None)
@@ -1303,20 +1398,118 @@ def ace_step_configure_dit_long_clip_quality(
     return True
 
 
-# def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
-#     """HiFi4 linear config for FLOP-bound projections (condition encoder small-seq linears)."""
-#     import ttnn
+def ace_step_dit_ultra_long_clip_quality_active() -> bool:
+    """True when :func:`ace_step_configure_dit_ultra_long_clip_quality` armed the process env."""
+    return os.environ.get("ACE_STEP_DIT_ULTRA_LONG_CLIP_QUALITY", "").lower() in ("1", "true", "yes", "on")
 
-#     init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-#     if not callable(init_ck):
-#         return None
-#     return init_ck(
-#         device.arch(),
-#         math_fidelity=ttnn.MathFidelity.HiFi4,
-#         math_approx_mode=False,
-#         fp32_dest_acc_en=False,
-#         packer_l1_acc=True,
-#     )
+
+def ace_step_dit_ultra_long_clip_quality_enabled(
+    *,
+    latent_frames: int | None = None,
+    duration_sec: float | None = None,
+    mesh_sku: str | None = None,
+) -> bool:
+    """Default-on for mesh clips >=45 s / >=1125 latent frames (60 s turbo path)."""
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_needs_split_device
+
+    env = os.environ.get("ACE_STEP_DIT_ULTRA_LONG_CLIP_QUALITY", "")
+    if env.lower() in ("0", "false", "no", "off"):
+        return False
+    if env.lower() in ("1", "true", "yes", "on"):
+        return True
+    if mesh_sku is None or not ace_step_needs_split_device(mesh_sku):
+        return False
+    if latent_frames is not None and int(latent_frames) >= 1125:
+        return True
+    if duration_sec is not None and float(duration_sec) >= 45.0:
+        return True
+    return False
+
+
+def ace_step_configure_dit_ultra_long_clip_quality(
+    *,
+    latent_frames: int,
+    duration_sec: float,
+    mesh_sku: str | None,
+) -> bool:
+    """Arm HiFi4+fp32acc DiT compute for >=45s mesh clips (stacks on long-clip preset)."""
+    if not ace_step_dit_ultra_long_clip_quality_enabled(
+        latent_frames=int(latent_frames),
+        duration_sec=float(duration_sec),
+        mesh_sku=mesh_sku,
+    ):
+        return False
+    if ace_step_dit_ultra_long_clip_quality_active():
+        return True
+    ace_step_configure_dit_long_clip_quality(
+        latent_frames=int(latent_frames),
+        duration_sec=float(duration_sec),
+        mesh_sku=mesh_sku,
+    )
+    ace_step_configure_cond_long_clip_quality(
+        latent_frames=int(latent_frames),
+        duration_sec=float(duration_sec),
+        mesh_sku=mesh_sku,
+    )
+    os.environ["ACE_STEP_DIT_ULTRA_LONG_CLIP_QUALITY"] = "1"
+    print(
+        "[ace_step_v1_5] DiT ultra-long quality (>=45s mesh): HiFi4+fp32acc linears, "
+        "HiFi4 RMSNorm, cond fp32acc + TILE ctx upload",
+        flush=True,
+    )
+    return True
+
+
+def ace_step_cond_long_clip_quality_active() -> bool:
+    """True when :func:`ace_step_configure_cond_long_clip_quality` armed the process env."""
+    return os.environ.get("ACE_STEP_COND_LONG_CLIP_QUALITY", "").lower() in ("1", "true", "yes", "on")
+
+
+def ace_step_cond_long_clip_quality_enabled(
+    *,
+    latent_frames: int | None = None,
+    duration_sec: float | None = None,
+    mesh_sku: str | None = None,
+) -> bool:
+    """Default-on for mesh clips >=30 s / >=750 latent frames."""
+    from models.experimental.ace_step_v1_5.utils.tt_device import ace_step_needs_split_device
+
+    env = os.environ.get("ACE_STEP_COND_LONG_CLIP_QUALITY", "")
+    if env.lower() in ("0", "false", "no", "off"):
+        return False
+    if env.lower() in ("1", "true", "yes", "on"):
+        return True
+    if mesh_sku is None or not ace_step_needs_split_device(mesh_sku):
+        return False
+    if latent_frames is not None and int(latent_frames) >= 750:
+        return True
+    if duration_sec is not None and float(duration_sec) >= 30.0:
+        return True
+    return False
+
+
+def ace_step_configure_cond_long_clip_quality(
+    *,
+    latent_frames: int,
+    duration_sec: float,
+    mesh_sku: str | None,
+) -> bool:
+    """Arm fp32acc condition-encoder linears + TILE ctx upload before encoder init."""
+    if not ace_step_cond_long_clip_quality_enabled(
+        latent_frames=int(latent_frames),
+        duration_sec=float(duration_sec),
+        mesh_sku=mesh_sku,
+    ):
+        return False
+    if ace_step_cond_long_clip_quality_active():
+        return True
+    os.environ["ACE_STEP_COND_LONG_CLIP_QUALITY"] = "1"
+    print(
+        "[ace_step_v1_5] condition long-clip quality (>=30s mesh): fp32acc lyric/timbre linears, "
+        "HiFi2 cond RMSNorm, TILE ctx latents",
+        flush=True,
+    )
+    return True
 
 
 def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
@@ -1340,14 +1533,18 @@ def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
 
 
 def ace_step_init_dit_linear_compute_kernel_config(device: Any):
-    """DiT linear compute kernel: LoFi default; HiFi2+fp32acc when long-clip quality is armed."""
+    """DiT linear compute kernel: LoFi default; HiFi2/HiFi4+fp32acc when quality presets armed."""
+    if ace_step_dit_ultra_long_clip_quality_active():
+        return ace_step_init_hifi4_linear_fp32acc_compute_kernel_config(device)
     if ace_step_dit_long_clip_quality_active():
         return ace_step_init_hifi2_linear_fp32acc_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
 def ace_step_init_cond_linear_compute_kernel_config(device: Any):
-    """Condition encoder / lyric / timbre linears: LoFi (same default as DiT)."""
+    """Condition encoder linears: LoFi default; fp32acc dest when long-clip quality is armed."""
+    if ace_step_cond_long_clip_quality_active():
+        return ace_step_init_cond_linear_fp32acc_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
@@ -1813,14 +2010,18 @@ def ace_step_lm_prefill_mlp_ff2_matmul_program_config(
 
 
 def ace_step_init_dit_rmsnorm_compute_kernel_config(device: Any):
-    """RMSNorm compute kernel for DiT blocks: LoFi default; HiFi2 when long-clip quality is armed."""
+    """RMSNorm compute kernel for DiT blocks: LoFi default; HiFi2/HiFi4 when quality presets armed."""
+    if ace_step_dit_ultra_long_clip_quality_active():
+        return ace_step_init_hifi4_linear_compute_kernel_config(device)
     if ace_step_dit_long_clip_quality_active():
         return ace_step_init_hifi2_linear_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 
 def ace_step_init_cond_rmsnorm_compute_kernel_config(device: Any):
-    """RMSNorm compute kernel for condition encoder blocks: LoFi."""
+    """RMSNorm compute kernel for condition encoder blocks: LoFi default; HiFi2 on long clips."""
+    if ace_step_cond_long_clip_quality_active():
+        return ace_step_init_hifi2_linear_compute_kernel_config(device)
     return ace_step_init_lofi_linear_compute_kernel_config(device)
 
 

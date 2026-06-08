@@ -231,7 +231,8 @@ Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam)
 | Variable | Purpose |
 |----------|---------|
 | `ACE_STEP_MESH_DEVICE` / `MESH_DEVICE` | Default mesh SKU if `--mesh-device` omitted |
-| `ACE_STEP_MAX_AUDIO_CODES` | Max LM audio codes for detokenizer (use **350** for 60s) |
+| `ACE_STEP_MAX_AUDIO_CODES` | LM audio-code planning cap (auto **350** for 60s via demo) |
+| `ACE_STEP_DETOK_CHUNK_CODES` | Max codes per TTNN detokenizer forward (default **200**, L1 limit; longer streams use HF PyTorch detokenizer) |
 | `ACE_STEP_VAE_QUALITY=1` | Force BF16 VAE decode on mesh |
 | `ACE_STEP_DEMO_PERF_LOG=1` | Enable `[ace_step_v1_5][perf]` timing tables |
 | `ACE_STEP_DISABLE_WEIGHT_CACHE=1` | Disable in-memory weight reuse |
@@ -241,7 +242,7 @@ Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam)
 
 ```bash
 # Base 60s — long-clip quality (slower)
-export ACE_STEP_MAX_AUDIO_CODES=350
+# Demo auto-sets ACE_STEP_MAX_AUDIO_CODES / ACE_STEP_DETOK_CHUNK_CODES from --duration_sec
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --mesh-device BH_QB --variant acestep-v15-base --lm_variant acestep-5Hz-lm-4B \
   --duration_sec 60 --infer_steps 50 --guidance_scale 7 --clarity \
