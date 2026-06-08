@@ -499,21 +499,24 @@ def _run_chunked_prefill(
     mesh_device,
     *,
     iters_isl,
+    reference="cpu",
     chunk_size_global=5120,
     prefill_len=0,
     num_users=1,
-    want_pcc=True,
     use_pretrained=False,
 ):
-    """Unified chunked-prefill scenario.
+    """Unified chunked-prefill scenario, decoupled from the reference.
 
-    Reference / prefix source is keyed off prefill_len and the trace env:
-      * prefill_len == 0          -> build from scratch; CPU torch reference (if want_pcc).
-      * prefill_len > 0 + trace   -> load prior KV from the GPU trace; reference = trace.
-      * prefill_len > 0, no trace -> random prior fill; functional only (want_pcc must be False).
-    Multi-user partitions iters_isl across users (last gets the remainder); each user is independent
-    in its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
+    `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
+      * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
+                   (rotation) allowed; any prefix is preloaded from the CPU reference KV.
+      * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
+                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset) and full-chunk iters.
+      * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
+    Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
+    its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
     """
+    assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
@@ -525,13 +528,13 @@ def _run_chunked_prefill(
         assert 0 < v <= chunk_size_global and v % tile == 0, f"iter isl {v}: tile-aligned and <= {chunk_size_global}"
     assert prefill_len % tile == 0, f"prefill_len {prefill_len} must be tile-aligned"
 
-    use_trace = DEEPSEEK_MLA_TRACE_DIR is not None and prefill_len > 0
-    random_prefill = prefill_len > 0 and not use_trace
-    if random_prefill and want_pcc:
-        pytest.skip("non-zero prefill with PCC requires DEEPSEEK_MLA_TRACE_DIR (else set want_pcc=False)")
+    use_trace = reference == "trace"
     if use_trace:
-        assert all(v == chunk_size_global for v in iters_isl), "trace mode requires full-chunk iters"
+        if DEEPSEEK_MLA_TRACE_DIR is None:
+            pytest.skip("reference='trace' requires DEEPSEEK_MLA_TRACE_DIR (trace-only scenario)")
+        assert all(v == chunk_size_global for v in iters_isl), "trace reference requires full-chunk iters (dense trace)"
         assert prefill_len % chunk_size_global == 0, "trace prefill must be chunk-aligned"
+        use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
     traces = discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
@@ -545,8 +548,6 @@ def _run_chunked_prefill(
             ka += v
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
 
-    if use_trace:
-        use_pretrained = True  # the GPU trace was generated with the real checkpoint
     if use_pretrained:
         config, sd = request.getfixturevalue("pretrained_transformer_weights")
         weights = sd["layers"][0]["mla_weights"]
@@ -558,47 +559,38 @@ def _run_chunked_prefill(
 
     logger.info(
         f"chunked prefill: mesh={tuple(mesh_device.shape)} chunk={chunk_size_global} prefill={prefill_len} "
-        f"iters={iters_isl} users={num_users} want_pcc={want_pcc} weights={'pretrained' if use_pretrained else 'random'} "
-        f"mode={'trace' if use_trace else ('random' if random_prefill else 'cpu')} seq_len_cache={seq_len_cache}"
+        f"iters={iters_isl} users={num_users} reference={reference} "
+        f"weights={'pretrained' if use_pretrained else 'random'} seq_len_cache={seq_len_cache}"
     )
 
-    # ---- per-user inputs + references ----
-    users = []  # each: {group, total_len, hidden[total_len,H], ref_out or None, kv_prior or None, kv_post or None}
+    # ---- per-user inputs + references. Each source provides hidden + (ref_out, ref_kvpe); the prior
+    #      prefix KV is carved from that same reference (random for the functional, ref-less mode). ----
+    users = []  # each: {group, total_len, hidden, ref_out|None, kv_prior|None, kv_post|None}
     for u in range(num_users):
         g = groups[u]
         total_len = prefill_len + sum(g)
-        if use_trace:
+        if reference == "trace":
             mi, mo, kv = load_trace(traces[u])
             assert total_len <= mi.shape[0], f"user {u}: prefill+iters {total_len} > trace len {mi.shape[0]}"
-            users.append(
-                dict(
-                    group=g,
-                    total_len=total_len,
-                    hidden=mi[:total_len],
-                    ref_out=mo[:total_len],
-                    kv_prior=kv[:prefill_len],
-                    kv_post=kv[:total_len],
-                )
-            )
-        elif random_prefill:
-            torch.manual_seed(100 + u)
-            users.append(
-                dict(
-                    group=g,
-                    total_len=total_len,
-                    hidden=torch.randn(total_len, hidden_size, dtype=torch.bfloat16),
-                    ref_out=None,
-                    kv_prior=torch.randn(prefill_len, kvpe_dim, dtype=torch.bfloat16),
-                    kv_post=None,
-                )
-            )
-        else:  # prefill_len == 0, CPU synthetic
+            hidden, ref_out, ref_kvpe = mi[:total_len], mo[:total_len], kv[:total_len]
+        elif reference == "cpu":
             torch.manual_seed(42 + u)
             hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
-            ref_out, ref_kvpe = cpu_mla_reference(config, weights, hidden) if want_pcc else (None, None)
-            users.append(
-                dict(group=g, total_len=total_len, hidden=hidden, ref_out=ref_out, kv_prior=None, kv_post=ref_kvpe)
-            )
+            ref_out, ref_kvpe = cpu_mla_reference(config, weights, hidden)
+        else:  # None -> functional / perf, no reference
+            torch.manual_seed(100 + u)
+            hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
+            ref_out, ref_kvpe = None, None
+
+        if prefill_len == 0:
+            kv_prior = None
+        elif ref_kvpe is not None:
+            kv_prior = ref_kvpe[:prefill_len]  # preload the reference's prior KV (cpu or trace)
+        else:
+            kv_prior = torch.randn(prefill_len, kvpe_dim, dtype=torch.bfloat16)  # functional: random prefix
+        users.append(
+            dict(group=g, total_len=total_len, hidden=hidden, ref_out=ref_out, kv_prior=kv_prior, kv_post=ref_kvpe)
+        )
 
     # ---- device setup ----
     mla_tt = ttMLA(
@@ -708,7 +700,7 @@ def _run_chunked_prefill(
             dst = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
             out_accum[u][0, 0, dst, :] = out_flat[src, :]
 
-            if want_pcc and users[u]["ref_out"] is not None:
+            if users[u]["ref_out"] is not None:
                 _, msg = assert_with_pcc(
                     users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
                     out_accum[u][:, :, kv_actual:valid_end, :],
@@ -719,7 +711,7 @@ def _run_chunked_prefill(
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
 
-    if not want_pcc:
+    if reference is None:
         logger.success(f"✓ Functional chunked prefill ran ({num_users} user(s), finite output)")
         return
 
@@ -736,7 +728,7 @@ def _run_chunked_prefill(
     #      block-cyclic layout, so blockcyclic_positions un-rotates the final cache (incl. partial
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
     #      Meta-style) but re-interleaved for the GPU trace (HF half-split -> device Meta basis). ----
-    if want_pcc and any(users[u]["kv_post"] is not None for u in range(num_users)):
+    if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
             tt_kvpe_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
@@ -774,9 +766,18 @@ _CHUNKED_SCENARIOS = (
     + [
         ("production-50k+5k", (8, 4), dict(iters_isl=[5120] * 11)),
         ("multiuser-U2", (2, 2), dict(iters_isl=[5120] * 4, num_users=2)),
-        ("trace-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024)),
-        ("trace-multiuser-U2", (8, 4), dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
-        ("functional-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, want_pcc=False)),
+        # Same full-chunk functionality as the two CPU cases above, but validated against the GPU
+        # trace instead (whole sequence built from scratch and PCC'd vs the trace output). Trace-only:
+        # skip without DEEPSEEK_MLA_TRACE_DIR. Rotation/partial cases have no dense-trace equivalent.
+        ("production-trace", (8, 4), dict(iters_isl=[5120] * 11, reference="trace")),
+        ("multiuser-U2-trace", (8, 4), dict(iters_isl=[5120] * 4, num_users=2, reference="trace")),
+        ("trace-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, reference="trace")),
+        (
+            "trace-multiuser-U2",
+            (8, 4),
+            dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2, reference="trace"),
+        ),
+        ("functional-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, reference=None)),
     ]
 )
 
