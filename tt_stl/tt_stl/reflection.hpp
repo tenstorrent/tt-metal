@@ -1426,28 +1426,31 @@ inline hash_t hash_object(const T& object) noexcept {
     }
 }
 
+// Fold one value's hash into a running seed with the splitmix64 finalizer (David Stafford's
+// "variant 13"), a strong 64-bit mixer. Shared by every combiner in this header (hash_objects and
+// hash_combine) so their mixing behavior is identical.
+//
+// The previous combiner was the classic boost::hash_combine
+// (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the small,
+// structured integers that dominate our cache keys (tensor shapes, dtypes), so distinct sequences
+// collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1] hashed identically, causing
+// wrong program-cache hits (issue #45821).
+//
+// The multiply-xorshift finalizer is the state of the art for 64-bit hash mixing (boost >=1.81 and
+// abseil use mixers of the same family, with different constants); we inline it with only <cstdint>
+// arithmetic so tt_stl pulls in no extra dependency. 0x9e3779b97f4a7c15 is the 64-bit golden-ratio
+// increment (the 64-bit analog of the old 0x9e3779b9), which keeps the fold order-dependent and
+// gives a non-trivial result for an all-zero input.
+inline hash_t mix_into(hash_t seed, hash_t value_hash) noexcept {
+    hash_t x = seed + 0x9e3779b97f4a7c15ULL + value_hash;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    // Fold each element into the running seed with the splitmix64 finalizer (David Stafford's
-    // "variant 13"), a strong 64-bit mixer.
-    //
-    // The previous combiner was the classic boost::hash_combine
-    // (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the
-    // small, structured integers that dominate our cache keys (tensor shapes, dtypes), so
-    // distinct sequences collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1]
-    // hashed identically, causing wrong program-cache hits (issue #45821).
-    //
-    // The multiply-xorshift finalizer is the state of the art for 64-bit hash mixing (boost
-    // >=1.81 and abseil use mixers of the same family, with different constants); we inline it
-    // with only <cstdint> arithmetic so tt_stl pulls in no extra dependency. 0x9e3779b97f4a7c15
-    // is the 64-bit golden-ratio increment (the 64-bit analog of the old 0x9e3779b9), which
-    // keeps the fold order-dependent and gives a non-trivial result for an all-zero input.
-    ([&seed](const auto& arg) {
-        hash_t x = seed + 0x9e3779b97f4a7c15ULL + hash_object(arg);
-        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-        seed = x ^ (x >> 31);
-    }(args), ...);
+    ([&seed](const auto& arg) { seed = mix_into(seed, hash_object(arg)); }(args), ...);
     return seed;
 }
 
@@ -1578,11 +1581,14 @@ inline std::string canonical_key(const Types&... args) {
     return out;
 }
 
-// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+// std::hash-based combiner used by the hand-written program-descriptor hashers (generic_op,
+// program_descriptors, fd_kernel, ...). Uses the same strong mixer as hash_objects so these
+// program-cache-relevant hashes get the same collision resistance (issue #45821).
 template <typename T>
 void hash_combine(std::size_t& seed, const T& value) {
     std::hash<T> hasher;
-    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed = static_cast<std::size_t>(
+        detail::mix_into(static_cast<ttsl::hash::hash_t>(seed), static_cast<ttsl::hash::hash_t>(hasher(value))));
 }
 
 }  // namespace ttsl::hash

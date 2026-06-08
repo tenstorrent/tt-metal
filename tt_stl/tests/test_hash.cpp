@@ -28,6 +28,16 @@ hash_t hash_shape(const std::vector<uint32_t>& dims) {
     return hash_objects_with_default_seed(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
 }
 
+// Allocation-free variants for the large sweeps (a stack std::array, no per-iteration heap).
+template <std::size_t N>
+hash_t hash_dims(const std::array<uint32_t, N>& dims) {
+    return hash_objects_with_default_seed(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
+}
+template <std::size_t N>
+std::string canonical_dims(const std::array<uint32_t, N>& dims) {
+    return canonical_key(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
+}
+
 // --- Regression: the exact collision from issue #45821 -------------------------------------
 
 TEST(HashCollisionTest, Issue45821_ShapesDoNotCollide) {
@@ -76,7 +86,7 @@ TEST(HashCollisionTest, NoCollisionsOverSmall4DShapes) {
         for (uint32_t b = 0; b < kMax; ++b) {
             for (uint32_t c = 0; c < kMax; ++c) {
                 for (uint32_t d = 0; d < kMax; ++d) {
-                    seen.insert(hash_shape({a, b, c, d}));
+                    seen.insert(hash_dims(std::array<uint32_t, 4>{a, b, c, d}));
                     ++count;
                 }
             }
@@ -120,7 +130,7 @@ TEST(HashCollisionTest, NoCollisionsOverHighBitAndPowerOfTwoShapes) {
     for (uint32_t a : vals) {
         for (uint32_t b : vals) {
             for (uint32_t c : vals) {
-                seen.insert(hash_shape({a, b, c}));
+                seen.insert(hash_dims(std::array<uint32_t, 3>{a, b, c}));
                 ++count;
             }
         }
@@ -218,7 +228,7 @@ TEST(CanonicalKeyTest, NoCollisionsOverSmall4DShapes) {
         for (uint32_t b = 0; b < kMax; ++b) {
             for (uint32_t c = 0; c < kMax; ++c) {
                 for (uint32_t d = 0; d < kMax; ++d) {
-                    seen.insert(canonical_shape({a, b, c, d}));
+                    seen.insert(canonical_dims(std::array<uint32_t, 4>{a, b, c, d}));
                     ++count;
                 }
             }
