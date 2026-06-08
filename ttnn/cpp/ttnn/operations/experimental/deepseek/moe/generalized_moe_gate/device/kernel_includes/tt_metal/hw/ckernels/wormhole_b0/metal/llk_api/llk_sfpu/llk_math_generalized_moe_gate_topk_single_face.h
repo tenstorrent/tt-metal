@@ -48,6 +48,16 @@ inline void llk_math_sfpu_generalized_moe_gate_merge4_top8(
         vector_mode);
 }
 
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, uint32_t store_lo, uint32_t store_hi, uint32_t idx_offset>
+inline void llk_math_sfpu_generalized_moe_gate_merge16_to_run(
+    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::
+            generalized_moe_gate_merge16_to_run<APPROXIMATE, is_fp32_dest_acc_en, store_lo, store_hi, idx_offset>,
+        dst_index,
+        vector_mode);
+}
+
 template <
     bool APPROXIMATE,
     bool is_fp32_dest_acc_en,
@@ -60,6 +70,29 @@ inline void llk_math_sfpu_generalized_moe_gate_copy_topk_run(
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::
             generalized_moe_gate_copy_topk_run<APPROXIMATE, is_fp32_dest_acc_en, from_lo, from_hi, to_lo, to_hi>,
+        dst_index,
+        vector_mode);
+}
+
+template <
+    bool APPROXIMATE,
+    bool is_fp32_dest_acc_en,
+    uint32_t field,
+    uint32_t src_lo,
+    uint32_t src_hi,
+    uint32_t dst_lo,
+    uint32_t dst_hi>
+inline void llk_math_sfpu_generalized_moe_gate_place_field_from_interm(
+    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::generalized_moe_gate_place_field_from_interm<
+            APPROXIMATE,
+            is_fp32_dest_acc_en,
+            field,
+            src_lo,
+            src_hi,
+            dst_lo,
+            dst_hi>,
         dst_index,
         vector_mode);
 }

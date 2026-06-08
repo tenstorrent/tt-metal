@@ -74,11 +74,17 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
 
     CoreRangeSet all_cores = input_shard.grid;
 
+    // num_blocks = how many 32x32 tiles per input shard (one 256-expert block per tile). 256->1, 512->2.
+    const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
+    TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
+
     TT_FATAL(input_shard.shape == bias_shard.shape, "Input and bias shard shapes must match");
     TT_FATAL(input_shard.orientation == bias_shard.orientation, "Input and bias shard orientations must match");
     TT_FATAL(bias_shard.grid.contains(all_cores), "Bias shard grid must contain input shard grid");
 
-    TT_FATAL(input_shard.shape == in_indices_shard.shape, "Input and input-indices shard shapes must match");
+    TT_FATAL(
+        in_indices_shard.shape[0] % 32 == 0 && in_indices_shard.shape[1] == 32,
+        "Input-indices shard must be tile-aligned (one 32x32 tile per block; block b holds global ids)");
     TT_FATAL(
         input_shard.orientation == in_indices_shard.orientation,
         "Input and input-indices shard orientations must match");
@@ -98,6 +104,17 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     constexpr uint8_t output_cb = 2;
     constexpr uint8_t input_indices_cb = 3;
     constexpr uint8_t output_indices_cb = 4;
+    // Intermediate L1 stash CBs for the multi-block combine: each holds num_blocks per-block run tiles
+    // for one field (scores/bias bf16, idx uint16). Only used when num_blocks > 1.
+    constexpr uint8_t run_scores_cb = 5;
+    constexpr uint8_t run_idx_cb = 6;
+    constexpr uint8_t run_bias_cb = 7;
+    // Scratch tiled CB for the L1-stash layout convert: a stashed run (row-major, via pack_untilize) is
+    // tilize'd into here, then transpose_wh'd into DEST math layout. bf16 (scores/bias).
+    constexpr uint8_t cb_tilize = 8;
+    // Separate uint16 tilize scratch for the idx field: the expert id must be BIT-PRESERVED through the
+    // round-trip (the SFPU reads it as a raw 16-bit id; a bf16 numeric convert would corrupt the bits).
+    constexpr uint8_t cb_tilize_idx = 9;
 
     auto in_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
     auto bias_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);
@@ -112,10 +129,30 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     set_cb_page_size_for_tile(in_indices_cb_desc, input_indices_tensor);
     set_cb_page_size_for_tile(out_indices_cb_desc, output_indices_tensor);
 
+    // Build an intermediate (non-tensor) L1 CB sized for num_blocks tiles of fmt_tensor's format.
+    auto make_run_cb = [&](uint8_t cb_id, const tt::tt_metal::Tensor& fmt_tensor) {
+        const auto& spec = fmt_tensor.tensor_spec();
+        const auto& tile = spec.tile();
+        auto df = tt::tt_metal::datatype_to_dataformat_converter(spec.data_type());
+        uint32_t tsz = tile.get_tile_size(df);
+        tt::tt_metal::CBDescriptor d;
+        d.total_size = num_blocks * tsz;
+        d.core_ranges = all_cores;
+        d.format_descriptors.push_back(
+            tt::tt_metal::CBFormatDescriptor{cb_id, df, tsz, tt::tt_metal::TileDescriptor(tile)});
+        return d;
+    };
+    auto run_scores_cb_desc = make_run_cb(run_scores_cb, input_tensor);          // bf16 (score)
+    auto run_idx_cb_desc = make_run_cb(run_idx_cb, input_indices_tensor);        // uint16 (idx)
+    auto run_bias_cb_desc = make_run_cb(run_bias_cb, input_tensor);              // bf16 (bias)
+    auto cb_tilize_desc = make_run_cb(cb_tilize, input_tensor);                  // bf16 (tilize scratch)
+    auto cb_tilize_idx_desc = make_run_cb(cb_tilize_idx, input_indices_tensor);  // uint16 (idx tilize scratch)
+
     KernelDescriptor::NamedCompileTimeArgs ncrisc_named = {
         {"moe_gate_input_cb", input_cb},
         {"moe_gate_bias_cb", bias_cb},
         {"moe_gate_input_indices_cb", input_indices_cb},
+        {"moe_gate_num_blocks", num_blocks},
         {"moe_gate_is_active_core", 1},
     };
     KernelDescriptor::NamedCompileTimeArgs brisc_named = {
@@ -132,11 +169,21 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
         {"moe_gate_eps", float_bits_u32(operation_attrs.eps)},
         {"moe_gate_scaling_factor", float_bits_u32(operation_attrs.scaling_factor)},
         {"moe_gate_enable_sigmoid", operation_attrs.enable_sigmoid ? 1u : 0u},
+        {"moe_gate_num_blocks", num_blocks},
+        {"moe_gate_run_scores_cb", run_scores_cb},
+        {"moe_gate_run_idx_cb", run_idx_cb},
+        {"moe_gate_run_bias_cb", run_bias_cb},
+        {"moe_gate_cb_tilize", cb_tilize},
+        {"moe_gate_cb_tilize_idx", cb_tilize_idx},
         {"moe_gate_is_active_core", 1},
     };
 
     tt::tt_metal::ComputeConfigDescriptor compute_config{};
     compute_config.math_fidelity = MathFidelity::HiFi4;
+    // Full DEST sync (single 16-tile bank; no double-buffer bank alternation across tile_regs_acquire).
+    // The multi-block combine parks block0's run in DEST and reads it back in block1's SEPARATE acquire;
+    // that only survives if acquire does not swap banks.
+    compute_config.dst_full_sync_en = true;
 
     KernelDescriptor reader{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),
@@ -178,12 +225,17 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     program_desc.kernels.push_back(std::move(writer));
     program_desc.kernels.push_back(std::move(compute_k));
 
-    program_desc.cbs.reserve(5);
+    program_desc.cbs.reserve(8);
     program_desc.cbs.push_back(std::move(in_cb_desc));
     program_desc.cbs.push_back(std::move(bias_cb_desc));
     program_desc.cbs.push_back(std::move(out_cb_desc));
     program_desc.cbs.push_back(std::move(in_indices_cb_desc));
     program_desc.cbs.push_back(std::move(out_indices_cb_desc));
+    program_desc.cbs.push_back(std::move(run_scores_cb_desc));
+    program_desc.cbs.push_back(std::move(run_idx_cb_desc));
+    program_desc.cbs.push_back(std::move(run_bias_cb_desc));
+    program_desc.cbs.push_back(std::move(cb_tilize_desc));
+    program_desc.cbs.push_back(std::move(cb_tilize_idx_desc));
 
     return program_desc;
 }
