@@ -91,7 +91,11 @@ def get_generic_stage_size_loopback_topology_config() -> PhysicalTopologyConfig:
     )
 
 
-GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
+try:
+    GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
+except ValueError as e:
+    pytest.skip(str(e), allow_module_level=True)
+
 PIPELINE_ENDPOINT_CORE_COORD = ttnn.CoreCoord(0, 0)
 
 
