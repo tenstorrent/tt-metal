@@ -75,6 +75,11 @@ on:
         required: false
         type: string
         default: ''
+      precompile:
+        description: 'Device-backed up-front precompile warmup before the conv test run (cold-vs-precompile bench)'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
@@ -192,11 +197,12 @@ jobs:
           # Matrix for tt-metal-l2-tests and didt-tests (N150, N300, P100, P150b)
           matrix_l2='[]'
           if [[ "$run_wormhole" == "true" ]]; then
-            matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
+            # [precompile-bench] N150 disabled — one WH card (N300) for the conv cold-vs-precompile bench. REVERT before merge.
+            # matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N150")
             matrix_l2=$(add_entry "$matrix_l2" "wormhole_b0" "N300")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            # [bh-ci-validate] P100 disabled to run a single conv job on P150b — REVERT before merge.
+            # [precompile-bench] P100 disabled — one BH card (P150b) for the conv cold-vs-precompile bench. REVERT before merge.
             # matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P100")
             matrix_l2=$(add_entry "$matrix_l2" "blackhole" "P150b")
           fi
@@ -276,6 +282,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
+      precompile: ${{ inputs.precompile || false }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

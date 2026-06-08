@@ -22,6 +22,10 @@ on:
         required: false
         type: number
         default: 150
+      precompile:
+        required: false
+        type: boolean
+        default: false
       run_conv_tests:
         required: false
         type: boolean
@@ -120,9 +124,6 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # [bh-ci-validate] explicit shared JIT cache (one dir for all three legs): the COLD baseline fills
-        # it then discards it, WARMUP repopulates it, the WARMED run reuses it. Same dir => fair A/B.
-        TT_METAL_CACHE: /work/.precompile_cache
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -150,41 +151,45 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
-      - name: 🔎 [bh-ci-validate] runner specs
+      - name: 🔎 [precompile-bench] runner specs
         run: |
-          echo "arch=$ARCH_NAME nproc=$(nproc)"; lscpu | grep -E '^(Model name|CPU\(s\))' || true
-          echo "TT_METAL_CACHE=$TT_METAL_CACHE"
-          python3 -c "import ttnn; print('has capture_jit_build_fingerprint:', hasattr(ttnn.cluster,'capture_jit_build_fingerprint'))" || true
-      - name: 🧊 [bh-ci-validate] COLD baseline run (empty cache, no warmup — inline compile == today's CI)
+          echo "arch=$ARCH_NAME  nproc=$(nproc)  precompile=${{ inputs.precompile }}"
+          lscpu | grep -E '^(Model name|CPU\(s\))' || true
+      - name: 🔥 [precompile-bench] WARMUP — device-backed fast collect (COLLECT + COMPILE, timed separately)
+        if: ${{ inputs.precompile }}
+        timeout-minutes: 120
+        run: |
+          # Real-device fast+shallow collect over the SAME selection as the test step. NO mock, NO xdist,
+          # NO rm, NO env override: the default JIT cache is shared with the test step below (same
+          # container), ccache left at the container default. Best-effort — never fails the job; a broken
+          # warmup just leaves the test step to run cold.
+          set +e +o pipefail
+          t0=$(date +%s)
+          UP_FRONT_COLLECT=1 UP_FRONT_COLLECT_WORKERS=$(nproc) LOGURU_LEVEL=ERROR \
+            pytest tests/ttnn/nightly/unit_tests/operations/conv -m "not disable_fast_runtime_mode" \
+            -p up_front_collect_plugin 2>&1 | tee /work/warmup.log
+          warm_wall=$(( $(date +%s)-t0 ))
+          comp=$(grep -aoE 'compiled [0-9]+ programs in [0-9.]+s' /work/warmup.log | tail -1)
+          comp_s=$(echo "$comp" | grep -oE 'in [0-9.]+s' | grep -oE '[0-9.]+')
+          echo "===== WARMUP BREAKDOWN ====="
+          echo "warmup TOTAL wall          : ${warm_wall}s"
+          echo "  parallel COMPILE          : ${comp:-<none — check warmup.log>}"
+          [ -n "$comp_s" ] && echo "  COLLECT (bodies+dedup+init): ~$(awk -v w="$warm_wall" -v c="$comp_s" 'BEGIN{printf "%.0f", w-c}')s   (= total - compile)"
+          grep -aoE 'UP_FRONT_COLLECT: [0-9]+ ops stashed[^|]*programs[^)]*\)|fast-shallow from_torch[^|]*' /work/warmup.log | tail -2
+          true
+      - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          # Start cold in the SAME cache dir the WARMED run uses (job-level TT_METAL_CACHE), emptied first:
-          # one location => cold & warmed are a fair same-disk A/B, and no second multi-GB cache on /work.
-          # These cold-compiled kernels are discarded before WARMUP below — we keep only the timing.
-          rm -rf "$TT_METAL_CACHE"
-          pytest tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py -k "resnet50 or vae_sdxl" \
-            -v -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }} 2>&1 | tee /work/cold_run.log
-      - name: 🔥 [bh-ci-validate] WARMUP (collect + precompile, hardware-free, fingerprint replay)
-        timeout-minutes: 60
-        run: |
-          rm -rf "$TT_METAL_CACHE"   # discard the cold cache so WARMUP populates it from scratch (exercises the real warmup path)
-          bash scripts/ci_precompile_warm.sh tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py -k "resnet50 or vae_sdxl"
-      - name: ✅ [bh-ci-validate] WARMED run (reuses the warmup cache)
-        timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          pytest tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py -k "resnet50 or vae_sdxl" \
-            -v -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }} 2>&1 | tee /work/warm_run.log
-      - name: 📊 [bh-ci-validate] COLD vs WARMED summary
-        if: ${{ !cancelled() }}
-        run: |
-          cold=$(grep -aoE '[0-9.]+s \([0-9:]+\)' /work/cold_run.log | tail -1 | grep -oE '^[0-9.]+')
-          warm=$(grep -aoE '[0-9.]+s \([0-9:]+\)' /work/warm_run.log | tail -1 | grep -oE '^[0-9.]+')
-          hit=$(grep -aoE 'JIT cache stats: [0-9/]+ hits \([0-9.]+%\)' /work/warm_run.log | tail -1)
-          echo "COLD baseline run-leg : ${cold:-?}s   (no warmup, inline compile)"
-          echo "WARMED run-leg        : ${warm:-?}s   ${hit:+($hit)}"
-          if [ -n "$cold" ] && [ -n "$warm" ]; then
-            awk -v c="$cold" -v w="$warm" 'BEGIN{ if (w>0) printf "warm-reuse speedup (cold / warmed): %.2fx\n", c/w }'
-          fi
+          set +e +o pipefail
+          t0=$(date +%s)
+          pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" \
+            --timeout=${{ env.TEST_BUDGET_SECONDS }} 2>&1 | tee /work/run.log
+          rc=${PIPESTATUS[0]}
+          echo "===== RUN BREAKDOWN (precompile=${{ inputs.precompile }}) ====="
+          echo "RUN-LEG wall : $(( $(date +%s)-t0 ))s"
+          grep -aoE 'JIT cache stats: [0-9/]+ hits \([0-9.]+%\)' /work/run.log | tail -1
+          grep -aoE '[0-9]+ (passed|failed)[^=]*(in|=) [0-9.]+s' /work/run.log | tail -1
+          exit $rc
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
