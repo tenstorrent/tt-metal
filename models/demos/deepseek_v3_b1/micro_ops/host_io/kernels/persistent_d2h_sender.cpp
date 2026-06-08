@@ -6,10 +6,10 @@
 //
 // Worker-sync protocol (mirror of H2D consumed-counter handshake):
 //   1. Service core multicasts transfer_done_sem → workers may write backing DRAM.
-//   2. Each worker writes its slice; when metadata is enabled the master forwarder
-//      fans the replicated metadata IN to this service core's metadata L1 region
-//      before acking. Every worker (incl. master) atomic-incs the service-core
-//      write_ack counter.
+//   2. Each worker writes its slice; when metadata is enabled the designated
+//      metadata master worker fans the replicated metadata IN to this service
+//      core's metadata L1 region before acking. Every worker (incl. master)
+//      atomic-incs the service-core write_ack counter.
 //   3. Service core waits for exactly num_workers acks, then streams the backing
 //      tensor to the host FIFO and, if metadata is enabled, reads this core's
 //      metadata L1 region and ships it as the trailing socket page.
@@ -157,8 +157,8 @@ void kernel_main() {
 
         if constexpr (metadata_enabled) {
             // Ship the metadata as the trailing socket page. metadata_l1_addr is the
-            // service-core staging region the master forwarder fanned the metadata
-            // in to: it is a full, zero-padded socket page on this same service core
+            // service-core staging region the metadata master worker fanned the
+            // metadata in to: it is a full, zero-padded socket page on this same service core
             // and is NOC-accessible, so write it straight to the host FIFO — no
             // intermediate scratch-CB copy needed.
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {

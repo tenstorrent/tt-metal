@@ -239,13 +239,14 @@ private:
 //
 // Optional worker sync (Config::worker_cores):
 //   1. Service core multicasts transfer_done_sem → workers may write backing.
-//   2. Workers write slices; when metadata is enabled the compile-time master
-//      forwarder reads its own replicated metadata copy from worker L1 and
-//      writes it to the service-core staging region after all writes (fan-in),
-//      then each worker acks the service-core write_ack counter.
+//   2. Every worker writes its backing slice then acks the service-core write_ack
+//      counter. When metadata is enabled, one designated worker (the metadata
+//      master) additionally reads its own replicated metadata copy from worker L1
+//      and writes it to the service-core staging region (fan-in) before its ack.
+//      There is no inter-worker handshake — the master role is just a runtime arg.
 //   3. Service core waits for num_workers acks, streams backing (+ metadata) to
 //      host; host calls read_from_tensor().
-// Config::master_forwarder_core is required only when metadata_size_bytes > 0.
+// Config::metadata_master_core is required only when metadata_size_bytes > 0.
 class D2HStreamService {
 public:
     struct Config {
@@ -256,16 +257,16 @@ public:
         uint32_t scratch_cb_size_bytes = 0;
         // Worker grid that writes the backing tensor before each D2H transfer.
         std::optional<CoreRange> worker_cores;
-        // Fixed metadata-forwarder core within worker_cores. Required only when
-        // metadata_size_bytes > 0; omitted when metadata is disabled (no master
-        // kernel — every worker writes + acks directly).
-        std::optional<CoreCoord> master_forwarder_core;
+        // The worker designated to fan metadata in to the service core. Must lie
+        // within worker_cores. Required only when metadata_size_bytes > 0; omitted
+        // when metadata is disabled (every worker just writes its slice + acks).
+        std::optional<CoreCoord> metadata_master_core;
         // Opt-in inline metadata shipped host-ward with each transfer (0 disables;
         // single-arg read_from_tensor is used). When > 0: requires worker_cores +
-        // master_forwarder_core, >= 2 workers, and metadata_size_bytes <= the derived
-        // socket_page_size (single trailing page; multi-page is a future extension).
-        // The master forwarder fans the replicated per-worker metadata in to the
-        // service core and the sender ships it as the trailing socket page.
+        // metadata_master_core, and metadata_size_bytes <= the derived socket_page_size
+        // (single trailing page; multi-page is a future extension). The metadata
+        // master worker writes the replicated per-worker metadata to the service-core
+        // staging region and the sender ships it as the trailing socket page.
         uint32_t metadata_size_bytes = 0;
     };
 
@@ -302,7 +303,7 @@ public:
     //     writes the metadata to and the sender ships from (the destination).
     // The master role is a worker runtime arg; there is no inter-worker handshake.
     CoreRange get_worker_cores() const;
-    CoreCoord get_master_forwarder_core() const;
+    CoreCoord get_metadata_master_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;
@@ -351,7 +352,7 @@ private:
     // Per-coord service-core L1 the master fans metadata into and the sender ships from.
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_input_addrs_;
     uint32_t num_workers_ = 0;
-    CoreCoord master_forwarder_core_{0, 0};
+    CoreCoord metadata_master_core_{0, 0};
 
     std::string descriptor_path_;
     // Host-side scratch page: read each socket's trailing metadata page into here

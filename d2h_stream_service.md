@@ -18,17 +18,18 @@ Workers → Backing DRAM → persistent_d2h_sender → host FIFO → read_from_t
 When `Config::worker_cores` is set:
 
 1. **Service core unlocks workers** — multicast `transfer_done_sem` so workers may write backing DRAM.
-2. **Workers write** their page slices.
-3. **If metadata is enabled** — compile-time **master forwarder** (fixed `master_forwarder_core`):
-   - waits for peer writes (`worker_done` roll call),
+2. **Workers write** their page slices. Every core runs the same `persistent_d2h_worker.cpp` kernel;
+   role is selected by an `is_master` runtime arg, and there is **no cross-talk between worker cores**.
+3. **If metadata is enabled** — the designated **metadata master** worker (`metadata_master_core`)
+   additionally, before its own ack:
    - reads its **local replicated** metadata copy from worker L1,
-   - writes it **in** to the service-core staging region the sender ships from (fan-in, host-ward),
-   - multicasts `metadata_ready_sem` purely to release peers — no metadata payload is sent to workers.
-   - Peers wait `metadata_ready` after reporting `worker_done`.
+   - writes it **in** to the service-core staging region the sender ships from (fan-in, host-ward).
 4. **Every worker acks** — atomic-inc `write_ack_counter` on the service core (one inc per worker).
 5. **Service core streams** backing (+ metadata page) to host FIFO; host calls `read_from_tensor()` + `barrier()`.
 
-When `metadata_size_bytes == 0`, there is **no master kernel** — every worker writes + acks directly.
+The service core waits for all `num_workers` acks before streaming, so the master writing metadata
+before its ack is sufficient ordering — no inter-worker handshake is required. When
+`metadata_size_bytes == 0`, no worker is the master — every worker just writes + acks.
 
 ## Host-only path
 
@@ -43,7 +44,7 @@ service = ttnn.D2HStreamService(
     fifo_size_bytes=fifo_size_bytes,
     scratch_cb_size_bytes=scratch_cb_size_bytes,
     worker_cores=None,
-    master_forwarder_core=None,  # required only when metadata_size_bytes > 0
+    metadata_master_core=None,  # required only when metadata_size_bytes > 0
     metadata_size_bytes=0,
 )
 ```
@@ -69,6 +70,5 @@ Python (host-only replicated sweep; needs `build_Release` ttnn + a venv on the *
 
 ```bash
 cmake --build build_Release --target ttnn
-tt-smi -r
-./scripts/run_d2h_stream_service_pytest.sh
+pytest tests/ttnn/unit_tests/base_functionality/test_d2h_stream_service.py --tt-arch=blackhole
 ```

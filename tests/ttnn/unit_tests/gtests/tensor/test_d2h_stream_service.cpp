@@ -79,7 +79,7 @@ std::vector<uint8_t> make_metadata_pattern(uint32_t iter, uint32_t metadata_size
 }
 
 // Stage the per-iter metadata as the device-produced source: the same blob is
-// written (replicated) to every worker core's metadata L1. The master forwarder
+// written (replicated) to every worker core's metadata L1. The metadata master worker
 // reads its own local copy and writes it to the service-core staging region, and
 // the sender ships it to the host alongside the payload.
 void write_worker_metadata(
@@ -150,8 +150,8 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
         const uint32_t metadata_size = metadata_enabled ? service.metadata_size_bytes() : 0u;
         const uint32_t worker_metadata_l1_addr =
             metadata_enabled ? static_cast<uint32_t>(service.get_worker_metadata_addr()) : 0u;
-        const tt::tt_metal::CoreCoord master_forwarder =
-            metadata_enabled ? service.get_master_forwarder_core() : tt::tt_metal::CoreCoord{0, 0};
+        const tt::tt_metal::CoreCoord metadata_master =
+            metadata_enabled ? service.get_metadata_master_core() : tt::tt_metal::CoreCoord{0, 0};
         const uint32_t metadata_input_addr =
             metadata_enabled ? static_cast<uint32_t>(service.get_metadata_input_addr(coord)) : 0u;
 
@@ -182,7 +182,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
                 const tt::tt_metal::CoreCoord core{x, y};
                 const uint32_t grid_idx = worker_idx_from_xy(worker_cores, x, y);
                 const uint32_t start_page = grid_idx * pages_per_worker;
-                const bool is_master = metadata_enabled && core.x == master_forwarder.x && core.y == master_forwarder.y;
+                const bool is_master = metadata_enabled && core.x == metadata_master.x && core.y == metadata_master.y;
                 tt::tt_metal::SetRuntimeArgs(
                     program,
                     worker_kernel,
@@ -207,7 +207,7 @@ void run_d2h_worker_sync_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const D2HServiceCase& cs,
     const tt::tt_metal::CoreRange& worker_cores,
-    std::optional<tt::tt_metal::CoreCoord> master_forwarder = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> metadata_master = std::nullopt,
     uint32_t num_iterations = 5,
     uint32_t metadata_size_bytes = 0) {
     const auto tensor_layout = TensorLayout(
@@ -218,7 +218,7 @@ void run_d2h_worker_sync_case(
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
-            master_forwarder.has_value(), "run_d2h_worker_sync_case: master_forwarder required when metadata enabled");
+            metadata_master.has_value(), "run_d2h_worker_sync_case: metadata_master required when metadata enabled");
     }
 
     tt::tt_metal::D2HStreamService::Config cfg{
@@ -227,7 +227,7 @@ void run_d2h_worker_sync_case(
         .fifo_size_bytes = cs.fifo_size_bytes,
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
         .worker_cores = worker_cores,
-        .master_forwarder_core = master_forwarder,
+        .metadata_master_core = metadata_master,
         .metadata_size_bytes = metadata_size_bytes,
     };
 
@@ -241,7 +241,7 @@ void run_d2h_worker_sync_case(
 
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         // Stage the per-iter metadata onto the worker cores (the device-side
-        // source). The master forwarder fans it in to the service-core staging
+        // source). The metadata master worker fans it in to the service-core staging
         // region, and the sender ships it to the host alongside the payload.
         const auto expected_metadata = make_metadata_pattern(iter, metadata_size_bytes);
         if (metadata_size_bytes > 0) {
@@ -267,7 +267,7 @@ void run_d2h_worker_sync_case(
 }
 
 // Worker-sync helper that verifies per-shard via the Tensor read path. Works
-// uniformly for replicated and sharded placements: every device's master+peers
+// uniformly for replicated and sharded placements: every device's workers
 // fill that device's backing tensor with `make_worker_fill_pattern(seed,
 // page_size, per_device_num_pages)` (the kernel only knows per-device-local
 // page indices), so the expected payload at every coord is the same per-device
@@ -276,7 +276,7 @@ void run_d2h_worker_sync_case_per_shard(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const D2HServiceCase& cs,
     const tt::tt_metal::CoreRange& worker_cores,
-    std::optional<tt::tt_metal::CoreCoord> master_forwarder = std::nullopt,
+    std::optional<tt::tt_metal::CoreCoord> metadata_master = std::nullopt,
     uint32_t num_iterations = 5,
     uint32_t metadata_size_bytes = 0) {
     const auto tensor_layout = TensorLayout(
@@ -287,8 +287,8 @@ void run_d2h_worker_sync_case_per_shard(
 
     if (metadata_size_bytes > 0) {
         TT_FATAL(
-            master_forwarder.has_value(),
-            "run_d2h_worker_sync_case_per_shard: master_forwarder required when metadata enabled");
+            metadata_master.has_value(),
+            "run_d2h_worker_sync_case_per_shard: metadata_master required when metadata enabled");
     }
 
     tt::tt_metal::D2HStreamService::Config cfg{
@@ -297,7 +297,7 @@ void run_d2h_worker_sync_case_per_shard(
         .fifo_size_bytes = cs.fifo_size_bytes,
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
         .worker_cores = worker_cores,
-        .master_forwarder_core = master_forwarder,
+        .metadata_master_core = metadata_master,
         .metadata_size_bytes = metadata_size_bytes,
     };
 
@@ -478,7 +478,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync) {
 
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {1, 0});
-    const tt::tt_metal::CoreCoord master_forwarder{0, 0};
+    const tt::tt_metal::CoreCoord metadata_master{0, 0};
     const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
     D2HServiceCase cs{
         .global_shape = ttnn::Shape({1, 1, 16, 640}),
@@ -487,7 +487,24 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
         .fifo_size_bytes = 16 * per_row_bytes,
     };
     run_d2h_worker_sync_case(
-        this->mesh_device_, cs, worker_cores, master_forwarder, /*num_iterations=*/5, /*metadata_size_bytes=*/64);
+        this->mesh_device_, cs, worker_cores, metadata_master, /*num_iterations=*/5, /*metadata_size_bytes=*/64);
+}
+
+// Single-worker metadata: the lone worker is itself the metadata master, writing
+// both its backing slice and the metadata. Exercises the >= 1 worker path (no
+// peers), so there is no inter-worker dependency at all.
+TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});
+    const tt::tt_metal::CoreCoord metadata_master{0, 0};
+    const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
+    D2HServiceCase cs{
+        .global_shape = ttnn::Shape({1, 1, 16, 640}),
+        .placements = replicate_all(*this->mesh_device_),
+        .scratch_cb_size_bytes = 4 * per_row_bytes,
+        .fifo_size_bytes = 16 * per_row_bytes,
+    };
+    run_d2h_worker_sync_case(
+        this->mesh_device_, cs, worker_cores, metadata_master, /*num_iterations=*/5, /*metadata_size_bytes=*/64);
 }
 
 // Sharded sweep — mirrors the H2D Sharded_Sweep but on the read path.
@@ -576,14 +593,14 @@ TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
 }
 
 // Worker-sync sweep at fully-replicated placements across worker grid sizes,
-// chunking budgets, and inline metadata sizes. Master forwarder is used only
+// chunking budgets, and inline metadata sizes. A metadata master worker is used only
 // when metadata_size_bytes > 0. Page count per device must divide num_workers.
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
     struct Row {
         uint32_t per_row_size;
         uint32_t N;
         tt::tt_metal::CoreRange worker_cores;
-        tt::tt_metal::CoreCoord master_forwarder;
+        tt::tt_metal::CoreCoord metadata_master;
         uint32_t num_iterations;
         uint32_t metadata_size_bytes;
         const char* label;
@@ -691,7 +708,7 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
                 this->mesh_device_,
                 cs,
                 row.worker_cores,
-                row.metadata_size_bytes > 0 ? std::make_optional(row.master_forwarder) : std::nullopt,
+                row.metadata_size_bytes > 0 ? std::make_optional(row.metadata_master) : std::nullopt,
                 row.num_iterations,
                 row.metadata_size_bytes);
         }
@@ -713,7 +730,7 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
         uint32_t per_row_size;
         uint32_t N;  // per-device page count (must satisfy N % num_workers == 0)
         tt::tt_metal::CoreRange worker_cores;
-        tt::tt_metal::CoreCoord master_forwarder;
+        tt::tt_metal::CoreCoord metadata_master;
         uint32_t metadata_size_bytes;
         const char* label;
     };
@@ -757,7 +774,7 @@ TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
                     this->mesh_device_,
                     cs,
                     row.worker_cores,
-                    row.metadata_size_bytes > 0 ? std::make_optional(row.master_forwarder) : std::nullopt,
+                    row.metadata_size_bytes > 0 ? std::make_optional(row.metadata_master) : std::nullopt,
                     /*num_iterations=*/20,
                     row.metadata_size_bytes);
             }

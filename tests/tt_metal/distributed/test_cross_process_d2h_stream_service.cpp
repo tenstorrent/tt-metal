@@ -76,13 +76,13 @@ std::vector<uint32_t> make_iter_data(uint32_t iter, size_t volume) {
 // --- Worker-sync + metadata helpers (mirrors the in-process gtest harness in
 // tests/ttnn/unit_tests/gtests/tensor/test_d2h_stream_service.cpp). Used only by
 // the metadata cross-process test: D2H metadata forwarding requires the
-// worker-sync path (worker_cores + master_forwarder_core), so the owner has to
-// dispatch the worker/master-forwarder workload that fills the backing tensor
-// and forwards the shared metadata. Both the device-side fill pattern and the
+// worker-sync path (worker_cores + metadata_master_core), so the owner has to
+// dispatch the worker workload that fills the backing tensor and (via the
+// metadata master worker) forwards the shared metadata. Both the device-side fill pattern and the
 // metadata pattern are deterministic, so the connector reconstructs the
 // expected values without any IPC. -----------------------------------------
 
-// Device-side fill: master + peers write `fill_seed + page + element` into each
+// Device-side fill: every worker writes `fill_seed + page + element` into each
 // page they own. Replicated placement => global payload == per-device payload.
 std::vector<uint32_t> make_worker_fill_pattern(uint32_t fill_seed, uint32_t page_size, uint32_t num_pages) {
     std::vector<uint32_t> out(num_pages * (page_size / sizeof(uint32_t)));
@@ -110,7 +110,7 @@ uint32_t worker_idx_from_xy(const tt::tt_metal::CoreRange& worker_cores, uint32_
 
 // Stage the per-iter metadata as the device-produced source: the same blob is
 // written (replicated) to every worker core's metadata L1 on every device. The
-// master forwarder reads its own local copy and writes it to the service-core
+// metadata master worker reads its own local copy and writes it to the service-core
 // staging region, and the sender ships it to the host alongside the payload.
 void write_worker_metadata(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
@@ -147,7 +147,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
     const uint32_t num_workers = (worker_cores.end_coord.x - worker_cores.start_coord.x + 1) *
                                  (worker_cores.end_coord.y - worker_cores.start_coord.y + 1);
     TT_FATAL(num_pages % num_workers == 0, "tensor page count must divide num_workers");
-    TT_FATAL(num_workers >= 2, "metadata forwarding requires a master + at least one peer worker");
+    TT_FATAL(num_workers >= 1, "metadata forwarding requires at least one worker core");
     const uint32_t pages_per_worker = num_pages / num_workers;
 
     const uint32_t transfer_done_sem_addr = static_cast<uint32_t>(service.get_transfer_done_sem_addr());
@@ -171,7 +171,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
                           .set_page_size(scratch_cb_index, page_size);
         tt::tt_metal::CreateCircularBuffer(program, tt::tt_metal::CoreRangeSet(worker_cores), cb_cfg);
 
-        const tt::tt_metal::CoreCoord master_forwarder = service.get_master_forwarder_core();
+        const tt::tt_metal::CoreCoord metadata_master = service.get_metadata_master_core();
         const uint32_t worker_metadata_l1_addr = static_cast<uint32_t>(service.get_worker_metadata_addr());
         const uint32_t metadata_input_addr = static_cast<uint32_t>(service.get_metadata_input_addr(coord));
 
@@ -202,7 +202,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
                 const tt::tt_metal::CoreCoord core{x, y};
                 const uint32_t grid_idx = worker_idx_from_xy(worker_cores, x, y);
                 const uint32_t start_page = grid_idx * pages_per_worker;
-                const bool is_master = core.x == master_forwarder.x && core.y == master_forwarder.y;
+                const bool is_master = core.x == metadata_master.x && core.y == metadata_master.y;
                 tt::tt_metal::SetRuntimeArgs(
                     program,
                     worker_kernel,
@@ -308,15 +308,15 @@ void run_connector(const CrossProcessCase& cs, const std::string& service_id) {
 
 // Rank-0 (owner) body for the metadata path. Unlike `run_owner`, this drives the
 // worker-sync path: each iteration stages the metadata into the service-core L1,
-// then dispatches the worker/master-forwarder workload (which fills the backing
-// tensor and forwards the shared metadata). The workload completing triggers the
+// then dispatches the worker workload (which fills the backing tensor and, via
+// the metadata master worker, forwards the shared metadata). The workload completing triggers the
 // persistent sender to stream payload + metadata to the connector.
 void run_owner_metadata(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const CrossProcessCase& cs,
     const std::string& service_id,
     const tt::tt_metal::CoreRange& worker_cores,
-    const tt::tt_metal::CoreCoord& master_forwarder) {
+    const tt::tt_metal::CoreCoord& metadata_master) {
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
         PageConfig(Layout::ROW_MAJOR),
@@ -329,7 +329,7 @@ void run_owner_metadata(
         .fifo_size_bytes = cs.fifo_size_bytes,
         .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
         .worker_cores = worker_cores,
-        .master_forwarder_core = master_forwarder,
+        .metadata_master_core = metadata_master,
         .metadata_size_bytes = cs.metadata_size_bytes,
     };
 
@@ -465,7 +465,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMinimal) {
 }
 
 // Cross-process metadata forwarding: the owner drives the worker-sync path (a
-// 4-worker grid with a fixed master forwarder) so per-transfer inline metadata
+// 4-worker grid with a fixed metadata master) so per-transfer inline metadata
 // is produced; the connector reads payload + metadata over PCIe and verifies
 // both. Replicated placement keeps the metadata identical across every socket,
 // exercising the cross-socket consistency check in read_from_tensor.
@@ -475,7 +475,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
     ttsl::SmallVector<MeshMapperConfig::Placement> placements(mesh_shape_.dims(), MeshMapperConfig::Replicate{});
 
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {3, 0});  // 4 workers; 16 % 4 == 0
-    const tt::tt_metal::CoreCoord master_forwarder{0, 0};
+    const tt::tt_metal::CoreCoord metadata_master{0, 0};
 
     const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
     CrossProcessCase cs{
@@ -487,7 +487,7 @@ TEST_F(CrossProcessD2HStreamServiceFixture, ReplicatedMetadata) {
         .num_iterations = kNumIterations,
     };
     if (rank_ == 0) {
-        run_owner_metadata(mesh_device_, cs, service_id, worker_cores, master_forwarder);
+        run_owner_metadata(mesh_device_, cs, service_id, worker_cores, metadata_master);
     } else {
         run_connector_metadata(cs, service_id);
     }

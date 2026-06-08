@@ -854,7 +854,7 @@ struct D2HWorkerSyncArgs {
 
 // Metadata args for the persistent D2H sender. When enabled, after the payload
 // the sender reads `metadata_size_bytes` from `metadata_l1_addr` (this service
-// core's staging region, which the master forwarder fanned in to), pads it to a
+// core's staging region, which the metadata master worker fanned in to), pads it to a
 // full socket page, and ships it as the trailing page.
 struct D2HMetadataArgs {
     bool enabled = false;
@@ -945,18 +945,18 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         num_workers_ = (wr.end_coord.x - wr.start_coord.x + 1) * (wr.end_coord.y - wr.start_coord.y + 1);
         if (cfg_.metadata_size_bytes > 0) {
             TT_FATAL(
-                cfg_.master_forwarder_core.has_value(),
-                "D2HStreamService: Config::master_forwarder_core is required when metadata_size_bytes > 0");
-            const auto& mf = cfg_.master_forwarder_core.value();
+                cfg_.metadata_master_core.has_value(),
+                "D2HStreamService: Config::metadata_master_core is required when metadata_size_bytes > 0");
+            const auto& mf = cfg_.metadata_master_core.value();
             TT_FATAL(
                 mf.x >= wr.start_coord.x && mf.x <= wr.end_coord.x && mf.y >= wr.start_coord.y &&
                     mf.y <= wr.end_coord.y,
-                "D2HStreamService: master_forwarder_core ({}, {}) must lie within worker_cores {}",
+                "D2HStreamService: metadata_master_core ({}, {}) must lie within worker_cores {}",
                 mf.x,
                 mf.y,
                 wr);
-            TT_FATAL(num_workers_ > 1, "D2HStreamService: metadata forwarding requires master + at least one peer");
-            master_forwarder_core_ = mf;
+            TT_FATAL(num_workers_ >= 1, "D2HStreamService: worker_cores must contain at least one core");
+            metadata_master_core_ = mf;
         } else {
             TT_FATAL(num_workers_ >= 1, "D2HStreamService: worker_cores must contain at least one core");
         }
@@ -1077,7 +1077,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
             // Per-worker metadata source: one L1 shard per worker core, all at the
             // same L1 address (sharded buffer). The replicated metadata lives here;
-            // the master forwarder reads its own shard and fans it in to the
+            // the metadata master worker reads its own shard and fans it in to the
             // service core. Same address on every worker, so get_worker_metadata_addr()
             // returns a single value.
             const DeviceAddr aligned_shard_size =
@@ -1105,7 +1105,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
     if (cfg_.metadata_size_bytes > 0) {
         // Per-coord service-core metadata staging region (one per mesh coord). The
-        // master forwarder fans the replicated metadata IN to this region, and the
+        // metadata master worker fans the replicated metadata IN to this region, and the
         // persistent sender reads it from here and ships it as the trailing socket
         // page. Zero-initialized so a stale read can't masquerade as valid metadata.
         const uint32_t l1_align = hal::get_l1_alignment();
@@ -1326,11 +1326,11 @@ CoreRange D2HStreamService::get_worker_cores() const {
     return *cfg_.worker_cores;
 }
 
-CoreCoord D2HStreamService::get_master_forwarder_core() const {
+CoreCoord D2HStreamService::get_metadata_master_core() const {
     TT_FATAL(
-        cfg_.metadata_size_bytes > 0 && cfg_.master_forwarder_core.has_value(),
-        "D2HStreamService::get_master_forwarder_core: master forwarder is only configured when metadata is enabled.");
-    return *cfg_.master_forwarder_core;
+        cfg_.metadata_size_bytes > 0 && cfg_.metadata_master_core.has_value(),
+        "D2HStreamService::get_metadata_master_core: metadata master is only configured when metadata is enabled.");
+    return *cfg_.metadata_master_core;
 }
 
 DeviceAddr D2HStreamService::get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const {
@@ -1464,7 +1464,7 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
         .fifo_size_bytes = 0,
         .scratch_cb_size_bytes = 0,
         .worker_cores = std::nullopt,
-        .master_forwarder_core = std::nullopt,
+        .metadata_master_core = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
     };
 
@@ -1602,7 +1602,7 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
     // Drain the trailing metadata page each socket ships after its payload. The
     // metadata is replicated identically across devices, so socket 0's page is
     // returned to the caller and every other socket's page must match it byte for
-    // byte — a mismatch means a device/forwarder shipped a stale or divergent blob.
+    // byte — a mismatch means a device/worker shipped a stale or divergent blob.
     if (cfg_.metadata_size_bytes > 0) {
         TT_FATAL(!sockets_.empty(), "D2HStreamService::read_from_tensor: expected at least one socket for metadata");
         sockets_.front()->read(metadata_scratch_.data(), /*num_pages=*/1);
