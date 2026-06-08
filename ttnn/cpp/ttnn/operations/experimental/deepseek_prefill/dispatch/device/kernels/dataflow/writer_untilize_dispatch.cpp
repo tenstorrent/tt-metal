@@ -174,8 +174,9 @@ void kernel_main() {
                 uint32_t routed_expert = entry->routed_expert;
                 uint32_t page_idx = entry->page_idx;
                 uint32_t token_idx = entry->token_idx;
-                uint32_t k = entry->k;
-                int16_t weight = entry->weight;
+                uint32_t weight_k = entry->weight_k;
+                uint32_t k = unpack_k(weight_k);
+                int16_t weight = unpack_weight(weight_k);
 
                 // Payload source: this token's untilized row inside the compute output CB.
                 uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;

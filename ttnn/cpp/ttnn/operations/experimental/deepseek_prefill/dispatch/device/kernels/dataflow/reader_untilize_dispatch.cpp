@@ -295,8 +295,8 @@ void kernel_main() {
                 entry->routed_expert = (uint32_t)routed_expert;
                 entry->page_idx = page_idx;
                 entry->token_idx = token_idx;
-                entry->weight = weight;
-                entry->k = (uint16_t)k;
+                // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
+                entry->weight_k = pack_weight_k(weight, (uint16_t)k);
                 // Linearized destination device index. Under 1D it is unused by the fabric writer
                 // (route/distance drive the send); under 2D it is the only routing input — the
                 // writer recomputes the EDM direction and (mesh,chip) header from it.
