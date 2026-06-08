@@ -811,7 +811,7 @@ def convert_decoder_layer_weights(
 
     # Optional fused gate+up weight for shared expert MLP (one matmul instead of two).
     w_mlp_gate_up: Optional[ttnn.Tensor] = None
-    if os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "").strip() == "1":
+    if os.environ.get("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", "1").strip() != "0":
         gate_torch = state[f"{mlp_prefix}gate_proj.weight"]  # [out, in]
         up_torch = state[f"{mlp_prefix}up_proj.weight"]  # [out, in]
         gate_up_torch = torch.cat([gate_torch, up_torch], dim=0)  # [2*out, in]

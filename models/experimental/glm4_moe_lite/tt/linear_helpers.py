@@ -212,11 +212,8 @@ def lm_head_linear(
     """LM head: interleaved activations + weights with tuned 1D multicast program config.
 
     Setting ``program_config`` flips ttnn.linear's implicit fidelity default from HiFi2 to LoFi
-    (matmul_device_operation.cpp::create_matmul_attributes). For the LM-head reduction
-    over hidden_size that drop is enough to flip top-1 token selection and produce
-    template-style drift, so we pin an explicit HiFi4 + fp32 DST accumulation kernel config
-    here. ``fp32_dest_acc_en`` is also threaded into ``compute_1d_prog_cfg`` so the
-    out-subblock heuristic respects the smaller (4-tile) DST budget.
+    (matmul_device_operation.cpp::create_matmul_attributes). We pin HiFi2 explicitly to match
+    the implicit default and avoid LoFi quality loss on the logit reduction.
 
     When the weight ``b`` is DRAM WIDTH_SHARDED (set via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1),
     routes to ``_lm_head_dram_sharded`` which uses parallel direct-DRAM reads instead of the
@@ -233,7 +230,7 @@ def lm_head_linear(
             b,
             m_total,
             overrides=overrides or LM_HEAD_MATMUL_OVERRIDES,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
         ),
         "compute_kernel_config": _lm_head_compute_kernel_config(),
     }
@@ -247,9 +244,9 @@ def lm_head_linear(
 
 def _lm_head_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,
+        fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
 
@@ -386,6 +383,14 @@ def _prefill_1d_prog_and_ws_mc(device: Any, b_weight: ttnn.Tensor, m_total: int)
     return prog_cfg, out_mc
 
 
+def _to_l1_if_needed(a: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
+    """Return (a_l1, was_copied). Skip the copy when a is already L1 interleaved."""
+    mc = a.memory_config()
+    if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return a, False
+    return ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG), True
+
+
 def _prefill_linear_ws_out(
     a: ttnn.Tensor,
     b: ttnn.Tensor,
@@ -421,11 +426,11 @@ def prefill_linear_ws_out(
         m_total *= int(a.shape[i])
     prog_cfg, ws_mc = _prefill_1d_prog_and_ws_mc(device, b, m_total)
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
-    # Move activation to L1 interleaved so the matmul reads from L1 instead of DRAM.
-    # Sweep confirmed l1/dram/ws beats dram/dram/ws for all 6 GLM-4 prefill shapes.
-    a_l1 = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    # Move activation to L1 interleaved; skip copy if the caller already did it.
+    a_l1, _copied = _to_l1_if_needed(a)
     out_sharded = ttnn.linear(a_l1, b, program_config=prog_cfg, memory_config=ws_mc, compute_kernel_config=ckc)
-    ttnn.deallocate(a_l1, force=False)
+    if _copied:
+        ttnn.deallocate(a_l1, force=False)
     downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.to_memory_config(out_sharded, downstream_mc)
     ttnn.deallocate(out_sharded, force=False)
@@ -487,11 +492,12 @@ def prefill_per_head_linear(
     )
 
     ckc = compute_kernel_config if compute_kernel_config is not None else _PREFILL_CKC
-    a_l1 = ttnn.to_memory_config(a, ttnn.L1_MEMORY_CONFIG)
+    a_l1, _copied = _to_l1_if_needed(a)
     out_l1 = ttnn.linear(
         a_l1, b, program_config=prog_cfg, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=ckc
     )
-    ttnn.deallocate(a_l1, force=False)
+    if _copied:
+        ttnn.deallocate(a_l1, force=False)
     downstream_mc = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     out = ttnn.to_memory_config(out_l1, downstream_mc)
     ttnn.deallocate(out_l1, force=False)

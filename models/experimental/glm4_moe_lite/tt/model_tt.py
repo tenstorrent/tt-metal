@@ -968,7 +968,11 @@ class Glm4MoeLiteDenseOnlyTT:
         ttnn.deallocate(x, force=False)
 
         t0 = time.perf_counter() if profile_on else 0.0
-        x_last = self.final_norm(x_last, mode="decode")
+        _x_last_dram = x_last
+        _x_last_l1 = ttnn.to_memory_config(x_last, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(_x_last_dram, force=False)
+        x_last = self.final_norm(_x_last_l1, mode="decode")
+        ttnn.deallocate(_x_last_l1, force=False)
         logits_tt = self._lm_head_linear(x_last, self.lm_head_w)
         if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
             cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
