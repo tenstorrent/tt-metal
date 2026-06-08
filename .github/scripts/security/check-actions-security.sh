@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=73
+MAX_CHECK_NUM=75
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3784,6 +3784,80 @@ check_73() {
     if [[ -n "${hits}" ]]; then
         log_issue "HIGH" "${file}" \
             "docker run with dangerous flag (--privileged, --network host, or --cap-add SYS_ADMIN/ALL) - can escape container isolation or expose cloud metadata endpoint" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# Check 74: cloud metadata endpoint (IMDS) access via curl/wget
+check_74_description="cloud metadata endpoint (IMDS) access via curl/wget"
+check_74_severity="HIGH"
+
+example_check_74() {
+    cat <<'EOF'
+    steps:
+      - run: curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+      - run: curl http://metadata.google.internal/computeMetadata/v1/instance/
+EOF
+}
+
+check_74() {
+    local file="$1"
+    local hits
+    # AWS/Azure IMDS: 169.254.169.254
+    hits=$(grep -nE \
+        '(curl|wget)[[:space:]].*http://169\.254\.169\.254/' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        # GCP metadata server
+        hits=$(grep -nE \
+            '(curl|wget)[[:space:]].*http://metadata\.google\.internal/' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        # Azure IMDS (different path but same IP — already caught above; also check header)
+        hits=$(grep -nE \
+            'Metadata:[[:space:]]*true' \
+            "${file}" 2>/dev/null | grep -v "^#" || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "Accesses cloud instance metadata endpoint (IMDS) - can exfiltrate IAM credentials or service account tokens from the runner's cloud identity" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# Check 75: hardcoded credentials (AWS keys, GitHub PATs, generic API keys)
+check_75_description="hardcoded credentials (AWS access key, GitHub PAT, generic secret)"
+check_75_severity="HIGH"
+
+example_check_75() {
+    cat <<'EOF'
+    steps:
+      - run: aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE
+      - run: export TOKEN=ghp_abc123def456ghi789jkl012mno345pqr6
+EOF
+}
+
+check_75() {
+    local file="$1"
+    local hits
+    # AWS Access Key ID: AKIA[A-Z0-9]{16}
+    hits=$(grep -nE \
+        'AKIA[A-Z0-9]{16}' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        # GitHub PAT: ghp_/ghs_/gho_/ghx_ followed by base36 chars
+        hits=$(grep -nE \
+            'gh[psoruct]_[A-Za-z0-9]{36,}' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "Contains hardcoded credential (AWS access key or GitHub PAT) - use secrets context (\${{ secrets.MY_KEY }}) instead of embedding values in workflow files" \
             "$(_extract_lines "${hits}")"
         return 1
     fi

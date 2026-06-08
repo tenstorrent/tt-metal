@@ -2512,6 +2512,109 @@ jobs:
       - run: docker run --cap-add=NET_BIND_SERVICE ubuntu id
 EOF
 
+# --- Check 74: cloud metadata endpoint (IMDS) access ---
+
+assert_detects "check 74 flags curl to AWS IMDS" "74" "IMDS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl http://169.254.169.254/latest/meta-data/iam/security-credentials/
+EOF
+
+assert_detects "check 74 flags wget to AWS IMDS" "74" "IMDS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: wget -qO- http://169.254.169.254/latest/meta-data/hostname
+EOF
+
+assert_detects "check 74 flags curl to GCP metadata server" "74" "IMDS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/
+EOF
+
+assert_clean "check 74 accepts curl to normal HTTPS endpoint" "74" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -s https://api.example.com/health
+EOF
+
+# --- Check 75: hardcoded credentials ---
+
+assert_detects "check 75 flags AWS access key ID" "75" "credential" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE
+EOF
+
+assert_detects "check 75 flags GitHub PAT (ghp_)" "75" "credential" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: export GITHUB_TOKEN=ghp_abc123def456ghi789jkl012mno345pqr678
+EOF
+
+assert_detects "check 75 flags GitHub server-to-server token (ghs_)" "75" "credential" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -H "Authorization: token ghs_abc123def456ghi789jkl012mno345pqr678" https://api.github.com
+EOF
+
+assert_clean "check 75 accepts secrets context reference" "75" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: aws s3 ls
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
