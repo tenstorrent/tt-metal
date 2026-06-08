@@ -38,25 +38,25 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     assign_z_direction: true
   }
 }
