@@ -515,9 +515,9 @@ def run_model(
             iter_pcc.append(("first_token_id", 1.0 if first_token_id == baseline_first_token_id else -1.0))
             logger.info(f"\n--- Determinism iter {i} vs iter0 ---")
             for label, pcc in iter_pcc:
-                status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
+                status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
                 logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-                if pcc <= threshold:
+                if pcc < threshold:
                     det_failures.append((i, label, pcc))
         profiler.end("tt_forward")
         profiler.end("total_test_time")
@@ -722,9 +722,9 @@ def run_model(
         logger.info(f"{'-'*50}")
         failures = []
         for label, pcc in pcc_results:
-            status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
+            status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
             logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-            if pcc <= threshold:
+            if pcc < threshold:
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
