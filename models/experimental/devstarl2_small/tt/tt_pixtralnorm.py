@@ -8,11 +8,11 @@ from __future__ import annotations
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import pad_by_zero
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     vision_rms_norm_block_shard_eligible,
     vision_rms_norm_block_shard_memcfg,
     vision_rms_norm_block_shard_program_config,
+    vision_rms_norm_gamma_weight,
     vision_rms_norm_memcfg,
     vision_rms_norm_prepare_block_shard_input,
 )
@@ -57,12 +57,12 @@ class TtPixtralRMSNorm(LightweightModule):
         if pytorch_gamma.dim() != 1:
             raise ValueError(f"Expected 1D gamma at {key!r}, got shape {tuple(pytorch_gamma.shape)}.")
 
-        self.weight = pad_by_zero(
+        self.weight = vision_rms_norm_gamma_weight(
             pytorch_gamma,
             mesh_device,
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
-            dtype,
-        )[0]
+            dtype=dtype,
+        )
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         seq_len = int(hidden_states.shape[-2])

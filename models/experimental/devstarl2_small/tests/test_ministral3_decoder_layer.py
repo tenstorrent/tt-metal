@@ -17,7 +17,7 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Decoder
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat
+from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat, resolve_rope_parameters
 from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer
 from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -151,9 +151,7 @@ def test_ministral3_decoder_layer_decode_pcc_devstral_weights(
         assert isinstance(layer, Ministral3DecoderLayer), type(layer)
         layer.eval()
 
-    rope_params = text_cfg.rope_parameters or {}
-    if not isinstance(rope_params, dict):
-        rope_params = dict(rope_params)
+    rope_params = resolve_rope_parameters(text_cfg)
 
     tt_ccl = TT_CCL(mesh_device)
     transformation_mats = {"decode": None, "prefill": None}

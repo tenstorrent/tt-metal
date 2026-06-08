@@ -66,14 +66,20 @@ class RMSNorm(LightweightModule):
         )
 
         if self.is_distributed:
+            mesh_sh = list(device.shape)
+            # Shard gamma dim-2 along whichever mesh axis has >1 device ([1,4] vs [4,1]).
+            shard_dims = (None, 2) if mesh_sh[1] > 1 else (2, None)
+            distributed_cache_name = (
+                None if weight_cache_path is None else weight_cache_path / (weight_name + "_distributed")
+            )
             self.weight_distributed = ttnn.as_tensor(
                 torch_weight,
                 device=device,
                 dtype=weight_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=weight_memory_config,
-                cache_file_name=cache_name,
-                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                cache_file_name=distributed_cache_name,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_sh)
                 if is_mesh_device
                 else None,
             )

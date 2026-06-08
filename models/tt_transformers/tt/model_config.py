@@ -2386,6 +2386,7 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Devstral-Small-2-24B": {"P150": 8, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2739,9 +2740,13 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params (transformers 5.x nests these under `rope_parameters`)
-        self.rope_theta = get_rope_theta(text_config)
-        self.rope_theta_local = get_rope_local_base_freq(text_config)
+        # RoPE params (transformers 5.x stores theta in rope_parameters)
+        rope_parameters = text_config.get("rope_parameters") or {}
+        if isinstance(rope_parameters, dict) and rope_parameters.get("rope_theta") is not None:
+            self.rope_theta = float(rope_parameters["rope_theta"])
+        else:
+            self.rope_theta = text_config.get("rope_theta")
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
             self.sliding_window is not None
@@ -2750,14 +2755,14 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
-        rope_scaling_params = get_rope_scaling(text_config)
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        rope_scaling_params = text_config.get("rope_scaling", None) or (
+            rope_parameters if isinstance(rope_parameters, dict) and rope_parameters else None
+            self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
             else None
         )
-
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
         # Configurable MLP activation type
@@ -2827,7 +2832,11 @@ class ModelArgs:
         # Common vision parameters for all models
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
-        self.vision_rope_theta = get_rope_theta(vision_config, default=10000.0)
+        vision_rope_parameters = vision_config.get("rope_parameters") or {}
+        if isinstance(vision_rope_parameters, dict) and vision_rope_parameters.get("rope_theta") is not None:
+            self.vision_rope_theta = float(vision_rope_parameters["rope_theta"])
+        else:
+            self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
         self.image_token_index = vision_config.get("image_token_index", 10)
 
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -3017,11 +3026,8 @@ class ModelArgs:
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
-        # was folded into AutoModelForImageTextToText (available since 4.46).
-        for model_cls in (AutoModelForImageTextToText,):
-            if type(self.hf_config) in model_cls._model_mapping:
-                return model_cls
+        if type(self.hf_config) in AutoModelForImageTextToText._model_mapping:
+            return AutoModelForImageTextToText
 
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 

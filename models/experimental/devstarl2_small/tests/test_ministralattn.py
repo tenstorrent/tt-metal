@@ -15,7 +15,7 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Attenti
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat
+from models.experimental.devstarl2_small.devstral_utils import apply_fp8_dequantize_compat, resolve_rope_parameters
 from models.experimental.devstarl2_small.tt.tt_ministralattn import TtMinistralAttention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -135,9 +135,7 @@ def test_ministral3_attention_pcc_devstral_weights(
         past_key_values=None,
     )
 
-    rope_params = text_cfg.rope_parameters or {}
-    if not isinstance(rope_params, dict):
-        rope_params = dict(rope_params)
+    rope_params = resolve_rope_parameters(text_cfg)
 
     tt_ccl = TT_CCL(mesh_device)
     transformation_mats = {"decode": None, "prefill": None}

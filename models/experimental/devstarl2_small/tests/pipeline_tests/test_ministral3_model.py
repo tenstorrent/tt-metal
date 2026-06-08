@@ -16,6 +16,7 @@ from transformers.models.ministral3.modeling_ministral3 import Ministral3Model
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.experimental.devstarl2_small.devstral_utils.multimodal_demo_helpers import resolve_rope_parameters
 from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -143,9 +144,7 @@ def _run_ministral3_model_prefill_pcc(
         )
     ref_out = text_root.norm(hidden)
 
-    rope_params = text_cfg.rope_parameters or {}
-    if not isinstance(rope_params, dict):
-        rope_params = dict(rope_params)
+    rope_params = resolve_rope_parameters(text_cfg)
 
     tt_ccl = TT_CCL(mesh_device)
     transformation_mats = {"decode": None, "prefill": None}

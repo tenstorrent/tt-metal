@@ -7,10 +7,10 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import pad_by_zero
 from models.experimental.devstarl2_small.devstral_utils.fp8_dequantize_compat import apply_fp8_dequantize_compat
 from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
     vision_activation_memcfg,
+    vision_rms_norm_gamma_weight,
     vision_rms_norm_memcfg,
     vision_seq_memcfg,
 )
@@ -36,11 +36,11 @@ class TTMistral3MultiModalProjector(LightweightModule):
         self.state_dict_prefix = state_dict_prefix
         self.dtype = dtype
 
-        self.norm_weight, _ = pad_by_zero(
+        self.norm_weight = vision_rms_norm_gamma_weight(
             state_dict[f"{state_dict_prefix}norm.weight"],
-            device=mesh_device,
-            tt_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            tt_dtype=dtype,
+            mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+            dtype=dtype,
         )
         self.norm_eps = eps
         self.patch_merger = TTMistral3PatchMerger(

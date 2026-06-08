@@ -30,6 +30,30 @@ if TYPE_CHECKING:
     from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
+_DEFAULT_ROPE_THETA = 10000.0
+
+
+def resolve_rope_parameters(config, *, default_theta: float = _DEFAULT_ROPE_THETA) -> dict:
+    """Normalize RoPE params for transformers 4.x (flat ``rope_theta``) and 5.x (``rope_parameters`` dict)."""
+    if hasattr(config, "standardize_rope_params"):
+        config.standardize_rope_params()
+
+    rp = getattr(config, "rope_parameters", None)
+    if rp is None and isinstance(config, dict):
+        rp = config.get("rope_parameters")
+    if not rp:
+        rp = {}
+    if not isinstance(rp, dict):
+        rp = dict(rp)
+
+    if "rope_theta" not in rp:
+        legacy = getattr(config, "rope_theta", None)
+        if legacy is None and isinstance(config, dict):
+            legacy = config.get("rope_theta")
+        rp["rope_theta"] = float(legacy if legacy is not None else default_theta)
+    if "rope_type" not in rp:
+        rp["rope_type"] = rp.get("type", "default")
+    return rp
 
 
 def text_model_root(multimodal_inner: Mistral3Model):
@@ -381,10 +405,8 @@ def tt_lm_head_logits_last_token(
 
 
 def devstral_supports_on_device_sampling(model_args: ModelArgs, mesh_device) -> bool:
-    """True if vocab shard ≤64k and mesh is not [1,1] (TTSampling corrupts on single device)."""
-    if list(mesh_device.shape) == [1, 1]:
-        return False
-    sampling_splits = model_args.num_devices
+    """True if vocab shard ≤64k per split (mirrors model.py TTSampling initialization)."""
+    sampling_splits = model_args.num_devices if list(mesh_device.shape) != [1, 1] else 2
     return model_args.vocab_size // sampling_splits <= 64 * 1024
 
 

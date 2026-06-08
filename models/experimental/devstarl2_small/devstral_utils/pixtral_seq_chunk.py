@@ -16,6 +16,34 @@ VISION_L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 TILE = 32
 
 
+def vision_rms_norm_gamma_weight(gamma, device, memory_config, dtype=ttnn.bfloat16):
+    """Tile-pad a 1D gamma and upload for ``ttnn.rms_norm`` (replaces removed ``pad_by_zero``)."""
+    hidden = int(gamma.shape[0])
+    tt = ttnn.from_torch(
+        gamma.reshape(1, 1, 1, hidden),
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    pad_h = TILE - 1
+    pad_w = (TILE - (hidden % TILE)) % TILE
+    if pad_h or pad_w:
+        tt = ttnn.pad(tt, padding=[(0, 0), (0, 0), (0, pad_h), (0, pad_w)], value=0.0)
+    tt = tt.to(ttnn.TILE_LAYOUT)
+    is_mesh = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+    if is_mesh:
+        tt = ttnn.from_torch(
+            ttnn.to_torch(tt),
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+    else:
+        tt = tt.to(device, memory_config)
+    return tt
+
+
 def vision_activation_memcfg(num_elements: int) -> ttnn.MemoryConfig:
     """L1 for vision ops when activation fits L1; else DRAM (avoids SDPA/CB clashes on large images)."""
     cap_raw = os.environ.get("PIXTRAL_VISION_L1_SEQ_CAP", "4096")
