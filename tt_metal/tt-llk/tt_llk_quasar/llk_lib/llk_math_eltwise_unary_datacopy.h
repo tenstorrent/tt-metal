@@ -146,8 +146,8 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_
  * @brief Perform an eltwise unary datacopy operation.
  *
  * @param num_rows_per_tile: Number of rows per tile, used to compute the destination write address
- * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
- * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function.
  */
 inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_idx)

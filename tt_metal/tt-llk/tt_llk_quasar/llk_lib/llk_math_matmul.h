@@ -14,7 +14,8 @@ using namespace ckernel::math;
 /**
  * @brief Initializes addrmod for matrix multiply operation.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when math is Float32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
@@ -82,7 +83,8 @@ inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 /**
  * @brief Initializes addrmod for matrix multiply operation using the direct-indexing instruction variant.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when math is Float32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
@@ -115,10 +117,11 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  * @brief Initializes mop config for matrix multiply operation.
  *
  * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
- * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
- * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32.
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when math is Float32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
@@ -172,10 +175,11 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
 /**
  * @brief Initializes mop config for matrix multiply operation using the direct-indexing instruction variant.
  *
- * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
- * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32.
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when math is Float32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
@@ -273,10 +277,11 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
  * @brief Initializes addrmod and config for matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA.
  *
  * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
- * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
- * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32.
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when math is Float32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam EN_DI: Enable direct indexing matrix multiplication
  * @tparam EN_X2: Enable matrix multiplication with MXFP_2X mode (double the performance)
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
@@ -307,8 +312,8 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
  *
  * Input 0 = 1 tile -> SrcB reg, Input 1 = 1 tile -> SrcA reg, output = 1 tile -> Dst reg at specified dst_index.
  *
- * @param dst_index: Tile index in destination register. For DstSync::SyncHalf: values = [0-7] for Float16b, values = [0-3] for Float32. For DstSync::SyncFull:
- * values = [0-15] for Float16b, values = [0-7] for Float32
+ * @param dst_index: Tile index in destination register. For DstSync::SyncHalf: values = [0-7] for 16-bit formats, values = [0-3] for 32-bit formats. For
+ * DstSync::SyncFull: values = [0-15] for 16-bit formats, values = [0-7] for 32-bit formats
  * @note Call @ref _llk_math_matmul_init_ with matching template args before this function.
  */
 inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
@@ -322,8 +327,8 @@ inline void _llk_math_matmul_tile_(const std::uint32_t dst_index)
  * @brief Does matrix multiply operation of Input 0 * Input 1 -> SrcB * SrcA over a block of tiles.
  *
  * Input 0 dim = [rt_dim, 1], Input 1 dim = [1, ct_dim]; output is a matrix block of dimension [rt_dim, ct_dim].
- * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
- * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in Float16b, ct_dim * rt_dim <= 8 tiles in Float32.
+ * For DstSync::SyncHalf: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
+ * For DstSync::SyncFull: ct_dim * rt_dim <= 16 tiles in a 16-bit format, ct_dim * rt_dim <= 8 tiles in a 32-bit format.
  *
  * IMPORTANT NOTES:
  * 1. Dest index always assumed to start at 0 for this operation.

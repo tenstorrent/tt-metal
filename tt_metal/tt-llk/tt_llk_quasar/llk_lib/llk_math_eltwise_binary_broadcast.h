@@ -21,7 +21,8 @@ using namespace ckernel::math;
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
@@ -84,7 +85,8 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
  * @brief Sets up addrmods for elementwise binary broadcast operations.
  *
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_addrmod_()
@@ -151,7 +153,8 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ *values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
@@ -173,8 +176,8 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
  * SrcB either has row, col or scalar datums broadcasted to the rest of the tile before elementwise operation.
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
  *
- * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
- * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @note Call @ref _llk_math_eltwise_binary_broadcast_init_ with matching template args before this function.
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)

@@ -87,7 +87,8 @@ inline std::uint32_t eltwise_di_binary_func(
  * @brief Sets up mop config for elementwise binary operations.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
@@ -133,7 +134,8 @@ inline void _llk_math_eltwise_binary_mop_config_(const ckernel::TensorShape& ten
  * @brief Sets up mop config for elementwise binary operations using the direct-indexing instruction variant.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param acc_to_dest: When true, accumulate the result into the destination register instead of overwriting
  */
@@ -206,7 +208,8 @@ inline void _llk_math_eltwise_di_binary_mop_config_(const ckernel::TensorShape& 
 /**
  * @brief Sets up addrmods for elementwise binary operations.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_addrmod_()
@@ -237,7 +240,8 @@ inline void _llk_math_eltwise_binary_addrmod_()
 /**
  * @brief Sets up addrmods for elementwise binary operations using the direct-indexing instruction variant.
  *
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_di_binary_addrmod_()
@@ -260,7 +264,8 @@ inline void _llk_math_eltwise_di_binary_addrmod_()
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
  *
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam MATH_FIDELITY_TYPE: Controls precision of multiplication when input is Tf32 format, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam EN_DI: Enable the direct-indexing instruction variant
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
@@ -305,8 +310,8 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape& tensor_sh
  * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB. The MOVD2A/B instruction copies a face from dest to the source register
  * before each MOP run, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
- * @param tile_idx: Tile index into the destination register. If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
- * full mode. If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
  * @param tensor_shape: Contains all the information of the tensor shape: num faces, face row/col dim, etc
  * @param clear_in_fp32_mode: When true, clears the dest face in Float32 mode during dest reuse
  * @note Call @ref _llk_math_eltwise_binary_init_ with matching template args before this function.

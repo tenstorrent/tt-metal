@@ -16,7 +16,7 @@ using namespace ckernel;
  * The matrix multiply FPU operation computes SrcB * SrcA. To obtain the row-major result
  * Input0 * Input1, SrcA and SrcB are loaded from Input1 and Input0 respectively. This unpacker only
  * sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]; kt_dim is assumed to be iterated over outside this
- * call. Constraints: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
+ * call. Constraints: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
  *
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 32
@@ -58,7 +58,7 @@ inline void _llk_unpack_matmul_mop_config_(
  * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim], SrcA and SrcB are loaded
  * from Input1 and Input0 respectively. This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim];
  * kt_dim is assumed to be iterated over outside this call. Constraints: ct_dim * rt_dim <= 8 tiles in
- * Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
+ * a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
  *
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, currently only supported for SrcA but can support other unpackers, values = <true/false>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
@@ -84,7 +84,7 @@ inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t 
  * Unpacks for the rt and ct dims of input0 and input1 respectively, producing
  * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]. This unpacker only sets
  * up Input0 [rt_dim, 1] x Input1 [1, ct_dim]; kt_dim is assumed to be iterated over outside this call.
- * Constraints: ct_dim * rt_dim <= 8 tiles in Float16b, ct_dim * rt_dim <= 4 tiles in Float32.
+ * Constraints: ct_dim * rt_dim <= 8 tiles in a 16-bit format, ct_dim * rt_dim <= 4 tiles in a 32-bit format.
  *
  * @param ct_dim: Number of tiles in the column dimension for input1 of the matrix multiply.
  * @param rt_dim: Number of tiles in the row dimension for input0 of the matrix multiply.
