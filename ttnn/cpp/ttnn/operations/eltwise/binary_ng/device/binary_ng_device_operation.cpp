@@ -291,6 +291,12 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor_b.has_value()) {
         TT_FATAL(
+            input_tensor_a.dtype() == input_tensor_b->dtype(),
+            "Mixed dtype is not supported for binary operation, dtype A: {} and dtype B: {}",
+            input_tensor_a.dtype(),
+            input_tensor_b->dtype());
+
+        TT_FATAL(
             ttnn::operations::binary::utils::is_input_dtype_supported(
                 attributes.binary_op_type, input_tensor_b->dtype()),
             "Input tensor B dtype {} is not supported for binary operation {}",
