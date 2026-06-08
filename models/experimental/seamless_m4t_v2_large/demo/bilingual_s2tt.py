@@ -54,6 +54,7 @@ if str(_REPO_ROOT) not in sys.path:
 # Reuse helpers already written for the full demo.
 from models.experimental.seamless_m4t_v2_large.demo.demo import (
     _decode,
+    _hf_gen_kwargs,
     _save_wav,
     _waveform_to_mono_fp32,
     make_tt_model,
@@ -295,6 +296,25 @@ def detect_source_lang(tt_model, gc, feats_tt, attn_tt, eos_ids: set) -> Tuple[s
 # ---------------------------------------------------------------------------
 
 
+def hf_translate_to(model, tokenizer, feats: torch.Tensor, sattn: torch.Tensor, tgt_lang: str, hf_gen: dict) -> str:
+    """Reference path: run the CPU HuggingFace model's generate() (fp32) for one segment.
+
+    Same pre-model pipeline as the TT path (VAD / segmentation / direction); only the inference
+    backend differs. Used by --reference to get a model-quality baseline independent of the TT
+    (bf16 / on-device) implementation.
+    """
+    with torch.no_grad():
+        out = model.generate(
+            input_features=feats.float(),
+            attention_mask=sattn,
+            generate_speech=False,
+            tgt_lang=tgt_lang,
+            **hf_gen,
+        )
+    ids = (out.sequences[0] if hasattr(out, "sequences") else out[0]).cpu().long().tolist()
+    return tokenizer.batch_decode([ids], skip_special_tokens=True)[0]
+
+
 def translate_to(tt_model, tokenizer, feats_tt, attn_tt, tgt_lang: str, gen_common: dict) -> str:
     out = tt_model.generate(
         input_features=feats_tt,
@@ -468,10 +488,24 @@ def main() -> None:
         help="Process at most N seconds from --start-seconds; <=0 = to end of file.",
     )
     ap.add_argument("--make-test-audio", type=Path, metavar="OUT", help="Generate a JP+EN test WAV and exit.")
+    ap.add_argument(
+        "--reference",
+        action="store_true",
+        help="Run the CPU HuggingFace model (fp32) instead of the Tenstorrent model — a quality baseline "
+        "independent of the TT/bf16 path. Same VAD/segmentation/direction. Slow. Needs a fixed direction "
+        "(--source-lang eng|jpn) or --lid alternate (self-score LID requires the TT model).",
+    )
     args = ap.parse_args()
 
     if not args.make_test_audio and not args.audio and not args.youtube:
         ap.error("provide --audio FILE, --youtube URL, or --make-test-audio OUT")
+    if args.reference:
+        if args.make_test_audio:
+            ap.error("--reference cannot be combined with --make-test-audio (synthesis needs the TT model).")
+        if args.source_lang == "auto" and args.lid != "alternate":
+            ap.error(
+                "--reference needs a direction without the TT model: use --source-lang eng|jpn, " "or --lid alternate."
+            )
 
     # YouTube mode: fetch the audio track up-front (fail fast before loading the model).
     if args.youtube:
@@ -496,6 +530,8 @@ def main() -> None:
     gen_common["max_new_tokens"] = int(args.max_new_tokens)
     gen_common["num_beams"] = max(1, int(args.num_beams))
     eos_ids = {int(gen_common["eos_token_id"])}
+    # Reference (HF CPU) generate kwargs: same gen settings, minus the TT-only perf flags.
+    hf_gen = _hf_gen_kwargs(gen_common)
 
     # ---- segment input audio up-front (so test-audio mode skips this) ----
     segments: List[Tuple[int, int]] = []
@@ -520,26 +556,32 @@ def main() -> None:
         if not segments:
             raise SystemExit("No speech segments found — try lowering --top-db.")
 
-    try:
-        original_default = ttnn.GetDefaultDevice()
-    except Exception:
-        original_default = None
-    device, mesh_shape = _open_device()
-    ttnn.SetDefaultDevice(device)
-    rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
-    print(f"  Device: MeshShape({rows}, {cols}) — TP={rows * cols}")
+    original_default = None
+    device = None
+    if not args.reference:
+        try:
+            original_default = ttnn.GetDefaultDevice()
+        except Exception:
+            original_default = None
+        device, mesh_shape = _open_device()
+        ttnn.SetDefaultDevice(device)
+        rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+        print(f"  Device: MeshShape({rows}, {cols}) — TP={rows * cols}")
+    else:
+        print("  Backend: HuggingFace reference (CPU, fp32) — no Tenstorrent device")
 
     gc = model.generation_config
     out_lines: List[str] = []
     tt_model = None
     try:
-        tt_model = make_tt_model(device, model, cfg, t2u_cfg)
+        if not args.reference:
+            tt_model = make_tt_model(device, model, cfg, t2u_cfg)
 
         if args.make_test_audio:
             make_test_audio(tt_model, processor, cfg, args.make_test_audio, gen_common)
             return
 
-        if args.keep_programs:
+        if args.keep_programs and tt_model is not None:
             # The per-segment cost is dominated by rebuilding the conv1d/matmul prep caches and
             # re-capturing the decode trace, NOT by kernel (re)compiles. So replace the full
             # clear_runtime_program_cache with one that ONLY releases the decode trace — required
@@ -597,18 +639,25 @@ def main() -> None:
                 ttnn.deallocate(attn_tt)
             tgt = "eng" if src == "jpn" else "jpn"
 
-            # ---- translate (and optionally transcribe) the FULL segment with the fast path ----
-            tt_model.prewarm_speech_encoder([int(feats.shape[1])])
-            tt_model.clear_runtime_program_cache()
-            ttnn.synchronize_device(device)
-            feats_tt = torch_feats_to_ttnn(device, feats)
-            attn_tt = torch_ids_to_ttnn(device, sattn)
-            translation = translate_to(tt_model, tokenizer, feats_tt, attn_tt, tgt, gen_common)
-            transcript = None
-            if not args.no_transcribe:
-                feats_tt2 = torch_feats_to_ttnn(device, feats)
-                attn_tt2 = torch_ids_to_ttnn(device, sattn)
-                transcript = translate_to(tt_model, tokenizer, feats_tt2, attn_tt2, src, gen_common)
+            # ---- translate (and optionally transcribe) the FULL segment ----
+            if args.reference:
+                # CPU HuggingFace reference (fp32) — same pipeline, different backend.
+                translation = hf_translate_to(model, tokenizer, feats, sattn, tgt, hf_gen)
+                transcript = None
+                if not args.no_transcribe:
+                    transcript = hf_translate_to(model, tokenizer, feats, sattn, src, hf_gen)
+            else:
+                tt_model.prewarm_speech_encoder([int(feats.shape[1])])
+                tt_model.clear_runtime_program_cache()
+                ttnn.synchronize_device(device)
+                feats_tt = torch_feats_to_ttnn(device, feats)
+                attn_tt = torch_ids_to_ttnn(device, sattn)
+                translation = translate_to(tt_model, tokenizer, feats_tt, attn_tt, tgt, gen_common)
+                transcript = None
+                if not args.no_transcribe:
+                    feats_tt2 = torch_feats_to_ttnn(device, feats)
+                    attn_tt2 = torch_ids_to_ttnn(device, sattn)
+                    transcript = translate_to(tt_model, tokenizer, feats_tt2, attn_tt2, src, gen_common)
 
             seg_model_s = time.perf_counter() - seg_t0
             total_model_s += seg_model_s
@@ -667,7 +716,8 @@ def main() -> None:
                 pass
         if original_default is not None:
             ttnn.SetDefaultDevice(original_default)
-        ttnn.close_mesh_device(device)
+        if device is not None:
+            ttnn.close_mesh_device(device)
 
 
 if __name__ == "__main__":
