@@ -10,7 +10,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -20,7 +20,7 @@
 namespace ttnn::prim {
 
 namespace {
-namespace m2 = tt::tt_metal::experimental::metal2_host_api;
+namespace m2 = tt::tt_metal::experimental;
 using namespace tt::tt_metal;
 
 // Resource identifier constants
@@ -57,23 +57,27 @@ constexpr const char* TP_P = "p";
 constexpr const char* TP_TEMP = "temp";
 constexpr const char* TP_OUTPUT = "output";
 
+inline m2::DFBSpecName DfbName(const char* name) { return m2::DFBSpecName{std::string{name}}; }
+inline m2::TensorParamName TpName(const char* name) { return m2::TensorParamName{std::string{name}}; }
+inline m2::KernelSpecName KernelName(const char* name) { return m2::KernelSpecName{std::string{name}}; }
+
 m2::KernelSpec::DFBBinding ProducerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::PRODUCER};
 }
 m2::KernelSpec::DFBBinding ConsumerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::CONSUMER};
 }
 
 m2::DataflowBufferSpec MakeDFB(
     const char* unique_id, uint32_t entry_size, uint32_t num_entries, tt::DataFormat data_format) {
     m2::DataflowBufferSpec dfb{
-        .unique_id = unique_id,
+        .unique_id = DfbName(unique_id),
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = data_format};
@@ -188,28 +192,27 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     ////////////////////////////////////////////////////////////////////////////
     // TensorParameters
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<m2::TensorParameter> tensor_parameters = {
-        {.unique_id = TP_INPUT_VALUES, .spec = input_values_tensor.tensor_spec()},
-        {.unique_id = TP_INPUT_INDICES, .spec = input_indices_tensor.tensor_spec()},
-        {.unique_id = TP_K, .spec = k.tensor_spec()},
-        {.unique_id = TP_P, .spec = p.tensor_spec()},
-        {.unique_id = TP_TEMP, .spec = temp.tensor_spec()},
-        {.unique_id = TP_OUTPUT, .spec = output_tensor.tensor_spec()},
-    };
+    std::vector<m2::TensorParameter> tensor_parameters;
+    tensor_parameters.push_back({.unique_id = TpName(TP_INPUT_VALUES), .spec = input_values_tensor.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_INPUT_INDICES), .spec = input_indices_tensor.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_K), .spec = k.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_P), .spec = p.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_TEMP), .spec = temp.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_OUTPUT), .spec = output_tensor.tensor_spec()});
 
     ////////////////////////////////////////////////////////////////////////////
     // Reader KernelSpec
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_spec;
-    reader_spec.unique_id = K_READER;
+    reader_spec.unique_id = KernelName(K_READER);
     reader_spec.source = std::filesystem::path{
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp"};
-    reader_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    reader_spec.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    reader_spec.compile_time_arg_bindings = {
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+    reader_spec.compile_time_args = {
         {"Ht", Ht},
         {"Wt", Wt},
         {"input_indices_page_size", aligned_final_indices_rm_unit_size},
@@ -222,23 +225,23 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         ProducerDFB(DFB_INDEX, "cb_index"),
     };
     reader_spec.tensor_bindings = {
-        {.tensor_parameter_name = TP_INPUT_VALUES, .accessor_name = "values"},
-        {.tensor_parameter_name = TP_INPUT_INDICES, .accessor_name = "indices"},
+        {.tensor_parameter_name = TpName(TP_INPUT_VALUES), .accessor_name = "values"},
+        {.tensor_parameter_name = TpName(TP_INPUT_INDICES), .accessor_name = "indices"},
     };
 
     ////////////////////////////////////////////////////////////////////////////
     // Writer KernelSpec — single KernelSpec; core_id is per-node named RTA
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec writer_spec;
-    writer_spec.unique_id = K_WRITER;
+    writer_spec.unique_id = KernelName(K_WRITER);
     writer_spec.source = std::filesystem::path{
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp"};
-    writer_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    writer_spec.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    writer_spec.compile_time_arg_bindings = {
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+    writer_spec.compile_time_args = {
         {"final_indices_stick_size", aligned_final_indices_rm_unit_size},
         {"out_stick_size", aligned_out0_unit_size},
         {"ids_per_batch", tile_width},
@@ -269,22 +272,22 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         ProducerDFB(DFB_TEMP, "cb_temp"),
     };
     writer_spec.tensor_bindings = {
-        {.tensor_parameter_name = TP_OUTPUT, .accessor_name = "output"},
-        {.tensor_parameter_name = TP_TEMP, .accessor_name = "temp"},
-        {.tensor_parameter_name = TP_K, .accessor_name = "k_tensor"},
-        {.tensor_parameter_name = TP_P, .accessor_name = "p_tensor"},
+        {.tensor_parameter_name = TpName(TP_OUTPUT), .accessor_name = "output"},
+        {.tensor_parameter_name = TpName(TP_TEMP), .accessor_name = "temp"},
+        {.tensor_parameter_name = TpName(TP_K), .accessor_name = "k_tensor"},
+        {.tensor_parameter_name = TpName(TP_P), .accessor_name = "p_tensor"},
     };
-    writer_spec.runtime_arguments_schema.named_runtime_args = {"core_id"};
+    writer_spec.runtime_arg_schema.runtime_arg_names = {"core_id"};
 
     ////////////////////////////////////////////////////////////////////////////
     // Compute KernelSpec — single KernelSpec; CTAs are uniform across cores
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec compute_spec;
-    compute_spec.unique_id = K_COMPUTE;
+    compute_spec.unique_id = KernelName(K_COMPUTE);
     compute_spec.source =
         std::filesystem::path{"ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp"};
-    compute_spec.config_spec = m2::ComputeConfiguration{};
-    compute_spec.compile_time_arg_bindings = {
+    compute_spec.hw_config = m2::ComputeHardwareConfig{};
+    compute_spec.compile_time_args = {
         {"Ht", Ht},
         {"Wt", Wt},
         {"logWt", static_cast<uint32_t>(std::log2(Wt))},
@@ -300,8 +303,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         std::string r = std::string(base) + "_r";
         compute_spec.dfb_bindings.push_back(ProducerDFB(name, w.c_str()));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(name, r.c_str()));
-        compute_spec.advanced_options.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = name, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+        compute_spec.advanced_options.dfb_self_loop_connectivities.emplace(
+            DfbName(name), m2::DFBSelfLoopConnectivity::INTRA);
     };
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_INPUT_VALUES, "input_values"));
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_INDEX, "index"));
@@ -322,8 +325,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // WorkUnitSpec
     ////////////////////////////////////////////////////////////////////////////
     m2::WorkUnitSpec wu{
-        .unique_id = WU_MAIN,
-        .kernels = {K_READER, K_WRITER, K_COMPUTE},
+        .name = WU_MAIN,
+        .kernels = {KernelName(K_READER), KernelName(K_WRITER), KernelName(K_COMPUTE)},
         .target_nodes = core_grid,  // NodeRangeSet aliases CoreRangeSet
     };
 
@@ -331,7 +334,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // ProgramSpec
     ////////////////////////////////////////////////////////////////////////////
     m2::ProgramSpec spec{
-        .program_id = "sampling",
+        .name = "sampling",
         .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores = {},
@@ -342,30 +345,28 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     ////////////////////////////////////////////////////////////////////////////
     // ProgramRunParams
     ////////////////////////////////////////////////////////////////////////////
-    m2::ProgramRunParams run_params;
+    m2::ProgramRunArgs run_params;
 
-    m2::ProgramRunParams::KernelRunParams writer_run{.kernel_spec_name = K_WRITER};
+    m2::ProgramRunArgs::KernelRunArgs writer_run{.kernel = KernelName(K_WRITER)};
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
-        writer_run.named_runtime_args.push_back({.node = m2::NodeCoord{core.x, core.y}, .args = {{"core_id", i}}});
+        writer_run.runtime_arg_values.push_back({.node = m2::NodeCoord{core.x, core.y}, .args = {{"core_id", i}}});
     }
-    // Per program_run_params.hpp: "KernelRunParams must be specified for ALL kernels in
+    // Per program_run_args.hpp: "KernelRunParams must be specified for ALL kernels in
     // the ProgramSpec." Reader and compute have no named RTAs/varargs, but we still need
     // an entry (with the kernel_spec_name set) so the framework doesn't fault on the
     // missing kernel.
-    run_params.kernel_run_params.push_back(m2::ProgramRunParams::KernelRunParams{.kernel_spec_name = K_READER});
-    run_params.kernel_run_params.push_back(std::move(writer_run));
-    run_params.kernel_run_params.push_back(m2::ProgramRunParams::KernelRunParams{.kernel_spec_name = K_COMPUTE});
+    run_params.kernel_run_args.push_back(m2::ProgramRunArgs::KernelRunArgs{.kernel = KernelName(K_READER)});
+    run_params.kernel_run_args.push_back(std::move(writer_run));
+    run_params.kernel_run_args.push_back(m2::ProgramRunArgs::KernelRunArgs{.kernel = KernelName(K_COMPUTE)});
 
     // Tensor args
-    run_params.tensor_args = {
-        {.tensor_parameter_name = TP_INPUT_VALUES, .tensor = input_values_tensor.mesh_tensor()},
-        {.tensor_parameter_name = TP_INPUT_INDICES, .tensor = input_indices_tensor.mesh_tensor()},
-        {.tensor_parameter_name = TP_K, .tensor = k.mesh_tensor()},
-        {.tensor_parameter_name = TP_P, .tensor = p.mesh_tensor()},
-        {.tensor_parameter_name = TP_TEMP, .tensor = temp.mesh_tensor()},
-        {.tensor_parameter_name = TP_OUTPUT, .tensor = output_tensor.mesh_tensor()},
-    };
+    run_params.tensor_args.emplace(TpName(TP_INPUT_VALUES), std::cref(input_values_tensor.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_INPUT_INDICES), std::cref(input_indices_tensor.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_K), std::cref(k.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_P), std::cref(p.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_TEMP), std::cref(temp.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_OUTPUT), std::cref(output_tensor.mesh_tensor()));
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

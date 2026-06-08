@@ -13,7 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
@@ -23,7 +23,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental::metal2_host_api;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -105,19 +105,23 @@ constexpr const char* TP_BETA = "beta";
 constexpr const char* TP_OUTPUT = "output";
 constexpr const char* TP_RECIP = "recip";
 
+inline m2::DFBSpecName DfbName(const char* name) { return m2::DFBSpecName{std::string{name}}; }
+inline m2::TensorParamName TpName(const char* name) { return m2::TensorParamName{std::string{name}}; }
+inline m2::KernelSpecName KernelName(const char* name) { return m2::KernelSpecName{std::string{name}}; }
+
 // Helper: build a DFB consumer binding.
 m2::KernelSpec::DFBBinding ConsumerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::CONSUMER};
 }
 
 m2::KernelSpec::DFBBinding ProducerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::PRODUCER};
 }
 
 m2::DataflowBufferSpec MakeDFB(
@@ -125,9 +129,9 @@ m2::DataflowBufferSpec MakeDFB(
     uint32_t entry_size,
     uint32_t num_entries,
     tt::DataFormat data_format,
-    std::optional<m2::TensorParameterName> borrowed_from = std::nullopt) {
+    std::optional<m2::TensorParamName> borrowed_from = std::nullopt) {
     m2::DataflowBufferSpec dfb{
-        .unique_id = unique_id,
+        .unique_id = DfbName(unique_id),
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = data_format};
@@ -427,31 +431,27 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     }
     if (use_welford) {
         // Borrowed-memory DFB backing the reciprocal LUT tensor.
-        dfbs.push_back(MakeDFB(
-            DFB_CB_RECIPROCALS,
-            reciprocal_CB_size_bytes,
-            1,
-            reciprocal_cb_data_format,
-            m2::TensorParameterName{TP_RECIP}));
+        dfbs.push_back(
+            MakeDFB(DFB_CB_RECIPROCALS, reciprocal_CB_size_bytes, 1, reciprocal_cb_data_format, TpName(TP_RECIP)));
     }
 
     ////////////////////////////////////////////////////////////////////////////
     // Build TensorParameters
     ////////////////////////////////////////////////////////////////////////////
     std::vector<m2::TensorParameter> tensor_parameters;
-    tensor_parameters.push_back({.unique_id = TP_INPUT_A, .spec = a.tensor_spec()});
-    tensor_parameters.push_back({.unique_id = TP_OUTPUT, .spec = output.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_INPUT_A), .spec = a.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_OUTPUT), .spec = output.tensor_spec()});
     if (b.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_RESIDUAL_B, .spec = b.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_RESIDUAL_B), .spec = b.value().tensor_spec()});
     }
     if (gamma.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_GAMMA, .spec = gamma.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_GAMMA), .spec = gamma.value().tensor_spec()});
     }
     if (beta.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_BETA, .spec = beta.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_BETA), .spec = beta.value().tensor_spec()});
     }
     if (use_welford) {
-        tensor_parameters.push_back({.unique_id = TP_RECIP, .spec = tensor_args.recip_tensor->tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_RECIP), .spec = tensor_args.recip_tensor->tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -460,41 +460,41 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // ---------- Reader ----------
     m2::KernelSpec reader_spec;
-    reader_spec.unique_id = READER_KERNEL;
+    reader_spec.unique_id = KernelName(READER_KERNEL);
     reader_spec.source = std::filesystem::path{reader_kernel_path};
     // Both Gen1 (WH/BH) and Gen2 (Quasar) configs are set so the same ProgramSpec
     // lowers on both archs. Gen2 uses QuasarDataMovementKernel under the hood — without
     // a `gen2_data_movement_config` entry, Quasar emulator runs reject the kernel.
-    reader_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    reader_spec.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
     // Named CTAs replace the legacy positional list. Slot meaning differs across the
     // four reader variants, so we set `block_size`, `W`, and (variant-specific) others.
-    reader_spec.compile_time_arg_bindings = {
+    reader_spec.compile_time_args = {
         {"block_size", block_size},
         {"W", W},
     };
     if (!large_tensor_needed) {
         // "ln" + "ln_rm_gb" readers take a use_welford CTA in slot[1] of the legacy
         // layout. (large-tensor variant doesn't take it.)
-        reader_spec.compile_time_arg_bindings.push_back({"use_welford", static_cast<uint32_t>(use_welford)});
+        reader_spec.compile_time_args.emplace("use_welford", static_cast<uint32_t>(use_welford));
     }
     // Variant-specific last CTA: elem_size_bytes (rm input or large_tensor rm),
     // gamma_stick_size (rm_gb with gamma rm), beta_stick_size (rm_gb with beta rm),
     // or tile_size of input dtype (rm_gb otherwise).
     if (input_is_row_major) {
-        reader_spec.compile_time_arg_bindings.push_back({"elem_size_bytes", static_cast<uint32_t>(a.element_size())});
+        reader_spec.compile_time_args.emplace("elem_size_bytes", static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         const uint32_t gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        reader_spec.compile_time_arg_bindings.push_back({"gamma_or_beta_stick", gamma_stick_size});
+        reader_spec.compile_time_args.emplace("gamma_or_beta_stick", gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         const uint32_t beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        reader_spec.compile_time_arg_bindings.push_back({"gamma_or_beta_stick", beta_stick_size});
+        reader_spec.compile_time_args.emplace("gamma_or_beta_stick", beta_stick_size);
     } else {
-        reader_spec.compile_time_arg_bindings.push_back(
-            {"input_tile_size", tt::tile_size(datatype_to_dataformat_converter(a.dtype()))});
+        reader_spec.compile_time_args.emplace(
+            "input_tile_size", tt::tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
     // Reader DFB bindings — producer for input/residual/gamma/beta CBs (and scaler/eps).
     reader_spec.dfb_bindings.push_back(ProducerDFB(DFB_CB_IN, "cb_in"));
@@ -516,81 +516,81 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         reader_spec.dfb_bindings.push_back(ProducerDFB(DFB_CB_IN_RM, "cb_in_rm"));
     }
     // Tensor bindings on the reader.
-    reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_INPUT_A, .accessor_name = "src_a"});
+    reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_INPUT_A), .accessor_name = "src_a"});
     if (b.has_value()) {
-        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_RESIDUAL_B, .accessor_name = "src_b"});
+        reader_spec.tensor_bindings.push_back(
+            {.tensor_parameter_name = TpName(TP_RESIDUAL_B), .accessor_name = "src_b"});
     }
     if (gamma.has_value()) {
-        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_GAMMA, .accessor_name = "gamma"});
+        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_GAMMA), .accessor_name = "gamma"});
     }
     if (beta.has_value()) {
-        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_BETA, .accessor_name = "beta"});
+        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_BETA), .accessor_name = "beta"});
     }
     if (use_welford) {
         // Ghost TensorBinding to satisfy the spec validator (every TensorParameter
         // requires ≥1 TensorBinding). The reader kernel does not actually access
         // `ta::recip` — the recip tensor's L1 data is consumed via the borrowed-memory
         // `cb_reciprocals` DFB on the compute kernel.
-        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_RECIP, .accessor_name = "recip"});
+        reader_spec.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_RECIP), .accessor_name = "recip"});
     }
     // Reader RTAs (buffer addresses are gone — auto-injected from TensorBinding).
-    reader_spec.runtime_arguments_schema.named_runtime_args = {"NCHt", "Wt", "start_tile_row", "eps"};
+    reader_spec.runtime_arg_schema.runtime_arg_names = {"NCHt", "Wt", "start_tile_row", "eps"};
     if (input_is_row_major) {
-        reader_spec.runtime_arguments_schema.named_runtime_args.push_back("H_logical");
+        reader_spec.runtime_arg_schema.runtime_arg_names.push_back("H_logical");
     }
     // Defines (legacy macro guards into kernel sources)
     if (fuse_pre_add) {
-        reader_spec.compiler_options.defines.push_back({"FUSE_PRE_ADD", "1"});
+        reader_spec.compiler_options.defines.emplace("FUSE_PRE_ADD", "1");
     }
     if (gamma.has_value()) {
-        reader_spec.compiler_options.defines.push_back({"FUSE_GAMMA", "1"});
+        reader_spec.compiler_options.defines.emplace("FUSE_GAMMA", "1");
     }
     if (beta.has_value()) {
-        reader_spec.compiler_options.defines.push_back({"FUSE_BETA", "1"});
+        reader_spec.compiler_options.defines.emplace("FUSE_BETA", "1");
     }
     if (rms_norm) {
-        reader_spec.compiler_options.defines.push_back({"RMSNORM", "1"});
+        reader_spec.compiler_options.defines.emplace("RMSNORM", "1");
     }
     if (input_is_row_major) {
-        reader_spec.compiler_options.defines.push_back({"TILIZE_IN", "1"});
+        reader_spec.compiler_options.defines.emplace("TILIZE_IN", "1");
     }
     if (use_welford) {
         // Preprocessor-level guard: when use_welford is true, the reader doesn't bind
         // cb_scaler, so any `if constexpr (!use_welford)` block that references
         // `dfb::cb_scaler` fails at parse-time name lookup. #ifdef gates the block out.
-        reader_spec.compiler_options.defines.push_back({"USE_WELFORD", "1"});
+        reader_spec.compiler_options.defines.emplace("USE_WELFORD", "1");
     }
 
     // ---------- Writer ----------
     m2::KernelSpec writer_spec;
-    writer_spec.unique_id = WRITER_KERNEL;
+    writer_spec.unique_id = KernelName(WRITER_KERNEL);
     writer_spec.source = std::filesystem::path{writer_kernel_path};
-    writer_spec.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    writer_spec.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    writer_spec.compile_time_arg_bindings = {{"block_size", block_size}};
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+    writer_spec.compile_time_args = {{"block_size", block_size}};
     if (input_is_row_major) {
-        writer_spec.compile_time_arg_bindings.push_back(
-            {"elem_size_bytes", static_cast<uint32_t>(output.element_size())});
+        writer_spec.compile_time_args.emplace("elem_size_bytes", static_cast<uint32_t>(output.element_size()));
     }
     if (input_is_row_major) {
         writer_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_OUT_RM, "cb_out_rm"));
     } else {
         writer_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_OUT, "cb_out"));
     }
-    writer_spec.tensor_bindings.push_back({.tensor_parameter_name = TP_OUTPUT, .accessor_name = "output"});
-    writer_spec.runtime_arguments_schema.named_runtime_args = {"Wt", "num_tile_rows", "writer_start"};
+    writer_spec.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_OUTPUT), .accessor_name = "output"});
+    writer_spec.runtime_arg_schema.runtime_arg_names = {"Wt", "num_tile_rows", "writer_start"};
     if (input_is_row_major) {
-        writer_spec.runtime_arguments_schema.named_runtime_args.push_back("H_logical");
+        writer_spec.runtime_arg_schema.runtime_arg_names.push_back("H_logical");
     }
 
     // ---------- Compute ----------
     m2::KernelSpec compute_spec;
-    compute_spec.unique_id = COMPUTE_KERNEL;
+    compute_spec.unique_id = KernelName(COMPUTE_KERNEL);
     compute_spec.source = std::filesystem::path{compute_kernel_path};
-    m2::ComputeConfiguration compute_config{
+    m2::ComputeHardwareConfig compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
@@ -601,7 +601,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // the large-tensor non-Welford path.
     if (fp32_dest_acc_en) {
         auto add_default = [&](const char* dfb_name) {
-            compute_config.unpack_to_dest_mode.push_back({dfb_name, tt::tt_metal::UnpackToDestMode::Default});
+            compute_config.unpack_to_dest_mode.emplace(DfbName(dfb_name), tt::tt_metal::UnpackToDestMode::Default);
         };
         // cb_data_format == Float32 when fp32_dest_acc_en, so all intermediate DFBs
         // that use cb_data_format need an entry. Mirror the host-side declaration guards.
@@ -643,11 +643,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (float32_reduction && large_tensor_needed && !use_welford) {
         // Large-tensor non-Welford accumulator unpacks Float32 → Dest directly.
         // Only valid when the cb_accumulate DFB is actually declared and bound on compute.
-        compute_config.unpack_to_dest_mode.push_back(
-            {DFB_CB_ACCUMULATE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32});
+        compute_config.unpack_to_dest_mode.emplace(
+            DfbName(DFB_CB_ACCUMULATE), tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }
-    compute_spec.config_spec = std::move(compute_config);
-    compute_spec.compile_time_arg_bindings = {
+    compute_spec.hw_config = std::move(compute_config);
+    compute_spec.compile_time_args = {
         {"Wt", Wt},
         {"block_size", block_size},
         {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
@@ -655,16 +655,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         {"FLOAT32_DTYPE", static_cast<uint32_t>(fp32_dest_acc_en)},
     };
     if (use_welford_and_not_rms_norm) {
-        compute_spec.compile_time_arg_bindings.push_back({"W", W});
-        compute_spec.compile_time_arg_bindings.push_back({"TILE_SIZE", ttnn::types::TILE_SIZE});
-        compute_spec.compile_time_arg_bindings.push_back({"rms_norm", static_cast<uint32_t>(rms_norm)});
-        compute_spec.compile_time_arg_bindings.push_back({"fuse_pre_add", static_cast<uint32_t>(fuse_pre_add)});
+        compute_spec.compile_time_args.emplace("W", W);
+        compute_spec.compile_time_args.emplace("TILE_SIZE", ttnn::types::TILE_SIZE);
+        compute_spec.compile_time_args.emplace("rms_norm", static_cast<uint32_t>(rms_norm));
+        compute_spec.compile_time_args.emplace("fuse_pre_add", static_cast<uint32_t>(fuse_pre_add));
     } else {
-        compute_spec.compile_time_arg_bindings.push_back(
-            {"FLOAT32_REDUCTION", static_cast<uint32_t>(float32_reduction)});
-        compute_spec.compile_time_arg_bindings.push_back({"LEGACY_RSQRT", static_cast<uint32_t>(legacy_rsqrt)});
-        compute_spec.compile_time_arg_bindings.push_back({"W", W});
-        compute_spec.compile_time_arg_bindings.push_back({"tile_width", tile_width});
+        compute_spec.compile_time_args.emplace("FLOAT32_REDUCTION", static_cast<uint32_t>(float32_reduction));
+        compute_spec.compile_time_args.emplace("LEGACY_RSQRT", static_cast<uint32_t>(legacy_rsqrt));
+        compute_spec.compile_time_args.emplace("W", W);
+        compute_spec.compile_time_args.emplace("tile_width", tile_width);
     }
     // Compute DFB bindings — the compute kernel consumes inputs, produces output, and
     // produces+consumes all intermediates. Per [Pattern: Conditional / optional DFB
@@ -673,8 +672,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     auto bind_compute_pair = [&](const char* dfb_name, const char* accessor_name) {
         compute_spec.dfb_bindings.push_back(ProducerDFB(dfb_name, accessor_name));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(dfb_name, accessor_name));
-        compute_spec.advanced_options.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = dfb_name, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+        compute_spec.advanced_options.dfb_self_loop_connectivities.emplace(
+            DfbName(dfb_name), m2::DFBSelfLoopConnectivity::INTRA);
     };
     // Reader → compute (consumer endpoints on compute).
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_IN, "cb_in"));
@@ -729,23 +728,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         compute_spec.dfb_bindings.push_back(ProducerDFB(DFB_CB_RECIPROCALS, "cb_reciprocals"));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_RECIPROCALS, "cb_reciprocals"));
     }
-    compute_spec.runtime_arguments_schema.named_runtime_args = {"NCHt"};
+    compute_spec.runtime_arg_schema.runtime_arg_names = {"NCHt"};
     if (fuse_pre_add && !use_welford) {
-        compute_spec.compiler_options.defines.push_back({"FUSE_PRE_ADD", "1"});
+        compute_spec.compiler_options.defines.emplace("FUSE_PRE_ADD", "1");
     }
     if (rms_norm) {
-        compute_spec.compiler_options.defines.push_back({"RMSNORM", "1"});
+        compute_spec.compiler_options.defines.emplace("RMSNORM", "1");
     }
     if (input_is_row_major) {
-        compute_spec.compiler_options.defines.push_back({"TILIZE_IN", "1"});
-        compute_spec.compiler_options.defines.push_back({"UNTILIZE_OUT", "1"});
+        compute_spec.compiler_options.defines.emplace("TILIZE_IN", "1");
+        compute_spec.compiler_options.defines.emplace("UNTILIZE_OUT", "1");
     }
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         auto act_defines =
             ttnn::operations::unary::utils::get_defines(act.op_type, act.params, "ACTIVATION", "i", output.dtype());
         for (auto& [key, val] : act_defines) {
-            compute_spec.compiler_options.defines.push_back({key, val});
+            compute_spec.compiler_options.defines.emplace(key, val);
         }
     }
 
@@ -753,8 +752,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Build WorkUnitSpec
     ////////////////////////////////////////////////////////////////////////////
     m2::WorkUnitSpec work_unit{
-        .unique_id = MAIN_WORK_UNIT,
-        .kernels = {READER_KERNEL, WRITER_KERNEL, COMPUTE_KERNEL},
+        .name = MAIN_WORK_UNIT,
+        .kernels = {KernelName(READER_KERNEL), KernelName(WRITER_KERNEL), KernelName(COMPUTE_KERNEL)},
         .target_nodes = all_cores,  // NodeRangeSet is an alias for CoreRangeSet
     };
 
@@ -762,7 +761,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Assemble ProgramSpec + ProgramRunParams
     ////////////////////////////////////////////////////////////////////////////
     m2::ProgramSpec spec{
-        .program_id = "layernorm_interleaved",
+        .name = "layernorm_interleaved",
         .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores = {},
@@ -770,7 +769,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         .work_units = {std::move(work_unit)},
     };
 
-    m2::ProgramRunParams run_params;
+    m2::ProgramRunArgs run_params;
 
     ////////////////////////////////////////////////////////////////////////////
     // Per-node runtime arguments
@@ -781,9 +780,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
-    m2::ProgramRunParams::KernelRunParams reader_run{.kernel_spec_name = READER_KERNEL};
-    m2::ProgramRunParams::KernelRunParams writer_run{.kernel_spec_name = WRITER_KERNEL};
-    m2::ProgramRunParams::KernelRunParams compute_run{.kernel_spec_name = COMPUTE_KERNEL};
+    m2::ProgramRunArgs::KernelRunArgs reader_run{.kernel = KernelName(READER_KERNEL)};
+    m2::ProgramRunArgs::KernelRunArgs writer_run{.kernel = KernelName(WRITER_KERNEL)};
+    m2::ProgramRunArgs::KernelRunArgs compute_run{.kernel = KernelName(COMPUTE_KERNEL)};
 
     uint32_t curr_row = 0;
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
@@ -815,7 +814,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         if (input_is_row_major) {
             reader_args["H_logical"] = H_logical;
         }
-        reader_run.named_runtime_args.push_back({.node = node, .args = std::move(reader_args)});
+        reader_run.runtime_arg_values.emplace_back(m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            .node = node, .args = m2::ProgramRunArgs::KernelRunArgs::RuntimeArgValues{reader_args}});
 
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
         std::unordered_map<std::string, uint32_t> writer_args = {
@@ -826,32 +826,34 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         if (input_is_row_major) {
             writer_args["H_logical"] = H_logical;
         }
-        writer_run.named_runtime_args.push_back({.node = node, .args = std::move(writer_args)});
+        writer_run.runtime_arg_values.emplace_back(m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            .node = node, .args = m2::ProgramRunArgs::KernelRunArgs::RuntimeArgValues{writer_args}});
 
-        compute_run.named_runtime_args.push_back({.node = node, .args = {{"NCHt", num_tile_rows_per_core}}});
+        compute_run.runtime_arg_values.emplace_back(m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            .node = node,
+            .args = m2::ProgramRunArgs::KernelRunArgs::RuntimeArgValues{{"NCHt", num_tile_rows_per_core}}});
 
         curr_row += num_tile_rows_per_core;
     }
 
-    run_params.kernel_run_params = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    run_params.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
 
     ////////////////////////////////////////////////////////////////////////////
     // TensorArgs (per-execution tensor identities)
     ////////////////////////////////////////////////////////////////////////////
-    run_params.tensor_args.push_back({.tensor_parameter_name = TP_INPUT_A, .tensor = a.mesh_tensor()});
-    run_params.tensor_args.push_back({.tensor_parameter_name = TP_OUTPUT, .tensor = output.mesh_tensor()});
+    run_params.tensor_args.emplace(TpName(TP_INPUT_A), std::cref(a.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_OUTPUT), std::cref(output.mesh_tensor()));
     if (b.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_RESIDUAL_B, .tensor = b.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_RESIDUAL_B), std::cref(b.value().mesh_tensor()));
     }
     if (gamma.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_GAMMA, .tensor = gamma.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_GAMMA), std::cref(gamma.value().mesh_tensor()));
     }
     if (beta.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_BETA, .tensor = beta.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_BETA), std::cref(beta.value().mesh_tensor()));
     }
     if (use_welford) {
-        run_params.tensor_args.push_back(
-            {.tensor_parameter_name = TP_RECIP, .tensor = tensor_args.recip_tensor->mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_RECIP), std::cref(tensor_args.recip_tensor->mesh_tensor()));
     }
 
     return ttnn::device_operation::ProgramArtifacts{

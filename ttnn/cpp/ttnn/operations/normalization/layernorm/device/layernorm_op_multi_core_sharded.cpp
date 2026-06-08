@@ -13,7 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
@@ -23,7 +23,7 @@
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental::metal2_host_api;
+namespace m2 = tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -85,17 +85,22 @@ constexpr const char* SEM_REDUCE_SENDER = "reduce_sender";
 constexpr const char* SEM_REDUCE_RECEIVER = "reduce_receiver";
 constexpr const char* SEM_REDUCE_SECOND_STAGE = "reduce_second_stage";
 
+inline m2::DFBSpecName DfbName(const char* name) { return m2::DFBSpecName{std::string{name}}; }
+inline m2::TensorParamName TpName(const char* name) { return m2::TensorParamName{std::string{name}}; }
+inline m2::KernelSpecName KernelName(const char* name) { return m2::KernelSpecName{std::string{name}}; }
+inline m2::SemaphoreSpecName SemName(const char* name) { return m2::SemaphoreSpecName{std::string{name}}; }
+
 m2::KernelSpec::DFBBinding ConsumerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::CONSUMER};
 }
 m2::KernelSpec::DFBBinding ProducerDFB(const char* dfb_name, const char* accessor_name) {
     return m2::KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER};
+        .dfb_spec_name = DfbName(dfb_name),
+        .accessor_name = accessor_name,
+        .endpoint_type = m2::DFBEndpointType::PRODUCER};
 }
 
 m2::DataflowBufferSpec MakeDFB(
@@ -103,9 +108,9 @@ m2::DataflowBufferSpec MakeDFB(
     uint32_t entry_size,
     uint32_t num_entries,
     tt::DataFormat data_format,
-    std::optional<m2::TensorParameterName> borrowed_from = std::nullopt) {
+    std::optional<m2::TensorParamName> borrowed_from = std::nullopt) {
     m2::DataflowBufferSpec dfb{
-        .unique_id = unique_id,
+        .unique_id = DfbName(unique_id),
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = data_format};
@@ -289,11 +294,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     // CB 0: in0 sharded → DFB borrowed from input tensor
     dfbs.push_back(MakeDFB(
-        DFB_IN0,
-        in_single_tile_size,
-        cb_sizes.in0_CB_size / in_single_tile_size,
-        in_data_format,
-        m2::TensorParameterName{TP_INPUT_A}));
+        DFB_IN0, in_single_tile_size, cb_sizes.in0_CB_size / in_single_tile_size, in_data_format, TpName(TP_INPUT_A)));
 
     // CB 1: in1 sharded (if has_b)
     if (b.has_value()) {
@@ -302,7 +303,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             in_single_tile_size,
             cb_sizes.in1_CB_size / in_single_tile_size,
             in_data_format,
-            m2::TensorParameterName{TP_RESIDUAL_B}));
+            TpName(TP_RESIDUAL_B)));
         if (is_pre_all_gather) {
             // CB 14: alias for in0 in pre-allgather mode
             dfbs.push_back(MakeDFB(
@@ -310,7 +311,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 in_single_tile_size,
                 cb_sizes.in1_CB_size / in_single_tile_size,
                 in_data_format,
-                m2::TensorParameterName{TP_INPUT_A}));
+                TpName(TP_INPUT_A)));
         }
     }
 
@@ -372,12 +373,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         dfbs.push_back(
             MakeDFB(DFB_TRANSPOSE, single_tile_size, cb_sizes.ex_global_CB_size / single_tile_size, cb_data_format));
         // CB 25: Reciprocal LUT — borrowed-memory DFB
-        dfbs.push_back(MakeDFB(
-            DFB_RECIPROCALS,
-            reciprocal_CB_size_bytes,
-            1,
-            reciprocal_cb_data_format,
-            m2::TensorParameterName{TP_RECIP}));
+        dfbs.push_back(
+            MakeDFB(DFB_RECIPROCALS, reciprocal_CB_size_bytes, 1, reciprocal_cb_data_format, TpName(TP_RECIP)));
     }
 
     if (is_post_all_gather) {
@@ -387,7 +384,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             stats_single_tile_size,
             cb_sizes.stats_cb_size / stats_single_tile_size,
             stats_cb_data_format,
-            m2::TensorParameterName{TP_STATS}));
+            TpName(TP_STATS)));
         // CB 21: cb_stats_reduced
         dfbs.push_back(MakeDFB(
             DFB_STATS_REDUCED, single_tile_size, cb_sizes.stats_reduced_cb_size / single_tile_size, cb_data_format));
@@ -406,7 +403,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             out_single_tile_size,
             cb_sizes.out_CB_size / out_single_tile_size,
             out_data_format,
-            out_borrowed ? std::optional<m2::TensorParameterName>{TP_OUTPUT} : std::nullopt));
+            out_borrowed ? std::optional<m2::TensorParamName>{TpName(TP_OUTPUT)} : std::nullopt));
     }
     if (is_post_all_gather && !skip_write_back) {
         // CB 17: output reshard — borrowed-memory DFB
@@ -415,38 +412,38 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             out_single_tile_size,
             cb_sizes.out_reshard_CB_size / out_single_tile_size,
             out_data_format,
-            m2::TensorParameterName{TP_OUTPUT}));
+            TpName(TP_OUTPUT)));
     }
 
     ////////////////////////////////////////////////////////////////////////////
     // TensorParameters
     ////////////////////////////////////////////////////////////////////////////
     std::vector<m2::TensorParameter> tensor_parameters;
-    tensor_parameters.push_back({.unique_id = TP_INPUT_A, .spec = a.tensor_spec()});
-    tensor_parameters.push_back({.unique_id = TP_OUTPUT, .spec = output.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_INPUT_A), .spec = a.tensor_spec()});
+    tensor_parameters.push_back({.unique_id = TpName(TP_OUTPUT), .spec = output.tensor_spec()});
     if (b.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_RESIDUAL_B, .spec = b.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_RESIDUAL_B), .spec = b.value().tensor_spec()});
     }
     if (gamma.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_GAMMA, .spec = gamma.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_GAMMA), .spec = gamma.value().tensor_spec()});
     }
     if (beta.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_BETA, .spec = beta.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_BETA), .spec = beta.value().tensor_spec()});
     }
     if (is_post_all_gather && stats.has_value()) {
-        tensor_parameters.push_back({.unique_id = TP_STATS, .spec = stats.value().tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_STATS), .spec = stats.value().tensor_spec()});
     }
     if (use_welford) {
-        tensor_parameters.push_back({.unique_id = TP_RECIP, .spec = tensor_args.recip_tensor->tensor_spec()});
+        tensor_parameters.push_back({.unique_id = TpName(TP_RECIP), .spec = tensor_args.recip_tensor->tensor_spec()});
     }
 
     ////////////////////////////////////////////////////////////////////////////
     // SemaphoreSpecs (always all 3; placement = all_cores)
     ////////////////////////////////////////////////////////////////////////////
     std::vector<m2::SemaphoreSpec> semaphores = {
-        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_SENDER, .target_nodes = core_ranges.all_cores},
-        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_RECEIVER, .target_nodes = core_ranges.all_cores},
-        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_SECOND_STAGE, .target_nodes = core_ranges.all_cores},
+        m2::SemaphoreSpec{.unique_id = SemName(SEM_REDUCE_SENDER), .target_nodes = core_ranges.all_cores},
+        m2::SemaphoreSpec{.unique_id = SemName(SEM_REDUCE_RECEIVER), .target_nodes = core_ranges.all_cores},
+        m2::SemaphoreSpec{.unique_id = SemName(SEM_REDUCE_SECOND_STAGE), .target_nodes = core_ranges.all_cores},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -454,7 +451,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     // The reader kernels share many of the same named CTAs across sender / receiver variants.
     // Semaphore IDs that were CTAs in legacy are replaced by SemaphoreBinding.
-    m2::KernelSpec::CompileTimeArgBindings reader_common_ctas = {
+    m2::KernelSpec::CompileTimeArgs reader_common_ctas = {
         {"num_blocks", grid.num_blocks},
         {"block_h", block_ht},
         {"block_h_size_bytes", block_ht * single_tile_size},
@@ -503,9 +500,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     auto bind_reader_semaphores = [&](m2::KernelSpec& k) {
         k.semaphore_bindings = {
-            {.semaphore_spec_name = SEM_REDUCE_RECEIVER, .accessor_name = "reduce_receiver"},
-            {.semaphore_spec_name = SEM_REDUCE_SENDER, .accessor_name = "reduce_sender"},
-            {.semaphore_spec_name = SEM_REDUCE_SECOND_STAGE, .accessor_name = "reduce_second_stage"},
+            {.semaphore_spec_name = SemName(SEM_REDUCE_RECEIVER), .accessor_name = "reduce_receiver"},
+            {.semaphore_spec_name = SemName(SEM_REDUCE_SENDER), .accessor_name = "reduce_sender"},
+            {.semaphore_spec_name = SemName(SEM_REDUCE_SECOND_STAGE), .accessor_name = "reduce_second_stage"},
         };
     };
 
@@ -515,16 +512,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // consumed via the borrowed CB. Bind them on reader_sender (a DM kernel; compute
     // kernels don't support TensorBindings).
     auto bind_borrowed_tensors = [&](m2::KernelSpec& k) {
-        k.tensor_bindings.push_back({.tensor_parameter_name = TP_INPUT_A, .accessor_name = "input_a"});
-        k.tensor_bindings.push_back({.tensor_parameter_name = TP_OUTPUT, .accessor_name = "output"});
+        k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_INPUT_A), .accessor_name = "input_a"});
+        k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_OUTPUT), .accessor_name = "output"});
         if (b.has_value()) {
-            k.tensor_bindings.push_back({.tensor_parameter_name = TP_RESIDUAL_B, .accessor_name = "residual_b"});
+            k.tensor_bindings.push_back(
+                {.tensor_parameter_name = TpName(TP_RESIDUAL_B), .accessor_name = "residual_b"});
         }
         if (is_post_all_gather && stats.has_value()) {
-            k.tensor_bindings.push_back({.tensor_parameter_name = TP_STATS, .accessor_name = "stats"});
+            k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_STATS), .accessor_name = "stats"});
         }
         if (use_welford) {
-            k.tensor_bindings.push_back({.tensor_parameter_name = TP_RECIP, .accessor_name = "recip"});
+            k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_RECIP), .accessor_name = "recip"});
         }
     };
 
@@ -532,22 +530,22 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // Reader sender KernelSpec
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_sender;
-    reader_sender.unique_id = K_READER_SENDER;
+    reader_sender.unique_id = KernelName(K_READER_SENDER);
     reader_sender.source = std::filesystem::path{kernel_paths.reader_sender};
-    reader_sender.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    reader_sender.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = reader_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    reader_sender.compile_time_arg_bindings = reader_common_ctas;
-    reader_sender.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 1u});
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+    reader_sender.compile_time_args = reader_common_ctas;
+    reader_sender.compile_time_args.emplace("is_all_to_all_worker", 1u);
     bind_reader_dfbs(reader_sender);
     bind_reader_semaphores(reader_sender);
     bind_borrowed_tensors(reader_sender);
     for (auto& d : kernel_defines.reader) {
-        reader_sender.compiler_options.defines.push_back(d);
+        reader_sender.compiler_options.defines.emplace(d.first, d.second);
     }
-    reader_sender.runtime_arguments_schema.named_runtime_args = {
+    reader_sender.runtime_arg_schema.runtime_arg_names = {
         "mcast_start_x", "mcast_start_y", "mcast_end_x", "mcast_end_y", "start_x", "start_y"};
     // Mcast noc lists are passed as varargs (variable count per node)
     reader_sender.advanced_options.num_runtime_varargs = core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
@@ -557,23 +555,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_rcv_a2a;
     if (has_reader_receiver_all_to_all) {
-        reader_rcv_a2a.unique_id = K_READER_RCV_A2A;
+        reader_rcv_a2a.unique_id = KernelName(K_READER_RCV_A2A);
         reader_rcv_a2a.source = std::filesystem::path{kernel_paths.reader_receiver};
-        reader_rcv_a2a.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config =
-                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+        reader_rcv_a2a.hw_config = m2::DataMovementHardwareConfig{
+            .gen1_config =
+                m2::DataMovementHardwareConfig::Gen1Config{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = reader_noc,
                     .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-        reader_rcv_a2a.compile_time_arg_bindings = reader_common_ctas;
-        reader_rcv_a2a.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 1u});
+            .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+        reader_rcv_a2a.compile_time_args = reader_common_ctas;
+        reader_rcv_a2a.compile_time_args.emplace("is_all_to_all_worker", 1u);
         bind_reader_dfbs(reader_rcv_a2a);
         bind_reader_semaphores(reader_rcv_a2a);
         for (auto& d : kernel_defines.reader) {
-            reader_rcv_a2a.compiler_options.defines.push_back(d);
+            reader_rcv_a2a.compiler_options.defines.emplace(d.first, d.second);
         }
-        reader_rcv_a2a.runtime_arguments_schema.named_runtime_args = {
+        reader_rcv_a2a.runtime_arg_schema.runtime_arg_names = {
             "is_last_all_to_all_worker", "all_to_all_offset_bytes", "is_second_stage_reader", "start_x", "start_y"};
         reader_rcv_a2a.advanced_options.num_runtime_varargs =
             core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
@@ -584,24 +582,24 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_rcv;
     if (has_not_all_to_all_workers) {
-        reader_rcv.unique_id = K_READER_RCV;
+        reader_rcv.unique_id = KernelName(K_READER_RCV);
         reader_rcv.source = std::filesystem::path{kernel_paths.reader_receiver};
-        reader_rcv.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config =
-                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+        reader_rcv.hw_config = m2::DataMovementHardwareConfig{
+            .gen1_config =
+                m2::DataMovementHardwareConfig::Gen1Config{
                     .processor = DataMovementProcessor::RISCV_0,
                     .noc = reader_noc,
                     .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-        reader_rcv.compile_time_arg_bindings = reader_common_ctas;
-        reader_rcv.compile_time_arg_bindings.push_back({"is_all_to_all_worker", 0u});
+            .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+        reader_rcv.compile_time_args = reader_common_ctas;
+        reader_rcv.compile_time_args.emplace("is_all_to_all_worker", 0u);
         bind_reader_dfbs(reader_rcv);
         bind_reader_semaphores(reader_rcv);
         for (auto& d : kernel_defines.reader) {
-            reader_rcv.compiler_options.defines.push_back(d);
+            reader_rcv.compiler_options.defines.emplace(d.first, d.second);
         }
         // Receiver-not-all-to-all expects fewer args; legacy uses 5 positional + 2 noc coords.
-        reader_rcv.runtime_arguments_schema.named_runtime_args = {
+        reader_rcv.runtime_arg_schema.runtime_arg_names = {
             "is_last_all_to_all_worker",
             "all_to_all_offset_bytes",
             "is_second_stage_reader",
@@ -615,7 +613,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // Writer CTAs (shared by sender + receiver)
     ////////////////////////////////////////////////////////////////////////////
     auto build_writer_ctas = [&](bool is_a2a) {
-        m2::KernelSpec::CompileTimeArgBindings ctas = {
+        m2::KernelSpec::CompileTimeArgs ctas = {
             {"is_all_to_all_worker", static_cast<uint32_t>(is_a2a)},
             {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
             {"do_beta", static_cast<uint32_t>(beta.has_value())},
@@ -624,16 +622,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         };
         if (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) {
             uint32_t gamma_stick = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-            ctas.push_back({"gamma_or_beta_stick", gamma_stick});
+            ctas.emplace("gamma_or_beta_stick", gamma_stick);
         } else if (beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR) {
             uint32_t beta_stick = beta.value().padded_shape()[-1] * beta.value().element_size();
-            ctas.push_back({"gamma_or_beta_stick", beta_stick});
+            ctas.emplace("gamma_or_beta_stick", beta_stick);
         }
-        ctas.push_back({"gamma_f32", static_cast<uint32_t>(gamma_cb_data_format == tt::DataFormat::Float32)});
-        ctas.push_back({"beta_f32", static_cast<uint32_t>(beta_cb_data_format == tt::DataFormat::Float32)});
-        ctas.push_back({"block_wt_bytes", block_wt * out_single_tile_size});
-        ctas.push_back({"block_wt_resharded_bytes", block_wt_resharded * out_single_tile_size});
-        ctas.push_back({"block_ht", block_ht});
+        ctas.emplace("gamma_f32", static_cast<uint32_t>(gamma_cb_data_format == tt::DataFormat::Float32));
+        ctas.emplace("beta_f32", static_cast<uint32_t>(beta_cb_data_format == tt::DataFormat::Float32));
+        ctas.emplace("block_wt_bytes", block_wt * out_single_tile_size);
+        ctas.emplace("block_wt_resharded_bytes", block_wt_resharded * out_single_tile_size);
+        ctas.emplace("block_ht", block_ht);
         return ctas;
     };
 
@@ -657,51 +655,51 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     auto bind_writer_tensors = [&](m2::KernelSpec& k) {
         if (gamma.has_value()) {
-            k.tensor_bindings.push_back({.tensor_parameter_name = TP_GAMMA, .accessor_name = "gamma"});
+            k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_GAMMA), .accessor_name = "gamma"});
         }
         if (beta.has_value()) {
-            k.tensor_bindings.push_back({.tensor_parameter_name = TP_BETA, .accessor_name = "beta"});
+            k.tensor_bindings.push_back({.tensor_parameter_name = TpName(TP_BETA), .accessor_name = "beta"});
         }
     };
 
     m2::KernelSpec writer_sender;
-    writer_sender.unique_id = K_WRITER_SENDER;
+    writer_sender.unique_id = KernelName(K_WRITER_SENDER);
     writer_sender.source = std::filesystem::path{kernel_paths.writer};
-    writer_sender.config_spec = m2::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            m2::DataMovementConfiguration::Gen1DataMovementConfig{
+    writer_sender.hw_config = m2::DataMovementHardwareConfig{
+        .gen1_config =
+            m2::DataMovementHardwareConfig::Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = writer_noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-        .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-    writer_sender.compile_time_arg_bindings = build_writer_ctas(true);
+        .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+    writer_sender.compile_time_args = build_writer_ctas(true);
     bind_writer_dfbs(writer_sender);
     bind_writer_tensors(writer_sender);
     for (auto& d : kernel_defines.writer) {
-        writer_sender.compiler_options.defines.push_back(d);
+        writer_sender.compiler_options.defines.emplace(d.first, d.second);
     }
     // Writer RTAs: scaler values + addresses + write-back. Use named for the common ones,
     // and varargs for the variable write-back segment list (per-core, multi-segment).
-    writer_sender.runtime_arguments_schema.named_runtime_args = {
+    writer_sender.runtime_arg_schema.runtime_arg_names = {
         "packed_cinv", "packed_winv", "eps_u", "gamma_addr", "beta_addr", "gamma_tile_start", "beta_tile_start"};
     writer_sender.advanced_options.num_runtime_varargs = 64;  // upper bound; legacy was variable
 
     m2::KernelSpec writer_rcv;
     if (has_not_all_to_all_workers) {
-        writer_rcv.unique_id = K_WRITER_RCV;
+        writer_rcv.unique_id = KernelName(K_WRITER_RCV);
         writer_rcv.source = std::filesystem::path{kernel_paths.writer};
-        writer_rcv.config_spec = m2::DataMovementConfiguration{
-            .gen1_data_movement_config =
-                m2::DataMovementConfiguration::Gen1DataMovementConfig{
+        writer_rcv.hw_config = m2::DataMovementHardwareConfig{
+            .gen1_config =
+                m2::DataMovementHardwareConfig::Gen1Config{
                     .processor = DataMovementProcessor::RISCV_1,
                     .noc = writer_noc,
                     .noc_mode = NOC_MODE::DM_DEDICATED_NOC},
-            .gen2_data_movement_config = m2::DataMovementConfiguration::Gen2DataMovementConfig{}};
-        writer_rcv.compile_time_arg_bindings = build_writer_ctas(false);
+            .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{}};
+        writer_rcv.compile_time_args = build_writer_ctas(false);
         bind_writer_dfbs(writer_rcv);
         bind_writer_tensors(writer_rcv);
         for (auto& d : kernel_defines.writer) {
-            writer_rcv.compiler_options.defines.push_back(d);
+            writer_rcv.compiler_options.defines.emplace(d.first, d.second);
         }
-        writer_rcv.runtime_arguments_schema.named_runtime_args = {
+        writer_rcv.runtime_arg_schema.runtime_arg_names = {
             "packed_cinv", "packed_winv", "eps_u", "gamma_addr", "beta_addr", "gamma_tile_start", "beta_tile_start"};
         writer_rcv.advanced_options.num_runtime_varargs = 64;
     }
@@ -710,7 +708,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // Compute CTAs (sender vs receiver variants — preserves multiplicity)
     ////////////////////////////////////////////////////////////////////////////
     auto build_compute_ctas = [&](bool is_a2a) {
-        m2::KernelSpec::CompileTimeArgBindings ctas = {
+        m2::KernelSpec::CompileTimeArgs ctas = {
             {"unused0", 0u},
             {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
             {"do_beta", static_cast<uint32_t>(beta.has_value())},
@@ -729,11 +727,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         if (use_welford) {
             uint32_t last_tile_W = K - (((K - tile_width) / tile_width) * tile_width);
             auto eps_u32 = std::bit_cast<uint32_t>(eps);
-            ctas.push_back({"tile_width", tile_width});
-            ctas.push_back({"last_tile_W", last_tile_W});
-            ctas.push_back({"K_dim", K});
-            ctas.push_back({"eps_u32", eps_u32});
-            ctas.push_back({"per_core_recip_lut_size", block_w});
+            ctas.emplace("tile_width", tile_width);
+            ctas.emplace("last_tile_W", last_tile_W);
+            ctas.emplace("K_dim", K);
+            ctas.emplace("eps_u32", eps_u32);
+            ctas.emplace("per_core_recip_lut_size", block_w);
         }
         return ctas;
     };
@@ -758,8 +756,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // Self-loop on cb_ex_partial2 and cb_ex2 — compute writes them then reads them back
             k.dfb_bindings.push_back(ProducerDFB(DFB_EX_PARTIAL2, "cb_ex_partial2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_PARTIAL2, "cb_ex_partial2"));
-            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_EX_PARTIAL2, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_self_loop_connectivities.emplace(
+                DfbName(DFB_EX_PARTIAL2), m2::DFBSelfLoopConnectivity::INTRA);
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX2, "cb_ex2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_EXTERNAL2, "cb_ex_external2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX2PE, "cb_ex2pe"));
@@ -767,21 +765,19 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         if (!rms_norm) {
             k.dfb_bindings.push_back(ProducerDFB(DFB_EX_PARTIAL, "cb_ex_partial"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_PARTIAL, "cb_ex_partial"));
-            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_EX_PARTIAL, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_self_loop_connectivities.emplace(
+                DfbName(DFB_EX_PARTIAL), m2::DFBSelfLoopConnectivity::INTRA);
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX, "cb_ex"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_EXTERNAL, "cb_ex_external"));
         }
         // cb_x: self-loop
         k.dfb_bindings.push_back(ProducerDFB(DFB_X, "cb_x"));
         k.dfb_bindings.push_back(ConsumerDFB(DFB_X, "cb_x"));
-        k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = DFB_X, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+        k.advanced_options.dfb_self_loop_connectivities.emplace(DfbName(DFB_X), m2::DFBSelfLoopConnectivity::INTRA);
         // cb_xmm: self-loop
         k.dfb_bindings.push_back(ProducerDFB(DFB_XMM, "cb_xmm"));
         k.dfb_bindings.push_back(ConsumerDFB(DFB_XMM, "cb_xmm"));
-        k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = DFB_XMM, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+        k.advanced_options.dfb_self_loop_connectivities.emplace(DfbName(DFB_XMM), m2::DFBSelfLoopConnectivity::INTRA);
         // cb_ex_global: consumer
         k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_GLOBAL, "cb_ex_global"));
         // Output
@@ -794,8 +790,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             k.dfb_bindings.push_back(ConsumerDFB(DFB_RECIPROCALS, "cb_reciprocals"));
             k.dfb_bindings.push_back(ProducerDFB(DFB_TRANSPOSE, "cb_transpose"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_TRANSPOSE, "cb_transpose"));
-            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_TRANSPOSE, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_self_loop_connectivities.emplace(
+                DfbName(DFB_TRANSPOSE), m2::DFBSelfLoopConnectivity::INTRA);
         }
         if (is_post_all_gather) {
             // cb_stats is borrowed-memory (backed by stats tensor) — no kernel produces
@@ -808,28 +804,28 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // self-loop on compute + plus the reader_sender binding handles consumption.
             k.dfb_bindings.push_back(ProducerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
-            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_STATS_REDUCED, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_self_loop_connectivities.emplace(
+                DfbName(DFB_STATS_REDUCED), m2::DFBSelfLoopConnectivity::INTRA);
             // cb_var: compute self-loop (variance written and read back within compute).
             k.dfb_bindings.push_back(ProducerDFB(DFB_VAR, "cb_var"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_VAR, "cb_var"));
-            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_VAR, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_self_loop_connectivities.emplace(
+                DfbName(DFB_VAR), m2::DFBSelfLoopConnectivity::INTRA);
         }
     };
 
-    // Build the compute ComputeConfiguration shared across both KernelSpecs. When
+    // Build the compute ComputeHardwareConfig shared across both KernelSpecs. When
     // fp32_dest_acc_en is true, the validator requires an explicit unpack_to_dest_mode
     // entry for every FP32 DFB the compute kernel consumes.
     auto build_compute_config = [&]() {
-        m2::ComputeConfiguration cfg{
+        m2::ComputeHardwareConfig cfg{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode};
         if (fp32_dest_acc_en) {
             auto add_default = [&](const char* dfb_name) {
-                cfg.unpack_to_dest_mode.push_back({dfb_name, tt::tt_metal::UnpackToDestMode::Default});
+                cfg.unpack_to_dest_mode.emplace(DfbName(dfb_name), tt::tt_metal::UnpackToDestMode::Default);
             };
             // cb_data_format == Float32 when fp32_dest_acc_en, so all intermediate DFBs
             // using cb_data_format need entries. Mirror the host DFB-declaration guards.
@@ -877,28 +873,28 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     };
 
     m2::KernelSpec compute_a2a;
-    compute_a2a.unique_id = K_COMPUTE_A2A;
+    compute_a2a.unique_id = KernelName(K_COMPUTE_A2A);
     compute_a2a.source = std::filesystem::path{kernel_paths.compute};
-    compute_a2a.config_spec = build_compute_config();
-    compute_a2a.compile_time_arg_bindings = build_compute_ctas(true);
+    compute_a2a.hw_config = build_compute_config();
+    compute_a2a.compile_time_args = build_compute_ctas(true);
     bind_compute_dfbs(compute_a2a);
     for (auto& d : kernel_defines.compute) {
-        compute_a2a.compiler_options.defines.push_back(d);
+        compute_a2a.compiler_options.defines.emplace(d.first, d.second);
     }
-    compute_a2a.runtime_arguments_schema.named_runtime_args = {"num_reduce_tiles_per_block_h"};
+    compute_a2a.runtime_arg_schema.runtime_arg_names = {"num_reduce_tiles_per_block_h"};
     compute_a2a.advanced_options.num_runtime_varargs = 4;  // is_a2a + variable suffix
 
     m2::KernelSpec compute_not_a2a;
     if (has_not_all_to_all_workers) {
-        compute_not_a2a.unique_id = K_COMPUTE_NOT_A2A;
+        compute_not_a2a.unique_id = KernelName(K_COMPUTE_NOT_A2A);
         compute_not_a2a.source = std::filesystem::path{kernel_paths.compute};
-        compute_not_a2a.config_spec = build_compute_config();
-        compute_not_a2a.compile_time_arg_bindings = build_compute_ctas(false);
+        compute_not_a2a.hw_config = build_compute_config();
+        compute_not_a2a.compile_time_args = build_compute_ctas(false);
         bind_compute_dfbs(compute_not_a2a);
         for (auto& d : kernel_defines.compute) {
-            compute_not_a2a.compiler_options.defines.push_back(d);
+            compute_not_a2a.compiler_options.defines.emplace(d.first, d.second);
         }
-        compute_not_a2a.runtime_arguments_schema.named_runtime_args = {"num_reduce_tiles_per_block_h"};
+        compute_not_a2a.runtime_arg_schema.runtime_arg_names = {"num_reduce_tiles_per_block_h"};
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -917,22 +913,22 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     // Sender work unit
     work_units.push_back({
-        .unique_id = WU_SENDER,
-        .kernels = {K_READER_SENDER, K_WRITER_SENDER, K_COMPUTE_A2A},
-        .target_nodes = m2::NodeRangeSet(core_ranges.sender_cores),
+        .name = WU_SENDER,
+        .kernels = {KernelName(K_READER_SENDER), KernelName(K_WRITER_SENDER), KernelName(K_COMPUTE_A2A)},
+        .target_nodes = core_ranges.sender_cores,
     });
 
     if (has_reader_receiver_all_to_all) {
         work_units.push_back({
-            .unique_id = WU_A2A_RCV,
-            .kernels = {K_READER_RCV_A2A, K_WRITER_SENDER, K_COMPUTE_A2A},
+            .name = WU_A2A_RCV,
+            .kernels = {KernelName(K_READER_RCV_A2A), KernelName(K_WRITER_SENDER), KernelName(K_COMPUTE_A2A)},
             .target_nodes = core_ranges.all_to_all_workers_except_sender,
         });
     }
     if (has_not_all_to_all_workers) {
         work_units.push_back({
-            .unique_id = WU_NOT_A2A,
-            .kernels = {K_READER_RCV, K_WRITER_RCV, K_COMPUTE_NOT_A2A},
+            .name = WU_NOT_A2A,
+            .kernels = {KernelName(K_READER_RCV), KernelName(K_WRITER_RCV), KernelName(K_COMPUTE_NOT_A2A)},
             .target_nodes = core_ranges.not_all_to_all_workers,
         });
     }
@@ -958,7 +954,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     }
 
     m2::ProgramSpec spec{
-        .program_id = "layernorm_sharded",
+        .name = "layernorm_sharded",
         .kernels = std::move(all_kernels),
         .dataflow_buffers = std::move(dfbs),
         .semaphores = std::move(semaphores),
@@ -967,9 +963,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     };
 
     ////////////////////////////////////////////////////////////////////////////
-    // ProgramRunParams: per-core RTAs and tensor args
+    // ProgramRunArgs: per-core RTAs and tensor args
     ////////////////////////////////////////////////////////////////////////////
-    m2::ProgramRunParams run_params;
+    m2::ProgramRunArgs run_params;
 
     // Packed values for writer
     float winv = 1.0f / block_w;
@@ -997,15 +993,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     uint32_t last_core_width_index = grid.mcast_1d ? (uint32_t)(core_ranges.all_cores.num_cores() - 1)
                                                    : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
 
-    m2::ProgramRunParams::KernelRunParams reader_sender_rp{.kernel_spec_name = K_READER_SENDER};
-    m2::ProgramRunParams::KernelRunParams reader_rcv_a2a_rp{.kernel_spec_name = K_READER_RCV_A2A};
-    m2::ProgramRunParams::KernelRunParams reader_rcv_rp{.kernel_spec_name = K_READER_RCV};
-    m2::ProgramRunParams::KernelRunParams writer_sender_rp{.kernel_spec_name = K_WRITER_SENDER};
-    m2::ProgramRunParams::KernelRunParams writer_rcv_rp{.kernel_spec_name = K_WRITER_RCV};
-    m2::ProgramRunParams::KernelRunParams compute_a2a_rp{.kernel_spec_name = K_COMPUTE_A2A};
-    m2::ProgramRunParams::KernelRunParams compute_not_a2a_rp{.kernel_spec_name = K_COMPUTE_NOT_A2A};
+    m2::ProgramRunArgs::KernelRunArgs reader_sender_rp{.kernel = KernelName(K_READER_SENDER)};
+    m2::ProgramRunArgs::KernelRunArgs reader_rcv_a2a_rp{.kernel = KernelName(K_READER_RCV_A2A)};
+    m2::ProgramRunArgs::KernelRunArgs reader_rcv_rp{.kernel = KernelName(K_READER_RCV)};
+    m2::ProgramRunArgs::KernelRunArgs writer_sender_rp{.kernel = KernelName(K_WRITER_SENDER)};
+    m2::ProgramRunArgs::KernelRunArgs writer_rcv_rp{.kernel = KernelName(K_WRITER_RCV)};
+    m2::ProgramRunArgs::KernelRunArgs compute_a2a_rp{.kernel = KernelName(K_COMPUTE_A2A)};
+    m2::ProgramRunArgs::KernelRunArgs compute_not_a2a_rp{.kernel = KernelName(K_COMPUTE_NOT_A2A)};
 
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
+    auto push_runtime_args = [&](m2::ProgramRunArgs::KernelRunArgs& kernel_args,
+                                 const m2::NodeCoord& node,
+                                 std::unordered_map<std::string, uint32_t>&& args) {
+        kernel_args.runtime_arg_values.emplace_back(m2::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
+            .node = node, .args = m2::ProgramRunArgs::KernelRunArgs::RuntimeArgValues{args}});
+    };
     uint32_t current_storage_core = 0;
     uint32_t current_storage_core_offset = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -1042,10 +1044,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 if (is_post_all_gather) {
                     varargs.push_back(num_distributed_devices);
                 }
-                compute_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                compute_a2a_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+                push_runtime_args(compute_a2a_rp, node, std::move(args));
+                compute_a2a_rp.advanced_options.runtime_varargs.emplace(node, std::move(varargs));
             } else {
-                compute_not_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
+                push_runtime_args(compute_not_a2a_rp, node, std::move(args));
             }
         }
 
@@ -1104,8 +1106,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                     varargs.insert(varargs.end(), mcast_noc_y.begin(), mcast_noc_y.end());
                 }
             }
-            reader_sender_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-            reader_sender_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+            push_runtime_args(reader_sender_rp, node, std::move(args));
+            reader_sender_rp.advanced_options.runtime_varargs.emplace(node, std::move(varargs));
         } else if (is_a2a) {
             bool is_last_a2a;
             if (grid.use_two_stage_reduce) {
@@ -1140,8 +1142,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                     varargs.insert(varargs.end(), mcast_noc_y.begin(), mcast_noc_y.end());
                 }
             }
-            reader_rcv_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-            reader_rcv_a2a_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+            push_runtime_args(reader_rcv_a2a_rp, node, std::move(args));
+            reader_rcv_a2a_rp.advanced_options.runtime_varargs.emplace(node, std::move(varargs));
         } else {
             // Non-all-to-all receiver
             std::unordered_map<std::string, uint32_t> args = {
@@ -1161,7 +1163,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 args["noc_x"] = mcast_noc_x[idx.height_index];
                 args["noc_y"] = mcast_noc_y[0];
             }
-            reader_rcv_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
+            push_runtime_args(reader_rcv_rp, node, std::move(args));
         }
 
         // Write-back varargs (post-allgather only, multi-segment)
@@ -1213,49 +1215,48 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 {"beta_tile_start", idx.beta_tile_start_id},
             };
             if (is_a2a) {
-                writer_sender_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                writer_sender_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
+                push_runtime_args(writer_sender_rp, node, std::move(args));
+                writer_sender_rp.advanced_options.runtime_varargs.emplace(node, write_back_varargs);
             } else {
-                writer_rcv_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                writer_rcv_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
+                push_runtime_args(writer_rcv_rp, node, std::move(args));
+                writer_rcv_rp.advanced_options.runtime_varargs.emplace(node, write_back_varargs);
             }
         }
     }
 
-    run_params.kernel_run_params.push_back(std::move(reader_sender_rp));
+    run_params.kernel_run_args.push_back(std::move(reader_sender_rp));
     if (has_reader_receiver_all_to_all) {
-        run_params.kernel_run_params.push_back(std::move(reader_rcv_a2a_rp));
+        run_params.kernel_run_args.push_back(std::move(reader_rcv_a2a_rp));
     }
     if (has_not_all_to_all_workers) {
-        run_params.kernel_run_params.push_back(std::move(reader_rcv_rp));
+        run_params.kernel_run_args.push_back(std::move(reader_rcv_rp));
     }
-    run_params.kernel_run_params.push_back(std::move(writer_sender_rp));
+    run_params.kernel_run_args.push_back(std::move(writer_sender_rp));
     if (has_not_all_to_all_workers) {
-        run_params.kernel_run_params.push_back(std::move(writer_rcv_rp));
+        run_params.kernel_run_args.push_back(std::move(writer_rcv_rp));
     }
-    run_params.kernel_run_params.push_back(std::move(compute_a2a_rp));
+    run_params.kernel_run_args.push_back(std::move(compute_a2a_rp));
     if (has_not_all_to_all_workers) {
-        run_params.kernel_run_params.push_back(std::move(compute_not_a2a_rp));
+        run_params.kernel_run_args.push_back(std::move(compute_not_a2a_rp));
     }
 
     // TensorArgs
-    run_params.tensor_args.push_back({.tensor_parameter_name = TP_INPUT_A, .tensor = a.mesh_tensor()});
-    run_params.tensor_args.push_back({.tensor_parameter_name = TP_OUTPUT, .tensor = output.mesh_tensor()});
+    run_params.tensor_args.emplace(TpName(TP_INPUT_A), std::cref(a.mesh_tensor()));
+    run_params.tensor_args.emplace(TpName(TP_OUTPUT), std::cref(output.mesh_tensor()));
     if (b.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_RESIDUAL_B, .tensor = b.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_RESIDUAL_B), std::cref(b.value().mesh_tensor()));
     }
     if (gamma.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_GAMMA, .tensor = gamma.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_GAMMA), std::cref(gamma.value().mesh_tensor()));
     }
     if (beta.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_BETA, .tensor = beta.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_BETA), std::cref(beta.value().mesh_tensor()));
     }
     if (is_post_all_gather && stats.has_value()) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = TP_STATS, .tensor = stats.value().mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_STATS), std::cref(stats.value().mesh_tensor()));
     }
     if (use_welford) {
-        run_params.tensor_args.push_back(
-            {.tensor_parameter_name = TP_RECIP, .tensor = tensor_args.recip_tensor->mesh_tensor()});
+        run_params.tensor_args.emplace(TpName(TP_RECIP), std::cref(tensor_args.recip_tensor->mesh_tensor()));
     }
 
     return ttnn::device_operation::ProgramArtifacts{
