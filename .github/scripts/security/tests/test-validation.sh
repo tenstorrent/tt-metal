@@ -1148,6 +1148,51 @@ assert_returns_1 "ipv4: negative octet"        validate_ipv4 "192.168.-1.1"
 echo ""
 
 # ============================================
+# validate_ipv6 tests
+# ============================================
+echo "validate_ipv6"
+
+# Valid: full 8-group form
+assert_returns_0 "ipv6: valid full form"              validate_ipv6 "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+assert_returns_0 "ipv6: valid all-lowercase hex"      validate_ipv6 "2001:db8:85a3:0:0:8a2e:370:7334"
+assert_returns_0 "ipv6: valid all zeros"              validate_ipv6 "0:0:0:0:0:0:0:0"
+assert_returns_0 "ipv6: valid all max"                validate_ipv6 "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+
+# Valid: compressed '::' form
+assert_returns_0 "ipv6: valid loopback ::1"           validate_ipv6 "::1"
+assert_returns_0 "ipv6: valid all-zeros ::"           validate_ipv6 "::"
+assert_returns_0 "ipv6: valid leading ::"             validate_ipv6 "::2001:db8"
+assert_returns_0 "ipv6: valid trailing ::"            validate_ipv6 "2001:db8::"
+assert_returns_0 "ipv6: valid middle ::"              validate_ipv6 "2001:db8::8a2e:370:7334"
+assert_returns_0 "ipv6: valid fe80::1"                validate_ipv6 "fe80::1"
+assert_returns_0 "ipv6: valid 7 groups + ::"          validate_ipv6 "::ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+
+# Valid: IPv4-mapped suffix
+assert_returns_0 "ipv6: valid IPv4-mapped ::ffff:192.168.1.1"  validate_ipv6 "::ffff:192.168.1.1"
+assert_returns_0 "ipv6: valid IPv4-translated 64:ff9b::192.168.1.1" validate_ipv6 "64:ff9b::192.168.1.1"
+
+# Invalid: structural errors
+assert_returns_1 "ipv6: empty"                        validate_ipv6 ""
+assert_returns_1 "ipv6: only 7 groups no ::"         validate_ipv6 "1:2:3:4:5:6:7"
+assert_returns_1 "ipv6: 9 groups"                    validate_ipv6 "1:2:3:4:5:6:7:8:9"
+assert_returns_1 "ipv6: too many groups with ::"     validate_ipv6 "1:2:3:4:5:6:7:8::"
+assert_returns_1 "ipv6: :: fills zero groups"        validate_ipv6 "1:2:3:4::5:6:7:8"
+assert_returns_1 "ipv6: double ::"                   validate_ipv6 "1::2::3"
+assert_returns_1 "ipv6: triple :::"                  validate_ipv6 ":::1"
+assert_returns_1 "ipv6: group > 4 hex digits"        validate_ipv6 "2001:db8:85a3:0:0:8a2e:370:73340"
+assert_returns_1 "ipv6: invalid hex char 'g'"        validate_ipv6 "gggg::1"
+assert_returns_1 "ipv6: invalid IPv4 suffix octet"   validate_ipv6 "::ffff:999.1.1.1"
+assert_returns_1 "ipv6: invalid IPv4 suffix format"  validate_ipv6 "::ffff:not.an.ip"
+
+# Invalid: forbidden characters (shell injection / zone ID)
+assert_returns_1 "ipv6: zone ID % rejected"          validate_ipv6 "fe80::1%eth0"
+assert_returns_1 "ipv6: shell \$ rejected"           validate_ipv6 '::$(id)'
+assert_returns_1 "ipv6: space rejected"              validate_ipv6 "::1 extra"
+assert_returns_1 "ipv6: semicolon rejected"          validate_ipv6 "::1;id"
+
+echo ""
+
+# ============================================
 # validate_github_repo tests
 # ============================================
 echo "validate_github_repo"

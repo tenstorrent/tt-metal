@@ -841,6 +841,120 @@ validate_ipv4() {
     return 0
 }
 
+# Validates an IPv6 address in any standard notation.
+# Supports: full form (8 groups), compressed '::' form, and IPv4-mapped suffix.
+# Rejects zone IDs (%ifname), shell metacharacters, and malformed addresses.
+# $1: IPv6 address string
+validate_ipv6() {
+    local ip="$1"
+
+    if [[ -z "${ip}" ]]; then
+        validation_error "IPv6 address cannot be empty"
+        return 1
+    fi
+
+    if [[ "${ip}" =~ [[:cntrl:]] ]]; then
+        validation_error "IPv6 address cannot contain control characters"
+        return 1
+    fi
+
+    # Character whitelist: hex digits, colons, and dots (IPv4-mapped suffix).
+    # Rejects shell metacharacters, zone IDs (%), spaces, etc.
+    if [[ ! "${ip}" =~ ^[0-9a-fA-F:.]+$ ]]; then
+        validation_error "IPv6 address contains invalid characters (only hex digits, ':', and '.' are allowed)"
+        return 1
+    fi
+
+    # Max 39 chars: 8 groups × 4 hex digits + 7 colons
+    if [[ ${#ip} -gt 39 ]]; then
+        validation_error "IPv6 address exceeds maximum length of 39 characters"
+        return 1
+    fi
+
+    # Reject ::: or longer runs
+    if [[ "${ip}" =~ ::: ]]; then
+        validation_error "IPv6 address cannot contain three or more consecutive colons"
+        return 1
+    fi
+
+    if [[ "${ip}" =~ :: ]]; then
+        # At most one :: allowed — replace the first and check for a second
+        local _tmp="${ip/::/_DC_}"
+        if [[ "${_tmp}" =~ :: ]]; then
+            validation_error "IPv6 address cannot contain more than one '::'"
+            return 1
+        fi
+
+        local _left="${ip%%::*}"
+        local _right="${ip##*::}"
+        local _lcount=0 _rcount=0
+        local _parts _g
+
+        if [[ -n "${_left}" ]]; then
+            IFS=':' read -ra _parts <<< "${_left}"
+            _lcount=${#_parts[@]}
+            for _g in "${_parts[@]}"; do
+                if [[ ! "${_g}" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+                    validation_error "IPv6 address contains invalid group: '${_g}'"
+                    return 1
+                fi
+            done
+        fi
+
+        if [[ -n "${_right}" ]]; then
+            IFS=':' read -ra _parts <<< "${_right}"
+            _rcount=${#_parts[@]}
+            local _last="${_parts[-1]}"
+            if [[ "${_last}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                # IPv4-mapped suffix — validate as IPv4 and count as 2 groups
+                if ! validate_ipv4 "${_last}" 2>/dev/null; then
+                    validation_error "Invalid IPv4-mapped suffix in IPv6 address: '${_last}'"
+                    return 1
+                fi
+                _rcount=$(( _rcount + 1 ))
+                local _i
+                for (( _i=0; _i < ${#_parts[@]}-1; _i++ )); do
+                    _g="${_parts[$_i]}"
+                    if [[ ! "${_g}" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+                        validation_error "IPv6 address contains invalid group: '${_g}'"
+                        return 1
+                    fi
+                done
+            else
+                for _g in "${_parts[@]}"; do
+                    if [[ ! "${_g}" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+                        validation_error "IPv6 address contains invalid group: '${_g}'"
+                        return 1
+                    fi
+                done
+            fi
+        fi
+
+        # :: must expand to at least one group — total explicit groups must be <= 7
+        if [[ $(( _lcount + _rcount )) -gt 7 ]]; then
+            validation_error "IPv6 address has too many groups ('::' must expand to at least one group)"
+            return 1
+        fi
+
+    else
+        # No :: — exactly 8 colon-separated hex groups required
+        local _parts _g
+        IFS=':' read -ra _parts <<< "${ip}"
+        if [[ ${#_parts[@]} -ne 8 ]]; then
+            validation_error "IPv6 address must have exactly 8 groups when '::' is absent (got ${#_parts[@]})"
+            return 1
+        fi
+        for _g in "${_parts[@]}"; do
+            if [[ ! "${_g}" =~ ^[0-9a-fA-F]{1,4}$ ]]; then
+                validation_error "IPv6 address contains invalid group: '${_g}'"
+                return 1
+            fi
+        done
+    fi
+
+    return 0
+}
+
 # Validates a GitHub repository reference in "owner/repo" format.
 # Enforces GitHub naming rules for both owner and repo components.
 # $1: repo reference (e.g. "tenstorrent/tt-metal")
