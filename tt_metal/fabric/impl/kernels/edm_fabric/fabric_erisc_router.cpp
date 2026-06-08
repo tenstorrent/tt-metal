@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"  // [debug] DPRINT for combine-marker detection
+#include "api/debug/device_print.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "internal/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -513,6 +516,77 @@ enum PacketLocalForwardType : uint8_t {
 // did_something=true (i.e. no progress was made), then we allow for context switch in case
 // the link is down
 bool did_something;
+
+// [debug] Combine-marker windowed Tx measurement. The combine writer sets FabricTelemetry::scratch[0]
+// non-zero at data-send start and 0 at end (handled in the main loop). Between those markers we collect a
+// set of counters that are read out and printed at the end marker.
+//
+// All the counters live in a fixed L1 scratch region (CombineDebug, below) rather than as globals, because
+// on eRISC the stack and .bss share an 8 KB local data RAM and we have no room there. The region is carved
+// by the builder from the channel-buffer headroom and its base is passed in as combine_debug_buffer_addr;
+// reaching it costs nothing on the local budget (the address is a compile-time constant).
+//
+// combine_window_active is the one exception: it stays a 1-byte .bss global because it is read on *every*
+// send attempt to gate the instrumentation, and a local-RAM read is far cheaper than a volatile L1 read.
+// The counter writes only happen while the window is open, so their L1 cost is confined to the active region.
+// Per-sender-channel counters. One instance per channel index so behaviour can be read separately instead
+// of aggregated across channels (aggregation made "starved" ambiguous: idle channels always report starved).
+struct CombineChannelDebug {
+    // Send-attempt breakdown (mutually exclusive, exhaustive): enq + starved + rxfull + txqbusy + other == total.
+    uint32_t att_total;
+    uint32_t att_enqueued;
+    uint32_t att_starved;
+    uint32_t att_rxfull;
+    uint32_t att_txqbusy;
+    uint32_t att_other;
+    // Tight Tx for this channel: time/bytes strictly inside the eth-send call (see send sites).
+    uint32_t tight_cycles;
+    uint32_t tight_bytes;    // payload + header (wire bytes)
+    uint32_t tight_payload;  // net payload only (header excluded)
+};
+
+struct CombineDebug {
+    uint32_t magic;  // sanity tag (set once at the start marker); 0 / garbage => bad address
+    // Windowed cycle deltas are loop-level (from BandwidthTelemetry), not per-channel. 32-bit: a single
+    // window fits well under 2^32 cycles, and unsigned subtraction handles wraparound of the running counters.
+    uint32_t total_cycles_at_start;
+    uint32_t active_cycles_at_start;
+    // One counter block per sender channel index. Indexed by sender_channel_index at the send sites.
+    CombineChannelDebug per_ch[MAX_NUM_SENDER_CHANNELS];
+    uint32_t spare[8];  // room to grow: add per-channel fields above, or global fields here
+};
+// Must not exceed COMBINE_DEBUG_BUFFER_SIZE carved in FabricEriscDatamoverConfig (1024 B).
+static_assert(sizeof(CombineDebug) <= 1024, "CombineDebug exceeds the carved combine_debug_buffer region");
+
+constexpr uint32_t COMBINE_DEBUG_MAGIC = 0xC0FFEE01;
+
+// Accessor folds to the constant base address (combine_debug_buffer_addr is a CT-arg constexpr), so it
+// occupies no storage in local RAM.
+FORCE_INLINE volatile CombineDebug* combine_dbg() {
+    return reinterpret_cast<volatile CombineDebug*>(combine_debug_buffer_addr);
+}
+
+bool combine_window_active = false;
+
+// [debug] Classify a single sender-channel send attempt into exactly one bucket, for channel `ch`. Called
+// only inside the combine window (caller gates on combine_window_active), using the same condition values
+// the send path already computed so the classification matches the real can_send decision.
+FORCE_INLINE void record_combine_send_attempt(
+    uint32_t ch, bool can_send, bool has_unsent_packet, bool receiver_has_space_for_packet, uint32_t sender_txq_id) {
+    volatile CombineChannelDebug* c = &combine_dbg()->per_ch[ch];
+    c->att_total++;
+    if (can_send) {
+        c->att_enqueued++;
+    } else if (!has_unsent_packet) {
+        c->att_starved++;
+    } else if (!receiver_has_space_for_packet) {
+        c->att_rxfull++;
+    } else if (internal_::eth_txq_is_busy(sender_txq_id)) {
+        c->att_txqbusy++;
+    } else {
+        c->att_other++;
+    }
+}
 
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
@@ -1664,6 +1738,11 @@ FORCE_INLINE
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+    // [debug] Classify this send attempt (enqueue vs skip-reason) while inside the combine window.
+    if (combine_window_active) {
+        record_combine_send_attempt(
+            sender_channel_index, can_send, has_unsent_packet, receiver_has_space_for_packet, sender_txq_id);
+    }
     if (can_send) {
         did_something = true;
         progress = true;
@@ -1673,11 +1752,22 @@ FORCE_INLINE
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
+        // [debug] Time only the actual data movement over Tx, and only inside the combine window.
+        uint32_t tight_send_t0;
+        if (combine_window_active) {
+            tight_send_t0 = get_timestamp_32b();
+        }
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+        if (combine_window_active) {
+            volatile CombineChannelDebug* c = &combine_dbg()->per_ch[sender_channel_index];
+            c->tight_cycles += static_cast<uint32_t>(get_timestamp_32b() - tight_send_t0);
+            c->tight_bytes += pkt_header->get_payload_size_including_header();
+            c->tight_payload += pkt_header->get_payload_size_excluding_header();
+        }
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -2172,6 +2262,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
+    // [debug] last-seen value of the combine sender's marker (FabricTelemetry::scratch[0], written by the
+    // writer_combine worker over NOC at data-send start/end). Used to emit a profiler event on change.
+    uint32_t last_combine_marker = 0;
+    uint32_t iteration_counter = 0;
+    bool should_log = true;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
@@ -2590,6 +2685,71 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            }
+
+            // [debug] Detect the combine sender's marker (worker writes scratch[0] at data-send
+            // start, then 0 at end) and emit a timestamped profiler event on each change. The read is
+            // a local L1 load (no NOC). Data = (MY_ERISC_ID << 32) | marker, timestamp added by profiler.
+            {
+                uint32_t combine_marker = fabric_telemetry->scratch[0];
+                if (combine_marker != last_combine_marker) {
+                    last_combine_marker = combine_marker;
+                    DEVICE_PRINT("[cmb] marker={}\n", combine_marker);
+
+                    auto& tx_bw = local_fabric_telemetry.dynamic_info.tx_bandwidth;
+                    volatile CombineDebug* d = combine_dbg();
+                    if (combine_marker != 0) {
+                        // START event: reset all counters, snapshot the running counters, and open the window.
+                        // Snapshot only the low 32 bits; the unsigned 32-bit subtraction at the end marker
+                        // gives the correct delta as long as the window is shorter than 2^32 cycles.
+                        d->magic = COMBINE_DEBUG_MAGIC;
+                        d->total_cycles_at_start = static_cast<uint32_t>(tx_bw.elapsed_cycles.full);
+                        d->active_cycles_at_start = static_cast<uint32_t>(tx_bw.elapsed_active_cycles.full);
+                        for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
+                            volatile CombineChannelDebug* c = &d->per_ch[ch];
+                            c->att_total = 0;
+                            c->att_enqueued = 0;
+                            c->att_starved = 0;
+                            c->att_rxfull = 0;
+                            c->att_txqbusy = 0;
+                            c->att_other = 0;
+                            c->tight_cycles = 0;
+                            c->tight_bytes = 0;
+                            c->tight_payload = 0;
+                        }
+                        combine_window_active = true;
+                    } else {
+                        // END event: close the window, print the loop-level deltas, then one line per
+                        // serviced sender channel (idle/unserviced channels are skipped).
+                        combine_window_active = false;
+                        uint32_t combine_total_cycles =
+                            static_cast<uint32_t>(tx_bw.elapsed_cycles.full) - d->total_cycles_at_start;
+                        uint32_t combine_active_cycles =
+                            static_cast<uint32_t>(tx_bw.elapsed_active_cycles.full) - d->active_cycles_at_start;
+                        DEVICE_PRINT("[cmb] total={} txact={}\n", combine_total_cycles, combine_active_cycles);
+                        // Per-channel send-attempt breakdown + tight Tx. Sanity per line:
+                        //   enq + starved + rxfull + txqbusy + other == att.
+                        for (uint32_t ch = 0; ch < MAX_NUM_SENDER_CHANNELS; ch++) {
+                            if (!is_sender_channel_serviced[ch]) {
+                                continue;
+                            }
+                            volatile CombineChannelDebug* c = &d->per_ch[ch];
+                            DEVICE_PRINT(
+                                "[cmb] ch={} att={} enq={} starved={} rxfull={} txqbusy={} other={} tight={} "
+                                "bytes={} payload={}\n",
+                                ch,
+                                c->att_total,
+                                c->att_enqueued,
+                                c->att_starved,
+                                c->att_rxfull,
+                                c->att_txqbusy,
+                                c->att_other,
+                                c->tight_cycles,
+                                c->tight_bytes,
+                                c->tight_payload);
+                        }
+                    }
+                }
             }
 
             if constexpr (enable_context_switch) {
@@ -3555,6 +3715,20 @@ void kernel_main() {
                     eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
             fabric_telemetry->static_info.neighbor_mesh_id = handshake_info->neighbor_mesh_id;
             fabric_telemetry->static_info.neighbor_device_id = handshake_info->neighbor_device_id;
+
+            // [debug] One-time dump of this fabric link's endpoints: which remote chip this eth core sends to.
+            // Connections don't change during a combine test, so a single line per router is enough. The
+            // remote eth channel isn't exchanged in the handshake, so we log our local eth_chan/direction
+            // plus the remote chip (mesh/device) identity. The routing plane is the same on both ends of a
+            // link, so it pairs local<->remote eth cores in multi-link topologies (e.g. linear-8 2-link).
+            DEVICE_PRINT(
+                "[eth] mesh {} dev {} dir {} plane {} -> mesh {} dev {}\n",
+                (uint32_t)routing_table_l1->my_mesh_id,
+                (uint32_t)routing_table_l1->my_device_id,
+                (uint32_t)my_direction,
+                (uint32_t)MY_ROUTING_PLANE,
+                (uint32_t)handshake_info->neighbor_mesh_id,
+                (uint32_t)handshake_info->neighbor_device_id);
         }
 
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;

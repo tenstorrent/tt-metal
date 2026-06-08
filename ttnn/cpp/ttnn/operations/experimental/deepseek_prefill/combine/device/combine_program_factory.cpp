@@ -1231,6 +1231,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             writer_runtime_args_raw.push_back(noc_y);
         }
 
+        // [debug] per-sender index, used by the writer kernel to build the eRISC combine marker value
+        // (100 + chip*10 + index) written into the eth router's telemetry scratch[0].
+        writer_runtime_args_raw.push_back(core_idx);
+
         if (num_links > 0) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;

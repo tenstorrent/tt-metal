@@ -132,6 +132,12 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         "Total channel size of {} B exceeds available space of {} B",
         total_slot_count * channel_buffer_size_bytes,
         available_channel_buffering_space);
+    // TT_FATAL(
+    //     total_slot_count * channel_buffer_size_bytes > available_channel_buffering_space,
+    //     "Total channel size of {} B lower than available space of {} B",
+    //     total_slot_count * channel_buffer_size_bytes,
+    //     available_channel_buffering_space
+    // );
 
     log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
 

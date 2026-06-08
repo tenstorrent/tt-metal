@@ -19,6 +19,11 @@
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
 // still has to be recomputed from dest_mesh_ids/dest_chip_ids — see note in writer_dispatch.cpp.
 
+// [debug] eRISC fabric-telemetry mailbox: FabricTelemetry struct (for offsetof(scratch)) and the
+// ACTIVE_ETH telemetry L1 base address the router uses.
+#include "hostdev/fabric_telemetry_msgs.h"
+#include "dev_mem_map.h"
+
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
 #define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
@@ -132,6 +137,9 @@ void kernel_main() {
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
         all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_barrier_l1_offset);
     }
+
+    // [debug] per-sender index (RT arg appended by the program factory); used for the eRISC combine marker.
+    [[maybe_unused]] const uint32_t combine_sender_index = get_arg_val<uint32_t>(rt_args_idx++);
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -263,6 +271,20 @@ void kernel_main() {
     noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_COMBINE("Fabric setup complete\n");
+
+    // [debug] Mark START of the combine data-send loop in each connected eth router's telemetry scratch[0].
+    // Value = 100 + chip*10 + sender_index so eRISC logs can correlate to this sender without host-side
+    // mapping. Single inline dword write (scratch[0] is 4-byte aligned); the router reads it locally.
+    constexpr uint32_t combine_marker_l1_addr = MEM_AERISC_FABRIC_TELEMETRY_BASE + offsetof(FabricTelemetry, scratch);
+    const uint32_t combine_marker_value = 100 + src_chip_id * 10 + combine_sender_index;
+    for (uint32_t d = 0; d < 4; d++) {
+        if (directions[d]) {
+            noc_inline_dw_write<InlineWriteDst::L1>(
+                get_noc_addr(fabric_connections[d].edm_noc_x, fabric_connections[d].edm_noc_y, combine_marker_l1_addr),
+                combine_marker_value);
+        }
+    }
+    // DPRINT << "[combine-marker] writer START value=" << combine_marker_value << ENDL();
 #endif
 
 #if INIT_ZEROS
@@ -350,6 +372,17 @@ void kernel_main() {
     // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
     // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();
+
+    // [debug] Mark END of the combine data-send loop: write 0 to the eth router's telemetry scratch[0]
+    // (after the barrier above, so the last data packet has departed L1). Reuses combine_marker_l1_addr.
+    for (uint32_t d = 0; d < 4; d++) {
+        if (directions[d]) {
+            noc_inline_dw_write<InlineWriteDst::L1>(
+                get_noc_addr(fabric_connections[d].edm_noc_x, fabric_connections[d].edm_noc_y, combine_marker_l1_addr),
+                0);
+        }
+    }
+    // DPRINT << "[combine-marker] writer END value=0" << ENDL();
 
     // Exit semaphore exchange on a dedicated semaphore (exit_semaphore_address). The exit-inc must not
     // be observed before our prior fabric writes to that chip have landed, or a peer could see

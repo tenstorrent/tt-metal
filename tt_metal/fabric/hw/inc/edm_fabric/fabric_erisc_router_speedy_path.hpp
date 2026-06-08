@@ -119,11 +119,22 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
 
+    // [debug] Classify this send attempt (enqueue vs skip-reason) while inside the combine window.
+    if (combine_window_active) {
+        record_combine_send_attempt(
+            sender_channel_index, can_send, has_unsent_packet, receiver_has_space_for_packet, sender_txq_id);
+    }
+
     if (can_send) {
         progress = true;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
+        // [debug] Time only the actual data movement over Tx, and only inside the combine window.
+        uint32_t tight_send_t0 = 0;
+        if (combine_window_active) {
+            tight_send_t0 = get_timestamp_32b();
+        }
         // explicit inline of send next data shaves about 9 cycles off the send time due to more efficient code-gen
         {
             auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
@@ -158,6 +169,12 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
             remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+        }
+        if (combine_window_active) {
+            volatile CombineChannelDebug* c = &combine_dbg()->per_ch[sender_channel_index];
+            c->tight_cycles += static_cast<uint32_t>(get_timestamp_32b() - tight_send_t0);
+            c->tight_bytes += pkt_header->get_payload_size_including_header();
+            c->tight_payload += pkt_header->get_payload_size_excluding_header();
         }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {

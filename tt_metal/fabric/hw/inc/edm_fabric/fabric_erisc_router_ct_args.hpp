@@ -296,6 +296,9 @@ constexpr bool IDLE_CONTEXT_SWITCHING = NAMED_CT_ARG("IDLE_CONTEXT_SWITCHING") !
 
 constexpr size_t MY_ETH_CHANNEL = NAMED_CT_ARG("MY_ETH_CHANNEL");
 
+// [debug] Routing plane of this eth channel; matches the peer's plane on the same link (0xFFFFFFFF if unknown).
+constexpr uint32_t MY_ROUTING_PLANE = NAMED_CT_ARG("MY_ROUTING_PLANE");
+
 constexpr size_t MY_ERISC_ID = NAMED_CT_ARG("MY_ERISC_ID");
 constexpr size_t NUM_ACTIVE_ERISCS = NAMED_CT_ARG("NUM_ACTIVE_ERISCS");
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
@@ -468,6 +471,10 @@ constexpr PerfTelemetryRecorderType perf_telemetry_mode =
     static_cast<PerfTelemetryRecorderType>(NAMED_CT_ARG("PERF_TELEMETRY_MODE"));
 
 constexpr size_t perf_telemetry_buffer_addr = NAMED_CT_ARG("PERF_TELEMETRY_BUFFER_ADDR");
+
+// [debug] Base L1 address of the combine-telemetry scratch region, carved from the channel-buffer
+// headroom by the builder (see FabricEriscDatamoverConfig). Overlaid by CombineDebug in the kernel.
+constexpr size_t combine_debug_buffer_addr = NAMED_CT_ARG("COMBINE_DEBUG_BUFFER_ADDR");
 
 // ============================================================================
 // Code Profiling

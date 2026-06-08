@@ -368,6 +368,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         buffer_address += field_size;
     }
 
+    // [debug] Carve a fixed L1 scratch region for combine telemetry counters out of the channel-buffer
+    // headroom. This advances buffer_address, which shrinks available_channel_buffering_space below by the
+    // same amount; safe as long as COMBINE_DEBUG_BUFFER_SIZE stays well under the unused channel space in
+    // the target config (the allocator's TT_FATAL would catch it at build time otherwise). Overlaid by
+    // CombineDebug in the kernel; size must stay >= sizeof(CombineDebug) there.
+    constexpr std::size_t COMBINE_DEBUG_BUFFER_SIZE = 1024;  // 256 uint32 words
+    this->combine_debug_buffer_address = buffer_address;
+    buffer_address += COMBINE_DEBUG_BUFFER_SIZE;
+
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -850,6 +859,9 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     // Add telemetry buffer address (16B aligned)
     named_args["PERF_TELEMETRY_BUFFER_ADDR"] = static_cast<uint32_t>(config.perf_telemetry_buffer_address);
 
+    // [debug] Combine-telemetry scratch buffer address (carved from channel-buffer headroom).
+    named_args["COMBINE_DEBUG_BUFFER_ADDR"] = static_cast<uint32_t>(config.combine_debug_buffer_address);
+
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Enable RECEIVER_CHANNEL_FORWARD timer (bit 0)
@@ -1250,6 +1262,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IDLE_CONTEXT_SWITCHING"] = static_cast<uint32_t>(
         this->firmware_context_switch_type == FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
     named_args["MY_ETH_CHANNEL"] = my_eth_channel_;
+    // [debug] Routing plane for this eth channel. Same plane id on both ends of a link identifies the matched
+    // core pair, so it distinguishes the links in multi-link topologies (e.g. linear-8 2-link). Guarded with
+    // a sentinel so an unexpected/non-fabric channel can't fail the build over a debug-only field.
+    uint32_t my_routing_plane = 0xFFFFFFFF;
+    try {
+        my_routing_plane =
+            static_cast<uint32_t>(control_plane.get_routing_plane_id(this->local_fabric_node_id, this->my_eth_channel));
+    } catch (...) {
+    }
+    named_args["MY_ROUTING_PLANE"] = my_routing_plane;
     named_args["MY_ERISC_ID"] = risc_id;
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
     named_args["UPDATE_PKT_HDR_ON_RX_CH"] = update_pkt_hdr_on_rx_ch;
