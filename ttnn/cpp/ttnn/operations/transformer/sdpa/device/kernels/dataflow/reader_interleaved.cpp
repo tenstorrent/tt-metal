@@ -70,15 +70,17 @@ void kernel_main() {
     constexpr uint32_t use_mla = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t mla_kv_overlap = get_compile_time_arg_val(25) == 1;
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(26);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(27);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(28) == 1;
 
     // Semaphore IDs for KV chain forwarding (non-causal only, but always present in compile args)
-    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(27);
-    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(28);
-    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(29);
-    constexpr bool mcast_enabled = get_compile_time_arg_val(30) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(31) == 1;
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(29);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(30);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(31);
+    constexpr bool mcast_enabled = get_compile_time_arg_val(32) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<32>();
+    constexpr auto q_args = TensorAccessorArgs<34>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -366,6 +368,21 @@ void kernel_main() {
             } else {
                 q_high_idx = Skt;
             }
+            uint32_t k_loop_start = 0;
+            if constexpr (use_streaming_compute && sliding_window_size > 0) {
+                // Must match the compute kernel's K-loop bounds (see sliding_window_geometry.hpp).
+                using window_geom =
+                    SlidingWindowLoopGeometry<sliding_window_size, is_causal, tt::constants::TILE_HEIGHT>;
+                constexpr uint32_t left_window_tiles = window_geom::left_window_tiles;
+                constexpr uint32_t right_window_tiles = window_geom::right_window_tiles;
+                if (q_low_idx > left_window_tiles) {
+                    k_loop_start = (q_low_idx - left_window_tiles) / Sk_chunk_t;
+                }
+                if constexpr (!is_causal) {
+                    const uint32_t window_high_unclamped = q_low_idx + Sq_chunk_t + right_window_tiles;
+                    q_high_idx = window_high_unclamped < Skt ? window_high_unclamped : Skt;
+                }
+            }
 
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
@@ -380,7 +397,7 @@ void kernel_main() {
             }
 
             // loop while k_low < q_high
-            for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+            for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
@@ -525,7 +542,7 @@ void kernel_main() {
                 // (noc_async_read_barrier inside read_q_subblock deadlocks on BH
                 // when NOC writes are in-flight).
                 if constexpr (use_q_subblock_push) {
-                    if (k_chunk == 0) {
+                    if (k_chunk == k_loop_start) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             read_q_subblock<q_tile_bytes>(
                                 q_reader,
