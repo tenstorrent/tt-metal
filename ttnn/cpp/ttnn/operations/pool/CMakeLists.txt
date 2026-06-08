@@ -14,14 +14,10 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    device/kernels/*
-    generic/device/kernels/*
-    grid_sample/device/kernels/*
-    rotate/device/kernels/*
-    upsample/device/kernels/*
-)
+# TODO(nuked-op pool): per-op kernel globs (generic/grid_sample/rotate/upsample) removed
+# for eval. The shared device/kernels/ headers are retained (used by data_movement/fold,
+# experimental/cnn, conv3d, padded_slice, ...). Restore per-op globs on recreate.
+file(GLOB_RECURSE kernels device/kernels/*)
 
 target_sources(
     ttnn_op_pool

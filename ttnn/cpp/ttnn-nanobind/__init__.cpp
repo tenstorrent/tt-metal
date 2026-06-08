@@ -63,10 +63,7 @@
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
 #include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
-#include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
-#include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
-#include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
-#include "ttnn/operations/pool/grid_sample/grid_sample_nanobind.hpp"
+// TODO(nuked-op pool): pool op bindings removed for eval; restore on recreate.
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
@@ -158,11 +155,10 @@ void py_module(nb::module_& mod) {
     auto m_conv2d = mod.def_submodule("conv", "Convolution operations");
     conv::py_module(m_conv2d);
 
+    // TODO(nuked-op pool): pool op bindings (generic/rotate/upsample/grid_sample) removed
+    // for eval. Empty submodule kept; restore the bind calls on recreate.
     auto m_pool = mod.def_submodule("pool", "pooling  operations");
-    pool::py_module(m_pool);
-    rotate::py_module(m_pool);
-    upsample::py_module(m_pool);
-    grid_sample::bind_grid_sample(m_pool);
+    (void)m_pool;
 
     auto m_normalization = mod.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);

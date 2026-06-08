@@ -169,7 +169,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
-    cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
@@ -255,10 +254,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.cpp
     cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp
     cpp/ttnn/operations/normalization/normalization_nanobind.cpp
-    cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
-    cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
-    cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
-    cpp/ttnn/operations/pool/upsample/upsample_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher/dram_prefetcher_nanobind.cpp
     cpp/ttnn/operations/prefetcher/prefetcher_nanobind.cpp
     cpp/ttnn/operations/reduction/reduction_nanobind.cpp

@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
+// TODO(nuked-op halo): halo.hpp removed for eval; ttnn::halo call stubbed to passthrough below.
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -334,8 +334,10 @@ static Tensor apply_halo_padding(
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
         /*default_l1_acc=*/false);
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    // TODO(nuked-op halo): ttnn::halo removed for eval; passthrough (no halo padding applied).
+    (void)sliding_window_config;
+    (void)compute_kernel_config;
+    auto halo_output = reshaped_tensor;
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(

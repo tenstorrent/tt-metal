@@ -154,10 +154,11 @@ def _golden_function(input_tensor: ttnn.Tensor, scale_factor: Tuple[float, float
     return ret
 
 
-ttnn.attach_golden_function(
-    ttnn.upsample,
-    golden_function=_golden_function,
-)
+# TODO(nuked-op pool): ttnn.upsample removed for eval; re-attach the golden on recreate.
+# ttnn.attach_golden_function(
+#     ttnn.upsample,
+#     golden_function=_golden_function,
+# )
 
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
