@@ -7,13 +7,11 @@ This test verifies that both modules can be created and weights are loaded corre
 """
 
 import os
-import time
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from safetensors.torch import load_file
 from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
@@ -31,6 +29,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
+    cpu_mla_reference,
+    discover_traces,
+    load_trace,
+    partition_iters,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
@@ -490,61 +494,6 @@ ROTATED_VALID_LISTS = [
 ROTATED_VALID_IDS = ["iter0partial", "allfull", "iter1rotpartial", "iter1multichippad", "lastpartial", "padded_partial"]
 
 
-def _discover_traces(root, num_users):
-    """Immediate subdirs of `root`, one per user (cycled if fewer than num_users). Assert mla_io/."""
-    dirs = sorted(d for d in Path(root).iterdir() if d.is_dir())
-    assert dirs, f"no trace subdirs under {root}"
-    for d in dirs:
-        assert (d / "mla_io").is_dir(), f"trace dir {d} is missing mla_io/"
-    return [dirs[u % len(dirs)] for u in range(num_users)]
-
-
-def _load_trace(d):
-    """Return (mla_input [S,H], mla_output [S,H], kv_post [S,kvpe]) for layer 0, all bf16."""
-    mi = load_file(d / "mla_io" / "mla_input_layer_0.safetensors")["mla_input_layer_0"]
-    mo = load_file(d / "mla_io" / "mla_output_layer_0.safetensors")["mla_output_layer_0"]
-    kv = load_file(d / "kv_cache" / "layer_0.safetensors")["kv_post_transform_layer_0"]
-    return mi.to(torch.bfloat16), mo.to(torch.bfloat16), kv.to(torch.bfloat16)
-
-
-def _partition_iters(iters_isl, num_users):
-    """Split iters_isl into num_users contiguous groups; the LAST user takes the remainder."""
-    assert len(iters_isl) >= num_users, f"need >= {num_users} iters to split across {num_users} users"
-    base = len(iters_isl) // num_users
-    groups, idx = [], 0
-    for u in range(num_users):
-        n = base if u < num_users - 1 else len(iters_isl) - base * (num_users - 1)
-        groups.append(list(iters_isl[idx : idx + n]))
-        idx += n
-    return groups
-
-
-def _cpu_mla_reference(config, weights, hidden_2d):
-    """torch MLA forward over [S, H] hidden; returns output [S, H] bf16. Bracketed host-attn logs."""
-    mla_ref = (
-        create_mla_reference(
-            config=config,
-            state_dict={"model.layers.0.self_attn." + k: v for k, v in weights.items()},
-            layer_idx=0,
-            module_path="model.layers.0.self_attn",
-        )
-        .eval()
-        .to(torch.bfloat16)
-    )
-    pos = torch.arange(hidden_2d.shape[0], dtype=torch.long).unsqueeze(0)
-    logger.warning(
-        f"===== HOST ATTENTION START: torch MLA reference over {hidden_2d.shape[0]} tokens "
-        f"(CPU chunked-flash, {config.num_attention_heads} heads) -- slow CPU phase ====="
-    )
-    t0 = time.perf_counter()
-    with torch.no_grad():
-        out, _, _ = mla_ref(
-            hidden_states=hidden_2d.unsqueeze(0), position_ids=pos, past_key_value=DynamicCache(), use_cache=True
-        )
-    logger.warning(f"===== HOST ATTENTION END: torch reference done in {time.perf_counter() - t0:.1f}s =====")
-    return out[0].to(torch.bfloat16)
-
-
 def _run_chunked_prefill(
     request,
     mesh_device,
@@ -584,8 +533,8 @@ def _run_chunked_prefill(
         assert all(v == chunk_size_global for v in iters_isl), "trace mode requires full-chunk iters"
         assert prefill_len % chunk_size_global == 0, "trace prefill must be chunk-aligned"
 
-    groups = _partition_iters(iters_isl, num_users)
-    traces = _discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
+    groups = partition_iters(iters_isl, num_users)
+    traces = discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
@@ -619,7 +568,7 @@ def _run_chunked_prefill(
         g = groups[u]
         total_len = prefill_len + sum(g)
         if use_trace:
-            mi, mo, kv = _load_trace(traces[u])
+            mi, mo, kv = load_trace(traces[u])
             assert total_len <= mi.shape[0], f"user {u}: prefill+iters {total_len} > trace len {mi.shape[0]}"
             users.append(
                 dict(
@@ -646,9 +595,9 @@ def _run_chunked_prefill(
         else:  # prefill_len == 0, CPU synthetic
             torch.manual_seed(42 + u)
             hidden = torch.randn(total_len, hidden_size, dtype=torch.bfloat16)
-            ref_out = _cpu_mla_reference(config, weights, hidden) if want_pcc else None
+            ref_out, ref_kvpe = cpu_mla_reference(config, weights, hidden) if want_pcc else (None, None)
             users.append(
-                dict(group=g, total_len=total_len, hidden=hidden, ref_out=ref_out, kv_prior=None, kv_post=None)
+                dict(group=g, total_len=total_len, hidden=hidden, ref_out=ref_out, kv_prior=None, kv_post=ref_kvpe)
             )
 
     # ---- device setup ----
@@ -783,8 +732,11 @@ def _run_chunked_prefill(
         _, msg = assert_with_pcc(ref_meas, meas, 0.98)
         logger.info(f"  user {u} full measured output PCC: {msg}")
 
-    # ---- trace mode: also check the freshly-written new-chunk KV cache (k_nope direct, k_pe Meta) ----
-    if use_trace:
+    # ---- check the measured KV cache vs the reference. The rotation accumulates into the canonical
+    #      block-cyclic layout, so blockcyclic_positions un-rotates the final cache (incl. partial
+    #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
+    #      Meta-style) but re-interleaved for the GPU trace (HF half-split -> device Meta basis). ----
+    if want_pcc and any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
             tt_kvpe_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
@@ -793,18 +745,21 @@ def _run_chunked_prefill(
         ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
         p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
         kv_lora = config.kv_lora_rank
+        d = kvpe_dim - kv_lora
         for u in range(num_users):
+            if users[u]["kv_post"] is None:
+                continue
             nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
             nat[p] = cache_sr[u, 0]
-            new_dev = nat[prefill_len : users[u]["total_len"]]
-            new_ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
-            d = kvpe_dim - kv_lora
-            ref_pe_meta = torch.stack(
-                [new_ref[:, kv_lora : kv_lora + d // 2], new_ref[:, kv_lora + d // 2 :]], dim=-1
-            ).reshape(-1, d)
-            _, nope_msg = assert_with_pcc(new_ref[:, :kv_lora], new_dev[:, :kv_lora], 0.98)
-            _, pe_msg = assert_with_pcc(ref_pe_meta, new_dev[:, kv_lora:], 0.98)
-            logger.info(f"  user {u} new-chunk KV PCC -- k_nope: {nope_msg}  k_pe[Meta]: {pe_msg}")
+            dev = nat[prefill_len : users[u]["total_len"]]
+            ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
+            ref_pe = ref[:, kv_lora:]
+            if use_trace:  # GPU trace stores k_pe HF half-split -> re-interleave to the device Meta basis
+                ref_pe = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)
+            _, nope_msg = assert_with_pcc(ref[:, :kv_lora], dev[:, :kv_lora], 0.98)
+            _, pe_msg = assert_with_pcc(ref_pe, dev[:, kv_lora:], 0.98)
+            basis = "Meta-aligned" if use_trace else "direct"
+            logger.info(f"  user {u} KV cache PCC -- k_nope: {nope_msg}  k_pe[{basis}]: {pe_msg}")
 
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
 
