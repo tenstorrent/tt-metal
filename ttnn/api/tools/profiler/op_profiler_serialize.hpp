@@ -139,6 +139,7 @@ private:
 inline thread_safe_cached_ops_map cached_ops{};
 inline thread_safe_call_stack call_stack;
 inline bool op_profiler_is_enabled = false;
+inline bool per_op_dump_is_enabled = false;
 
 #endif  // TRACY_ENABLE
 
@@ -269,6 +270,14 @@ inline bool is_op_profiler_env_var_set() {
         op_profiler_is_enabled = true;
     }
     return op_profiler_is_enabled;
+}
+
+inline bool is_per_op_dump_env_var_set() {
+    const char* per_op_dump_enable_str = std::getenv("TTNN_PROFILER_PER_OP_DUMP");
+    if (per_op_dump_enable_str != nullptr && per_op_dump_enable_str[0] == '1') {
+        per_op_dump_is_enabled = true;
+    }
+    return per_op_dump_is_enabled;
 }
 
 // ---------------------------------------------------------------------------
