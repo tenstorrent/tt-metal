@@ -382,6 +382,8 @@ uint32_t input_addr = input.get_bank_base_address(bank_id);  // when truly neede
 
 Most ports don't reach for the raw pointer at all — `TensorAccessor`'s normal page-access methods are the standard path. `get_bank_base_address` is the escape hatch for explicit address arithmetic cases only.
 
+> *Sanctioned exception — host-computed offset.* When the legacy host pre-composed a base pointer with a host-side-computed offset (`tensor.buffer()->address() + compute_offset(attrs)`) and passed the result through an RTA, the standard `TensorBinding` fix isn't enough on its own — the offset arithmetic has to cross the host/kernel boundary. Apply [Pattern: Host-computed base-pointer offset](metal2_port_patterns.md#pattern-host-computed-base-pointer-offset--cta-offset--kernel-side-addition): pass the tensor as a binding, pass the offset as a *named CTA*, and add the single `+ offset` line on the kernel side after the accessor's base-address retrieval. This is the only documented kernel-side modification beyond the whitelist above.
+
 **6. Conditionally bound resources (DFB, tensor, semaphore).** A binding declared conditionally on the host (omitted from the kernel's bindings when a path isn't taken) requires kernel-side coordination:
 
 - The condition that selects the binding moves from a CTA to a kernel-side `#define` (emitted by the host via `KernelSpec::compiler_options.defines`).

@@ -272,6 +272,64 @@ The framework validates that the two compute `KernelSpec`s have non-overlapping 
 
 ---
 
+## Pattern: Host-computed base-pointer offset → CTA offset + kernel-side addition
+
+**Category**: Pattern (sanctioned kernel-side exception)
+
+**Recognition signal**: The legacy host code computes an offset from the op's attributes / shapes / strides, *adds it to a tensor's base pointer*, and threads the result through a runtime argument. The kernel reads the pre-shifted address and uses it directly. The hallmark expression on the host side is `tensor.buffer()->address() + compute_offset(attrs)` (or similar arithmetic). The audit's [Step 0.5](port_op_to_metal2_audit.md#step-05--per-binding-bypass-of-the-tensor-accessor-mechanism) catches this as a YELLOW (RTA bypass) — but it's the variant that *can't* be cleanly resolved by replacing the address-RTA with a `TensorBinding` alone, because the offset arithmetic lives on the host side of the legacy boundary.
+
+In the wild: `ttnn/cpp/ttnn/operations/data_movement/slice/` (slice computes a per-region offset on the host, then composes it with the input buffer's base address before handing the result to the kernel).
+
+**Why a straight `TensorBinding` fix doesn't work**: Metal 2.0's `TensorArgument` carries a tensor identity, not a pre-offset memory address — there is no way to attach an offset to a `TensorArgument` and have the kernel receive `base + offset` automatically. Passing the offset-shifted address as a raw RTA preserves the legacy *RTA-smuggling* shape that Step 0.5 was built to eliminate — same bug under a different name. The sanctioned resolution moves the addition across the host/kernel boundary.
+
+**Decision**: Three-part rewrite:
+
+1. **Keep the host-side offset arithmetic on the host.** Whatever computation derives the offset value from attributes / shapes / strides stays exactly where it was. Only its *target* changes — it no longer pre-shifts a pointer.
+2. **Pass the original tensor as a `TensorParameter` / `TensorBinding`** — the standard binding-mechanism translation. The kernel constructs `TensorAccessor(ta::<name>)` and obtains the base address from it.
+3. **Pass the computed offset as a named compile-time argument** on the `KernelSpec`. Add the offset on the kernel side, in a single line after retrieving the base address from the accessor.
+
+**Synthetic example**.
+
+```cpp
+// Legacy host (smuggling shape):
+uint32_t addr = input.buffer()->address() + compute_offset(attrs);
+KernelDescriptor reader = {
+    .kernel_source = "reader.cpp",
+    .runtime_args  = {{{0,0}, {addr, /* other RTAs */}}},
+};
+
+// Legacy kernel (consumes the pre-shifted address):
+uint32_t base = get_arg_val<uint32_t>(0);
+// ... use `base` directly as the read address ...
+```
+
+```cpp
+// Metal 2.0 host:
+const uint32_t offset = compute_offset(attrs);  // unchanged host-side arithmetic
+KernelSpec reader{
+    .unique_id = READER,
+    .source = "reader.cpp",
+    .compile_time_args = {{"offset", offset}, /* other CTAs */},
+    .tensor_bindings = {{
+        .tensor_parameter_name = INPUT,
+        .accessor_name = "in",
+    }},
+    // ...
+};
+
+// Metal 2.0 kernel (one-line addition — the sanctioned exception):
+auto in = TensorAccessor(ta::in);
+constexpr auto offset = get_arg(args::offset);
+uint32_t base = in.get_bank_base_address(bank_id) + offset;
+// ... use `base` as the read address ...
+```
+
+**Sanctioned exception note**: This pattern *explicitly* requires a kernel-side change that is not on the [recipe's kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) — the `+ offset` addition after the accessor's base-address retrieval. That's deliberate. This is the documented, sanctioned exception; applying it does not constitute off-whitelist improvising. The kernel-side discipline's spirit (mechanical translation, no creative work, no functional change) is preserved: the kernel's *behavior* is identical before and after, since `base + offset` on the kernel simply relocates one host-side line into the kernel — the arithmetic is unchanged, the read pattern is unchanged, only the boundary moves.
+
+**Constraint**: The offset must be expressible as a compile-time argument — i.e., a factory-construction-time value derivable from attributes / shapes. The sanctioned path is **CTA-only**. If your offset would need to be per-dispatch-varying (RTA), this pattern doesn't apply; capitulate per the recipe's [§When the discipline doesn't fit](port_op_to_metal2_recipe.md#when-the-discipline-doesnt-fit).
+
+---
+
 ## Anti-pattern: `.id` extraction or temp DFB wrappers at LLK call sites
 
 **Category**: Anti-pattern
