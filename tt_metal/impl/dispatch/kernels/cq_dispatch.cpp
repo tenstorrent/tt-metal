@@ -1044,10 +1044,8 @@ static void process_wait() {
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        // Same-core (prefetch+dispatch colocated): increment the sync sem in local L1 instead of
-        // a NOC self-loopback. Sole writer, so a plain RMW through the uncached alias is safe.
-        volatile tt_l1_ptr uint32_t* upstream_sync_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<fd_core_type>(upstream_sync_sem)));
+        volatile tt_l1_ptr uint32_t* upstream_sync_sem_addr =
+            uncached_l1_ptr<uint32_t>(get_semaphore<fd_core_type>(upstream_sync_sem));
         *upstream_sync_sem_addr += 1;
 #else
         noc_semaphore_inc(
