@@ -11390,10 +11390,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             from ._cli_helpers.ttnn_preflight import ensure_ttnn_ready
 
-            if not ensure_ttnn_ready(
-                agent_bin=getattr(args, "auto_agent_bin", None) or getattr(args, "agent_bin", None) or "claude",
-                agent_model=getattr(args, "auto_model", None) or getattr(args, "model", None) or "sonnet",
-            ):
+            if not ensure_ttnn_ready():
                 return 1
         except Exception:
             pass
