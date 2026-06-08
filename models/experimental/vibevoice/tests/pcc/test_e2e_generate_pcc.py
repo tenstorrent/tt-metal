@@ -39,7 +39,8 @@ pytestmark = pytest.mark.skipif(
 
 CFG_SCALE = 1.3
 NUM_DIFFUSION_STEPS = 10
-SPEECH_PCC = 0.95
+SPEECH_PCC = 0.99
+TOKEN_MATCH = 0.99
 # Cap AR steps for CI; remove or raise for full 1p_short parity runs.
 MAX_NEW_TOKENS = 128
 
@@ -91,9 +92,8 @@ def test_e2e_generate_speech_pcc(mesh_device):
 
     prefill_len = inputs["input_ids"].shape[1]
 
-    # Pre-compute reference speech embeddings (CPU, before seeding).
-    # The draw count depends on std_dist_type ("gaussian" draws batch_size extra
-    # values vs "fix"), so we replicate the exact call rather than computing T_enc.
+    # Pre-compute reference speech embeddings under seed 0 (matches ref generate prefill).
+    torch.manual_seed(0)
     with torch.no_grad():
         _, prefill_speech_embeds = ref_model._process_speech_inputs(
             inputs["speech_tensors"].to(ref_model.dtype),
@@ -156,13 +156,13 @@ def test_e2e_generate_speech_pcc(mesh_device):
     token_match = 1.0
     if cmp_len > 0:
         token_match = (ref_gen[:cmp_len] == tt_gen[:cmp_len]).float().mean().item()
-        assert token_match >= 0.94, f"Generated token match rate {token_match:.4f} < 0.94 over {cmp_len} tokens"
+        assert (
+            token_match >= TOKEN_MATCH
+        ), f"Generated token match rate {token_match:.4f} < {TOKEN_MATCH} over {cmp_len} tokens"
 
     n = min(ref_speech.numel(), tt_speech.numel())
     passed, pcc_val = comp_pcc(ref_speech[:n], tt_speech[:n], pcc=SPEECH_PCC)
-    if not passed:
-        pytest.xfail(
-            f"Speech PCC {pcc_val:.6f} < {SPEECH_PCC} (ref len={ref_speech.numel()}, "
-            f"tt len={tt_speech.numel()}, token_match={token_match:.4f}). "
-            "Negative-prompt KV surgery / CFG parity still in progress."
-        )
+    assert passed, (
+        f"Speech PCC {pcc_val:.6f} < {SPEECH_PCC} (ref len={ref_speech.numel()}, "
+        f"tt len={tt_speech.numel()}, token_match={token_match:.4f})"
+    )
