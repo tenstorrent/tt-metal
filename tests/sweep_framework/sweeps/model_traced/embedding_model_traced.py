@@ -121,6 +121,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
     op_kwargs = build_op_kwargs(kwargs, exclude={"padding_idx", "weight_tensor_placement"})
 
+    # Forward padding_idx when the master trace recorded it (excluded above so a
+    # stale/absent value isn't passed, but ttnn.embedding takes it and the master
+    # captures it as an explicit kwarg — dropping it shows as a `padding_idx`
+    # extra_key diff vs the master trace).
+    if padding_idx is not None and padding_idx != "__ABSENT__":
+        op_kwargs["padding_idx"] = int(padding_idx)
+
     # V2 format provides separate shapes
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
