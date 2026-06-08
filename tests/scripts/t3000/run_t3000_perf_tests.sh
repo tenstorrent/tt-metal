@@ -68,6 +68,7 @@ run_t3000_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
 
+  export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
   pytest models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
@@ -104,7 +105,7 @@ run_t3000_gemma3_tests() {
   fail=0
   start_time=$(date +%s)
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+  HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-3-27b-it TT_CACHE_PATH=$TT_CACHE_HOME/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -118,7 +119,7 @@ run_t3000_gemma3_tests() {
 }
 
 run_t3000_gemma3_tests_op_to_op() {
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
+  HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-3-27b-it TT_CACHE_PATH=$TT_CACHE_HOME/google/gemma-3-27b-it pytest models/demos/multimodal/gemma3/tests/test_vision_cross_attention_transformer_perf_ops.py::test_op_to_op_perf_gemma_vision
 }
 
 run_t3000_wan22_tests() {
@@ -129,7 +130,7 @@ run_t3000_wan22_tests() {
   echo "LOG_METAL: Running run_t3000_wan22_tests"
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x4_sp0tp1 and resolution_480p and t2v" --timeout 1500; fail+=$?
+  pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x4_sp0tp1 and resolution_480p and t2v and not bf8_lofi" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

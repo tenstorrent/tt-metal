@@ -163,7 +163,7 @@ void kernel_main() {
 
 #if SRC_BCAST
                             const uint32_t current_read_len_b = align(current_chunk_bytes, alignment_b);
-                            const uint64_t addr_a = get_noc_addr(row_block_a, src);
+                            const uint64_t addr_a = src.get_noc_addr(row_block_a);
                             const uint32_t src_low_bits = static_cast<uint32_t>(addr_a & (alignment_a - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src + src_low_bits;
 
@@ -176,7 +176,7 @@ void kernel_main() {
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
-                                const uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + current_chunk_offset;
+                                const uint64_t addr_b = src_b.get_noc_addr(row_idx_b) + current_chunk_offset;
                                 noc_async_read(addr_b, curr_l1_b, current_read_len_b);
                                 curr_l1_b += current_chunk_bytes;
                             }
@@ -188,13 +188,13 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = get_noc_addr(row_idx_a, src) + current_chunk_offset;
+                                const uint64_t addr_a = src.get_noc_addr(row_idx_a) + current_chunk_offset;
                                 noc_async_read(addr_a, curr_l1_a, current_read_len_a);
                                 curr_l1_a += current_chunk_bytes;
                             }
                             noc.async_read_barrier();
 
-                            const uint64_t addr_b = get_noc_addr(row_block_b, src_b);
+                            const uint64_t addr_b = src_b.get_noc_addr(row_block_b);
                             const uint32_t src_low_bits = static_cast<uint32_t>(addr_b & (alignment_b - 1));
                             const uint32_t scratch_l1_addr = l1_write_addr_src_b + src_low_bits;
 

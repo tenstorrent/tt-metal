@@ -202,7 +202,10 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_group_1;
     compute_desc.compile_time_args = {num_inputs_per_core_group_1};
-    compute_desc.defines = {{"REDUCE_OP", "PoolType::SUM"}, {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"}};
+    compute_desc.defines = KernelDescriptor::Defines{
+        {"REDUCE_OP", "PoolType::SUM"},
+        {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
+    };
     compute_desc.config = ComputeConfigDescriptor{};
     compute_desc.runtime_args.reserve(num_cores_to_be_used);
 

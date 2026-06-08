@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
@@ -22,8 +23,11 @@ void kernel_main() {
 
     constexpr uint32_t max_dst_tiles = 8;  // TODO: Make general
 
-    cb_wait_front(cb_in0, num_blocks * block_num_tiles);
-    cb_reserve_back(cb_out0, block_num_tiles);
+    CircularBuffer cb_in(cb_in0);
+    CircularBuffer cb_out(cb_out0);
+
+    cb_in.wait_front(num_blocks * block_num_tiles);
+    cb_out.reserve_back(block_num_tiles);
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     add_tiles_init(cb_in0, cb_in1, true);
@@ -60,5 +64,5 @@ void kernel_main() {
         block_num_tiles_cnt += num_tiles_to_pack;
     }
 
-    cb_push_back(cb_out0, block_num_tiles);
+    cb_out.push_back(block_num_tiles);
 }

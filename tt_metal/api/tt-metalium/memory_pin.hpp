@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <memory>
-#include <cstddef>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -23,17 +24,27 @@ public:
     MemoryPin(MemoryPin&& other) noexcept;
     MemoryPin& operator=(MemoryPin&& other) noexcept;
 
+    // The callback runs once when the last MemoryPin sharing this state is released, before decrementing the pin.
+    void add_final_release_callback(std::function<void()> callback);
+
     friend bool operator==(const MemoryPin& pin, std::nullptr_t) noexcept;
     friend bool operator==(std::nullptr_t, const MemoryPin& pin) noexcept;
     friend bool operator!=(const MemoryPin& pin, std::nullptr_t) noexcept;
     friend bool operator!=(std::nullptr_t, const MemoryPin& pin) noexcept;
 
 private:
+    struct FinalReleaseState {
+        std::vector<std::function<void()>> callbacks;
+        bool ran = false;
+    };
+
     void maybe_increment();
     void maybe_decrement();
+    void maybe_run_final_release_callbacks();
 
     std::function<void()> inc_;
     std::function<void()> dec_;
+    std::shared_ptr<FinalReleaseState> final_release_state_;
 };
 
 }  // namespace tt::tt_metal

@@ -28,9 +28,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler
+from models.common.utility_functions import comp_pcc, profiler, skip_for_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.topk import TopKRouter
+from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -387,7 +388,7 @@ def _run_router_test(
         batch_size_per_device = batch_size
 
     # Use throughput experts mode when mesh has multiple rows (like 4x8)
-    use_throughput_experts = mesh_shape[0] > 1 and batch_size * seq_len > 1
+    use_throughput_experts = mesh_shape[0] > 1 and batch_size * seq_len > 1 and throughput_experts_supported_on_arch()
 
     # Create input tensors
     hidden_states = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.float32)
@@ -708,6 +709,9 @@ def _run_router_single_device_test(
         }
     ],
     indirect=True,
+)
+@skip_for_blackhole(
+    "gpt_oss_router multi-device test exclusively exercises throughput-experts routing, unsupported on Blackhole"
 )
 def test_gpt_oss_router(
     mode,

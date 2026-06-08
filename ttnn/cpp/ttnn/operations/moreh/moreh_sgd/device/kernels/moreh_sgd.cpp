@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr auto cb_param_in = tt::CBIndex::c_0;
@@ -13,6 +14,7 @@ void kernel_main() {
     constexpr auto cb_momentum_out = tt::CBIndex::c_17;
 
     constexpr auto cb_scalar_args = tt::CBIndex::c_24;
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
     constexpr auto cb_tmp1 = tt::CBIndex::c_25;
     constexpr auto cb_tmp2 = tt::CBIndex::c_26;
     constexpr auto cb_tmp3 = tt::CBIndex::c_27;
@@ -29,7 +31,7 @@ void kernel_main() {
     uint32_t num_tiles = get_compile_time_arg_val(0);
 
     // from reader
-    cb_wait_front(cb_scalar_args, 5);
+    cb_scalar_args_obj.wait_front(5);
 
     for (uint32_t n = 0; n < num_tiles; ++n) {
         uint32_t cb_grad_tmp = cb_grad;
@@ -71,7 +73,8 @@ void kernel_main() {
 #else
 // have to pop cb_grad_tmp
 #if defined(MOMENTUM_INITIALIZED)
-        cb_pop_front(cb_grad_tmp, 1);
+        CircularBuffer cb_grad_tmp_obj(cb_grad_tmp);
+        cb_grad_tmp_obj.pop_front(1);
 #else
 // not pop this case because `cb_momentum_tmp == cb_grad_tmp`
 #endif

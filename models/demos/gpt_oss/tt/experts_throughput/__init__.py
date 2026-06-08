@@ -150,21 +150,26 @@ class ThroughputExperts:
 
         # Create all_to_all configurations (used by dense flow)
         _axis = dispatch_cluster_axis if dispatch_cluster_axis is not None else 0
+        _num_links = ccl_manager.num_links
         self.dispatch_config_decode = AllToAllDispatchConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.dispatch_config_prefill = AllToAllDispatchConfig(
             memory_config=prefill_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.combine_config_decode = AllToAllCombineConfig(
             memory_config=decode_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
         self.combine_config_prefill = AllToAllCombineConfig(
             memory_config=prefill_memory_config,
             cluster_axis=_axis,
+            num_links=_num_links,
         )
 
         # Load weights for the dense flow. When using the fused flow (fused_config is set),

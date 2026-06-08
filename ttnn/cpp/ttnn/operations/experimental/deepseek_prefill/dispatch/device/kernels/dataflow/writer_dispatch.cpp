@@ -9,15 +9,20 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+
+// FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
+// (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
+// under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
+// still has to be recomputed from dest_mesh_ids/dest_chip_ids because the reader's 1D-style
+// route_info[0] doesn't match the 2D physical EDM index.
 
 #define ENABLE_DISPATCH_DEBUG 0
 
 #if ENABLE_DISPATCH_DEBUG
-#define DPRINT_DISPATCH DPRINT
+#define DPRINT_DISPATCH(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_DISPATCH \
-    if (0)              \
-    DebugPrinter()
+#define DPRINT_DISPATCH(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -128,8 +133,11 @@ void kernel_main() {
     constexpr uint32_t dispatch_devices = num_devices;
 #endif
 
-    DPRINT_DISPATCH << "Writer kernel: dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
-                    << " dispatch_devices=" << dispatch_devices << ENDL();
+    DPRINT_DISPATCH(
+        "Writer kernel: dispatch_core={} / {} dispatch_devices={}\n",
+        dispatch_core_idx,
+        num_dispatch_cores,
+        dispatch_devices);
 
 #ifdef DEST_CHIP_ID
     constexpr uint8_t dest_chip_ids[num_devices] = DEST_CHIP_ID;
@@ -161,7 +169,7 @@ void kernel_main() {
     noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
 
-    DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
+    DPRINT_DISPATCH("Fabric setup complete\n");
 #endif
 
     const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
@@ -180,6 +188,29 @@ void kernel_main() {
         }
         uint32_t distance = route_info[1];
         uint32_t page_idx = route_info[2];
+
+#ifdef DEST_CHIP_ID
+        // CB layout (written by reader_dispatch): [0]=route (1D EDM index), [1]=distance_hops,
+        // [2]=page_idx, [3]=dst_chip_index (2D only). Capture per-iteration route state from the
+        // CB BEFORE cb_pop_front invalidates the pointer; under 2D recompute the EDM direction
+        // from the destination since route_info[0] is 1D-style and doesn't match the 2D index.
+        ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+        uint32_t fabric_route;
+        if constexpr (
+            std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+            std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+            const uint32_t dst_chip_device_id = route_info[3];
+            pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_device_id];
+            pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_device_id];
+            // TODO(#46174): drop the private tt_fabric_api.h dependency once
+            // RoutingPlaneConnectionManager exposes a portable (mesh, chip) -> slot lookup.
+            fabric_route = static_cast<uint32_t>(
+                get_next_hop_router_direction(dest_mesh_ids[dst_chip_device_id], dest_chip_ids[dst_chip_device_id]));
+        } else {
+            pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+            fabric_route = route;
+        }
+#endif
         cb_pop_front(cb_route_info_id, 1);
 
         cb_wait_front(cb_payload_for_writer_id, 1);
@@ -187,15 +218,15 @@ void kernel_main() {
         uint32_t payload_addr = get_read_ptr(cb_payload_for_writer_id);
         uint32_t metadata_addr = get_read_ptr(cb_metadata_for_writer_id);
 
-        DPRINT_DISPATCH << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << page_idx
-                        << ENDL();
+        DPRINT_DISPATCH("Fabric send: route={} distance={} page_idx={}\n", route, distance, page_idx);
 
 #ifdef DEST_CHIP_ID
         // Send payload
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+        ccl_routing_utils::fabric_set_line_unicast_route(
+            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
-            fabric_connections[route],
+            fabric_connections[fabric_route],
             unicast_packet_header,
             payload_addr,
             page_idx,
@@ -203,10 +234,11 @@ void kernel_main() {
             l1_alignment);
 
         // Send metadata
-        fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+        ccl_routing_utils::fabric_set_line_unicast_route(
+            pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             metadata_addr_gen,
-            fabric_connections[route],
+            fabric_connections[fabric_route],
             unicast_packet_header,
             metadata_addr,
             page_idx,
@@ -256,14 +288,13 @@ void kernel_main() {
         noc_semaphore_set(exit_sem_ptr, 0);
     }
 
-    // send_init_semaphore_to_configured_targets calls fabric_send_chip_unicast_noc_unicast_semaphore_only[_1d]
-    // which calls send_payload_flush_blocking_from_address -> send_payload_from_address_impl<FLUSH_BLOCKING>,
-    // which only calls noc_async_writes_flushed on the packet-header write. It confirms the the write departed
-    // worker's NIU but does not mean the write landed in EDM's L1 inbox.
-    // If we exit the kernel and close_direction_connections runs while the write is still mid-flight toward EDM's L1,
-    // EDM might process its slot bookkeeping before the actual packet bytes have landed.
-    // A full barrier ensures all writes have completed, as well as atomics which is purely defensive here and
-    // future-proof.
+    // send_init_semaphore_to_configured_targets's portable helper uses
+    // fabric_unicast_noc_unicast_atomic_inc (linear/api.h), which calls
+    // send_payload_flush_non_blocking_from_address — confirms the write departed worker's NIU
+    // but does not mean the packet bytes have landed in EDM's L1 inbox. If we exit the kernel
+    // and close_direction_connections runs while the write is still mid-flight, EDM might
+    // process its slot bookkeeping before the bytes arrive. A full barrier ensures all writes
+    // (and atomics, defensively) have completed before we close.
     noc_async_full_barrier();
 
     close_direction_connections(directions, fabric_connections);

@@ -17,6 +17,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/pinned_memory_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh_translation_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed_host_buffer.cpp
@@ -27,6 +28,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shm_resource_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hd_socket_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/h2d_stream_service_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
 )

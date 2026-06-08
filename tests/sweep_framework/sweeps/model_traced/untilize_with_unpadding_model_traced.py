@@ -84,8 +84,14 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Traced configs store the end argument as 'output_tensor_end' (named kwarg);
+    # sample configs use 'end_shape'. Accept both.
     if end_shape is None:
-        return [(False, "Missing end_shape"), 0.0]
+        end_shape = kwargs.get("output_tensor_end")
+    if end_shape is None:
+        return [(False, "Missing end_shape or output_tensor_end"), 0.0]
+    if isinstance(end_shape, list):
+        end_shape = tuple(end_shape)
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

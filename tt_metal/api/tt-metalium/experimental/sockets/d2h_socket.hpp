@@ -17,6 +17,7 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketConnectorState;
 
 /**
  * @brief A socket for streaming data from a device core to the host.
@@ -259,6 +260,17 @@ public:
 
     MeshDevice* get_mesh_device() const;
 
+    /**
+     * @brief Returns whether the prior connector process shut down cleanly.
+     *
+     * On the owner side this is always true (no prior connector existed). On a
+     * connector created via connect(), this reflects the clean_shutdown flag
+     * left in SHM by the previous process: true if it ran its destructor, false
+     * if it exited via crash, _exit, or kill. Useful for warning the operator
+     * or deciding whether to call discard_pending_pages() to drop stale data.
+     */
+    bool had_clean_prior_shutdown() const { return prior_clean_shutdown_; }
+
     D2HSocket(const D2HSocket&) = delete;
     D2HSocket& operator=(const D2HSocket&) = delete;
 
@@ -318,6 +330,9 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
+    bool prior_clean_shutdown_ = true;
 
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;

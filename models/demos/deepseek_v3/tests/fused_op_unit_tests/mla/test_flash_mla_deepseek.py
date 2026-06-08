@@ -12,6 +12,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import nearest_y
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -138,7 +139,7 @@ def _reconstruct_logical_cache_from_paged(
     "device_params",
     [
         {
-            "trace_region_size": 5500000,  # Larger trace region for flash attention
+            "trace_region_size": 0,  # Dynamic allocation mode; no dedicated trace region
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -369,7 +370,7 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,

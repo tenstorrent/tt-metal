@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/debug/device_print.h"  // required in all kernels using DEVICE_PRINT
+#include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
@@ -11,7 +11,7 @@ void kernel_main() {
 
     // Copy float from device DRAM into the core's SRAM
     uint32_t dram_addr = get_arg_val<uint32_t>(0);
-    uint64_t noc_addr = get_noc_addr(1, 0, dram_addr);
+    uint64_t noc_addr = get_noc_addr_from_bank_id<true>(0, dram_addr);
     constexpr uint32_t cb_id = tt::CBIndex::c_0;  // index=0
     uint32_t size = get_tile_size(cb_id);
     uint32_t l1_addr = get_write_ptr(cb_id);
@@ -21,7 +21,7 @@ void kernel_main() {
 
     // Read floating point value from SRAM and print it
     float* data = (float*)l1_addr;
-    DEVICE_PRINT("Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: {}\n", *data);
+    DPRINT("Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: {}\n", *data);
 
     cb_push_back(cb_id, 0);
 }
