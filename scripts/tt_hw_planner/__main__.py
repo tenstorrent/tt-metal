@@ -92,7 +92,7 @@ def _run_wrapped() -> int:
     except Exception:
         logf = None
 
-    sys.stdout.write(f"  (clean screen — full log → {log_path})\n")
+    sys.stdout.write(f"  full log → {log_path}\n")
     sys.stdout.flush()
     try:
         assert proc.stdout is not None
