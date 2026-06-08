@@ -180,6 +180,23 @@ def _dp_decode_matmul_program_config(device, input_shape, weight_shape):
     num_cores = max(1, grid_x * grid_y)
     per_core_n = max(1, math.ceil(n_tiles / num_cores))
 
+    # TP4 col-parallel MLP down: each device sees K=8960/4=2240 and N=1536.
+    # N has exactly 48 tiles, so the 1D-mcast kernel is already capped at 48
+    # active cores. Use a larger K block to reduce inner-loop overhead; the
+    # generic cap below picks 2 because it only allows divisors <=4.
+    if k_dim == 2240 and n_dim == 1536:
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=14,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
     # For very large N (e.g. lm_head N=151936 → per_core_n≈75) the per-core
     # L1 footprint of 1D-mcast becomes tight (output tiles + weight cache +
     # circular buffers) and the default ttnn config is typically as fast or
