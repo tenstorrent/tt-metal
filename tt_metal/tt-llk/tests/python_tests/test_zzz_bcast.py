@@ -48,6 +48,7 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
+    DataFormat.Int8,
     DataFormat.Int32,
     DataFormat.UInt32,
     DataFormat.UInt16,
@@ -87,6 +88,7 @@ def test_unpack_bcast(
         DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.UInt32,
+        DataFormat.Int8,
     ):
         pytest.skip("32-bit formats require dest accumulation")
 

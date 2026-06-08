@@ -111,6 +111,8 @@ def test_sfpu_binary_float(
     formats=input_output_formats(
         [
             DataFormat.Int32,
+            # DataFormat.Int16,
+            DataFormat.Int8,
         ]
     ),
     mathop=[

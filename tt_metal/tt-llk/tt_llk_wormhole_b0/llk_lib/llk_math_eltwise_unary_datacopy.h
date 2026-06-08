@@ -166,6 +166,18 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+        const bool needs_adj32 =
+            is_fp32_dest_acc_en &&
+            ((src_format == to_underlying(DataFormat::UInt16)) ||
+             (type == DataCopyType::B2D && (src_b_bcast_type == BroadcastType::NONE ||
+                                            (src_b_bcast_type == BroadcastType::ROW && masked_data_format(src_format) != to_underlying(DataFormat::Int8)))));
+
+        if (needs_adj32)
+        {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
+        }
+
         if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
@@ -184,6 +196,11 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             {
                 ckernel_template::run();
             }
+        }
+
+        if (needs_adj32)
+        {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
         }
 
         math::clear_dst_reg_addr();
