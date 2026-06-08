@@ -569,7 +569,6 @@ class ttMLA:
         cache_batch_idx: int,
         cache_layer_idx: int,
         cache_user_id: int,
-        num_cache_layers: Optional[int],
         seq_len_local: int,
         on_layer_complete: Optional[Callable[[int], None]],
     ) -> ttnn.Tensor:
@@ -600,7 +599,7 @@ class ttMLA:
             tt_kvpe,
             slot_idx=cache_user_id,
             layer_idx=cache_layer_idx,
-            num_layers=num_cache_layers if num_cache_layers is not None else 1,
+            num_layers=self.layer_num,
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
@@ -652,7 +651,6 @@ class ttMLA:
         actual_isl: Optional[int] = None,
         kv_actual_isl: Optional[int] = None,
         cache_user_id: int = 0,
-        num_cache_layers: Optional[int] = None,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
@@ -671,14 +669,11 @@ class ttMLA:
             f"(self.is_chunked={self.is_chunked}); the required ring buffers are not allocated"
         )
 
-        # Cache batch dim is user-major: each user reserves num_cache_layers contiguous slots. For
-        # single-user callers (default) cache_user_id == 0 and num_cache_layers may be left None,
-        # preserving the original cache_layer_idx indexing.
-        if num_cache_layers is None:
-            assert cache_user_id == 0, "num_cache_layers must be set when cache_user_id != 0"
-            cache_batch_idx = cache_layer_idx
-        else:
-            cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
+        # Cache batch dim is user-major: each user reserves self.layer_num contiguous slots, so the
+        # flat slot is cache_user_id * layer_num + cache_layer_idx (reduces to cache_layer_idx for the
+        # single-user default cache_user_id == 0).
+        assert cache_user_id < self.slot_num, f"cache_user_id {cache_user_id} >= slot_num {self.slot_num}"
+        cache_batch_idx = cache_user_id * self.layer_num + cache_layer_idx
 
         # q_projection
         tt_q = ttnn.linear(
@@ -875,7 +870,6 @@ class ttMLA:
                 cache_batch_idx=cache_batch_idx,
                 cache_layer_idx=cache_layer_idx,
                 cache_user_id=cache_user_id,
-                num_cache_layers=num_cache_layers,
                 seq_len_local=seq_len_local,
                 on_layer_complete=on_layer_complete,
             )
