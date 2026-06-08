@@ -203,15 +203,44 @@ class BenchmarkSession:
     def proc_pool(self) -> Optional[ProcessPoolExecutor]:
         return self._proc_pool
 
-    def open_device(self, device_id: int):
-        print(f"  Opening TTNN device id={device_id} (l1_small_size={self.l1_small_size})...")
-        self.device = ttnn.open_device(device_id=device_id, l1_small_size=self.l1_small_size)
+    def open_device(self, device_id: int, trace_shapes: Optional[List] = None):
+        """Open TTNN device. If trace_shapes is non-empty, allocate
+        trace_region_size and warm up Flow per-flow traces for those
+        (seq_len, batch) shapes."""
+        kw = dict(device_id=device_id, l1_small_size=self.l1_small_size)
+        if trace_shapes:
+            kw["trace_region_size"] = 16_000_000
+        print(f"  Opening TTNN device id={device_id} (l1_small_size={self.l1_small_size}"
+              f"{', trace_region_size=' + str(kw['trace_region_size']) if trace_shapes else ''})...")
+        self.device = ttnn.open_device(**kw)
 
         print("  Loading TTNN modules (TTNNFlowDecoder + TTNNGeneratorNSF)...")
         t0 = time.time()
         self.flow = TTNNFlowDecoder.from_checkpoint(self.sd, self.device)
         self.gen = TTNNGeneratorNSF.from_checkpoint(self.sd, self.device)
         print(f"    TTNN modules ready in {time.time() - t0:.2f}s")
+
+        if trace_shapes:
+            # Pre-warm Generator's prep_cache (persistent conv1d weights) for
+            # every trace shape BEFORE Flow trace capture. Otherwise Generator
+            # forward lazily allocates those during inference — when a Flow
+            # trace is active — and collides with Flow's trace region,
+            # silently corrupting Generator output.
+            print(f"  Pre-warming Generator prep_cache for trace shapes...")
+            t0 = time.time()
+            with torch.no_grad():
+                for seq_len, batch in trace_shapes:
+                    z_dummy = torch.zeros(batch, 192, seq_len)
+                    har_dummy = torch.zeros(batch, 1, seq_len * UPP)
+                    g_dummy = torch.zeros(batch, 256, 1)
+                    _ = self.gen(z_dummy, har_dummy, g_dummy)
+            print(f"    Generator warmed in {time.time() - t0:.2f}s")
+
+            print(f"  Capturing Flow traces for shapes {trace_shapes}...")
+            t0 = time.time()
+            self.flow.warm_up_traces(trace_shapes)
+            print(f"    Flow traces ready in {time.time() - t0:.2f}s "
+                  f"({len(self.flow._flow_traces)} per-flow traces)")
 
         print("  Loading torch reference modules (for correctness check)...")
         self.flow_torch = load_flow_torch_modules(self.sd)
@@ -649,6 +678,11 @@ def main():
                         help="Use pipeline-overlapped batched path: split B into "
                              "two micro-batches so CPU preprocess of mb2 overlaps "
                              "with TTNN compute of mb1 (requires --batch >= 2).")
+    parser.add_argument("--trace", action="store_true",
+                        help="Capture and use trace+execute_trace for Flow's "
+                             "per-flow device compute. Pre-allocates persistent "
+                             "L1 buffers and replays the captured op sequence, "
+                             "amortizing host dispatch (~3x on Flow forward).")
     args = parser.parse_args()
     if args.batch < 1:
         parser.error("--batch must be >= 1")
@@ -695,7 +729,18 @@ def main():
         t_pool0 = time.time()
         session.start_proc_pool(n_workers)
         print(f"    ProcessPool ready in {_fmt(time.time() - t_pool0)}")
-    session.open_device(device_id=args.device_id)
+    trace_shapes = None
+    if args.trace:
+        # Flow always sees TARGET_LEN-padded chunks (one-sided first chunk
+        # gets F.pad'd up to TARGET_LEN before flow call). So we only need
+        # traces at TARGET_LEN, not at the unpadded ext_len.
+        if args.overlap:
+            half = (args.batch + 1) // 2
+            batches = sorted({half, args.batch - half})
+        else:
+            batches = [args.batch]
+        trace_shapes = [(TARGET_LEN, b) for b in batches]
+    session.open_device(device_id=args.device_id, trace_shapes=trace_shapes)
     print(f"  Setup total: {_fmt(time.time() - t_setup0)}")
 
     try:
