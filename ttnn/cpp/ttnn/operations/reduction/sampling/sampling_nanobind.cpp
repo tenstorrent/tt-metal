@@ -86,6 +86,9 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             :attr:`input_indices_tensor`, :attr:`k`, and the output tensor. Otherwise (e.g. on
             Quasar, which does not support UINT32/UINT16 tile formats), only INT32 is supported.
 
+            When :attr:`output_tensor` is not provided, the default output dtype is architecture-dependent:
+            UINT32 on Wormhole/Blackhole, and INT32 otherwise.
+
         Returns:
             ttnn.Tensor: The output tensor containing sampled indices.
 
