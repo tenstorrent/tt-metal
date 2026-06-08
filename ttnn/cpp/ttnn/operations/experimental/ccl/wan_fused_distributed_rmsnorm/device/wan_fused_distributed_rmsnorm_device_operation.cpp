@@ -132,7 +132,7 @@ void WanFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     // outside the op lets the caller pre-create one MeshBuffer per cluster
     // and reuse it across launches; we reject mismatched shape/dtype/layout
     // up front so a wrong tensor doesn't silently corrupt the AG.
-    const auto sizing = compute_sizing(args, input, tensor_args);
+    const auto sizing = compute_sizing(args, input);
     if (sizing.use_mux) {
         TT_FATAL(
             tensor_args.persistent_output_buffer.has_value(),
@@ -201,7 +201,7 @@ WanFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     // Allocated as a regular device tensor so the framework's
     // create_device_tensor places it as a mesh-coherent MeshBuffer — every
     // chip gets the same DRAM address, which the fabric mcast relies on.
-    const auto sizing = compute_sizing(args, input, tensor_args);
+    const auto sizing = compute_sizing(args, input);
     if (sizing.use_mux) {
         ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
         MemoryConfig stats_mem{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};

@@ -25,50 +25,27 @@ Every LTX fusion opportunity maps onto the existing op — no new kernel capabil
 
 i.e. block norms, audio QK (self + cross), A→V audio-K, and no-rope video QK all fuse.
 
-## Two host-side L1/chunk-sizing bugs — now FIXED
+## Blocked by two host-side L1/chunk-sizing bugs (NOT kernel-capability gaps)
 
-These were tuned for Wan's 40-tile-col / broadcast-RoPE shapes; LTX's wider features
-(64 cols) and per-head RoPE exposed them. Fixed in `compute_sizing` (single source of
-truth for chunk/window/page sizing, so the program and the caller-allocated stats buffer
-agree); `create_stats_buffer` now forwards weight/RoPE + uses `fp32_dest_acc=true`.
+**Bug A — per-head RoPE overflows L1 at feat ≥ 1024.** The per-head cos/sin CBs are
+`chunk × num_tile_cols`-sized (fp32), but `decide_streaming_low_l1()` estimates resident
+L1 with a flat "~192 KB of small CBs" and never counts them. With `chunk_h_cap =
+128/num_tile_cols` (=4 at feat 1024) the resident path allocates ~1.86 MB > 1.5 MB.
+Blocks: **video self-attn QK** (feat 1024, head_dim 128) at both stages, and the
+**A↔V video-Q/K at TP=2** (feat 1024). Fix: include per-head cos/sin (chunk-scaled) in
+the L1 estimate, and/or cap chunk for per-head rope.
 
-**Bug A — per-head RoPE overflowed L1 at feat ≥ 1024.** The per-head cos/sin CBs are
-`chunk × num_tile_cols` fp32 tiles, uncounted by the L1 estimate; `chunk_h_cap=4` made the
-resident path ~1.86 MB. **Fix:** per-head RoPE now uses `chunk_size_rows=1` resident — one
-row of cos/sin fits feat ≤ 1024, and chunk-1 also dodges a per-head-RoPE deadlock that
-appears at chunk ≥ 2 with many rows. ⟹ video self-attn QK (feat 1024) and A↔V video-Q/K
-now fuse.
+**Bug B — streaming path asserts `chunk_size_rows==1` for wide features.** At feat 2048
+(TP=2 video, 64 tile-cols), `chunk_h_cap = 128/64 = 2`, but the streaming-low-L1 path
+requires `chunk_size_rows==1` → `TT_FATAL`. Blocks **all TP=2 video configs** (block /
+self-attn / text-cross, regardless of RoPE). Fix: clamp `chunk_size_rows=1` when
+`streaming_low_l1` is selected.
 
-**Bug B — streaming path asserted `chunk_size_rows==1` for wide features** (feat 2048 →
-`chunk_h_cap=2`). **Fix:** `compute_sizing` clamps `chunk_size_rows=1` whenever streaming
-is selected. ⟹ TP=2 wide-feature video block / text-cross now fuse.
-
-### Measured after the fix (fused µs, WH galaxy LINE, TP=4 — all 14 configs fuse)
-| config | pattern | feat | rows | fused µs |
-|---|---|---:|---:|---:|
-| v_block_s1 / s2 | block+adaLN | 1024 | 1216/4864 | 129 / 190 |
-| a_block | block+adaLN | 512 | 32 | 25 |
-| v_selfattn_qk_s1 / s2 | qk + per-head rope | 1024 | 1216/4864 | 177 / 538 |
-| a_selfattn_qk | qk + per-head rope | 512 | 32 | 31 |
-| a2v_videoQ_s1 / s2 | qk + per-head rope | 512 | 1216/4864 | 110 / 291 |
-| a2v_audioK | qk + per-head rope | 512 | 256 | 55 |
-| v_textcross_q_s1/s2/k | qk (no rope) | 1024 | 1216/4864/1024 | 113 / 183 / 78 |
-| a_textcross_q / k | qk (no rope) | 512 | 32/1024 | 23 / 67 |
-
-(Speedup vs baseline not shown — the unfused baseline `rotary_embedding_llama` at large
-rows is slow/flaky on this galaxy; these are fused timings.) Wan is unaffected
-(correctness PCC 0.99998).
-
-## Remaining limitation
-**feat-2048 per-head RoPE** (TP=2 video self-attn + A↔V video-Q/K) still exceeds L1 even
-at chunk 1 — the 64-wide fp32 cos/sin (512 KB) + intermediate/rotated don't fit. It now
-fails as a **clean compile-time OOM** (not a hang). Fitting it needs **cos/sin streaming**
-(read per block rather than holding the whole row) — a larger kernel change, tracked as a
-follow-up. All other LTX configs fuse.
+Both stem from the op being tuned for Wan's 40-tile-col / broadcast-RoPE shapes; LTX's
+wider features (64 cols) and per-head RoPE expose the gaps.
 
 ## Note on the benchmark
 The *baseline* (composite norm + standalone `rotary_embedding_llama`) at large row counts
-can be slow / flaky on this galaxy; the bench catches per-config failures and keeps
-sweeping. Run fused-only via `LTX_BENCH_METHODS=fused`. The fused op's correctness (incl.
-per-head rope) is covered by
+(video stage-2, rows 4864) can be slow / flaky on this galaxy; the bench catches per-config
+failures and keeps sweeping. The fused op's correctness (incl. per-head rope) is covered by
 `test_wan_fused_distributed_rmsnorm_device_op.py::test_wan_fused_distributed_rmsnorm_tp1_rope`.
