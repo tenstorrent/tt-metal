@@ -6,6 +6,10 @@ on:
       docker-image:
         required: true
         type: string
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
       build-artifact-name:
         required: true
         type: string
@@ -55,7 +59,12 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: >-
+        ${{
+          !contains(fromJSON('["bh_quietbox","wh_galaxy"]'), matrix.test-group.sku) &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) ||
+          inputs.docker-image || 'docker-image-unresolved!'
+        }}
       env:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
