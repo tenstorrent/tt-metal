@@ -1,7 +1,7 @@
 """
 Official ACE-Step LM + handler conditioning for TTNN demos.
 
-Mirrors ``acestep.inference.generate_music`` Phase 1 (5 Hz LM / CoT) and the kwargs
+Host preprocessing helpers for the TTNN demo (5 Hz LM / CoT Phase 1 and handler kwargs).
 passed into ``AceStepHandler.generate_music``, then runs only:
 
   ``_normalize_service_generate_inputs`` → ``_prepare_batch`` → ``preprocess_batch``
@@ -306,10 +306,10 @@ def build_filtered_dit_kwargs_for_handler(
     progress: Any = None,
 ) -> dict[str, Any]:
     """
-    Same LM + ``dit_generate_kwargs`` filtering as ``acestep.inference.generate_music``,
+    Same LM + ``dit_generate_kwargs`` filtering as the upstream ACE-Step CLI Phase 1,
     without invoking ``dit_handler.generate_music``.
     """
-    # --- Begin: adapted from acestep.inference.generate_music (Phase 1 + kwargs) ---
+    # --- Phase 1: LM metadata + kwargs (adapted from upstream ACE-Step inference) ---
     if params.task_type == "text2music" and params.flow_edit_morph:
         audio_code_string_to_use = ""
     else:
@@ -686,13 +686,14 @@ def handler_prepare_condition_payload(
         chunk_mask_mode=filtered_generate_kwargs.get("chunk_mask_mode", "auto"),
     )
 
-    vram_error = dit_handler._vram_preflight_check(
-        actual_batch_size=actual_batch_size,
-        audio_duration=audio_duration,
-        guidance_scale=guidance_scale,
-    )
-    if vram_error is not None:
-        raise RuntimeError(vram_error.get("error", "VRAM preflight failed"))
+    if not getattr(dit_handler, "preprocess_only", False):
+        vram_error = dit_handler._vram_preflight_check(
+            actual_batch_size=actual_batch_size,
+            audio_duration=audio_duration,
+            guidance_scale=guidance_scale,
+        )
+        if vram_error is not None:
+            raise RuntimeError(vram_error.get("error", "VRAM preflight failed"))
 
     normalized = dit_handler._normalize_service_generate_inputs(
         captions=service_inputs["captions_batch"],

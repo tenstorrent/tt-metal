@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any, Tuple
 
 import torch
@@ -63,9 +64,235 @@ def ace_step_needs_split_device(mesh_sku: str | None) -> bool:
     return int(rows) * int(cols) > 1
 
 
+def ace_step_mesh_use_host_preprocess(mesh_sku: str | None) -> bool:
+    """Run preprocess on host PyTorch (skip TTNN Phase A on mesh)."""
+    if not ace_step_needs_split_device(mesh_sku):
+        return False
+    raw = os.environ.get("ACE_STEP_MESH_HOST_PREPROCESS", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def ace_step_mesh_use_split_ttnn_preprocess(mesh_sku: str | None) -> bool:
     """Run LM + Qwen + condition on a 1×1 TTNN device before opening the DiT mesh (BH_QB Phase A)."""
+    if ace_step_mesh_use_host_preprocess(mesh_sku):
+        return False
     return ace_step_needs_split_device(mesh_sku)
+
+
+_ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR = "_ace_step_tt_visible_devices_saved"
+_TT_VISIBLE_DEVICES_ENV = "TT_VISIBLE_DEVICES"
+_TT_MESH_GRAPH_DESC_PATH_ENV = "TT_MESH_GRAPH_DESC_PATH"
+_TT_METAL_FORCE_REINIT_ENV = "TT_METAL_FORCE_REINIT"
+_PREPROCESS_MGD_REL = "tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto"
+
+
+def _tt_metal_repo_root() -> str:
+    env_root = os.environ.get("TT_METAL_HOME")
+    if env_root:
+        return str(env_root)
+    # utils/ -> ace_step_v1_5/ -> experimental/ -> models/ -> repo root
+    return str(Path(__file__).resolve().parents[4])
+
+
+def _preprocess_mesh_graph_descriptor_path() -> str:
+    return str(Path(_tt_metal_repo_root()) / _PREPROCESS_MGD_REL)
+
+
+_DIT_MGD_BY_SKU: dict[str, str] = {
+    "BH_QB": "tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto",
+    "P150x4": "tt_metal/fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto",
+}
+
+
+def _dit_mesh_graph_descriptor_path(mesh_sku: str | None) -> str | None:
+    if mesh_sku is None:
+        return None
+    rel = _DIT_MGD_BY_SKU.get(str(mesh_sku).upper())
+    if rel is None:
+        return None
+    return str(Path(_tt_metal_repo_root()) / rel)
+
+
+def _apply_single_chip_open_env(device_id: int) -> dict[str, str | None] | None:
+    """On multi-PCIe hosts, open one chip with P150 MGD (fabric auto-discovery breaks open_device)."""
+    if os.environ.get(_TT_VISIBLE_DEVICES_ENV) is not None:
+        return None
+    try:
+        n_pcie = int(ttnn.GetNumPCIeDevices())
+    except Exception:
+        return None
+    if n_pcie <= 1:
+        return None
+    chip = str(int(device_id))
+    saved: dict[str, str | None] = {
+        _TT_VISIBLE_DEVICES_ENV: os.environ.get(_TT_VISIBLE_DEVICES_ENV),
+        _TT_MESH_GRAPH_DESC_PATH_ENV: os.environ.get(_TT_MESH_GRAPH_DESC_PATH_ENV),
+    }
+    os.environ[_TT_VISIBLE_DEVICES_ENV] = chip
+    if saved[_TT_MESH_GRAPH_DESC_PATH_ENV] is None:
+        os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = _preprocess_mesh_graph_descriptor_path()
+    return saved
+
+
+def _restrict_cluster_to_preprocess_chip(mesh_sku: str | None, device_id: int) -> dict[str, str | None] | None:
+    """Limit UMD to one PCIe device for Phase A on multi-chip SKUs (default on for BH_QB).
+
+    Sets ``TT_VISIBLE_DEVICES`` and a 1×1 P150 MGD so ``open_device`` does not require the
+    full fabric mesh. DiT transition clears this and forces MetalContext re-init (see
+    :func:`_ensure_full_cluster_env_for_dit`).
+
+    Set ``ACE_STEP_PREPROCESS_SINGLE_CHIP=0`` to disable (not recommended on BH_QB).
+    """
+    if os.environ.get("ACE_STEP_PREPROCESS_SINGLE_CHIP", "").strip().lower() in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        return _apply_single_chip_open_env(device_id)
+    if mesh_sku is None or not ace_step_needs_split_device(mesh_sku):
+        return None
+    chip = str(int(device_id))
+    saved: dict[str, str | None] = {
+        _TT_VISIBLE_DEVICES_ENV: os.environ.get(_TT_VISIBLE_DEVICES_ENV),
+        _TT_MESH_GRAPH_DESC_PATH_ENV: os.environ.get(_TT_MESH_GRAPH_DESC_PATH_ENV),
+    }
+    os.environ[_TT_VISIBLE_DEVICES_ENV] = chip
+    if saved[_TT_MESH_GRAPH_DESC_PATH_ENV] is None:
+        os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = _preprocess_mesh_graph_descriptor_path()
+    print(
+        f"[ace_step_v1_5] preprocess: {_TT_VISIBLE_DEVICES_ENV}={chip} "
+        f"(single-chip UMD cluster for Phase A; full mesh after preprocess close)",
+        flush=True,
+    )
+    return saved
+
+
+def _apply_preprocess_cluster_env(mesh_sku: str | None, device_id: int) -> dict[str, str | None] | None:
+    """Env overrides for Phase A device open on multi-chip SKUs."""
+    return _restrict_cluster_to_preprocess_chip(mesh_sku, device_id)
+
+
+def _restore_cluster_visibility(saved: dict[str, str | None] | None) -> None:
+    if saved is None:
+        return
+    for key in (_TT_VISIBLE_DEVICES_ENV, _TT_MESH_GRAPH_DESC_PATH_ENV):
+        prior = saved.get(key)
+        if prior is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = prior
+
+
+def open_single_tt_device(
+    ttnn_mod: Any,
+    *,
+    device_id: int = 0,
+    num_command_queues: int = 1,
+    mesh_sku: str | None = None,
+) -> Any:
+    """Open one TTNN device; applies single-chip env on multi-PCIe Blackhole hosts."""
+    ace_step_preflight_devices_available(mesh_sku=mesh_sku, device_id=device_id)
+    visible_saved = _apply_preprocess_cluster_env(mesh_sku, device_id)
+    if visible_saved is None:
+        visible_saved = _apply_single_chip_open_env(device_id)
+    try:
+        dev = ttnn_mod.open_device(
+            device_id=int(device_id),
+            **ace_step_open_kwargs(num_command_queues=num_command_queues, ttnn_mod=ttnn_mod),
+        )
+    except RuntimeError as exc:
+        _restore_cluster_visibility(visible_saved)
+        msg = str(exc)
+        if "tt_tlb_alloc" in msg or "TLB window" in msg:
+            hint = _format_device_busy_hint(mesh_sku=mesh_sku, device_id=device_id)
+            if hint:
+                raise RuntimeError(f"{msg}{hint}") from exc
+        raise
+    except Exception:
+        _restore_cluster_visibility(visible_saved)
+        raise
+    if hasattr(dev, "enable_program_cache"):
+        dev.enable_program_cache()
+    if visible_saved is not None:
+        setattr(dev, _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR, visible_saved)
+    return dev
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return raw.replace(b"\0", b" ").decode(errors="replace").strip() or "?"
+    except OSError:
+        return "?"
+
+
+def ace_step_device_holders(device_ids: list[int] | None = None) -> list[tuple[int, int, str]]:
+    """Return ``(chip_id, pid, cmdline)`` for foreign processes holding TT device TLBs."""
+    if device_ids is None:
+        device_ids = list(range(4))
+    my_pid = os.getpid()
+    holders: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for chip_id in device_ids:
+        pids_path = Path(f"/proc/driver/tenstorrent/{chip_id}/pids")
+        if not pids_path.is_file():
+            continue
+        for tok in pids_path.read_text().split():
+            if not tok.isdigit():
+                continue
+            pid = int(tok)
+            if pid == my_pid or (chip_id, pid) in seen:
+                continue
+            seen.add((chip_id, pid))
+            holders.append((chip_id, pid, _read_proc_cmdline(pid)))
+    return holders
+
+
+def ace_step_preflight_devices_available(
+    *,
+    mesh_sku: str | None,
+    device_id: int = 0,
+) -> None:
+    """Fail fast when another process holds the chip(s) we need (avoids opaque TLB -12 errors)."""
+    chip_ids = [int(device_id)]
+    if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
+        rows, cols = ace_step_mesh_shape(mesh_sku)
+        if int(rows) * int(cols) > 1:
+            chip_ids = list(range(int(rows) * int(cols)))
+    holders = ace_step_device_holders(chip_ids)
+    if not holders:
+        return
+    lines = "\n".join(f"  chip {chip}: pid {pid} — {cmd}" for chip, pid, cmd in holders)
+    sku_label = str(mesh_sku) if mesh_sku else f"device_id={device_id}"
+    stale_pids = sorted({pid for _, pid, _ in holders})
+    kill_hint = " ".join(f"kill {pid}" for pid in stale_pids)
+    reset_chips = " ".join(f"tt-smi -r {chip}" for chip in sorted({chip for chip, _, _ in holders}))
+    raise RuntimeError(
+        "Tenstorrent device(s) busy — another process holds TLB/sysmem (tt_tlb_alloc -12 if ignored):\n"
+        f"{lines}\n"
+        f"Free the device, then rerun ACE-Step {sku_label}:\n"
+        f"  {kill_hint}\n"
+        f"  # if still busy: {reset_chips}\n"
+        "Or set ACE_STEP_MESH_HOST_PREPROCESS=1 to skip TTNN Phase A (DiT mesh still needs all chips)."
+    )
+
+
+def _format_device_busy_hint(*, mesh_sku: str | None, device_id: int) -> str:
+    chip_ids = [int(device_id)]
+    if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
+        rows, cols = ace_step_mesh_shape(mesh_sku)
+        if int(rows) * int(cols) > 1:
+            chip_ids = list(range(int(rows) * int(cols)))
+    holders = ace_step_device_holders(chip_ids)
+    if not holders:
+        return ""
+    lines = "\n".join(f"  chip {chip}: pid {pid} — {cmd}" for chip, pid, cmd in holders)
+    return (
+        "\nTenstorrent device(s) appear busy:\n"
+        f"{lines}\n"
+        "Stop those processes or reset chips (`tt-smi -r`) before retrying."
+    )
 
 
 def ace_step_mesh_use_host_temb_precompute(device: Any) -> bool:
@@ -233,14 +460,24 @@ def ace_step_device_num_command_queues(device: Any) -> int:
     return 1
 
 
-def ace_step_open_kwargs(*, num_command_queues: int = 1) -> dict[str, Any]:
+def ace_step_open_kwargs(*, num_command_queues: int = 1, ttnn_mod: Any | None = None) -> dict[str, Any]:
     kw: dict[str, Any] = dict(
         l1_small_size=int(os.environ.get("ACE_STEP_L1_SMALL_SIZE", "98304")),
         trace_region_size=128 << 20,
     )
+    if ttnn_mod is not None:
+        kw["dispatch_core_config"] = ace_step_dit_dispatch_core_config(ttnn_mod)
     if int(num_command_queues) > 1:
         kw["num_command_queues"] = int(num_command_queues)
     return kw
+
+
+def ace_step_dit_dispatch_core_config(ttnn_mod: Any) -> Any:
+    """Explicit dispatch cores for DiT mesh open (avoids stale cluster type after preprocess reset)."""
+    return ttnn_mod.DispatchCoreConfig(
+        type=ttnn_mod.DispatchCoreType.WORKER,
+        axis=ttnn_mod.DispatchCoreAxis.COL,
+    )
 
 
 def open_preprocess_device(
@@ -248,18 +485,21 @@ def open_preprocess_device(
     *,
     device_id: int = 0,
     num_command_queues: int = 1,
+    mesh_sku: str | None = None,
 ) -> Any:
     """Open a 1×1 device for Qwen / 5 Hz LM / detokenizer (never a multi-device mesh).
 
+    When ``mesh_sku`` is a multi-device SKU (e.g. ``BH_QB``), sets ``TT_VISIBLE_DEVICES`` to
+    ``device_id`` for this open so UMD does not start all chips during Phase A.
+
     Use :func:`ace_step_preprocess_num_command_queues` when trace replay is enabled.
     """
-    dev = ttnn_mod.open_device(
-        device_id=int(device_id),
-        **ace_step_open_kwargs(num_command_queues=num_command_queues),
+    return open_single_tt_device(
+        ttnn_mod,
+        device_id=device_id,
+        num_command_queues=num_command_queues,
+        mesh_sku=mesh_sku,
     )
-    if hasattr(dev, "enable_program_cache"):
-        dev.enable_program_cache()
-    return dev
 
 
 def open_dit_device(
@@ -270,8 +510,9 @@ def open_dit_device(
     num_command_queues: int = 1,
 ) -> Any:
     """Open the DiT/VAE device: 1×1 for single-chip SKUs, ``open_mesh_device`` otherwise."""
+    ace_step_preflight_devices_available(mesh_sku=mesh_sku, device_id=device_id)
     rows, cols = ace_step_mesh_shape(mesh_sku)
-    open_kw = ace_step_open_kwargs(num_command_queues=num_command_queues)
+    open_kw = ace_step_open_kwargs(num_command_queues=num_command_queues, ttnn_mod=ttnn_mod)
     if rows * cols == 1:
         dev = ttnn_mod.open_device(device_id=int(device_id), **open_kw)
     else:
@@ -280,19 +521,88 @@ def open_dit_device(
                 f"Mesh SKU {mesh_sku!r} needs ttnn.open_mesh_device / MeshShape; build may be single-device only."
             )
         mesh_kw = {k: v for k, v in open_kw.items()}
-        dev = ttnn_mod.open_mesh_device(ttnn_mod.MeshShape(int(rows), int(cols)), **mesh_kw)
+        dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
+        try:
+            dev = ttnn_mod.open_mesh_device(ttnn_mod.MeshShape(int(rows), int(cols)), **mesh_kw)
+        except Exception as exc:
+            hint = _format_mesh_open_failure_hint(
+                mesh_sku=mesh_sku,
+                rows=int(rows),
+                cols=int(cols),
+                mgd_path=dit_mgd,
+            )
+            raise RuntimeError(f"{exc}{hint}") from exc
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
     return dev
 
 
+def _format_mesh_open_failure_hint(
+    *,
+    mesh_sku: str | None,
+    rows: int,
+    cols: int,
+    mgd_path: str | None,
+) -> str:
+    """Actionable context when ``open_mesh_device`` fails (MGD vs physical fabric topology)."""
+    lines = [
+        "",
+        f"ACE-Step could not open DiT mesh {mesh_sku!r} ({rows}×{cols}).",
+    ]
+    if mgd_path:
+        lines.append(f"MGD: {mgd_path}")
+    lines.extend(
+        [
+            "This is usually fabric topology (not missing Python/checkpoint files):",
+            "  • BH_QB needs a full 2×2 fabric mesh across 4 Blackhole chips (WARP400 links).",
+            "  • If logs show 'Downgrading to mesh shape 2x1', only 2 chips are fabric-connected.",
+            "  • Check WARP cabling / run `tt-smi -r` on all chips; verify with a bare 2×2 open_mesh_device test.",
+            "  • On a single P150/P300 card use `--mesh-device P150` instead of BH_QB.",
+            "  • Unknown motherboards (e.g. B850M-C) need an entry in "
+            "tt_metal/fabric/physical_system_discovery.cpp (rebuild tt_metal after editing).",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def close_ace_step_device(ttnn_mod: Any, device: Any) -> None:
     if device is None:
         return
-    if isinstance(device, ttnn_mod.MeshDevice):
-        ttnn_mod.close_mesh_device(device)
-    else:
-        ttnn_mod.close_device(device)
+    try:
+        if hasattr(device, "is_remote_only") and device.is_remote_only():
+            return
+    except Exception:
+        pass
+    visible_saved = getattr(device, _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR, None)
+    try:
+        if isinstance(device, ttnn_mod.MeshDevice):
+            ttnn_mod.close_mesh_device(device)
+        else:
+            ttnn_mod.close_device(device)
+    except Exception:
+        # Stale/remote-only meshes can abort pytest teardown (SubDeviceManagerTracker).
+        pass
+    if visible_saved is not None:
+        _restore_cluster_visibility(visible_saved)
+
+
+def _ensure_full_cluster_env_for_dit(mesh_sku: str | None) -> dict[str, str | None] | None:
+    """Clear single-chip preprocess env and set DiT MGD before opening the full mesh."""
+    if mesh_sku is None or not ace_step_needs_split_device(mesh_sku):
+        return None
+    saved: dict[str, str | None] = {
+        _TT_VISIBLE_DEVICES_ENV: os.environ.get(_TT_VISIBLE_DEVICES_ENV),
+        _TT_MESH_GRAPH_DESC_PATH_ENV: os.environ.get(_TT_MESH_GRAPH_DESC_PATH_ENV),
+    }
+    os.environ.pop(_TT_VISIBLE_DEVICES_ENV, None)
+    dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
+    if dit_mgd is not None:
+        os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = dit_mgd
+    print(
+        f"[ace_step_v1_5] DiT: full cluster ({mesh_sku}), {_TT_MESH_GRAPH_DESC_PATH_ENV} set",
+        flush=True,
+    )
+    return saved
 
 
 def transition_preprocess_to_dit_device(
@@ -303,14 +613,68 @@ def transition_preprocess_to_dit_device(
     device_id: int = 0,
     num_command_queues: int = 1,
 ) -> Any:
-    """Close preprocess 1×1 device, then open the DiT mesh (avoids parent/submesh CQ conflicts)."""
+    """Close preprocess 1×1 device, then open the DiT mesh (same process; prefer :func:`ace_step_reexec_for_dit_mesh`)."""
     close_ace_step_device(ttnn_mod, preprocess_dev)
-    return open_dit_device(
-        ttnn_mod,
-        mesh_sku=mesh_sku,
-        device_id=device_id,
-        num_command_queues=num_command_queues,
+    dit_env_saved = _ensure_full_cluster_env_for_dit(mesh_sku)
+    try:
+        dev = open_dit_device(
+            ttnn_mod,
+            mesh_sku=mesh_sku,
+            device_id=device_id,
+            num_command_queues=num_command_queues,
+        )
+    except Exception:
+        _restore_cluster_visibility(dit_env_saved)
+        raise
+    if dit_env_saved is not None:
+        setattr(dev, _ACE_STEP_VISIBLE_DEVICES_SAVED_ATTR, dit_env_saved)
+    return dev
+
+
+def ace_step_reexec_for_dit_mesh(
+    ttnn_mod: Any,
+    *,
+    preprocess_dev: Any,
+    cached_preprocess: Any,
+    mesh_sku: str | None,
+    argv: list[str],
+) -> None:
+    """Re-exec demo in a fresh process so DiT opens the full mesh after single-chip preprocess."""
+    import pickle
+    import sys
+    import tempfile
+
+    if cached_preprocess is None:
+        raise RuntimeError("ace_step_reexec_for_dit_mesh requires cached preprocess tensors")
+
+    close_ace_step_device(ttnn_mod, preprocess_dev)
+
+    fd, handoff_path = tempfile.mkstemp(prefix="ace_step_dit_handoff_", suffix=".pkl")
+    os.close(fd)
+    with open(handoff_path, "wb") as f:
+        pickle.dump({"cached_preprocess": cached_preprocess, "mesh_sku": mesh_sku}, f)
+
+    os.environ.pop(_TT_VISIBLE_DEVICES_ENV, None)
+    dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
+    if dit_mgd is not None:
+        os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = dit_mgd
+    print(
+        f"[ace_step_v1_5] DiT: re-exec for full mesh ({mesh_sku}), handoff={handoff_path}",
+        flush=True,
     )
+
+    new_argv = [sys.executable]
+    skip_next = False
+    for tok in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok == "--ace-step-dit-handoff":
+            skip_next = True
+            continue
+        new_argv.append(tok)
+    new_argv.extend(["--ace-step-dit-handoff", handoff_path])
+    os.execv(sys.executable, new_argv)
 
 
 def ace_step_is_mesh_device(device: Any) -> bool:

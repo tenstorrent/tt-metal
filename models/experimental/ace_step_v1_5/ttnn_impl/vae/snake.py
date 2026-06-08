@@ -152,12 +152,12 @@ class TtSnake1d:
         orig_shape = tuple(x.shape)
 
         # Fast path: input is already TILE in L1 (HEIGHT_SHARDED or interleaved) from
-        # conv1(return_sharded=True).  Convert to L1 INTERLEAVED before unsqueeze so the
-        # rank-4 param broadcast and downstream to_layout check work unchanged.
-        # This S2I (or no-op) stays entirely on-chip — no DRAM traffic.
-        if len(orig_shape) == 3 and self._is_l1_tile(x):
-            if l1_mc is not None:
-                x = ttnn.to_memory_config(x, l1_mc)  # HEIGHT_SHARDED → L1 INTERLEAVED (NoC only)
+        # conv1(return_tile / return_sharded).  De-shard to L1 INTERLEAVED before unsqueeze
+        # so rank-4 param broadcast, typecast, and eltwise ops see matching layouts.
+        if len(orig_shape) == 3 and self._is_l1_tile(x) and l1_mc is not None:
+            x = ace_step_vae_ensure_interleaved(ttnn, x, memory_config=l1_mc)
+            if x.memory_config() != l1_mc:
+                x = ttnn.to_memory_config(x, l1_mc)
 
         if len(orig_shape) == 3:
             x4 = ttnn.unsqueeze(x, 1)
@@ -175,13 +175,15 @@ class TtSnake1d:
         if x4.layout != ttnn.TILE_LAYOUT:
             # ROW_MAJOR → Tilize to L1 (normal path or DRAM ROW_MAJOR after return_tile).
             x4 = ttnn.to_layout(x4, ttnn.TILE_LAYOUT, **_tilize_kw)
-        elif l1_mc is not None and x4.memory_config() != l1_mc:
-            # Already TILE but in DRAM (e.g. from return_tile without sharding):
-            # DMA copy DRAM→L1 (replaces the 4568 µs Tilize with a ~150 µs DMA copy).
-            x4 = ttnn.to_memory_config(x4, l1_mc)
+        elif l1_mc is not None:
+            # Already TILE: de-shard if needed, then DMA/copy to L1 interleaved.
+            x4 = ace_step_vae_ensure_interleaved(ttnn, x4, memory_config=l1_mc)
+            if x4.memory_config() != l1_mc:
+                x4 = ttnn.to_memory_config(x4, l1_mc)
 
         x4_compute = x4
         if self.compute_dtype is not None and x4.dtype != self.compute_dtype:
+            x4 = ace_step_vae_ensure_interleaved(ttnn, x4, memory_config=l1_mc)
             x4_compute = ttnn.typecast(x4, self.compute_dtype, **self._typecast_kw)
 
         # Eltwise chain — all intermediate tensors in L1.
@@ -199,6 +201,7 @@ class TtSnake1d:
             ttnn.deallocate(x4_compute)
 
         if y4.dtype != self._storage_dtype:
+            y4 = ace_step_vae_ensure_interleaved(ttnn, y4, memory_config=l1_mc)
             y4 = ttnn.typecast(y4, self._storage_dtype, **self._typecast_kw)
 
         y = ttnn.squeeze(y4, 1) if squeeze_back else y4

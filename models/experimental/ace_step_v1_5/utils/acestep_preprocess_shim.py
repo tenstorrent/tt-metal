@@ -1,12 +1,9 @@
 """
-Types and small helpers mirrored from ``acestep.inference`` for TTNN demos.
+Types and small helpers for TTNN demo preprocessing.
 
-``acestep.inference`` imports ``acestep.audio_utils`` (``torchaudio``) at module
-load time.  The ``run_prompt_to_wav`` path only needs ``GenerationParams``,
-``GenerationConfig``, and the repaint/LM metadata helpers — keep them here to
-avoid pulling in the full ``acestep.inference`` import chain.
-
-Keep in sync with ACE-Step ``acestep/inference.py`` when upstream adds fields.
+``GenerationParams`` and ``GenerationConfig`` are kept here so demos avoid importing
+the removed upstream ``acestep.inference`` module (which pulled in ``torchaudio`` via
+``acestep.audio_utils`` at import time).
 """
 
 from __future__ import annotations

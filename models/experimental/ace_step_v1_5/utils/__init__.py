@@ -6,6 +6,7 @@
 
 __all__ = [
     "ace_step_perf_log",
+    "acestep_paths",
     "acestep_preprocess_shim",
     "official_lm_preprocess",
     "tt_device",

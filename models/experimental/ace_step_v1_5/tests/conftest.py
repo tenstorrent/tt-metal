@@ -42,11 +42,18 @@ def device():
         yield dev
     finally:
         if dev is not None:
-            try:
-                close_ace_step_device(ttnn, dev)
-            except Exception:
-                pass
+            close_ace_step_device(ttnn, dev)
         if saved_mesh is not None:
             os.environ["MESH_DEVICE"] = saved_mesh
         if saved_ace_mesh is not None:
             os.environ["ACE_STEP_MESH_DEVICE"] = saved_ace_mesh
+
+
+@pytest.fixture(scope="function")
+def mesh_device(device):
+    """Reuse the per-test 1×1 device instead of a session BH_QB mesh.
+
+    Avoids exhausting MeshDevice slots (remote-only teardown abort) when many
+    tests each open their own device while a session 2×2 mesh stays alive.
+    """
+    return device

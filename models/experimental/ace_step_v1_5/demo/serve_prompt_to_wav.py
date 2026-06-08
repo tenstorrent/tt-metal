@@ -158,6 +158,8 @@ class AceStepModelRegistry:
             config_path=variant,
             device="cpu",
             use_flash_attention=False,
+            preprocess_only=True,
+            use_mlx_dit=False,
         )
         log.info("  DiT-handler status: %s", status)
         if not ok:
@@ -665,39 +667,13 @@ def _ensure_variant(name: str, ckpt_dir: Path) -> Path:
     return local
 
 
-_WELL_KNOWN_REPO_ROOTS = [
-    Path.home() / "proj_sdk" / "ACE-Step-1.5",
-    Path.home() / "ACE-Step-1.5",
-    Path("/opt") / "ACE-Step-1.5",
-]
-_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent.parent / "torch_ref" / "_vendored_acestep"
+from models.experimental.ace_step_v1_5.utils.acestep_paths import (
+    resolve_acestep_repo_root as _resolve_acestep_repo_root_impl,
+)
 
 
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
-    candidates: list[Path] = []
-    if ace_step_repo_root:
-        candidates.append(Path(ace_step_repo_root).expanduser().resolve())
-    env = os.environ.get("ACE_STEP_REPO_ROOT")
-    if env:
-        candidates.append(Path(env).expanduser().resolve())
-    candidates.append(_VENDORED_ACESTEP_ROOT)
-    if ckpt_dir:
-        cur = Path(ckpt_dir).expanduser().resolve()
-        for _ in range(8):
-            candidates.append(cur)
-            if cur.parent == cur:
-                break
-            cur = cur.parent
-    candidates.extend(_WELL_KNOWN_REPO_ROOTS)
-    seen: set[str] = set()
-    for c in candidates:
-        key = str(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        if (c / "acestep" / "__init__.py").is_file():
-            return c
-    return None
+    return _resolve_acestep_repo_root_impl(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
 
 
 # ─────────────────────────────────────────────────────────────────
