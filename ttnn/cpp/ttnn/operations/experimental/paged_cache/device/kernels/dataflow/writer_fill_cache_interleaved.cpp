@@ -43,6 +43,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
     constexpr uint32_t batch_idx_stick_size =
         get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+    // Number of users batched into the input ([num_users, num_heads, seq_len, head_dim]).
+    // num_users == 1 is the legacy single-user fill (page-table row = batch_idx). For
+    // num_users > 1, all users are filled in one dispatch: work rows are laid out
+    // user-major and user u maps to page-table row u (input row u <-> page_table row u),
+    // which is exactly what the batched caller produces (batch_indices = arange).
+    constexpr uint32_t num_users = get_compile_time_arg_val(11);
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t page_table_addr = get_arg_val<uint32_t>(1);
@@ -56,44 +62,61 @@ void kernel_main() {
         return;  // Early exit, no work done
     }
 
-    constexpr auto s0_args = TensorAccessorArgs<11>();
+    constexpr auto s0_args = TensorAccessorArgs<12>();
     constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
     constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
-    uint32_t batch_idx;
-    if constexpr (use_batch_idx_tensor) {
-        uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
-
-        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
-        cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
-        uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
-        uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
-        noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size);
-        noc_async_read_barrier();
-        volatile tt_l1_ptr uint32_t* batch_idx_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
-        batch_idx = batch_idx_ptr[0];
-    } else {
-        batch_idx = batch_arg;  // Arg 4 is the scalar fallback value
+    // Legacy single-user page-table row. Only meaningful (and only read) when
+    // num_users == 1; for the batched path the row is the user index itself.
+    uint32_t single_user_batch_idx = 0;
+    if constexpr (num_users == 1) {
+        if constexpr (use_batch_idx_tensor) {
+            uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
+            const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr);
+            cb_reserve_back(cb_id_batch_idx, 1);
+            uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
+            uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
+            noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size);
+            noc_async_read_barrier();
+            volatile tt_l1_ptr uint32_t* batch_idx_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_cb_wr_ptr);
+            single_user_batch_idx = batch_idx_ptr[0];
+        } else {
+            single_user_batch_idx = batch_arg;  // Arg 4 is the scalar fallback value
+        }
     }
 
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
     const auto out_gen = TensorAccessor(s0_args, dst_addr);
-
     const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr);
+
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-    uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
-    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-    noc_async_read_barrier();
-
     volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 
+    // Work rows are user-major: per_user_work = num_heads * num_blocks_of_work_per_head.
+    // Decode (user, head, seq_tile) and (re)load that user's page-table row whenever the
+    // user changes within this core's contiguous row range. num_users == 1 collapses to
+    // the original behaviour (user == 0 for every row, one page-table load).
+    constexpr uint32_t per_user_work = num_heads * num_blocks_of_work_per_head;
+
+    uint32_t cur_user = 0xFFFFFFFFu;  // sentinel: force a page-table load on the first row
     for (uint32_t row_id = start_row_num; row_id < start_row_num + num_rows; ++row_id) {
-        uint32_t cur_head = row_id / num_blocks_of_work_per_head;
-        uint32_t seq_tile_id = row_id % num_blocks_of_work_per_head;
+        const uint32_t user = row_id / per_user_work;
+        const uint32_t user_row = row_id % per_user_work;
+        const uint32_t cur_head = user_row / num_blocks_of_work_per_head;
+        const uint32_t seq_tile_id = user_row % num_blocks_of_work_per_head;
+
+        if (user != cur_user) {
+            const uint32_t page_table_row = (num_users == 1) ? single_user_batch_idx : user;
+            uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(page_table_row);
+            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+            noc_async_read_barrier();
+            cur_user = user;
+        }
+
         uint32_t physical_tile_id =
             virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
 

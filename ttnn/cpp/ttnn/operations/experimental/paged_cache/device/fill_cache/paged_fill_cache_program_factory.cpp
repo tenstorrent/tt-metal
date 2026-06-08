@@ -39,6 +39,9 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     //
     // head_dim comes from the input and block_size honors the override; the cache shape
     // is only a byte budget (per-block byte count enforced in validate).
+    // input dim 0 is num_users: 1 for a legacy single-user fill, N for a batched fill
+    // that writes all N users' KV in one dispatch. Work is laid out user-major.
+    const uint32_t num_users = input_tensor.padded_shape()[0];
     const uint32_t num_heads = input_tensor.padded_shape()[1];
     const uint32_t input_seq_len = input_tensor.padded_shape()[2];
 
@@ -49,7 +52,7 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     const uint32_t Wt = head_dim / TILE_WIDTH;
     const uint32_t block_size_t = block_size / TILE_HEIGHT;
 
-    uint32_t num_blocks_of_work = num_heads * input_seq_len_t;
+    uint32_t num_blocks_of_work = num_users * num_heads * input_seq_len_t;
     uint32_t num_blocks_of_work_per_head = input_seq_len_t;
 
     // Pagetable-specific parameters
@@ -71,7 +74,11 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         batch_idx_buffer_addr = tensor.buffer()->address();
         batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
-        TT_FATAL(tensor.physical_volume() == 1, "batch_idx_tensor must contain a single element.");
+        TT_FATAL(
+            tensor.physical_volume() == num_users,
+            "batch_idx_tensor must have num_users ({}) elements, got {}.",
+            num_users,
+            tensor.physical_volume());
     }
 
     tt_metal::IDevice* device = input_tensor.device();
@@ -119,8 +126,9 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         page_table_stick_size_B,
         // New compile-time args for batch_idx_tensor
         (uint32_t)use_batch_idx_tensor,
-        cb_batch_idx_id,        // Meaningful only if use_batch_idx_tensor is true
-        batch_idx_stick_size_B  // Meaningful only if use_batch_idx_tensor is true
+        cb_batch_idx_id,         // Meaningful only if use_batch_idx_tensor is true
+        batch_idx_stick_size_B,  // Meaningful only if use_batch_idx_tensor is true
+        num_users                // batched fill: input dim 0 (1 == legacy single-user)
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);

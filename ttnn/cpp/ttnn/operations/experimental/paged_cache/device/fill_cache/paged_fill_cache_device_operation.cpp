@@ -105,7 +105,13 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.batch_idx_tensor_opt.has_value()) {
         const auto& tensor = tensor_args.batch_idx_tensor_opt.value();
-        TT_FATAL(tensor.physical_volume() == 1, "Batch idx tensor must have a single element");
+        // Batched fill writes input_shape[0] (num_users) users in one dispatch, so the
+        // batch-index tensor carries one page-table row per user (== 1 for legacy single-user).
+        TT_FATAL(
+            tensor.physical_volume() == input_shape[0],
+            "Batch idx tensor must have num_users ({}) elements, got {}",
+            input_shape[0],
+            tensor.physical_volume());
         TT_FATAL(
             tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
             "Batch idx tensor must be an integer type");
