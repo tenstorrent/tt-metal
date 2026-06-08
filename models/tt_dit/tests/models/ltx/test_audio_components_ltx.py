@@ -25,7 +25,7 @@ import ttnn
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
 from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
 from models.tt_dit.models.audio_vae.vocoder_ltx import Vocoder
-from models.tt_dit.parallel.config import ParallelFactor
+from models.tt_dit.parallel.config import AudioTCParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params, ring_params
@@ -254,15 +254,25 @@ def _build_torch_stage_b(seed: int = 42):
     return model
 
 
-def _audio_parallel_config(mesh_shape: tuple[int, int]) -> ParallelFactor | None:
+def _audio_parallel_config(mesh_shape: tuple[int, int]):
+    # T-shard on the larger axis; if both axes are >1, channel-TP on the other
+    # axis so every chip does work (vocoder t_frames=120 is too small to absorb
+    # large T-only factors without t_pad waste — channel-TP scales cleanly).
     t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
     t_factor = mesh_shape[t_axis]
-    return ParallelFactor(factor=t_factor, mesh_axis=t_axis) if t_factor > 1 else None
+    c_axis = 1 - t_axis
+    c_factor = mesh_shape[c_axis]
+    if t_factor > 1 and c_factor > 1:
+        return AudioTCParallelConfig(
+            time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
+            channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
+        )
+    if t_factor > 1:
+        return ParallelFactor(factor=t_factor, mesh_axis=t_axis)
+    return None
 
 
-def _build_tt_stage_b(
-    mesh_device: ttnn.MeshDevice, *, parallel_config: ParallelFactor | None, ccl_manager: CCLManager | None
-) -> Vocoder:
+def _build_tt_stage_b(mesh_device: ttnn.MeshDevice, *, parallel_config, ccl_manager: CCLManager | None) -> Vocoder:
     return Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
@@ -318,7 +328,7 @@ def _build_torch_stage_c(seed: int = 42):
 
 
 def _build_tt_stage_c(
-    mesh_device: ttnn.MeshDevice, *, parallel_config: ParallelFactor | None, ccl_manager: CCLManager | None
+    mesh_device: ttnn.MeshDevice, *, parallel_config, ccl_manager: CCLManager | None
 ) -> VocoderWithBWE:
     main_voc = Vocoder(
         mesh_device=mesh_device,
@@ -329,12 +339,14 @@ def _build_tt_stage_c(
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_MAIN_VOCODER_CFG),
     )
+    # BWE channel-TP has a known divergence in the full pipeline — keep single-axis.
+    bwe_pc = parallel_config.time_parallel if isinstance(parallel_config, AudioTCParallelConfig) else parallel_config
     bwe_voc = Vocoder(
         mesh_device=mesh_device,
         dtype=ttnn.float32,
         in_channels=128,
         out_channels=2,
-        parallel_config=parallel_config,
+        parallel_config=bwe_pc,
         ccl_manager=ccl_manager,
         **_tt_vocoder_cfg(_BWE_VOCODER_CFG),
     )

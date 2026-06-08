@@ -82,6 +82,26 @@ def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> 
     return ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
 
 
+def _pick_c_out_block_shard(*, full: int, shard: int, dst_size: int = 4, tile: int = 32) -> int:
+    """Pick the largest legal C_out_block ≤ ``full`` for a column-parallel conv3d shard.
+
+    Constraints from the conv3d device-op:
+      - shard % block == 0  (C_out_num_blocks * C_out_block == padded_C_out)
+      - matmul_N_t = ceil(block / TILE) must be ≤ dst_size OR a multiple of dst_size
+        (matmul_N_t % out_subblock_w == 0 where out_subblock_w = min(matmul_N_t, dst_size))
+
+    Walk N_t from min(ceil(full/tile), shard/tile) downward; return block = N_t*tile.
+    """
+    max_nt = min(full, shard) // tile
+    for nt in range(max_nt, 0, -1):
+        block = nt * tile
+        if shard % block != 0:
+            continue
+        if nt <= dst_size or nt % dst_size == 0:
+            return block
+    return tile  # 1 tile is always legal
+
+
 def prepare_conv3d_weight_state(
     state: dict,
     w_5d: torch.Tensor,
@@ -612,13 +632,17 @@ class Conv1dViaConv3d(Module):
         if channel_factor(parallel_config) > 1:
             # Reuse the full config's C_in_block: the weight is prepared once with it
             # and C_in stays full, so only C_out_block shrinks to the per-chip slice.
+            # C_out_block_shard must (a) divide out_channels_shard so num_blocks*block
+            # == shard, and (b) yield matmul_N_t = ceil(block / 32) that is either
+            # ≤ dst_size or a multiple of dst_size (dst_size=4 on BH fp32+fp32_dest).
+            # Pick the largest tile-multiple satisfying both.
             self.conv_config_shard = ttnn.Conv3dConfig(
                 weights_dtype=self.conv_config.weights_dtype,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT,
                 T_out_block=self.conv_config.T_out_block,
                 W_out_block=self.conv_config.W_out_block,
                 H_out_block=self.conv_config.H_out_block,
-                C_out_block=min(self.conv_config.C_out_block, self.out_channels_shard),
+                C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             )
