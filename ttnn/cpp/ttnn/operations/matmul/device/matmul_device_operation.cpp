@@ -1102,7 +1102,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
                             // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
-                            // weight (reported as BLOCK_SHARDED) whose data is delivered via the
+                            // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
                             (attributes.global_cb.has_value() &&
@@ -1144,15 +1144,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Num global CB receivers must be 1 when global CB is not provided.");
                     }
 
-                    // weight shape (silent-hang guards). Gated on the DRAM-sender path; see the
-                    // helper for why.
-                    // This cross-check encodes the K-row-major DRAM-sender convention: each bank
-                    // holds one wide (K, N/num_banks) width shard and feeds the contiguous ring
-                    // positions [b*rpb, (b+1)*rpb). The receiver-contiguous layout uses an
-                    // NdShardSpec weight (BLOCK_SHARDED) with round-robin shard placement and a
-                    // strided bank->ring mapping, so this convention doesn't apply — skip it for
-                    // non-WIDTH_SHARDED in1. recv-contig correctness is covered by
-                    // test_validator_dram_sender_recv_contig and the bench PCC check.
+                    // Cross-check program_config against the in1 weight shape (silent-hang guards),
+                    // gated on the DRAM-sender path. The two DRAM-sender weight layouts have
+                    // different bank->ring conventions, so dispatch per in1 memory_layout():
+                    //   * WIDTH_SHARDED (K-row-major): each bank holds one wide (K, N/num_banks)
+                    //     shard feeding the contiguous ring positions [b*rpb, (b+1)*rpb).
+                    //   * ND_SHARDED (receiver-contiguous): an NdShardSpec weight with round-robin
+                    //     shard placement and a strided bank->ring mapping.
+                    // NdShardSpec reports memory_layout() == ND_SHARDED (see MemoryConfig(BufferType,
+                    // NdShardSpec)); the prefetcher manager and validator key on the same enum.
                     if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
                         tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
                             tt::tt_metal::experimental::SenderCoreType::Dram) {
@@ -1160,10 +1160,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         if (in1_layout == TensorMemoryLayout::WIDTH_SHARDED) {
                             validate_dram_sender_global_cb_gather_in0_geometry(
                                 attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
-                        } else if (in1_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                            // Receiver-contiguous DRAM weight (NdShardSpec is reported as BLOCK_SHARDED).
+                        } else if (in1_layout == TensorMemoryLayout::ND_SHARDED) {
                             validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
                                 attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else {
+                            TT_FATAL(
+                                false,
+                                "gather_in0 matmul with a DRAM-sender global CB requires in1 to be WIDTH_SHARDED "
+                                "(K-row-major) or ND_SHARDED (receiver-contiguous), but got {}.",
+                                in1_layout);
                         }
                     }
 

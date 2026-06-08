@@ -168,7 +168,11 @@ FORCE_INLINE uint32_t poll_min_free_aligned_pages(const RemoteSenderCBInterface&
     invalidate_l1_cache();
     for (uint32_t i = 0; i < num_receivers; ++i) {
         const uint32_t sent_minus_ack = *pages_sent_ptr - *pages_acked_ptr;
-        const uint32_t free_pages = fifo_aligned_num_pages - sent_minus_ack;
+        // Clamp: a resize padding credit (pages_sent bumped without a free-space reserve) can
+        // transiently push sent ahead of acked by more than the fifo holds; an unclamped
+        // subtraction would underflow to a huge value and defeat receiver backpressure.
+        const uint32_t free_pages =
+            sent_minus_ack >= fifo_aligned_num_pages ? 0u : fifo_aligned_num_pages - sent_minus_ack;
         if (free_pages < min_free) {
             min_free = free_pages;
         }
@@ -561,8 +565,11 @@ void kernel_main() {
                     // writes, preserving the overlap. The two in-flight DMAs (gc+1, gc+2) and
                     // the write source (gc) occupy all three distinct slots.
 
-                    // Prologue: prime the pipe with the first up-to-2 chunk DMAs.
-                    for (uint32_t c = 0; c < 2u && c < total_chunks_round; ++c) {
+                    // Compute chunk c's receiver-contiguous DRAM source + size and issue its DMA
+                    // into stage slot c%3. cr = receiver index within the round, civ = chunk index
+                    // within that receiver's visit. Shared by the prologue and the in-loop gc+2
+                    // issue so the address arithmetic lives in one place.
+                    auto issue_chunk_dma = [&](uint32_t c) {
                         const uint32_t cr = c / chunks_per_visit;
                         const uint32_t civ = c - cr * chunks_per_visit;
                         const uint32_t boff = civ * max_chunk_bytes;
@@ -570,10 +577,15 @@ void kernel_main() {
                         const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
                         const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
                                              pages_sent_global * t_page_bytes_per_recv + boff;
+                        experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
+                    };
+
+                    // Prologue: prime the pipe with the first up-to-2 chunk DMAs.
+                    for (uint32_t c = 0; c < 2u && c < total_chunks_round; ++c) {
                         PROF_DECL_TS(t_p0);
                         PROF_DECL_TS(t_p1);
                         PROF_TICK(t_p0);
-                        experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
+                        issue_chunk_dma(c);
                         PROF_TICK(t_p1);
                         PROF_ACC(prof_dma_issue, t_p1, t_p0);
                     }
@@ -647,18 +659,10 @@ void kernel_main() {
 
                         // ---- Issue chunk gc+2's DMA into slot (gc+2)%3 (read overlaps gc's drain). ----
                         if (will_issue) {
-                            const uint32_t c = gc + 2u;
-                            const uint32_t cr = c / chunks_per_visit;
-                            const uint32_t civ = c - cr * chunks_per_visit;
-                            const uint32_t boff = civ * max_chunk_bytes;
-                            const uint32_t rem = bytes_per_recv - boff;
-                            const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
-                            const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
-                                                 pages_sent_global * t_page_bytes_per_recv + boff;
                             PROF_DECL_TS(t_di0);
                             PROF_DECL_TS(t_di1);
                             PROF_TICK(t_di0);
-                            experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
+                            issue_chunk_dma(gc + 2u);
                             PROF_TICK(t_di1);
                             PROF_ACC(prof_dma_issue, t_di1, t_di0);
                         }

@@ -152,7 +152,11 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     // pushes to these as runtime args).
     receiver_coords_per_sender_.reserve(sender_receiver_core_mapping.size());
     for (const auto& [_sender_core, receivers] : sender_receiver_core_mapping) {
-        const auto& receivers_vec = corerange_to_cores(receivers);
+        // Row-wise, to match both the dual-sender ceil/floor split (select_from_corerangeset
+        // with row_wise=true) and the validator's receiver flatten. The slab index
+        // recv_index_base+r maps to the r-th receiver in this order, so all three must agree;
+        // they only diverge when a bank's receiver set spans multiple rows and columns.
+        const auto& receivers_vec = corerange_to_cores(receivers, /*max_cores=*/std::nullopt, /*row_wise=*/true);
         std::vector<CoreCoord> phys;
         phys.reserve(receivers_vec.size());
         for (const auto& r : receivers_vec) {
