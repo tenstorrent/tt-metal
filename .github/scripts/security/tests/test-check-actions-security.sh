@@ -1757,6 +1757,335 @@ jobs:
       - run: echo test
 EOF
 
+# =============================================================================
+# Checks 53-66: New gap checks
+# =============================================================================
+
+printf '\n'
+printf '%s\n' "--- Checks 53-66: New gap checks ---"
+
+# Check 53: github.actor in run blocks
+assert_detects "check 53 flags github.actor in run block" "53" "github.actor/github.triggering_actor" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR by ${{ github.actor }}"
+EOF
+
+assert_clean "check 53 accepts github.actor via env var" "53" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          ACTOR: ${{ github.actor }}
+        run: echo "PR by ${ACTOR}"
+EOF
+
+# Check 54: github.event.issue.title in run blocks
+assert_detects "check 54 flags issue.title in run block" "54" "github.event.issue.title" << 'EOF'
+name: test
+on: issues
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.issue.title }}"
+EOF
+
+assert_clean "check 54 accepts issue.title via env var" "54" << 'EOF'
+name: test
+on: issues
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TITLE: ${{ github.event.issue.title }}
+        run: echo "${TITLE}"
+EOF
+
+# Check 55: head.repo.full_name / head.label in run blocks
+assert_detects "check 55 flags head.repo.full_name in run block" "55" "head.repo/label" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Fork ${{ github.event.pull_request.head.repo.full_name }}"
+EOF
+
+assert_detects "check 55 flags head.label in run block" "55" "head.repo/label" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.pull_request.head.label }}"
+EOF
+
+assert_clean "check 55 accepts head.repo via env var" "55" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          FORK: ${{ github.event.pull_request.head.repo.full_name }}
+        run: echo "${FORK}"
+EOF
+
+# Check 56: user.login / sender.login in run blocks
+assert_detects "check 56 flags review.user.login in run block" "56" "user.login/sender.login" << 'EOF'
+name: test
+on: pull_request_review
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.review.user.login }}"
+EOF
+
+assert_detects "check 56 flags sender.login in run block" "56" "user.login/sender.login" << 'EOF'
+name: test
+on: issue_comment
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.sender.login }}"
+EOF
+
+# Check 57: workflow_run.head_commit.message
+assert_detects "check 57 flags workflow_run.head_commit.message in run block" "57" "workflow_run.head_commit" << 'EOF'
+name: test
+on: workflow_run
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.workflow_run.head_commit.message }}"
+EOF
+
+assert_clean "check 57 accepts workflow_run.head_sha (not commit message)" "57" << 'EOF'
+name: test
+on: workflow_run
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "${SHA}"
+EOF
+
+# Check 58: deployment.payload in run blocks
+assert_detects "check 58 flags deployment.payload in run block" "58" "deployment" << 'EOF'
+name: test
+on: deployment
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.deployment.payload }}"
+EOF
+
+# Check 59: discussion.category.name in run blocks
+assert_detects "check 59 flags discussion.category.name in run block" "59" "discussion sub-field" << 'EOF'
+name: test
+on: discussion
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.discussion.category.name }}"
+EOF
+
+# Check 60: github.workflow in run blocks
+assert_detects "check 60 flags github.workflow in run block" "60" "github.workflow" << 'EOF'
+name: "test; echo pwned"
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Workflow ${{ github.workflow }}"
+EOF
+
+assert_clean "check 60 accepts github.workflow_ref (different field)" "60" << 'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          WF: ${{ github.workflow }}
+        run: echo "${WF}"
+EOF
+
+# Check 61: run-name with attacker-controlled expressions
+assert_detects "check 61 flags run-name with pull_request.title" "61" "run-name" << 'EOF'
+name: test
+on: pull_request
+run-name: "PR ${{ github.event.pull_request.title }}"
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+EOF
+
+assert_clean "check 61 accepts run-name with safe fields" "61" << 'EOF'
+name: test
+on: pull_request
+run-name: "PR #${{ github.event.pull_request.number }}"
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo test
+EOF
+
+# Check 62: environment with attacker-controlled expressions
+assert_detects "check 62 flags environment with head.ref expression" "62" "environment" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - run: echo deploy
+EOF
+
+assert_clean "check 62 accepts hardcoded environment" "62" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo deploy
+EOF
+
+# Check 63: GITHUB_STEP_SUMMARY with attacker-controlled expressions
+assert_detects "check 63 flags attacker data written to GITHUB_STEP_SUMMARY" "63" "GITHUB_STEP_SUMMARY" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.pull_request.title }}" >> "${GITHUB_STEP_SUMMARY}"
+EOF
+
+assert_clean "check 63 accepts safe GITHUB_STEP_SUMMARY usage" "63" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "## Build Results" >> "${GITHUB_STEP_SUMMARY}"
+EOF
+
+# Check 64: continue-on-error: true
+assert_detects "check 64 flags continue-on-error: true" "64" "continue-on-error" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./security-check.sh
+        continue-on-error: true
+      - run: ./deploy.sh
+EOF
+
+assert_clean "check 64 accepts continue-on-error: false" "64" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./security-check.sh
+        continue-on-error: false
+      - run: ./deploy.sh
+EOF
+
+# Check 65: merge_group.head_commit.message
+assert_detects "check 65 flags merge_group.head_commit.message in run block" "65" "merge_group.head_commit" << 'EOF'
+name: test
+on: merge_group
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ github.event.merge_group.head_commit.message }}"
+EOF
+
+# Check 66: concurrency group with github.actor
+assert_detects "check 66 flags github.actor in concurrency group" "66" "concurrency group" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.actor }}
+    steps:
+      - run: echo test
+EOF
+
+assert_clean "check 66 accepts github.sha in concurrency group" "66" << 'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.sha }}
+    steps:
+      - run: echo test
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
