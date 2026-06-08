@@ -647,7 +647,6 @@ def _run_chunked_prefill_scenario(request, mesh_device, valid_per_iter):
             rope_tensors=indexed_rope,
             kvpe_cache=tt_kvpe_cache,
             kv_actual_isl=kv_actual,
-            num_cache_layers=1,
         )
 
         out_host = ttnn.to_torch(
@@ -839,7 +838,6 @@ def test_mla_chunked_prefill_trace_layer0(request, mesh_device, device_params, v
         rope_tensors=indexed_rope,
         kvpe_cache=tt_kvpe_cache,
         kv_actual_isl=kv_actual_isl,
-        num_cache_layers=1,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -1062,7 +1060,6 @@ def test_mla_chunked_prefill_multi_user(
                 kvpe_cache=tt_kvpe_cache,
                 kv_actual_isl=chunk_start,
                 cache_user_id=u,
-                num_cache_layers=num_cache_layers,
             )
 
             out_host = ttnn.to_torch(
