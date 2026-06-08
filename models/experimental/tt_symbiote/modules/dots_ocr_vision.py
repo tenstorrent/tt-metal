@@ -339,7 +339,7 @@ def _vision_matmul_program_config(device, m_dim: int, k_dim: int, n_dim: int):
     return pc
 
 
-def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int):
+def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int, *, grid_size: tuple[int, int] | None = None):
     """Cached L1 BLOCK_SHARDED MemoryConfig splitting m_dim across grid_y rows and wid_dim across grid_x columns.
 
     Returns None if either dimension is not evenly divisible by the grid extents.
@@ -347,7 +347,13 @@ def _vision_block_sharded_mem(device, m_dim: int, wid_dim: int):
     if device is None:
         return None
     grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
+    device_grid_x, device_grid_y = int(grid.x), int(grid.y)
+    if grid_size is None:
+        grid_x, grid_y = device_grid_x, device_grid_y
+    else:
+        grid_x, grid_y = int(grid_size[0]), int(grid_size[1])
+        if grid_x > device_grid_x or grid_y > device_grid_y:
+            return None
     if m_dim % grid_y != 0 or wid_dim % grid_x != 0:
         return None
     cache_key = (grid_x, grid_y, m_dim, wid_dim)
@@ -442,38 +448,49 @@ def _vision_mlp_down_l1_pc(device):
     return pc
 
 
-def _vision_merger_fc1_bs_program_config(device):
+def _vision_merger_fc1_bs_program_config(device, m_dim: int):
     """Program config for patch-merger fc1 (3072×6144×6144) with L1-interleaved
     in0 and L1 BLOCK_SHARDED output (interleaved-in0 / sharded-out pattern).
 
-    The output is block-sharded over the full 8×8 grid: shard is [M/8, N/8] =
-    [384, 768] (= 12×24 tiles). The sharded output requires ``out_subblock_h == 1``
-    since ``out_subblock_w (8) != per_core_N (24)``.
+    The output is block-sharded over an 8×8 core rectangle, even on devices with
+    taller compute grids. For M=3072 the shard is [M/8, N/8] = [384, 768]
+    (= 12×24 tiles); for smaller buckets (for example M=2816) per_core_M is
+    derived from M. The sharded output requires ``out_subblock_h == 1`` since
+    ``out_subblock_w (8) != per_core_N (24)``.
 
     in0 is L1-interleaved BF16 (~590 KB/core; the norm cannot emit BFP8 without a
     typecast op). in0_block_w is held to 2 so the BF16 in0 + sharded-output CBs
-    still fit the 1,395 KB bank at out_block_h=6. GELU is fused. Returns None when
-    the device grid is smaller than 8×8.
+    still fit the 1,395 KB bank at out_block_h<=6. GELU is fused. Returns None
+    when the device grid is smaller than 8×8 or M does not tile across 8 rows.
     """
     if device is None:
         return None
     grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    if grid_x < 8 or grid_y < 8:
-        _VISION_MERGER_FC1_BS_PC_CACHE[(grid_x, grid_y)] = None
+    device_grid_x, device_grid_y = int(grid.x), int(grid.y)
+    grid_x, grid_y = 8, 8
+    tile = 32
+    if device_grid_x < grid_x or device_grid_y < grid_y or m_dim % (tile * grid_y) != 0:
+        _VISION_MERGER_FC1_BS_PC_CACHE[(grid_x, grid_y, m_dim)] = None
         return None
-    cache_key = (grid_x, grid_y)
+    cache_key = (grid_x, grid_y, m_dim)
     if cache_key in _VISION_MERGER_FC1_BS_PC_CACHE:
         return _VISION_MERGER_FC1_BS_PC_CACHE[cache_key]
+    per_core_m = (m_dim // tile) // grid_y
+    per_core_n = 24
+    out_block_h = 1
+    for candidate in (6, 4, 3, 2, 1):
+        if candidate <= per_core_m and per_core_m % candidate == 0:
+            out_block_h = candidate
+            break
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=8,
-        out_block_h=6,
-        out_block_w=24,
-        per_core_M=12,
-        per_core_N=24,
+        out_block_h=out_block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
         transpose_mcast=False,
         fused_activation=(ttnn.UnaryOpType.GELU, False),
         fuse_batch=False,
@@ -482,37 +499,53 @@ def _vision_merger_fc1_bs_program_config(device):
     return pc
 
 
-def _vision_merger_fc2_bs_program_config(device):
+def _vision_merger_fc2_bs_program_config(device, m_dim: int):
     """Program config for patch-merger fc2 (3072×6144×1536) when its in0 is the
     L1 BLOCK_SHARDED fc1 output and its output stays L1 interleaved.
 
-    in0 shard is [M/8, K/8] = [384, 768] (= 12×24 tiles) — identical shard spec to
-    fc1's output, so no reshard is needed between fc1 and fc2. ``fuse_batch=True``
-    is mandatory for sharded in0. The output is interleaved (not sharded) so the
-    sharded-output subblock constraint does not bind and we keep a full 8-tile DST
-    (out_subblock_h=4, out_subblock_w=2). out_block_h=12 streams the full per-core
-    M once (minimal weight-DRAM re-reads); fc2's CB region is tiny (N=1536).
-    Returns None when the device grid is smaller than 8×8.
+    in0 shard is [M/8, K/8] on the same 8×8 core rectangle as fc1, so no reshard
+    is needed between fc1 and fc2. ``fuse_batch=True`` is mandatory for sharded in0.
+    The output is interleaved (not sharded), so choose subblocks from the derived
+    per_core_M while keeping as much of the 8-tile DST as possible. Returns None
+    when the device grid is smaller than 8×8 or M does not tile across 8 rows.
     """
     if device is None:
         return None
     grid = device.compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    if grid_x < 8 or grid_y < 8:
-        _VISION_MERGER_FC2_BS_PC_CACHE[(grid_x, grid_y)] = None
+    device_grid_x, device_grid_y = int(grid.x), int(grid.y)
+    grid_x, grid_y = 8, 8
+    tile = 32
+    if device_grid_x < grid_x or device_grid_y < grid_y or m_dim % (tile * grid_y) != 0:
+        _VISION_MERGER_FC2_BS_PC_CACHE[(grid_x, grid_y, m_dim)] = None
         return None
-    cache_key = (grid_x, grid_y)
+    cache_key = (grid_x, grid_y, m_dim)
     if cache_key in _VISION_MERGER_FC2_BS_PC_CACHE:
         return _VISION_MERGER_FC2_BS_PC_CACHE[cache_key]
+    per_core_m = (m_dim // tile) // grid_y
+    per_core_n = 6
+    out_block_h = per_core_m
+    best_area = 0
+    out_subblock_h, out_subblock_w = 1, 1
+    for h in range(min(out_block_h, 8), 0, -1):
+        if out_block_h % h != 0:
+            continue
+        for w in range(min(per_core_n, 8 // h), 0, -1):
+            if per_core_n % w != 0:
+                continue
+            area = h * w
+            if area > best_area:
+                best_area = area
+                out_subblock_h, out_subblock_w = h, w
+            break
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=8,
-        out_subblock_h=4,
-        out_subblock_w=2,
-        out_block_h=12,
-        out_block_w=6,
-        per_core_M=12,
-        per_core_N=6,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
@@ -2192,16 +2225,17 @@ class TTNNDotsPatchMerger(TTNNModule):
         new_r = flat // int(self.mlp_size)
 
         # Block-sharded merger MLP. fc1 in0 is L1-interleaved BF16; fc1 output is L1
-        # BLOCK_SHARDED over the 8x8 grid ([M/8, N/8] = [384, 768] shards); fc2
-        # consumes the fc1 output shard with no reshard. Requires the production
-        # 8x8 grid with M (= folded S/4) divisible by the shard grid.
-        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
-        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
-        bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
+        # BLOCK_SHARDED over an 8x8 core rectangle; fc2 consumes that shard with no
+        # reshard. Keep this rectangle fixed on BH, whose full compute grid can be
+        # taller than 8 rows and therefore not divide smaller folded buckets.
+        merger_grid = (8, 8)
+        fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device, new_r)
+        fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device, new_r)
+        bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size), grid_size=merger_grid)
         if fc1_bs_pc is None or fc2_bs_pc is None or bs_mem is None:
             raise RuntimeError(
-                f"PatchMerger block-sharded path requires an 8x8 grid and folded M={new_r} "
-                "divisible by the shard grid; got an incompatible device/shape."
+                f"PatchMerger block-sharded path requires an available 8x8 grid and folded M={new_r} "
+                "divisible by that shard grid; got an incompatible device/shape."
             )
         print("pre patch merger hidden_states.shape:", hidden_states.shape)
         if self._use_layer_norm:
