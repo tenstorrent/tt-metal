@@ -195,7 +195,7 @@ ReduceScatterDeviceOperation::create_op_performance_model(
         bottleneck_bytes = (N - 1) * slice_size;
         num_hops = N - 1;
     }
-    // Fabric bandwidth competes with DRAM/compute (max); the pipeline-fill latency is additive.
+    // Fabric bandwidth and its pipeline-fill latency are two independent floors — both compete in the final max().
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
@@ -263,22 +263,20 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     // =========================================================================
     // 4. PIPELINED MODEL
     //
-    // All resources operate in parallel throughout the pipeline.
-    // BW terms compete — the slowest resource determines the throughput:
-    //   max(fabric, dram_read_bw, dram_write_bw, compute)
-    //
-    // Latencies are additive — pipeline fill and drain stages that
-    // cannot overlap with steady-state:
-    //   fill:  read_latency (first DRAM read before pipeline starts)
-    //   drain: compute_latency (last chunk's reduction after all data arrived)
-    //        + write_latency (last DRAM write after last reduction completes)
+    // All resources operate in parallel, and a pipelined collective overlaps
+    // fill/drain latency with steady-state streaming. So every term — bandwidth
+    // AND fill/drain latency — compete; none stack on top:
+    //   max( max(fabric_bw, dram_bw, compute), max(pipeline_latency, fabric_fill) )
+    // pipeline_latency = read_latency (first DRAM read) + compute_latency
+    //   (last chunk's reduction) + write_latency (last DRAM write).
     // =========================================================================
     const int local_bw_cycles = std::max(read_bw_cycles, write_bw_cycles);
     const int compute_latency_cycles =
         static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
     const int pipeline_latency_cycles = read_latency_cycles + compute_latency_cycles + write_latency_cycles;
-    const int ideal_dev_clock_cycles =
-        std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles}) + pipeline_latency_cycles + fabric_fill_cycles;
+    const int throughput_cycles = std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles});
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensors, ideal_dev_clock_cycles);

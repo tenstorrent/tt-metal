@@ -372,8 +372,9 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
     // hardware ceiling: the minimum time given the physical topology and
     // memory bandwidth, independent of any particular algorithm.
     //
-    // Performance is bounded by:
-    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency + fabric_fill_latency
+    // Performance is the slowest single resource, not the sum: a pipelined
+    // collective overlaps fill/drain with streaming, so the terms compete (max):
+    //   ideal_cycles = max(DRAM_bw, fabric_bw, DRAM_fill/drain, fabric_fill)
     //
     // --- Fabric term (bottleneck link analysis) ---
     //
@@ -431,16 +432,17 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
         num_hops = N - 1;
     }
 
-    // Fabric bandwidth competes with local DRAM (max); the pipeline-fill latency is an additive
-    // serial prefix (first chunk must cross the diameter before streaming starts).
+    // Fabric gives two floors: bandwidth (bottleneck-link bytes / BW) and fill latency
+    // (first chunk crossing the diameter). Fill overlaps streaming rather than preceding
+    // it, so it joins the max() below instead of adding on.
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
-    // (hardware max parallelism). BW competes with fabric (max); latencies
-    // are additive (pipeline fill/drain).
+    // (hardware max parallelism). DRAM bandwidth and its read/write fill-drain
+    // latency are two more floors; all of these overlap, so all feed the final max().
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
@@ -464,8 +466,12 @@ AllGatherAsyncDeviceOperation::create_op_performance_model(
 
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
-    const int ideal_dev_clock_cycles =
-        std::max(local_bw_cycles, fabric_bw_cycles) + pipeline_latency_cycles + fabric_fill_cycles;
+    // Optimistic floor = the slowest single resource, not the sum. A pipelined collective overlaps
+    // fill/drain with streaming (nearer chunks arrive while the farthest is still in flight): the
+    // throughput ceiling and the fill/drain floor each take a max, then those two compete (not +).
+    const int throughput_cycles = std::max(local_bw_cycles, fabric_bw_cycles);
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);

@@ -141,9 +141,9 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // compute are modeled at the AllReduce level (input→output), not by
     // summing RS and AG independently.
     //
-    // Performance is bounded by:
-    //   ideal_cycles = max(fabric_bw_cycles, dram_bw_cycles, compute_cycles)
-    //                  + pipeline_latency + fabric_fill_latency
+    // Performance is the slowest single resource, not the sum: a pipelined
+    // collective overlaps fill/drain with streaming, so the terms compete (max):
+    //   ideal_cycles = max(fabric_bw, dram_bw, compute, pipeline_latency, fabric_fill)
     // =========================================================================
 
     const auto& input_tensor = tensor_args.input_tensor;
@@ -193,8 +193,8 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
         ag_bottleneck_bytes = (N - 1) * S;
         num_hops = N - 1;
     }
-    // AllReduce = ReduceScatter + AllGather: two fabric phases, each with its own pipeline fill.
-    // Bandwidth competes with DRAM/compute (max); fill latencies are additive.
+    // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their
+    // bandwidths sum and their fills sum (the totals compete in the final max() below).
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const auto [rs_bw_cycles, rs_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, fabric_config, clock_rate_mhz, rs_bottleneck_bytes, num_links, num_hops);
@@ -248,21 +248,21 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // =========================================================================
     // 4. PIPELINED MODEL
     //
-    // BW terms compete — the slowest resource sets throughput:
-    //   max(fabric, dram_read_bw, dram_write_bw, compute)
-    //
-    // Latencies are additive (pipeline fill/drain):
-    //   read_latency  — first DRAM read before pipeline starts
-    //   compute_latency — last chunk's reduction after all data arrived
-    //   write_latency — last DRAM write after last reduction completes
+    // A pipelined collective overlaps fill/drain latency with steady-state streaming,
+    // so every term — bandwidth AND fill/drain latency — competes:
+    //   max( max(fabric_bw, dram_bw, compute), max(pipeline_latency, fabric_fill) )
+    // pipeline_latency = read_latency (first DRAM read) + compute_latency
+    //   (last chunk's reduction) + write_latency (last DRAM write).
+    // fabric_bw / fabric_fill each already sum the RS + AG phases (sequential).
     // =========================================================================
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int compute_latency_cycles =
         static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
     const int pipeline_latency_cycles =
         static_cast<int>(read_latency_cycles) + compute_latency_cycles + static_cast<int>(write_latency_cycles);
-    const int ideal_dev_clock_cycles =
-        std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles}) + pipeline_latency_cycles + fabric_fill_cycles;
+    const int throughput_cycles = std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles});
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensors}, ideal_dev_clock_cycles);
