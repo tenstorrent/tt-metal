@@ -48,7 +48,19 @@ ALWI void fill_tile(uint32_t idst, float param0) {
  */
 template <DataFormat DATA_FORMAT>
 ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_DATA_FORMAT_EXTRA_PARAM(_calculate_fill_int_, RC, APPROX, DATA_FORMAT, 8, idst, param0));
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for fill_tile_int. Supported: Int32, UInt32, UInt16");
+    constexpr InstrModLoadStore INSTRUCTION_MODE =
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_fill_int_,
+        (APPROX, INSTRUCTION_MODE, 8 /* ITERATIONS */),
+        RC,
+        idst,
+        param0));
 }
 
 // clang-format off
