@@ -1,0 +1,28 @@
+devloop: lock acquired Mon Jun  8 09:28:26 UTC 2026
+######## PART 1: JIT-cache staleness on a kernel edit ########
+  stale_1_populate       wall= 119.5s  hit=0/490 (0.0%)  [75 passed ]
+  stale_2_rerun          wall=  10.0s  hit=490/490 (100.0%)  [75 passed ]
+  stale_3_afteredit      wall=  37.5s  hit=418/490 (85.3%)  [75 passed ]
+  (stale_3: jitted>0 => warm JIT correctly recompiles the edited kernel; ~0 => STALE hit)
+######## PART 2: dev-loop e2e (warm ccache, fresh JIT)  COLD vs PRECOMPILE ########
+  warm_ccache_unedited   wall=  58.9s  hit=0/397 (0.0%)  [75 passed ]
+  (ccache warmed with unedited sources)
+  (one-time precompile probe overhead pr+mk = 8.6s, added to PRECOMPILE totals)
+
+=== edit: edit_one_kernel ===
+  edit_one_kernel.COLD   wall=  85.5s  hit=0/490 (0.0%)  [75 passed ]
+  edit_one_kernel.warmup wall=  22.7s  hit=0/397 (0.0%)  [75 passed ]
+  edit_one_kernel.warm   wall=  20.3s  hit=397/490 (81.0%)  [75 passed ]
+  >> edit_one_kernel    COLD=85.5s  PRECOMPILE=51.6s (pr+mk 8.6s + wu 22.7s + wm 20.3s)  speedup=1.66x
+
+=== edit: edit_all_compute ===
+  edit_all_compute.COLD  wall= 109.0s  hit=0/490 (0.0%)  [75 passed ]
+  edit_all_compute.warmup wall=  28.6s  hit=0/397 (0.0%)  [75 passed ]
+  edit_all_compute.warm  wall=  16.7s  hit=397/490 (81.0%)  [75 passed ]
+  >> edit_all_compute   COLD=109.0s  PRECOMPILE=53.9s (pr+mk 8.6s + wu 28.6s + wm 16.7s)  speedup=2.02x
+DONE_DEVLOOP Mon Jun  8 09:37:06 UTC 2026
+
+# incremental warm-JIT, whole compute path (supplemental measurement):
+incr_populate        wall= 128.6s  JIT cache stats: 0/490 hits (0.0%)
+incr_editall_rerun   wall= 101.7s  JIT cache stats: 277/490 hits (56.5%)
+DONE_INCR

@@ -1,0 +1,8 @@
+WORKER SWEEP  Mon Jun  8 09:22:43 UTC 2026  nproc=8  tests=75
+workers  warmup_wall  compile_wall   %CPU       cores      speedup_vs_w1
+1        104.993s     98.0s          331%       3.3        1.00x
+2        64.242s      57.5s          590%       5.9        1.70x
+4        56.591s      49.9s          704%       7.0        1.96x
+8        57.929s      51.2s          702%       7.0        1.91x
+16       58.776s      52.2s          704%       7.0        1.88x
+DONE_SWEEP

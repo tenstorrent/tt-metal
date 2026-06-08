@@ -80,6 +80,8 @@ BENCH_SEL=/tmp/s3.txt BENCH_OUT=/tmp/smoke BENCH_REPEATS=1 scripts/precompile_be
 | `cpu_sampler.py` | 0.25 s `/proc` subtree sampler → CPU-seconds split compiler/python/other |
 | `_probe_real.py` / `_probe_mock.py` | the real-device / hardware-free build_key + fingerprint probes |
 | `summarize.py` | joins phase results + marks + sampler → the report below (`SUMMARY.txt`) |
+| `worker_sweep.sh` | sweeps warmup compile worker count → parallel-compile scaling curve (hardware-free) |
+| `devloop.sh` | device: JIT-cache staleness on a kernel edit + dev-loop e2e (COLD vs PRECOMPILE after editing) |
 
 ## Caveats (honest reading)
 
@@ -92,4 +94,6 @@ BENCH_SEL=/tmp/s3.txt BENCH_OUT=/tmp/smoke BENCH_REPEATS=1 scripts/precompile_be
 
 ## Results
 
-See `RESULTS.md` (generated narrative) and `SUMMARY.txt` in the output dir for the latest numbers.
+* `RESULTS.md` — cold vs warmup+warm north-star, per-phase utilization, ccache axis (+ `SUMMARY.txt`).
+* `RESULTS_devloop.md` — parallel-compile scaling, JIT-cache staleness, and the **dev-loop crossover**
+  (small edit → just rerun; big edit → precompile). Raw: `worker_sweep.example.txt`, `devloop.example.txt`.
