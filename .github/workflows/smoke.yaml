@@ -31,6 +31,15 @@ on:
         description: "Enable watcher"
         default: false
         type: boolean
+      enable-kernel-ccache:
+        description: 'Enable kernel ccache for JIT compilation at runtime'
+        default: false
+        type: boolean
+      redis-ccache-storage:
+        description: 'Redis storage URL for kernel ccache. Format: redis://user:password@host:port|read-only=false'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   smoke:
@@ -125,6 +134,18 @@ jobs:
           echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
           echo "TT_METAL_WATCHER_DISABLE_ETH=1" >> $GITHUB_ENV
+
+      - name: Set up kernel ccache
+        if: ${{ inputs.enable-kernel-ccache == true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          echo "Enabling TT Metal kernel ccache"
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
+          mkdir -p /tmp/ccache
 
       - name: Run a test
         id: test

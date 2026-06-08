@@ -20,6 +20,15 @@ on:
         required: false
         type: string
         default: 'Release'
+      enable-kernel-ccache:
+        description: 'Enable kernel ccache for JIT compilation at runtime'
+        default: false
+        type: boolean
+      redis-ccache-storage:
+        description: 'Redis storage URL for kernel ccache. Format: redis://user:password@host:port|read-only=false'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   sdk-examples:
@@ -71,6 +80,18 @@ jobs:
           echo "LD_LIBRARY_PATH=$CLANG_RT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
           echo "ASAN_OPTIONS=detect_leaks=0:color=always" >> "$GITHUB_ENV"
           echo "LSAN_OPTIONS=suppressions=/usr/share/tt-metalium/lsan.supp" >> "$GITHUB_ENV"
+
+      - name: Set up kernel ccache
+        if: ${{ inputs.enable-kernel-ccache == true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          echo "Enabling TT Metal kernel ccache"
+          echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
+          echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
+          mkdir -p /tmp/ccache
 
       - name: Run examples
         id: test
