@@ -1,4 +1,4 @@
-name: "[internal] tt-metal L2 nightly tests impl"
+name: "[internal] tt-metal L2 tests impl"
 
 on:
   workflow_call:
@@ -39,7 +39,7 @@ jobs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
       has-sim-entries: ${{ steps.filter-categories.outputs.has-sim-entries }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_nightly_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,7 +58,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "nightly"
+            "l2"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -111,7 +111,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  l2-nightly-tests:
+  l2-tests:
     needs: [load-test-matrix, fetch-ttsim]
     if: ${{ always() && needs.load-test-matrix.outputs.matrix != '[]' && needs.load-test-matrix.result == 'success' && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:

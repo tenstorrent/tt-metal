@@ -290,7 +290,7 @@ jobs:
         github.event_name == 'schedule' || inputs.additional_test_categories != ''
       )
     secrets: inherit
-    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
+    uses: ./.github/workflows/tt-metal-l2-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
