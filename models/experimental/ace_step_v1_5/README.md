@@ -144,6 +144,8 @@ Use **`--no-use-cot-caption`** when you need the **exact** `--prompt` text in Di
 
 On **BH_QB**, the default is **split TTNN preprocess** (Phase A on a 1×1 chip → re-exec → Phase B on 2×2 mesh). PyTorch on CPU/GPU handles orchestration, tokenization, and opt-in fallbacks.
 
+The denoise loop runs DiT forwards on TTNN; on BH_QB the per-step CFG (APG/ADG) and Euler update run on host PyTorch between TTNN steps.
+
 | Stage | Default backend (BH_QB) | Notes |
 |-------|-------------------------|-------|
 | Handler / `preprocess_batch` | **Host** | Upstream `AceStepHandler` orchestration on CPU |
