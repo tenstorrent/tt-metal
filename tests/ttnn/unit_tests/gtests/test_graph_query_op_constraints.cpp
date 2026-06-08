@@ -27,7 +27,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -44,7 +43,6 @@
 #include "ttnn/operations/ccl/all_reduce/all_reduce.hpp"
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast.hpp"
 #include "ttnn/operations/ccl/broadcast/broadcast.hpp"
-#include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -835,6 +833,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
+// TODO(nuked-op conv): Conv2dOpIfTest removed for eval; restore on recreate.
+#if 0
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
                        public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
 
@@ -915,6 +915,7 @@ INSTANTIATE_TEST_SUITE_P(
     Conv2dConfigVariations,
     Conv2dOpIfTest,
     ::testing::Values(std::nullopt, ttnn::prim::Conv2dConfig{.deallocate_activation = true}));
+#endif
 
 // ============================================================================
 // Transformer tests
@@ -1284,6 +1285,8 @@ TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
     }
 }
 
+// TODO(nuked-op rms_allgather): FusedRmsMinimal test removed for eval; restore on recreate.
+#if 0
 TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     // fused_rms_minimal requirements (from validate_on_program_cache_miss):
     //   - input shape (1,1,M,N): M<=32, N%32==0, TILE, WIDTH_SHARDED ROW_MAJOR
@@ -1380,5 +1383,6 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
                          << " l1_output=" << query.resource_usage.l1_output_buffer_per_core;
     }
 }
+#endif
 
 }  // namespace ttnn::operations::binary::test

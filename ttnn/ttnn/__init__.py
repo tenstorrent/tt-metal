@@ -487,42 +487,15 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
-from ttnn.operations.conv2d import (
-    Conv2dConfig,
-    PaddingMode,
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
+# TODO(nuked-op conv): conv2d Python wrapper removed for eval; restore on recreate.
+# TODO(nuked-op pool): pool Python wrapper (prepare_grid_sample_grid) removed for eval; restore on recreate.
+# TODO(nuked-op conv3d): Conv3dConfig binding removed for eval; restore on recreate.
 
-from ttnn.operations.pool import (
-    prepare_grid_sample_grid,
-)
-
-from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn._ttnn.operations.experimental import disaggregation
 from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
-
-# TODO(nuked-op conv2d): conv2d/conv1d C++ bindings removed for eval. Alias the
-# placeholder Conv2dConfig from the Python wrapper so `import ttnn` succeeds; restore
-# `ttnn._ttnn.operations.conv.Conv2dConfig` once the conv ops are recreated.
-Conv1dConfig = Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
 

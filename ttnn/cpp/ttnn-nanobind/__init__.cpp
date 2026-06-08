@@ -35,7 +35,6 @@
 #include "ttnn/graph/graph_nanobind.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
-#include "ttnn/operations/conv/conv_nanobind.hpp"
 #include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
@@ -66,7 +65,6 @@
 // TODO(nuked-op pool): pool op bindings removed for eval; restore on recreate.
 #include "ttnn/operations/prefetcher/prefetcher_nanobind.hpp"
 #include "ttnn/operations/reduction/reduction_nanobind.hpp"
-#include "ttnn/operations/sliding_window/sliding_window_nanobind.hpp"
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
@@ -149,11 +147,13 @@ void py_module(nb::module_& mod) {
     auto m_data_movement = mod.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
 
+    // TODO(nuked-op sliding_window): sliding_window submodule bindings removed for eval; restore on recreate.
     auto m_sliding_window = mod.def_submodule("sliding_window", "sliding_window operations");
-    sliding_window::bind_sliding_window(m_sliding_window);
+    (void)m_sliding_window;
 
+    // TODO(nuked-op conv): conv submodule bindings removed for eval; restore on recreate.
     auto m_conv2d = mod.def_submodule("conv", "Convolution operations");
-    conv::py_module(m_conv2d);
+    (void)m_conv2d;
 
     // TODO(nuked-op pool): pool op bindings (generic/rotate/upsample/grid_sample) removed
     // for eval. Empty submodule kept; restore the bind calls on recreate.
