@@ -6,6 +6,9 @@
 
 #include "api/tensor/noc_traits.h"
 
+
+// TODO: this overload zeros a single page per call, so bulk callers loop page-by-page.
+// A page-range overload could zero a bank at a time instead of one write per page.
 template <typename DSpecT, typename Scratch>
 inline void Noc::async_write_zeros(
     const ::TensorAccessor<DSpecT>& accessor,
@@ -17,6 +20,7 @@ inline void Noc::async_write_zeros(
     static_assert(
         std::is_same_v<Scratch, CircularBuffer> || std::is_same_v<Scratch, DataflowBuffer>,
         "noc.async_write_zeros scratch must be a CircularBuffer or DataflowBuffer.");
+    ASSERT(args.offset_bytes + size_bytes <= accessor.get_aligned_page_size());
     // Largest single noc_async_write the loop below will issue from scratch.
     // Caller's pre-zeroed prefix must cover at least this many bytes.
     const uint32_t max_chunk =

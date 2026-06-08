@@ -712,6 +712,9 @@ public:
      *
      * Caller MUST zero the scratch via overload (1) + write_zeros_l1_barrier() before the first call.
      *
+     * Each call zeroes within a single page: @p args.offset_bytes + @p size_bytes must not exceed
+     * the accessor's aligned page size, otherwise the write spills into a neighbouring page.
+     *
      * @see write_zeros_dram_barrier.
      *
      * @param accessor Destination DRAM tensor accessor

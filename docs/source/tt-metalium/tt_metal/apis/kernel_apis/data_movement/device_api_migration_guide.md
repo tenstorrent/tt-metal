@@ -570,6 +570,8 @@ noc.write_zeros_dram_barrier();
 dfb.pop_front(1);                        // release; the buffer is left as it was
 ```
 
+**Each call zeroes within a single page:** `offset_bytes + size_bytes` must not exceed the tensor's aligned page size. Zero a multi-page region by looping over `page_id`.
+
 Any buffer the kernel already owns can be reused (i.e. it needn't be one dedicated to zeroing). The pre-zeroed prefix must cover at least `min(page_size, NOC_MAX_BURST_SIZE)` bytes. This overload pairs with `write_zeros_dram_barrier()`.
 
 #### Barriers and the Quasar command-buffer contract
