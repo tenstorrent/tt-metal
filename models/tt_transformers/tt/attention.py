@@ -347,6 +347,10 @@ class Attention(LightweightModule):
         def get_wo_memory_config():
             if self.use_fused_all_gather_matmul or self.TG:
                 return ttnn.DRAM_MEMORY_CONFIG
+            # Opt-in (Voxtral attn_wo_interleaved_weights): wo DRAM-INTERLEAVED instead of bank-sharded,
+            # so decode can use a 1D mcast wo matmul. getattr-gated → every other model unchanged.
+            elif getattr(configuration, "attn_wo_interleaved_weights", False):
+                return ttnn.DRAM_MEMORY_CONFIG
             else:
                 return wo_mem_config
 
@@ -358,7 +362,12 @@ class Attention(LightweightModule):
             memory_config=get_wo_memory_config(),
             mesh_mapper=get_wo_mesh_mapper(),
             cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+                cache_name("wo_width_sharded_2d")
+                if (self.use_fused_all_gather_matmul or self.TG)
+                # Layout-aware tag: interleaved wo must NOT reuse the DRAM-sharded cache entry.
+                else cache_name(
+                    "wo_interleaved" if getattr(configuration, "attn_wo_interleaved_weights", False) else "wo"
+                )
             ),
         )
         if not use_paged_kv_cache:
@@ -827,6 +836,12 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
+
+            # Opt-in (Voxtral attn_wo_interleaved_weights): the 1D mcast wo matmul wants an
+            # L1-INTERLEAVED in0, but tt_all_gather(sharded=True) leaves attn_output width-sharded on
+            # the concat-heads grid. Reshard to interleaved here so the matmul's compute grid is valid.
+            if not self.TG and self.prefetcher is None and getattr(self.args, "attn_wo_interleaved_weights", False):
+                attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.linear(
