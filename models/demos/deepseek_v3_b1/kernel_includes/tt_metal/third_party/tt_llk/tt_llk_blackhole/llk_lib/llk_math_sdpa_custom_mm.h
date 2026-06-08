@@ -96,6 +96,11 @@ inline void _llk_math_sdpa_custom_mm_init_(const std::uint32_t operandB_face_r_d
 
 inline void _llk_math_sdpa_custom_mm_mask_dest_(
     const std::uint32_t dst_index, const std::uint32_t ct_dim, bool mask_chunk = false) {
+    // #43562/3 fix: drain pending SrcA/SrcB before touching the DEST offset / matmul. Without this the
+    // matmul could write at a stale (prev-iteration, wrong-bank) DEST offset, giving iteration-dependent
+    // mm1 and the alternating PCC. Stalling on SRCA_VLD|SRCB_VLD guarantees the operands (and thus the
+    // bank state) are settled before the DEST-offset SETC16 below.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD | p_stall::SRCB_VLD);
     // Zero Dest
     uint32_t dst_offset = dst_index + get_dest_buffer_base();
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_offset);
