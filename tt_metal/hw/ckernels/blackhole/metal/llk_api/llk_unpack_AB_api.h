@@ -10,6 +10,21 @@
  * LLK UNPACK AB
  *************************************************************************/
 
+/**
+ * @brief Initialize unpacker to unpack two source operands A and B into SrcA and SrcB registers.
+ *
+ * Configures the unpacker hardware for dual-operand unpacking with support for various
+ * broadcast modes and optional transpose. Derives the tile geometry from operand A's
+ * circular buffer.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param operandA: Circular-buffer index of source operand A.
+ * @param operandB: Circular-buffer index of source operand B.
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values =
+ * <None/IntraFace/InterFace/Both>
+ * @note Call @ref llk_unpack_AB with matching template args after this.
+ * @ref llk_math_eltwise_binary_init is the matching init on the math thread (consumes SrcA/SrcB).
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const ckernel::Transpose transpose) {
@@ -29,11 +44,36 @@ inline void llk_unpack_AB_init(
     _llk_unpack_AB_init_<BType>(tensor_shape, transpose);
 }
 
+/**
+ * @brief Initialize unpacker to unpack operands A and B with no transpose.
+ *
+ * Convenience overload that forwards to the transpose-aware init with @ref ckernel::Transpose::None.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param operandA: Circular-buffer index of source operand A.
+ * @param operandB: Circular-buffer index of source operand B.
+ * @note Call @ref llk_unpack_AB with matching template args after this.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
 }
 
+/**
+ * @brief Unpack two tiles from L1 memory into SrcA and SrcB registers.
+ *
+ * Resolves each tile's L1 address from its operand's circular buffer and runs the configured
+ * MOP, handling context switching and synchronization with the unpacker.
+ *
+ * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param operandA: Circular-buffer index of source operand A.
+ * @param operandB: Circular-buffer index of source operand B.
+ * @param tile_index_a: Index of the tile to unpack within operand A's buffer.
+ * @param tile_index_b: Index of the tile to unpack within operand B's buffer.
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast.
+ * @note Call @ref llk_unpack_AB_init with matching template args before this function.
+ * @ref llk_math_eltwise_binary on the math thread consumes the SrcA/SrcB tiles unpacked here.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA,
