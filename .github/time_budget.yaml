@@ -151,6 +151,10 @@ runtime:
   perf:
     wh_n300_civ2: 55
     bh_p150_perf: 40
+  triage:
+    wh_n150_civ2: 16
+    bh_p150b_civ2_viommu: 16
+    bh_p150b_civ2_viommu_prio: 16
 
 llk:
   unit:
