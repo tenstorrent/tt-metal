@@ -122,8 +122,8 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
                 const uint16_t dr = get_dest_row_id(row, true);
                 uint32_t tmp[16];
                 uint32_t rd[16];
-                dbg_get_array_row(dbg_array_id::DEST, dr, tmp);
-                dbg_get_array_row(dbg_array_id::DEST, dr + 8, tmp + 8);
+                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, dr, tmp);
+                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, dr + 8, tmp + 8);
                 for (int i = 0; i < 8; ++i)
                 {
                     rd[2 * i]     = reconstruct_float32(lo_word(tmp[i]), lo_word(tmp[i + 8]));
@@ -138,7 +138,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
             case DataFormat::Int8:
             {
                 uint32_t rd[8];
-                dbg_get_array_row(dbg_array_id::DEST, get_dest_row_id(row, false), rd);
+                ckernel::dbg_get_array_row(ckernel::dbg_array_id::DEST, get_dest_row_id(row, false), rd);
                 DEVICE_PRINT("{}", dp_typed_array_t<8>(static_cast<uint16_t>(data_format), rd));
                 break;
             }
