@@ -105,6 +105,9 @@ class TTNNFlowDecoder:
         self._conv_weights = []
         self._device = None
         self._prep_cache = {}
+        # Per-(flow_idx, seq_len, batch) trace cache. Populated by
+        # warm_up_traces(); forward() uses it when present.
+        self._flow_traces = {}
 
     @classmethod
     def from_checkpoint(cls, state_dict, device):
@@ -279,19 +282,76 @@ class TTNNFlowDecoder:
         ttnn.deallocate(x_dev)
         return output_acc
 
+    def _per_flow_device_compute(self, f, x0_in, g_in, seq_len, batch):
+        """Pure-device per-flow compute (pre_linear + cond_linear + reshape +
+        WN_loop + reshape + post_linear). Inputs/outputs are device tensors —
+        callable both directly and inside a trace capture region."""
+        fw = self._flows[f]
+        h_tt = ttnn.linear(x0_in, fw["pre_w"], bias=fw["pre_b"],
+                            memory_config=DEFAULT_MEMORY_CONFIG)
+        g_proj_tt = ttnn.linear(g_in, fw["cond_w"], bias=fw["cond_b"],
+                                 memory_config=DEFAULT_MEMORY_CONFIG)
+        g_proj_4d = ttnn.reshape(g_proj_tt, (batch, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
+        wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len, batch)
+        ttnn.deallocate(g_proj_4d)
+        wn_3d = ttnn.reshape(wn_out, (batch, seq_len, HIDDEN_CH))
+        ttnn.deallocate(wn_out)
+        stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
+                                memory_config=DEFAULT_MEMORY_CONFIG)
+        ttnn.deallocate(wn_3d)
+        return stats_tt
+
+    def warm_up_traces(self, shapes):
+        """Pre-capture per-flow traces for given (seq_len, batch) shapes.
+        After this, forward() with matching shapes uses traced replay.
+        Shapes not pre-warmed fall back to direct (unsafe to mix per the
+        TTNN allocator warning, so pre-warm everything forward() will hit).
+
+        Ordering matters: all persistent input buffers are allocated FIRST
+        (before any trace is active), then ONE warmup pass primes the
+        program cache and prepare_conv_weights cache, then traces are
+        captured back-to-back. This avoids the "allocating during active
+        trace" warning that produces buffer overlap between captures."""
+        if self._device is None:
+            raise RuntimeError("warm_up_traces requires from_checkpoint() first")
+        plan = []
+        for seq_len, batch in shapes:
+            for f in range(N_FLOWS):
+                key = (f, seq_len, batch)
+                if key in self._flow_traces:
+                    continue
+                x0 = ttnn.from_torch(
+                    torch.zeros(batch, seq_len, HALF_CH).float(),
+                    dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
+                    device=self._device, memory_config=DEFAULT_MEMORY_CONFIG)
+                g = ttnn.from_torch(
+                    torch.zeros(batch, 1, 256).float(),
+                    dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT,
+                    device=self._device, memory_config=DEFAULT_MEMORY_CONFIG)
+                plan.append((key, x0, g))
+        for key, x0, g in plan:
+            f, seq_len, batch = key
+            out = self._per_flow_device_compute(f, x0, g, seq_len, batch)
+            ttnn.deallocate(out)
+        for key, x0, g in plan:
+            f, seq_len, batch = key
+            trace_id = ttnn.begin_trace_capture(self._device, cq_id=0)
+            stats_out = self._per_flow_device_compute(f, x0, g, seq_len, batch)
+            ttnn.end_trace_capture(self._device, trace_id, cq_id=0)
+            self._flow_traces[key] = {
+                "trace_id": trace_id,
+                "x0_pers": x0,
+                "g_pers": g,
+                "stats_out": stats_out,
+            }
+
     def forward(self, z_p, g):
         """Execute 4-flow decoder with persistent weights.
-
-        Args:
-            z_p: [B, 192, T] channels-first latent from TextEncoder
-            g:   [B, 256, 1] channels-first speaker embedding
-
-        Returns:
-            z: [B, 192, T] channels-first decoded latent
-        """
+        z_p [B, 192, T], g [B, 256, 1] → z [B, 192, T]."""
         batch = z_p.shape[0]
         seq_len = z_p.shape[2]
-        x_cl = z_p.permute(0, 2, 1)  # [B, T, C]
+        x_cl = z_p.permute(0, 2, 1)
+        g_cl = g.permute(0, 2, 1)
 
         for f in range(N_FLOWS):
             fw = self._flows[f]
@@ -300,28 +360,34 @@ class TTNNFlowDecoder:
             x0_cl = x_cl[:, :, :HALF_CH]
             x1_cl = x_cl[:, :, HALF_CH:]
 
-            x0_tt = to_device(x0_cl, self._device)
-            h_tt = ttnn.linear(x0_tt, fw["pre_w"], bias=fw["pre_b"],
-                                memory_config=DEFAULT_MEMORY_CONFIG)
-            ttnn.deallocate(x0_tt)
-
-            g_cl = g.permute(0, 2, 1)
-            g_tt = to_device(g_cl, self._device)
-            g_proj_tt = ttnn.linear(g_tt, fw["cond_w"], bias=fw["cond_b"],
-                                     memory_config=DEFAULT_MEMORY_CONFIG)
-            ttnn.deallocate(g_tt)
-            g_proj_4d = ttnn.reshape(g_proj_tt, (batch, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
-
-            wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len, batch)
-            ttnn.deallocate(g_proj_4d)
-
-            wn_3d = ttnn.reshape(wn_out, (batch, seq_len, HIDDEN_CH))
-            ttnn.deallocate(wn_out)
-            stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
+            key = (f, seq_len, batch)
+            trace_info = self._flow_traces.get(key)
+            if trace_info is not None:
+                x0_host = ttnn.from_torch(x0_cl.contiguous(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT)
+                g_host = ttnn.from_torch(g_cl.contiguous(), dtype=DEFAULT_DTYPE, layout=ttnn.TILE_LAYOUT)
+                ttnn.copy_host_to_device_tensor(x0_host, trace_info["x0_pers"])
+                ttnn.copy_host_to_device_tensor(g_host, trace_info["g_pers"])
+                ttnn.execute_trace(self._device, trace_info["trace_id"], cq_id=0, blocking=True)
+                stats_cl = ttnn.to_torch(trace_info["stats_out"]).float()[:batch, :seq_len, :HALF_CH]
+            else:
+                x0_tt = to_device(x0_cl, self._device)
+                h_tt = ttnn.linear(x0_tt, fw["pre_w"], bias=fw["pre_b"],
                                     memory_config=DEFAULT_MEMORY_CONFIG)
-            stats_cl = to_host(stats_tt)[:batch, :seq_len, :HALF_CH]
-            ttnn.deallocate(wn_3d)
-            ttnn.deallocate(stats_tt)
+                ttnn.deallocate(x0_tt)
+                g_tt = to_device(g_cl, self._device)
+                g_proj_tt = ttnn.linear(g_tt, fw["cond_w"], bias=fw["cond_b"],
+                                         memory_config=DEFAULT_MEMORY_CONFIG)
+                ttnn.deallocate(g_tt)
+                g_proj_4d = ttnn.reshape(g_proj_tt, (batch, 1, 1, 2 * HIDDEN_CH * NUM_WN_LAYERS))
+                wn_out = self._conditioned_wn_device(h_tt, g_proj_4d, f, seq_len, batch)
+                ttnn.deallocate(g_proj_4d)
+                wn_3d = ttnn.reshape(wn_out, (batch, seq_len, HIDDEN_CH))
+                ttnn.deallocate(wn_out)
+                stats_tt = ttnn.linear(wn_3d, fw["post_w"], bias=fw["post_b"],
+                                        memory_config=DEFAULT_MEMORY_CONFIG)
+                stats_cl = to_host(stats_tt)[:batch, :seq_len, :HALF_CH]
+                ttnn.deallocate(wn_3d)
+                ttnn.deallocate(stats_tt)
 
             x1_cl = x1_cl - stats_cl
             x_cl = torch.cat([x0_cl, x1_cl], dim=-1)
@@ -332,6 +398,17 @@ class TTNNFlowDecoder:
         return self.forward(z_p, g)
 
     def deallocate(self):
+        for ti in self._flow_traces.values():
+            try:
+                ttnn.release_trace(self._device, ti["trace_id"])
+            except (RuntimeError, ValueError):
+                pass
+            for t in (ti["x0_pers"], ti["g_pers"], ti["stats_out"]):
+                try:
+                    ttnn.deallocate(t)
+                except (RuntimeError, ValueError):
+                    pass
+        self._flow_traces = {}
         for fw in self._flows:
             for key in ["pre_w", "pre_b", "post_w", "post_b", "cond_w", "cond_b"]:
                 try:

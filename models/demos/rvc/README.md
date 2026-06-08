@@ -70,6 +70,9 @@ Output: `data/output/ttnn_output.wav` (TTNN) and `data/output/torch_reference.wa
 # Single-stream, RMVPE
 python -m models.demos.rvc.benchmark --max_secs 3.0 --warmup 1 --runs 3
 
+# Single-stream with Flow trace+execute_trace (~5% TTNN-only RTF win at B=1)
+python -m models.demos.rvc.benchmark --max_secs 3.0 --warmup 1 --runs 3 --trace
+
 # Batched, 5 concurrent, with CPU/TTNN pipeline overlap (meets RTF<0.2)
 python -m models.demos.rvc.benchmark --batch 5 --max_secs 3.0 --warmup 1 --runs 2 \
     --f0_method dio --overlap
@@ -100,13 +103,16 @@ Measured on N300 (Wormhole B0), warm JIT cache, 3 s input audio. Numbers are mea
 | Full-pipeline RTF | 0.300 | < 0.5 |
 | Audio PCC vs torch reference | 0.998 | > 0.95 |
 
-### Batched (`--batch 5 --overlap --f0_method dio`)
+### Batched (B=5)
 
-| Metric | Value | Bounty target |
-|---|---:|---|
-| TTNN-only RTF / sample | 0.140 | < 0.5 (stretched: < 0.2) |
-| Full-pipeline RTF / sample | 0.187 | stretched: < 0.2 |
-| Per-row PCC vs B=1 reference | > 0.995 | — |
+Two configs measured; pick by use case. Per-row PCC vs B=1 reference > 0.995 in both.
+
+| Config | TTNN-only RTF / sample | Full-pipeline RTF / sample |
+|---|---:|---:|
+| `--batch 5 --f0_method dio` (no overlap) | **0.143** | 0.209 |
+| `--batch 5 --overlap --f0_method dio` | 0.155 | **0.187** (stretched RTF<0.2 MET) |
+
+Without `--overlap`, TTNN-only is best (compute is contiguous, no per-flow dispatch overhead from micro-batch splitting). With `--overlap`, full-pipeline is best (CPU preprocess of mb2 hidden by TTNN compute of mb1).
 
 ### Where time goes (single-stream, 3 s warm)
 
@@ -147,21 +153,21 @@ Stage 1 (bring-up) and Stage 2 (optimization) targets are met with margin. Stage
 | Maximize core counts | Done (HEIGHT_SHARDED conv1d, 8×7 grid where shape permits) |
 | Efficient flow-based decoder | Done (device-resident WN inner loop; B=8 at 5.4× per-sample) |
 | Flash Attention or equivalent | N/A (RVC has no attention layers) |
-| Minimize voice conversion latency | Done (TTNN-only RTF 0.535 → 0.140, 74% reduction) |
+| Minimize voice conversion latency | Done. Best TTNN-only RTF 0.143 at B=5 batched (vs Stage 1 final 0.535 = 73% reduction). Single-stream B=1: 0.166 with `--trace`. |
 | Batch processing | Done (native B=2..8, per-row correctness tested at B=2/3/5/8) |
 | Optimize feature index search | N/A by design (FAISS < 1% of wall time) |
-| Pipeline encoder/decoder/vocoder stages | Done for batched path (`--overlap`); single-stream cross-chunk overlap not implemented |
+| Pipeline encoder/decoder/vocoder stages | Done for batched path (`--overlap`); single-stream cross-chunk overlap not implemented; Flow trace integration (`--trace`) further amortizes host dispatch on single-stream |
 | Efficient pitch extraction and transposition | Done (RMVPE persisted, `--key` transposition supported, DIO alternative measured) |
 | Minimize memory and TM overheads | Done (WN and ResBlock inner loops eliminate host roundtrips; `prepare_conv_weights` cache) |
 | Caching feature indices | N/A by design |
 | Document tuning and trade-offs | Done (this README + commit history) |
 | **Stretched:** 60+ tokens/second | Done (Flow at B=8: ~6900 tokens/s) |
-| **Stretched:** RTF < 0.2 | Met. TTNN-only 0.140; full pipeline 0.187 with `--batch 5 --overlap --f0_method dio` |
+| **Stretched:** RTF < 0.2 | Met. Best full-pipeline RTF 0.187 at `--batch 5 --overlap --f0_method dio` (TTNN-only 0.155 at that config). Best TTNN-only RTF 0.143 at `--batch 5 --f0_method dio` (no overlap). |
 | **Stretched:** 5+ concurrent conversions | Done (verified end-to-end at B=5 and B=8) |
 
 ## Limitations
 
-**Trace + 2CQ not shipped.** `ttnn.conv1d` is trace-capturable in isolation (verified, 2.63× speedup, PCC 1.0). Integration across the full forward path is blocked architecturally: `Flow.forward` and `Generator.forward` are deeply hybrid — torch ops (residual adds, tanh, leaky_relu, torch conv1d for noise injection) interleave with TTNN sub-graphs, producing ~20 host↔device round-trips per inference. Trace requires a pure-device op sequence; the round-trips break capture. Closing this requires rewriting both modules as fully device-resident graphs (no torch ops, no `from_torch`/`to_torch` inside forward) — multi-day refactor outside this stage's scope.
+**Trace + 2CQ — implemented for Flow, not for Generator.** `benchmark.py --trace` captures one trace per (flow_idx, seq_len, batch) and replays via `execute_trace` + `copy_host_to_device_tensor` for new inputs each call. Per-flow capture is bit-exact (PCC 1.000000 vs direct forward), per-flow replay is ~7× faster on its compute. End-to-end measured within-session at B=1/RMVPE/3s warm: TTNN-only RTF 0.1749 → 0.1664 (−4.9%); full-pipeline RTF 0.2979 → 0.2899 (−2.7%); Audio PCC vs torch preserved at 0.998. At B=5 with `--overlap`, trace adds slight overhead because per-call `copy_host_to_device_tensor` and `execute_trace` dispatch exceed the saved dispatch on compute-dominated batched ops — so `--trace` is recommended for single-stream only. Generator trace is not implemented; Generator forward allocates many transient buffers per call (288 conv1d calls across 4 upsample stages with varying seq_len), and a Generator trace would require pre-allocating all per-stage intermediates and pre-warming `_prep_cache` for every needed shape, which is a multi-day refactor without the same per-op headroom (Generator compute already dominates dispatch).
 
 **Single-stream cross-chunk pipeline overlap not implemented.** Preprocess is monolithic per inference (produces all frames at once), so within-stream overlap would require re-architecting preprocess as streaming. Batched path closes this for B>1 via `--overlap`.
 
