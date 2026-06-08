@@ -146,6 +146,14 @@ uint32_t force_num_workers() {
     }();
     return v;
 }
+// Diagnostic: WAN_RMSNORM_NO_PERHEAD_CLAMP=1 skips forcing chunk_size_rows=1 for
+// per-head RoPE, so the natural (chunk>=2) path runs — used to REPRODUCE the
+// per-head-RoPE chunk>=2 compute deadlock under the watcher. Applied in BOTH
+// compute_sizing and the program factory so the buffer stays consistent.
+bool perhead_chunk_clamp_disabled() {
+    static const bool v = (std::getenv("WAN_RMSNORM_NO_PERHEAD_CLAMP") != nullptr);
+    return v;
+}
 // Input-read push+barrier granularity (in tiles). A WH-Galaxy sweep
 // (WAN_BARRIER_TILES) showed the optimum here is governed by compute-overlap
 // (how finely PRE is fed), NOT by the DRAM-contention model of the reference
@@ -354,7 +362,7 @@ WanFusedDistributedRmsnormSizing compute_sizing(
             num_tile_cols, block_size, s.chunk_size_rows, in_b, interm_b, out_b, tensor_args.weight.has_value(),
             args.per_head_norm);
     }
-    if (per_head_rope || streaming) {
+    if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming) {
         s.chunk_size_rows = 1u;
     }
     s.window_size = s.chunk_size_rows;
@@ -600,7 +608,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // so the caller's stats buffer (window/pages) matches. feat-2048 per-head RoPE
     // still can't fit even one row -> clean compile-time CB-alloc OOM (needs
     // cos/sin streaming, a separate change), NOT a hang.
-    if (per_head_rope || streaming_low_l1) {
+    if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming_low_l1) {
         chunk_size_rows = 1u;
     }
     // Phase 9 packed-page AG: every chunk this chip processes maps to a distinct
