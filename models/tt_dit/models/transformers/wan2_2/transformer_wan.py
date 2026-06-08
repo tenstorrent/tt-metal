@@ -283,15 +283,15 @@ class WanTransformer3DModel(Module):
         self.cached_rope_features = {}
         self.output_dtype = output_dtype
 
-        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        assert model_type in ["t2v", "i2v", "s2v"], "model_type must be one of t2v / i2v / s2v"
         if model_type == "i2v":
             in_channels = 36
         else:
-            assert in_channels == 16, "in_channels must be 16 for t2v"
+            assert in_channels == 16, f"in_channels must be 16 for {model_type}"
 
         self.patch_size = patch_size
         self.dim = dim
-
+        self.num_heads = num_heads
         self.out_channels = out_channels
 
         # NOTE: Fallback
@@ -463,7 +463,7 @@ class WanTransformer3DModel(Module):
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
-    def preprocess_spatial_input_host(self, spatial):
+    def preprocess_spatial_input_host(self, spatial, *, pad: bool = True):
         B, C, F, H, W = spatial.shape
         logger.info(f"Preprocessing spatial input with shape {spatial.shape}")
         assert B == 1, "Batch size must be 1"
@@ -471,13 +471,13 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
-        # Patchify video input
         spatial = spatial.reshape(B, C, patch_F, pF, patch_H, pH, patch_W, pW)
         spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
         logger.info(f"spatial input after patchifying: {spatial.shape}")
 
-        spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
-        logger.info(f"spatial input after padding: {spatial.shape}")
+        if pad:
+            spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
+            logger.info(f"spatial input after padding: {spatial.shape}")
 
         return spatial, N
 

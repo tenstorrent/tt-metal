@@ -1,0 +1,179 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""S2V audio conditioning: CausalAudioEncoder + AudioInjector_WAN.
+Mirrors ``wan/modules/s2v/audio_utils.py`` (the underlying CausalConv1d /
+MotionEncoder_tc live in ``auxi_blocks.py``, matching the reference layout)."""
+
+from __future__ import annotations
+
+import torch
+
+import ttnn
+
+from .....layers.linear import ColParallelLinear, prepare_chunked_linear_output
+from .....layers.module import Module, ModuleList, Parameter
+from .....parallel.config import DiTParallelConfig
+from .....parallel.manager import CCLManager
+from .....utils.tensor import local_device_to_torch
+from ..attention_wan import WanAttention
+from .auxi_blocks import MotionEncoder_tc
+
+
+class CausalAudioEncoder(Module):
+    """Weighted-sum of wav2vec2 hidden states + MotionEncoder_tc."""
+
+    def __init__(
+        self,
+        *,
+        dim: int,
+        num_layers: int,
+        out_dim: int,
+        num_token: int = 4,
+        need_global: bool = False,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        tp_mesh_axis: int | None = None,
+        ccl_manager: CCLManager | None = None,
+    ) -> None:
+        super().__init__()
+        self.num_layers = num_layers
+
+        self.encoder = MotionEncoder_tc(
+            in_dim=dim,
+            hidden_dim=out_dim,
+            num_heads=num_token,
+            need_global=need_global,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            tp_mesh_axis=tp_mesh_axis,
+            ccl_manager=ccl_manager,
+        )
+        # Per-layer weights, initialized to 0.01 in the reference. Shape
+        # [1, num_layers, 1, 1] so it broadcasts across [B, num_layers, dim, T].
+        self.weights = Parameter(
+            total_shape=[1, num_layers, 1, 1],
+            device=mesh_device,
+            dtype=ttnn.float32,
+        )
+        # Host cache of the silu-normalized weights — the Parameter is a
+        # static 25-element learned table, so silu/sum/normalize is the same
+        # every clip. Materialized on first forward and reused.
+        self._cached_w_normalized: torch.Tensor | None = None
+
+    def forward(self, features_torch: torch.Tensor) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
+        """``[B, num_layers, dim, T_video]`` → ``[B, T_video // 4, num_token + 1, out_dim]``
+        (or ``(global, local)`` tuple when ``need_global=True``).
+        """
+        if self._cached_w_normalized is None:
+            with torch.no_grad():
+                weights_torch = local_device_to_torch(self.weights.data).reshape(1, self.num_layers, 1, 1)
+                w = torch.nn.functional.silu(weights_torch.float())
+                w_sum = w.sum(dim=1, keepdim=True).clamp_min(1e-12)
+                self._cached_w_normalized = (w / w_sum).contiguous()
+        with torch.no_grad():
+            weighted = (features_torch.float() * self._cached_w_normalized).sum(dim=1)  # [B, dim, T]
+            agg = weighted.permute(0, 2, 1).contiguous()  # [B, T, dim]
+        return self.encoder(agg)
+
+
+class AudioInjector_WAN(Module):
+    """Per-DiT-layer audio cross-attention slots + optional AdaIN projections.
+
+    Each entry in ``injector_adain_layers`` is a plain
+    ``ColParallelLinear(adain_dim, 2*dim)``; the surrounding transformer
+    block applies the silu + chunk(2, -1) split. Matches the reference's
+    use of ``diffusers.AdaLayerNorm(..., chunk_dim=1)``.
+    """
+
+    def __init__(
+        self,
+        *,
+        dim: int,
+        num_heads: int,
+        inject_layers: tuple[int, ...] = (0, 4, 8, 12, 16, 20, 24, 27),
+        enable_adain: bool = False,
+        adain_dim: int | None = None,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool = False,
+    ) -> None:
+        super().__init__()
+        self.injected_block_id = {layer_idx: i for i, layer_idx in enumerate(inject_layers)}
+        n_inject = len(inject_layers)
+
+        self.injector = ModuleList(
+            WanAttention(
+                dim=dim,
+                num_heads=num_heads,
+                qk_norm=True,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                is_self=False,
+            )
+            for _ in range(n_inject)
+        )
+
+        # Reference's ``injector_pre_norm_feat`` / ``..._vec`` are
+        # ``nn.LayerNorm(elementwise_affine=False)`` and contribute no
+        # parameters. The actual spatial pre-norm runs via the surrounding
+        # block's ``norm1`` (no-affine DistributedLayerNorm).
+        self.injector_pre_norm_feat = ModuleList()
+        self.injector_pre_norm_vec = ModuleList()
+
+        if enable_adain:
+            adain_dim = adain_dim or dim
+            self._adain_tp_factor = mesh_device.shape[parallel_config.tensor_parallel.mesh_axis]
+            self.injector_adain_layers = ModuleList(
+                ColParallelLinear(
+                    adain_dim,
+                    dim * 2,
+                    bias=True,
+                    mesh_device=mesh_device,
+                    mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                )
+                for _ in range(n_inject)
+            )
+        else:
+            self._adain_tp_factor = None
+            self.injector_adain_layers = ModuleList()
+
+        # Per-injector slot for cached (k_BHNE, v_BHNE). Audio embedding is
+        # constant across a clip's diffusion loop, so to_kv + norm_k + head
+        # split produce the same K/V on every step. Lazily filled by
+        # ``WanAttention.forward`` and reused.
+        self._audio_kv_cache: dict[int, list[ttnn.Tensor]] = {}
+
+    def kv_cache_slot(self, audio_attn_id: int) -> list[ttnn.Tensor]:
+        return self._audio_kv_cache.setdefault(audio_attn_id, [])
+
+    def invalidate_audio_kv_cache(self) -> None:
+        for slot in self._audio_kv_cache.values():
+            for t in slot:
+                ttnn.deallocate(t)
+        self._audio_kv_cache = {}
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # HF pre-norm LayerNorms have no weights; drop any keys that slip through.
+        for k in list(state):
+            if k.startswith("injector_pre_norm_feat.") or k.startswith("injector_pre_norm_vec."):
+                state.pop(k)
+        # Pre-interleave AdaIN proj rows so each chip's local chunk(2, -1)
+        # yields (local_shift, local_scale) instead of mixing them across chips.
+        if self._adain_tp_factor is not None:
+            for i in range(len(self.injector_adain_layers)):
+                prepare_chunked_linear_output(
+                    state,
+                    prefix=f"injector_adain_layers.{i}",
+                    device_count=self._adain_tp_factor,
+                    chunks=2,
+                )
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError(
+            "AudioInjector_WAN has no top-level forward; index into .injector / .injector_adain_layers"
+        )

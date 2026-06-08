@@ -194,7 +194,8 @@ _BLOCKINGS = {
     (4, 8, 192, 192, (3, 3, 3), 83, 60, 52): (96, 96, 3, 16, 2),  # up2_res — 7547us
     (4, 8, 192, 96, (1, 3, 3), 81, 120, 104): (192, 96, 1, 8, 4),  # up2_spatial — table 5755us
     (4, 8, 96, 96, (3, 3, 3), 83, 120, 104): (96, 96, 7, 4, 8),  # up3_res — 6839us
-    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 8, 4, 4),  # conv_out — 4986us
+    # T_out_block > 1 here produces a visible twitch ~frame 24; (1, 8, 4) is the safe swept choice.
+    (4, 8, 96, 3, (3, 3, 3), 83, 120, 104): (96, 32, 1, 8, 4),  # conv_out
     # ===================================================================
     # BH Galaxy 4x8, 720p, 81 frames full-T (latent T=21)
     # Per-device (H,W): stage0(23,20) stage1(46,40) stage2(92,80) stage3(184,160)
@@ -306,6 +307,25 @@ _BLOCKINGS = {
     # conv_out disabled — T_out_block=4 caused a frame-24-25 artifact; falls back to _DEFAULT_BLOCKINGS pending a clean re-sweep.
     # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
     # ===================================================================
+    # BH Loud Box 2x4, 480p, VAE encoder with encoder_t_chunk_size=4
+    # ===================================================================
+    # Stage 0 (cur_T=4): T_res=6, T_spatial=4 at (240,208); tconv at (120,104) T=4
+    (2, 4, 32, 96, (3, 3, 3), 6, 240, 208): (32, 96, 4, 2, 16),  # conv_in — 864us
+    (2, 4, 96, 96, (3, 3, 3), 6, 240, 208): (96, 96, 4, 16, 2),  # down0_res — 1224us
+    (2, 4, 96, 96, (1, 3, 3), 4, 240, 208): (96, 96, 1, 16, 2),  # down0_spatial — 706us
+    (2, 4, 96, 96, (3, 1, 1), 4, 120, 104): (96, 96, 2, 2, 16),  # down0_tconv — 157us
+    # Stage 1 (cur_T=2): T_res=4, T_spatial=2 at (120,104); tconv at (60,52) T=2
+    (2, 4, 96, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 2, 16),  # down1_res0 — 386us
+    (2, 4, 192, 192, (3, 3, 3), 4, 120, 104): (96, 96, 2, 8, 4),  # down1_res1 — 821us
+    (2, 4, 192, 192, (1, 3, 3), 2, 120, 104): (192, 96, 1, 16, 2),  # down1_spatial — 251us
+    (2, 4, 192, 192, (3, 1, 1), 2, 60, 52): (192, 96, 1, 8, 4),  # down1_tconv — 137us
+    # Stage 2 (cur_T=1): T_res=3, T_spatial=1 at (60,52); no tconv (downsample2d)
+    (2, 4, 192, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res0 — 316us
+    (2, 4, 384, 384, (3, 3, 3), 3, 60, 52): (96, 96, 1, 16, 2),  # down2_res1 — 515us
+    (2, 4, 384, 384, (1, 3, 3), 1, 60, 52): (192, 96, 1, 4, 8),  # down2_spatial — 233us
+    # Stage 3 (cur_T=1): T_res=3 at (30,26); no downsample
+    (2, 4, 384, 32, (3, 3, 3), 3, 30, 26): (192, 32, 1, 2, 16),  # conv_out — 134us
+    # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.
     # ===================================================================
@@ -416,6 +436,22 @@ _DEFAULT_BLOCKINGS = {
     (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
     (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
     (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+    # S2V wav2vec2 feature extractor: H=W=1, long-T audio convs. C_out_block
+    # divides cleanly into 512; T_out_block capped at 32 to keep CB in L1.
+    (1, 512, (10, 1, 1)): (32, 128, 32, 1, 1),  # layer 0: raw audio → 512
+    (512, 512, (3, 1, 1)): (128, 128, 32, 1, 1),  # layers 1-4: kernel 3
+    (512, 512, (2, 1, 1)): (128, 128, 32, 1, 1),  # layers 5-6: kernel 2
+    # S2V MotionEncoder_tc CausalConv1d: kernel-3 temporal convs at
+    # WAN 2.2 5120-hidden / 4-token shapes (5120/4=1280, 5120/2=2560).
+    (5120, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (1280, 2560, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (2560, 5120, (3, 1, 1)): (320, 64, 1, 1, 1),
+    (768, 5120, (3, 1, 1)): (256, 64, 1, 1, 1),
+    # S2V wav2vec2-large-xlsr-53 pos_conv: grouped Conv1d (groups=16,
+    # in=out=1024, kernel=128). C_in_block=in_per_group=64 is forced by the
+    # grouped-conv constraint; C_out_block=32 keeps per-core CB under the
+    # 1.5 MB L1 cap (kernel=128 → large per-shard weight residency).
+    (1024, 1024, (128, 1, 1)): (64, 32, 1, 1, 1),
 }
 
 

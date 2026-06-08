@@ -308,6 +308,7 @@ class WanAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        kv_cache: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
@@ -319,6 +320,9 @@ class WanAttention(Module):
         trans_mat: replicated
         addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
         addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
+        kv_cache: (optional, cross-attn only) caller-owned 2-element list used as
+            a K/V slot. Empty list → fill on miss; ``[k_BHNE, v_BHNE]`` → reuse
+            on hit (skips to_kv / norm_k / V head-split).
 
         If prompt_1BLP is not provided, run self-attention.
         Otherwise, run cross-attention on prompt.
@@ -345,6 +349,8 @@ class WanAttention(Module):
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
+        kv_hit = kv_cache is not None and len(kv_cache) == 2 and not self.is_self
+
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
@@ -354,16 +360,15 @@ class WanAttention(Module):
             )
         else:
             # Cross-attention: Q from spatial, fused KV from prompt
-            assert prompt_1BLP is not None
-            kv_input = prompt_1BLP
             q_1BNF = self.to_q(
                 spatial_1BND,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
-            k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            if not kv_hit:
+                assert prompt_1BLP is not None
+                k_1BNF, v_1BNF = self.to_kv(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
 
-        # Set norm output dtype to the input dtype required for ring self-attn.
         sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
         use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
         norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
@@ -371,14 +376,6 @@ class WanAttention(Module):
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
             q_1BNF,
-            num_heads_per_device=self.n_local_heads,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat,
-            dtype=norm_output_dtype,
-        )
-        k_BHNE = self.norm_k(
-            k_1BNF,
             num_heads_per_device=self.n_local_heads,
             rope_cos=rope_cos,
             rope_sin=rope_sin,
@@ -395,9 +392,24 @@ class WanAttention(Module):
             )
             return out
 
-        v_BHNE = create_heads(v_1BNF)
+        if kv_hit:
+            k_BHNE, v_BHNE = kv_cache
+        else:
+            k_BHNE = self.norm_k(
+                k_1BNF,
+                num_heads_per_device=self.n_local_heads,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                dtype=norm_output_dtype,
+            )
+            v_BHNE = create_heads(v_1BNF)
+            if kv_cache is not None and not self.is_self:
+                kv_cache[:] = [k_BHNE, v_BHNE]
 
-        if prompt_1BLP is None:
+        # Q/K/V heads are ready. Dispatch on self.is_self rather than
+        # prompt_1BLP because cached-KV cross-attention may omit the prompt.
+        if self.is_self:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
                 # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
