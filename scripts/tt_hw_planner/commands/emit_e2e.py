@@ -127,10 +127,24 @@ def cmd_emit_e2e(args) -> int:
     skip_grade = bool(getattr(args, "no_grade", False))
     max_grade_rounds = int(getattr(args, "max_grade_rounds", 0) or 0) or 3
 
+    # One consolidated full log for the whole run (builder + grader + fix
+    # appended in order). Clean screen, complete log, no per-phase scatter.
+    import re as _re
+
+    _safe = _re.sub(r"[^A-Za-z0-9._-]", "_", model_id)
+    full_log = Path("generated") / f"emit_e2e_{_safe}_full.log"
+    try:
+        full_log.parent.mkdir(parents=True, exist_ok=True)
+        full_log.write_text("")  # start fresh each run
+    except Exception:
+        full_log = None
+
     sep = "=" * 78
     print(sep)
     print(f"  EMIT-E2E (LLM agent)  {model_id}")
     print(f"  demo_dir={demo_dir}  pcc>={pcc}  model={agent_model}")
+    if full_log is not None:
+        print(f"  full log (complete transcript) → {full_log}")
     print(sep)
 
     print("\n  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====\n")
@@ -141,6 +155,7 @@ def cmd_emit_e2e(args) -> int:
         agent_model=agent_model,
         timeout_s=timeout_s,
         label="builder",
+        log_path=full_log,
     )
     if rc_build != 0:
         print(f"\n  ✗ builder agent exited rc={rc_build}; skipping grade")
@@ -150,7 +165,7 @@ def cmd_emit_e2e(args) -> int:
     if skip_grade:
         print("\n  (--no-grade) skipping independent grader phase.\n")
         # No grader report to render; show a clean (markdown-stripped) build summary.
-        if not _verbose() and (build_final or "").strip():
+        if (build_final or "").strip():
             print(_md_to_terminal(build_final))
         _render_compute_split(model_id)
         return 0
@@ -164,6 +179,7 @@ def cmd_emit_e2e(args) -> int:
             agent_model=agent_model,
             timeout_s=timeout_s,
             label="grader",
+            log_path=full_log,
         )
         # Clean, professional terminal summary: render the structured
         # grader_report.json; fall back to a markdown-stripped prose summary.
@@ -191,6 +207,7 @@ def cmd_emit_e2e(args) -> int:
             agent_model=agent_model,
             timeout_s=timeout_s,
             label="fix",
+            log_path=full_log,
         )
 
     print("\n" + sep)
@@ -199,7 +216,13 @@ def cmd_emit_e2e(args) -> int:
     return 1
 
 
-def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, label="agent"):
+def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int, label="agent", log_path: Path = None):
+    """Run one agent. The SCREEN always stays clean — only a throttled
+    `· <label> working…` heartbeat — while the COMPLETE agent stream (narration,
+    tool calls, results) is appended to ``log_path`` (one consolidated file for
+    the whole emit-e2e run). The structured grader report is rendered by the
+    caller. This is how emit-e2e gets a clean screen + one full log without a
+    regex filter (the agent's free-form narration can't be pattern-matched)."""
     cmd = [
         agent_bin,
         "-p",
@@ -213,7 +236,12 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
         "stream-json",
         "--verbose",
     ]
-    verbose = _verbose()
+    log_fh = None
+    if log_path is not None:
+        try:
+            log_fh = open(log_path, "a", buffering=1, errors="ignore")
+        except Exception:
+            log_fh = None
     try:
         proc = subprocess.Popen(
             cmd,
@@ -226,10 +254,11 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
         )
     except FileNotFoundError:
         print(f"  ✗ agent binary not found: {agent_bin!r}")
+        if log_fh:
+            log_fh.close()
         return 2, ""
 
     final_text = ""
-    last_assistant_text = ""
     start = time.monotonic()
     last_hb = start
     tool_calls = 0
@@ -237,38 +266,33 @@ def _run_agent(*, prompt: str, agent_bin: str, agent_model: str, timeout_s: int,
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            rendered, final, atext, n_tool = _render_stream_event(line)
+            if log_fh is not None:  # COMPLETE stream → one consolidated log file
+                try:
+                    log_fh.write(line)
+                except Exception:
+                    pass
+            _rendered, final, _atext, n_tool = _render_stream_event(line)
             if final:
                 final_text = final
-            if atext:
-                last_assistant_text = atext
             tool_calls += n_tool
-            if verbose:
-                # Full transcript on screen only under TT_HW_PLANNER_VERBOSE.
-                if rendered:
-                    sys.stdout.write(rendered + "\n")
-                    sys.stdout.flush()
-            else:
-                # Quiet mode (TT_HW_PLANNER_VERBOSE=0): a single throttled
-                # progress line. Default is verbose → the full stream prints.
-                now = time.monotonic()
-                if now - last_hb >= HB_EVERY_S:
-                    sys.stdout.write(f"  · {label} working… {int(now - start)}s, {tool_calls} tool calls\n")
-                    sys.stdout.flush()
-                    last_hb = now
+            now = time.monotonic()  # CLEAN screen: heartbeat only, never the transcript
+            if now - last_hb >= HB_EVERY_S:
+                sys.stdout.write(f"  · {label} working… {int(now - start)}s, {tool_calls} tool calls\n")
+                sys.stdout.flush()
+                last_hb = now
         rc = proc.wait(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         proc.kill()
         print(f"\n  ✗ agent exceeded {timeout_s}s; killed")
+        if log_fh:
+            log_fh.close()
         return 1, final_text
-
-    # Verbose only: echo the agent's raw final summary (deduped against the
-    # last assistant turn). Non-verbose callers render a clean structured report
-    # instead of dumping the agent's raw markdown.
-    if verbose and final_text and final_text.strip() != last_assistant_text.strip():
-        print("\n  ── agent final summary ──")
-        for ln in final_text.splitlines():
-            print("  " + ln)
+    finally:
+        if log_fh:
+            try:
+                log_fh.close()
+            except Exception:
+                pass
     return (0 if rc == 0 else 1), final_text
 
 

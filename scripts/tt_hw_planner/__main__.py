@@ -21,7 +21,11 @@ import sys
 #   * If wrap setup fails it falls through to a normal run — never double-runs.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_WRAPPABLE_COMMANDS = {"auto-up", "up", "bringup", "promote", "emit-e2e"}
+# emit-e2e is intentionally NOT here: its output is free-form agent narration
+# that a regex filter can't clean. emit-e2e does its own clean-screen + single
+# full-log internally (see commands/emit_e2e.py). This wrapper is only for the
+# marker-tagged-noise commands.
+_WRAPPABLE_COMMANDS = {"auto-up", "up", "bringup", "promote"}
 
 
 def _should_wrap() -> bool:
