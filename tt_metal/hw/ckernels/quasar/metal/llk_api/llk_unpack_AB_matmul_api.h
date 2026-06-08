@@ -23,6 +23,8 @@
 *
 * This function initializes the unpacker to unpack operand 0 from the input0 operand circular buffer into SrcB
 * and operand 1 from the input1 operand circular buffer into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
+*
+* @ref llk_unpack_AB_matmul is the matching execute call on this thread.
 */
 template <bool TRANSPOSE_EN = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -58,6 +60,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
  * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]
  * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
  * kt_dim is assumed to be iterated over outside this api call
+ *
+ * @note Resolves each tile's L1 address from its operand's circular buffer. Call @ref llk_unpack_AB_matmul_init
+ *       with matching template args before this function.
  */
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,

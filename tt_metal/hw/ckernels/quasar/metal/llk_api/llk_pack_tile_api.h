@@ -17,6 +17,8 @@
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * DataFlow Buffer.
+ *
+ * @ref llk_pack is the matching execute call on this thread.
  */
 inline void llk_pack_init(const std::uint32_t pack_output) {
     const std::uint8_t output_id = static_cast<std::uint8_t>(get_output_id(pack_output));
@@ -70,6 +72,8 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
  * @param output_tile_index: The index in the output CB to write to
  *
  * This function packs tiles from the destination register to the output DataFlow Buffer, packer0 is used.
+ *
+ * @note Resolves the output tile's L1 address from the output buffer. Call @ref llk_pack_init before this.
  */
 template <bool out_of_order_output = false>
 inline void llk_pack(
@@ -89,6 +93,8 @@ inline void llk_pack(
  *
  * Packs ntiles tiles starting at start_tile_index from the destination register into the L1
  * output buffer identified by pack_output starting from output_tile_index
+ *
+ * @note Loops the single-tile pack over ntiles. Call @ref llk_pack_init before this.
  */
 // TODO: AM; Optimize block calls by using ntiles per pack, issue #40798
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, uint32_t ntiles) {

@@ -23,8 +23,8 @@
 /**
  * @brief Programs l1 info & source register format for both UNP_A and UNP_B
  *
- * @param operandA: The input0 operand circular buffer
- * @param operandB: The input1 operand circular buffer
+ * @param unpA_operand: The input0 operand circular buffer (UNP_A)
+ * @param unpB_operand: The input1 operand circular buffer (UNP_B)
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
@@ -66,7 +66,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 /**
  * @brief Programs l1 info & source register format for UNP_A
  *
- * @param operandA: The input operand circular buffer
+ * @param unpA_operand: The input operand circular buffer (UNP_A; also reused for UNP_B)
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure(unpA_operand, unpA_operand);
@@ -78,7 +78,14 @@ inline bool should_reconfig_src_reg_df(std::uint32_t old_operand, std::uint32_t 
 }
 
 /**
+ * @brief Reconfigure the SrcA unpacker data format to that of a new operand.
+ *
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srca_new_operand: The new SrcA operand circular buffer whose formats are programmed
  */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
@@ -90,6 +97,16 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
 }
 
+/**
+ * @brief Reconfigure the SrcB unpacker data format to that of a new operand.
+ *
+ * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srcb_new_operand: The new SrcB operand circular buffer whose formats are programmed
+ */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     static_assert(
@@ -100,6 +117,17 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
+/**
+ * @brief Reconfigure the SrcA unpacker data format from an old operand to a new one.
+ *
+ * Silent no-op when the old and new operands already share both src and dst formats.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srca_old_operand: The currently programmed SrcA operand circular buffer
+ * @param srca_new_operand: The new SrcA operand circular buffer to switch to
+ */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
@@ -113,6 +141,17 @@ inline void llk_unpack_reconfig_data_format_srca(
     llk_unpack_reconfig_data_format_srca<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srca_new_operand);
 }
 
+/**
+ * @brief Reconfigure the SrcB unpacker data format from an old operand to a new one.
+ *
+ * Silent no-op when the old and new operands already share both src and dst formats.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srcb_old_operand: The currently programmed SrcB operand circular buffer
+ * @param srcb_new_operand: The new SrcB operand circular buffer to switch to
+ */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
@@ -126,6 +165,15 @@ inline void llk_unpack_reconfig_data_format_srcb(
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
+/**
+ * @brief Reconfigure both SrcA and SrcB unpacker data formats to those of new operands.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srca_new_operand: The new SrcA operand circular buffer
+ * @param srcb_new_operand: The new SrcB operand circular buffer
+ */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
@@ -136,6 +184,19 @@ inline void llk_unpack_reconfig_data_format(
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(srcb_new_operand);
 }
 
+/**
+ * @brief Reconfigure both SrcA and SrcB unpacker data formats from old operands to new ones.
+ *
+ * Each side is a silent no-op when its old and new operands already share both src and dst formats.
+ *
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam dim_stride_target: Must be p_dim_stride_target::IGNORE; stride/tile-dim changes are unsupported on Quasar
+ * @tparam to_from_int8: Unused on Quasar; kept for API parity
+ * @param srca_old_operand: The currently programmed SrcA operand circular buffer
+ * @param srca_new_operand: The new SrcA operand circular buffer to switch to
+ * @param srcb_old_operand: The currently programmed SrcB operand circular buffer
+ * @param srcb_new_operand: The new SrcB operand circular buffer to switch to
+ */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_old_operand,

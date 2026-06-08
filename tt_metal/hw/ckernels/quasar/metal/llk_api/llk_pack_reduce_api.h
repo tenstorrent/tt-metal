@@ -17,6 +17,9 @@
  *
  * @tparam reduce_dim The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @tparam pack_mode Unused on Quasar
+ *
+ * @note On the unpack thread, pair with @ref llk_unpack_AB_reduce_init (T0); on the math thread, pair with
+ *       @ref llk_math_reduce_init (T1). Call @ref llk_pack_reduce_mask_clear afterwards to restore normal packing.
  */
 template <ReduceDim reduce_dim, [[maybe_unused]] PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config([[maybe_unused]] uint32_t ocb) {

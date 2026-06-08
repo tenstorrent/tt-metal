@@ -21,6 +21,9 @@
  * This function initializes the UNPACKER0 to unpack a single tile from the input DFB to srcA
  * and UNPACKER1 to unpack a single face from the input DFB to srcB, with specified reduce dimension.
  *
+ * @note On the math thread, pair with @ref llk_math_reduce_init (T1); on the pack thread, pair with
+ *       @ref llk_pack_reduce_mask_config (T2).
+ * @ref llk_unpack_AB_reduce is the matching execute call on this thread.
  */
 template <ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::uint32_t operandB) {
@@ -43,6 +46,8 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
  * This function performs unpacking for reduce kernels, the UNPACKER0 unpacks a single tile from the input DFB
  * to srcA and UNPACKER1 unpacks a single face from the input DFB to srcB.
  *
+ * @note Resolves each tile's L1 address from its operand's circular buffer. Call @ref llk_unpack_AB_reduce_init
+ *       with matching template args before this function.
  */
 inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA,

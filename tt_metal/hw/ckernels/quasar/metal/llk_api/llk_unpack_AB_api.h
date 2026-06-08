@@ -21,6 +21,8 @@
  * @param operandA: The input operand dataflow buffer for source A
  * @param operandB: The input operand dataflow buffer for source B
  * @param transpose: Unused param; only for API compatibility.
+ *
+ * @ref llk_unpack_AB is the matching execute call on this thread.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
@@ -36,6 +38,15 @@ inline void llk_unpack_AB_init(
     }
 }
 
+/**
+ * @brief Initialization for unpack of binary operations, uses SrcA & SrcB.
+ *
+ * Convenience overload that forwards to @ref llk_unpack_AB_init with Transpose::None.
+ *
+ * @tparam BType: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
+ * @param operandA: The input operand dataflow buffer for source A
+ * @param operandB: The input operand dataflow buffer for source B
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t operandB) {
     llk_unpack_AB_init<BType>(operandA, operandB, ckernel::Transpose::None);
@@ -50,6 +61,9 @@ inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t
  * @param tile_index_b: Tile index within the operandB dataflow buffer to read from
  * @param bcast_row_idx: Present for API compatibility with Blackhole binary `llk_unpack_AB` (ROW uses it there).
  *     Unused on Quasar; row selection within the B tile is not implemented in this wrapper.
+ *
+ * @note Resolves each tile's L1 address from its operand's circular buffer. Call @ref llk_unpack_AB_init
+ *       with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(

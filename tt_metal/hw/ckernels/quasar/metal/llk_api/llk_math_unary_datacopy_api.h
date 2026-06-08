@@ -13,6 +13,12 @@
  * LLK ELTWISE UNARY DATACOPY
  *************************************************************************/
 
+/**
+ * @brief Builds the TileShape for an operand from its circular buffer (used by the unary-broadcast math path).
+ *
+ * @param operand: Logical dataflow buffer id for the input operand
+ * @return TileShape with the operand's face count, face dims, and narrow-tile flag.
+ */
 inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     return TileShape{
@@ -32,6 +38,9 @@ inline TileShape llk_math_eltwise_unary_broadcast_tile_shape(const std::uint32_t
  * @tparam is_int_fpu_en Unused on Quasar.
  * @tparam tilize Unused on Quasar.
  * @param operand Logical dataflow buffer id for the input operand
+ *
+ * @note On the unpack thread, pair with @ref llk_unpack_A_init (T0); on the pack thread, pair with @ref llk_pack_init.
+ * @ref llk_math_eltwise_unary_datacopy is the matching execute call on this thread.
  */
 template <
     DataCopyType type,
@@ -68,6 +77,8 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
  * @tparam unpack_to_dest when true, unpack-to-dest path; plain datacopy otherwise
  * @param dst_index Tile index into the destination register.
  * @param operand Logical dataflow buffer id for the input operand (defaults to 0 for legacy call sites).
+ *
+ * @note Call @ref llk_math_eltwise_unary_datacopy_init with matching template args before this function.
  */
 template <
     DataCopyType type = DataCopyType::A2D,
@@ -94,6 +105,8 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
  * @param start_dst_index Starting tile index in the destination register.
  * @param ntiles Number of tiles to copy to the destination register.
  * @param operand Logical dataflow buffer id for the input operand (defaults to 0 for legacy call sites).
+ *
+ * @note Loops the single-tile datacopy over ntiles. Call @ref llk_math_eltwise_unary_datacopy_init before this.
  */
 inline void llk_math_eltwise_unary_datacopy_block(
     const std::uint32_t start_dst_index, const std::uint32_t ntiles, const std::uint32_t operand = 0) {
@@ -107,6 +120,9 @@ inline void llk_math_eltwise_unary_datacopy_block(
     }
 }
 
+/**
+ * @brief No-op on Quasar; kept for API parity with arches that restore math state after datacopy.
+ */
 template <
     [[maybe_unused]] BroadcastType src_b_bcast_type = BroadcastType::NONE,
     [[maybe_unused]] bool unpack_to_dest = false>

@@ -21,6 +21,9 @@
  *
  * This function initializes unpacker0 to unpack a single tile
  * from the input circular buffer to srcA/dest register.
+ *
+ * @note Resolves the operand's format and face dims from its circular buffer.
+ * @ref llk_unpack_A is the matching execute call on this thread.
  */
 template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
 inline void llk_unpack_A_init(const std::uint32_t operand) {
@@ -45,6 +48,8 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
  * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @param operand: The input operand logical dataflow buffer / CB id
+ *
+ * @ref llk_unpack_A is the matching execute call on this thread.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -101,6 +106,9 @@ inline void llk_unpack_A_init(
  * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
+ *
+ * @note Resolves the tile's L1 address from the operand's circular buffer. Call @ref llk_unpack_A_init
+ *       with matching template args before this function.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -132,6 +140,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
+ *
+ * @note Loops the single-tile unpack over ntiles. Call @ref llk_unpack_A_init with matching template
+ *       args before this function.
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
@@ -156,5 +167,10 @@ inline void llk_unpack_A_block(
     }
 }
 
+/**
+ * @brief No-op on Quasar; kept for API parity with arches that restore unpacker state after @ref llk_unpack_A.
+ *
+ * @param operand: Unused; kept for API parity.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit(const std::uint32_t operand) {}
