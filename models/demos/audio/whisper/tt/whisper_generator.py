@@ -61,7 +61,7 @@ MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 # Upper bound on tokens held while waiting for a multi-byte UTF-8 character to complete during
 # streaming incremental detokenization. A single UTF-8 char is at most 4 bytes, so a legitimate
 # split spans only a few tokens; beyond this the trailing U+FFFD can never complete and we stop
-# holding to avoid an unbounded stall (see WhisperGenerator._stream_incremental_text).
+# holding to avoid an unbounded stall (see WhisperGenerator._stream_incremental_texts).
 STREAM_MAX_HOLD_TOKENS = 8
 
 
@@ -641,25 +641,38 @@ class WhisperGenerator:
         self._pending_token_host = None
         return sampled.reshape(-1).long()
 
-    def _stream_incremental_text(self, cache, token_id):
+    @staticmethod
+    def _stream_incremental_texts(processor, caches, token_ids):
         """Windowed incremental detokenization for streaming intermediate yields.
 
         Whisper's byte-level BPE splits a multi-byte UTF-8 character (e.g. a kanji) across
         tokens, so decoding a single token in isolation yields partial bytes that surface as
-        U+FFFD. Instead, hold unresolved trailing tokens in ``cache`` (mutated in place) and
-        emit text only once the decoded bytes form complete characters. Returns the newly
-        completed incremental text ("" while a multi-byte character is still incomplete).
+        U+FFFD. Instead, hold unresolved trailing tokens per batch element in ``caches``
+        (a list of per-element token-id lists, mutated in place) and emit text only once the
+        decoded bytes form complete characters. Returns a list with the newly completed
+        incremental text per element ("" while a multi-byte character is still incomplete).
+
+        All batch elements are decoded in a single ``processor.batch_decode`` call so the tight
+        decode loop pays one tokenizer invocation per step rather than one per element per step.
 
         A genuinely undecodable byte (e.g. a lone continuation byte) would otherwise be held
         forever; cap the hold at STREAM_MAX_HOLD_TOKENS and flush the U+FFFD as-is so the stream
         never stalls. The final result is decoded from the full ID sequence and is unaffected.
+
+        ``token_ids`` may be longer than ``caches`` (padded batch); the trailing padded entries
+        are ignored since the zip stops at the number of real (unpadded) batch elements.
         """
-        cache.append(int(token_id))
-        text = self.processor.batch_decode([cache], skip_special_tokens=True)[0]
-        if text.endswith("�") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
-            return ""  # incomplete multi-byte tail — keep the tokens and wait for the next one
-        cache.clear()  # bytes form complete characters (or a never-completing tail we stop holding)
-        return text
+        for cache, token_id in zip(caches, token_ids):
+            cache.append(int(token_id))
+        decoded = processor.batch_decode(caches, skip_special_tokens=True)
+        results = []
+        for cache, text in zip(caches, decoded):
+            if text.endswith("�") and len(cache) <= STREAM_MAX_HOLD_TOKENS:
+                results.append("")  # incomplete multi-byte tail — keep the tokens and wait for the next one
+            else:
+                cache.clear()  # bytes form complete characters (or a never-completing tail we stop holding)
+                results.append(text)
+        return results
 
     def generate(
         self,
@@ -1012,7 +1025,7 @@ class WhisperGenerator:
         collect_output_ids = not return_timestamps_for_prefix
         output_ids = []
         # Per-batch token buffers for windowed incremental detokenization of streaming
-        # intermediate yields (see _stream_incremental_text). Unused in non-streaming mode.
+        # intermediate yields (see _stream_incremental_texts). Unused in non-streaming mode.
         stream_token_cache = [[] for _ in range(unpadded_batch_size)]
         total_decode_time = 0
         prompt_is_done = [False for _ in range(unpadded_batch_size)]
@@ -1090,10 +1103,9 @@ class WhisperGenerator:
                     prompt_is_done[user_id] = True
 
             if streaming:
-                ttnn_transcription = [
-                    self._stream_incremental_text(stream_token_cache[b], first_transcription_token[b])
-                    for b in range(unpadded_batch_size)
-                ]
+                ttnn_transcription = self._stream_incremental_texts(
+                    self.processor, stream_token_cache, first_transcription_token
+                )
                 current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
 
                 if return_perf_metrics:
@@ -1344,10 +1356,7 @@ class WhisperGenerator:
             # Streaming mode decodes per-token to yield incremental results; non-streaming
             # skips this entirely and decodes the full collected ID sequence once at the end.
             if i >= transcription_start_pos and streaming:
-                ttnn_transcription = [
-                    self._stream_incremental_text(stream_token_cache[b], next_tokens[b])
-                    for b in range(unpadded_batch_size)
-                ]
+                ttnn_transcription = self._stream_incremental_texts(self.processor, stream_token_cache, next_tokens)
 
                 # Calculate current average log probability for each batch item
                 if log_probs:
