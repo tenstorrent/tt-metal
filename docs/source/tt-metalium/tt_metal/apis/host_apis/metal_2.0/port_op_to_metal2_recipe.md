@@ -12,7 +12,7 @@
 - **TTNN** is the high-level neural-network library for Tenstorrent accelerators. Ops live in `ttnn/cpp/ttnn/operations/<family>/<op>/`. A typical op has a device-operation class on the host side and one or more program factories that build what runs on the accelerator.
 - **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
 - **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). It's a **bundled prereq** to Metal 2.0 — the audit checks that ops are already on it — not part of Metal 2.0 itself.
-- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
 
 For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-params split — see [`metal2_migration_guide.md`](metal2_migration_guide.md). The recipe below assumes you've at least skimmed it.
 
@@ -49,12 +49,12 @@ The legacy host API hurt the project for years in concrete, structural ways. Pos
 **Crossing the boundary in kernel code.** Some kernel call sites in the ported kernels invoke functions whose source lives outside the op directory — kernel-lib helpers (`dataflow_kernel_lib::*`, `compute_kernel_lib::*`), LLKs (`reduce_init`, `pack_tile`, `cb_wait_front`, etc.). These callees take `uint32_t` CB ids today.
 
 - **`dfb::name` crosses freely.** Pass `dfb::name` directly at the call site. The `DFBAccessor::operator uint32_t()` implicit conversion bridges the named handle to the legacy `uint32_t` signature without `.id` extraction, temporary wrappers, or typed shims. See [Pattern: Pass DFB handles directly to LLKs and kernel-lib helpers](metal2_port_patterns.md#pattern-pass-dfb-handles-directly-to-llks-and-kernel-lib-helpers).
-- **`sem::name` and `ta::name` do NOT cross — assumption.** Unlike `dfb::name`, the semaphore and tensor-accessor handles have no implicit conversion to `uint32_t` today. **The recipe assumes that no out-of-op call site requires passing one** — semaphores and tensor accessors are consumed inside the op's own kernels. If you encounter a call site whose callee lives outside the op directory and that requires a `sem::name` or `ta::name` argument, this is an **assumption violation**. Do not write the call. Do not preemptively wrap, refactor, or extract — the fix is upstream of the porter's scope. Stop and record the site in [`METAL2_PORT_REPORT.md` — Handoff points](#capture-the-port-report) so the kernel-lib / API owners can address it.
+- **`sem::name` and `ta::name` do NOT cross — assumption.** Unlike `dfb::name`, the semaphore and tensor-accessor handles have no implicit conversion to `uint32_t` today. **The recipe assumes that no out-of-op call site requires passing one** — semaphores and tensor accessors are consumed inside the op's own kernels. If you encounter a call site whose callee lives outside the op directory and that requires a operand that is structurally unavailable to the Metal 2.0-converted code, this is an **assumption violation**. These are supposed to have been already prepared for Metal 2.0 migration. Do not write the call. Do not preemptively wrap, refactor, or extract — the fix is upstream of the porter's scope. Stop and record the site in [`METAL2_PORT_REPORT.md` — Handoff points](#capture-the-port-report) so the kernel-lib / API owners can address it.
 
 **Two exceptions to the boundary rule** — these are not "out-of-op" call graphs:
 
-- **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees.
-- **Framework primitives the porter uses directly** — `noc.async_read(...)`, `cb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
+- **Cross-op kernel files** — some ops share dataflow kernels that live in another op's directory (e.g., `eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp` reused by many ops). The legacy inventory step flags these; modifying them is porter-touchable with caution per [Caution: Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel). These are *peer ops*, not framework callees. Document the changes you found necessary in the `METAL2_PORT_REPORT.md`.
+- **Framework primitives the porter uses directly** — `noc.async_read(...)`, `dfb.wait_front(...)` on a `DataflowBuffer` the porter constructs locally from `dfb::name`, the `TensorAccessor(ta::name)` constructor, etc. These are *consumed by* the porter's kernel code (named handles flow in via the documented constructors); they are not handoffs to out-of-op code.
 
 **Scope guardrails — anti-temptations.** Beyond the directory boundary, the port has behavioral guardrails. Each is a known failure mode from prior porting attempts:
 
@@ -243,23 +243,54 @@ Any items the audit flagged as YELLOW that affect this port, plus any new findin
 
 ---
 
-## Working with kernel code
+## Scope discipline
 
-*Read this before you touch a kernel file. This section governs every device-side edit in the port.*
+*Read this before you touch a file. This section governs every edit in the port — host-side and device-side.*
 
 ### The principle
 
-**The premise.** A Metal 2.0 port is a *host-side* restructuring. The kernel diff that comes out the other end should be a mechanical projection of the host changes — nothing more. The expected post-port behavior of the kernel — its compiled output, its performance, every observable side effect — is *identical* to the pre-port behavior. If your kernel diff looks like anything other than a thin shell of mechanical substitutions, something has gone off-script.
+**The premise.** A Metal 2.0 port is a *targeted, scope-tight* transformation: the program factory is restructured to the new host API, and that restructuring projects mechanically into the kernel. Nothing else changes. The expected post-port behavior of the op — its numerics, its performance, every observable side effect — is *identical* to the pre-port behavior. If your diff looks like anything other than the Metal 2.0 transformation, something has gone off-script.
 
-**Two deliverables.** You're producing two things, not one: the diff and the port report. Both are load-bearing. The diff is what ships; the report is what feeds back into the framework's understanding of where its assumptions break, which ops were tricky and why, which kernel patterns surfaced that we hadn't anticipated. A clean diff with a thorough report has the same success-tier as a clean diff with a sparse report — possibly higher, depending on what the report contains. Don't treat the report as a write-up of what you already did; treat it as a deliverable in its own right.
+**Two deliverables.** You're producing two things, not one: the diff and the port report. Both are load-bearing. The diff is what ships; the report is what feeds back into the framework's understanding of where its assumptions break, which ops were tricky and why, which patterns surfaced that we hadn't anticipated. A clean diff with a thorough report has the same success-tier as a clean diff with a sparse report — possibly higher, depending on what the report contains. Don't treat the report as a write-up of what you already did; treat it as a deliverable in its own right.
 
-**Why the kernel is special.** Kernel code is performance-tuned and brittle. Many of these kernels have been hand-optimized over years and contain subtle structural choices whose reasons aren't always documented. Subtle behavioral or performance regressions — the kind that arise from "harmless-looking" kernel edits — can take days to bisect, and the trust damage from one such regression outlives the bisection. The cost of any single local improvement is rarely worth that asymmetry. The whitelist below isn't conservatism; it's a structural defense against an asymmetry the porter cannot evaluate at edit time.
+**Improvements are not suppressed — they are routed.** This recipe will at points ask you to leave things alone that you can see how to improve. Refactors, bug fixes, perf optimizations, stale comments, suboptimal type checks, missing validations, hardcoded constants that should be parameters — leave them all. *Write each one up in the report.* Those observations don't disappear into the void; the report is a real channel, read by people with the context to act on findings. The improvement isn't being deleted, it's being delivered to the right hands at the right time.
 
-**The pulls, named.** This recipe will at points ask you to leave things alone that you can see how to improve. When you read a kernel that has a duplicated block and you can see the cleaner refactor — don't refactor. When you spot what looks like a bug — don't fix it. When you find a stale comment — leave it (or, at most, tweak it to match the line you're forced to change). When you can see a perf optimization — don't make it. *Write each one up in the report.* That writeup is more valuable than the local change would have been: it surfaces something we didn't know, and it lets the right person — often someone who knows that kernel's history — decide what to do about it.
+**Why this is actively harmful, not just unnecessary.** The instinct here — *I see a problem, I can fix it cheaply, it's the right thing to do* — is a good instinct in most software work. In this work it's wrong, and not by a small margin. Four reasons, compounding:
 
-If at any point during the port you find yourself reaching past the whitelist below, treat that as a signal — *the port has met its limit, not the porter has met theirs.* The [§When the whitelist doesn't fit](#when-the-whitelist-doesnt-fit) off-ramp at the bottom of this section is the proper resolution; it is on the same success tier as a completed port.
+1. **The diff loses attribution.** A port PR that bundles improvements becomes ambiguous in future bisection. When a regression appears six weeks from now and `git bisect` lands on this commit, the question "did the port cause it, or did the bundled change?" is expensive to answer — and the trust damage compounds. A scope-tight diff says "if a regression appears here, it's a Metal 2.0 issue"; a bundled diff says "good luck."
 
-### The whitelist
+2. **The improvement is denied proper review.** Reviewers looking at a Metal 2.0 port PR have their attention budgeted on the *port*: spec construction, binding shape, kernel projection. They are not budgeted to evaluate a bug-fix patch sitting alongside. The improvement gets less scrutiny than it would get in its own PR — exactly the opposite of what an improvement deserves.
+
+3. **You are not in a position to evaluate the improvement.** The porter sees a local pattern and reasons from local evidence. But ops carry context the porter doesn't have: silicon-generation constraints, calling-convention assumptions, historical bug-fix scars, downstream caller expectations. A change that looks self-evidently correct from inside the file may be wrong from outside it. Example: a porter tightening a `TT_FATAL` on a tensor dtype check to "also accept INT32" may not realize that INT32 support is Quasar-only and this op doesn't target Quasar yet — a "correct-looking" change that is, in context, a bug. *The porter's confidence here is structurally lower than it feels.*
+
+4. **Codebase policy.** PRs that do multiple things at once are explicitly contrary to the codebase's review norms, regardless of how good the bundled changes are individually.
+
+If at any point during the port you find yourself reaching past the rules below, treat that as a signal — *the port has met its limit, not the porter has met theirs.* The [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit) off-ramp at the bottom of this section is the proper resolution; it is on the same success tier as a completed port.
+
+### Host-side: stay in the lane
+
+The host-side discipline divides cleanly along a line between *the program factory body* and *everything around it*:
+
+- **The program factory body is the port.** The `create_program_spec` function (and any helpers it calls) is where Metal 2.0's host API is constructed — this code will be heavily rewritten by the port, and that's the work. Stay inside the Metal 2.0 transformation patterns documented in [§Construct paired spec + run-params](#construct-paired-spec--run-params) and [migration guide](metal2_migration_guide.md). Don't refactor adjacent code in the factory while you're there. Don't tighten or loosen a `TT_FATAL` that lives inside the factory. Don't reorder, rename, or "clean up" variables beyond the API renames documented (e.g., `cb_*` → `dfb_*`).
+
+- **The op-level host code outside the factory is off-limits.** The device-operation class itself (`validate`, `invoke`, `compute_output_specs`, attribute parsing, the `OpInputs` / `OpParams` definitions, runtime-arg validation, tensor-dtype checks, etc.) is *not* part of the Metal 2.0 port. Do not edit it. Even if the change seems trivial, even if it seems correct, even if you can see exactly what it should say. If you encounter something here that wants changing — a too-tight validation, a stale comment, a `TT_FATAL` whose message is wrong, a missing check — write it up in the port report under findings. Do not change the file.
+
+Concrete example of what *not* to do, drawn from a prior porting attempt:
+
+```cpp
+// In the op's device-operation class (NOT the program factory):
+
+// Before the port:
+TT_FATAL(k.dtype() == DataType::UINT32, "Only UINT32 dtypes are supported for k!");
+
+// Tempting "improvement" during the port:
+TT_FATAL(k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
+         "Only UINT32 & INT32 dtypes are supported for k!");
+```
+
+This change is wrong in context: INT32 support is Quasar-only, and this op doesn't target Quasar yet. But more importantly, *whether or not it's correct in context isn't the porter's question to answer.* The change is unrelated to the Metal 2.0 port. It belongs in a separate PR with its own review. Bundled into the port, it muddies attribution and crowds out the actual deliverable. The right action: leave the `TT_FATAL` exactly as it is, and write a finding in the port report ("`k.dtype()` is restricted to UINT32; INT32 also seems plausible — flagging for owner review").
+
+### Kernel-side whitelist
 
 The following are the *only* changes you should be making to kernel code during a Metal 2.0 port. The single `#include` a porter adds to a kernel is `experimental/kernel_args.h` (which pulls in `get_arg`, `args::`, `dfb::`, `sem::`, `ta::`); the generated headers are auto-included by the build system — do not `#include` them yourself.
 
@@ -390,18 +421,18 @@ The fix belongs in a separate PR, owned by the team responsible for the shared k
 
 For shared kernels that live *inside* `ttnn/cpp/ttnn/operations` but are used by multiple ops (a kernel that several siblings rely on), see [patterns catalog — Modifying a shared dataflow kernel](metal2_port_patterns.md#caution-modifying-a-shared-dataflow-kernel) for the fork-vs-in-place decision.
 
-### When the whitelist doesn't fit
+### When the discipline doesn't fit
 
-If you reach a point where the kernel changes the port would require fall outside the whitelist above, **stop.** Don't improvise. Don't introduce a "clever" workaround. Don't expand the whitelist by one rule "just this once." Capitulate gracefully.
+If you reach a point where the changes the port would require fall outside the host-side scope or the kernel-side whitelist above, **stop.** Don't improvise. Don't introduce a "clever" workaround. Don't expand the rules by one "just this once." Capitulate gracefully.
 
-**This is not a failed port — it is a *successful capitulation*.** Same success tier as a clean port. The framework's calibration depends on knowing where its assumptions break, and a grounded capitulation gives the maintainers a clear picture of what to refine before the next porting wave. A creative workaround buried in a kernel diff gives them noise; a clean writeup gives them signal.
+**This is not a failed port — it is a *successful capitulation*.** Same success tier as a clean port. The framework's calibration depends on knowing where its assumptions break, and a grounded capitulation gives the maintainers a clear picture of what to refine before the next porting wave. A creative workaround buried in a diff gives them noise; a clean writeup gives them signal.
 
 Record in the port report's *Successful failure* section:
 
 - The op (path, factory).
-- The kernel file and the specific lines / constructs that needed to change.
-- A short explanation of *why* mechanical conversion failed — what the kernel was doing that didn't fit a binding-token replacement, a comment-preserving `#ifdef`, or whichever rule was the sticking point.
-- (If you can sketch it) what the off-whitelist change would have been, accurate enough that a maintainer can evaluate the gap.
+- The file and the specific lines / constructs that needed to change.
+- A short explanation of *why* mechanical conversion failed — what the code was doing that didn't fit a binding-token replacement, a comment-preserving `#ifdef`, the host-side-scope boundary, or whichever rule was the sticking point.
+- (If you can sketch it) what the off-rules change would have been, accurate enough that a maintainer can evaluate the gap.
 
 **The stop-signal we see most often:** *if you find yourself reaching past the op's own directory to make kernel changes, that's the signal.* The op shouldn't have made it to porting if its kernel needs out-of-dir changes — flag this prominently in the report. Other signals will surface as porting experience accumulates; this list will grow.
 
@@ -409,7 +440,7 @@ Record in the port report's *Successful failure* section:
 
 ## Construct paired spec + run-params
 
-*Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together. Kernel-side edits performed alongside this step are governed by [§Working with kernel code](#working-with-kernel-code).*
+*Mechanical translation from the plan. Build each resource's spec entry and its run-params entry together. Every edit in this step — host-side and kernel-side — is governed by the [§Scope discipline](#scope-discipline) section above.*
 
 **Operating principle**: prefer designated initializers. Metal 2.0 was designed to support them and the spec reads as data, not as procedure.
 
