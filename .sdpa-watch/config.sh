@@ -10,6 +10,12 @@ API_KEY_FILE="$HOME/.sdpa-watch/api_key"
 # Model for the LLM agent. Heavier = better diagnosis, more $$$.
 MODEL="claude-opus-4-7"
 
+# Pin the Claude Code binary so its self-updater can't rewrite claude.exe
+# out from under a cron tick (caused intermittent rc=127 "command not
+# found" → "(agent error)" blocks). Update deliberately instead:
+#   npm i -g @anthropic-ai/claude-code
+export DISABLE_AUTOUPDATER=1
+
 # Pipelines to watch.
 # Format per entry: "workflow_filename.yml|Display Name|test focus hint|job_name_pattern"
 # - workflow_filename is the .yml/.yaml file under .github/workflows in REPO
