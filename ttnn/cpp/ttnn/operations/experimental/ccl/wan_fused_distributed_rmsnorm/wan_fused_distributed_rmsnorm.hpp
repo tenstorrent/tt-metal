@@ -52,12 +52,6 @@ std::optional<ttnn::Tensor> wan_fused_distributed_rmsnorm_create_stats_buffer(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     uint32_t num_heads_per_device = 1,
-    bool per_head_norm = false,
-    // RoPE/weight passed through so the buffer's chunk/window sizing matches the
-    // program's streaming-low-L1 decision (needed for per-head RoPE at feat>=1024).
-    const std::optional<const ttnn::Tensor>& weight = std::nullopt,
-    const std::optional<const ttnn::Tensor>& transformation_mat = std::nullopt,
-    const std::optional<const ttnn::Tensor>& rope_cos = std::nullopt,
-    const std::optional<const ttnn::Tensor>& rope_sin = std::nullopt);
+    bool per_head_norm = false);
 
 }  // namespace ttnn::experimental
