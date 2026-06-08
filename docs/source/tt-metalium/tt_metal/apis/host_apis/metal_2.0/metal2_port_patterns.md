@@ -6,12 +6,17 @@ Each entry is self-contained. New entries land here as they're discovered during
 
 ## Conventions
 
-Entry shape:
-- **Category**: `Pattern` (an affordance to reach for) | `Anti-pattern` (a shape to avoid) | `Caution` (a judgment call with consequences).
+Entry shape — load-bearing fields, in order:
+- **Category**: `Pattern` (an affordance to reach for) | `Anti-pattern` (a shape to avoid) | `Caution` (a judgment call with consequences). Sanctioned-exception entries carry a parenthetical category suffix (e.g. `Pattern (sanctioned kernel-side exception)`) flagging that the entry documents a deliberate carve-out from a stricter rule elsewhere in the recipe.
 - **Recognition signal**: what to look for in legacy code (or proposed port code).
 - **Decision** (Pattern / Caution) or **Why wrong** (Anti-pattern): the prescribed move and its rationale.
-- **Correct port**: code or prose showing the right pattern.
-- **Prerequisite**: any Metal 2.0 framework commit / PR / version below which the pattern doesn't apply.
+
+Optional fields, used when the entry's substance requires them:
+- **Why this is hard** (before Decision): explanatory rationale when the recognition→decision step has non-obvious reasoning the porter benefits from understanding before reading the prescription. May also appear as **Why this is a sanctioned X exception** for sanctioned-exception entries.
+- **Correct port**: code or prose showing the right pattern. Most Pattern entries include this; omit when the Decision is fully prescriptive on its own.
+- **Constraint**: scoping fence on where the entry's authority ends. Beyond that boundary, capitulate per the recipe's [§When the discipline doesn't fit](port_op_to_metal2_recipe.md#when-the-discipline-doesnt-fit).
+- **Sanctioned exception note**: for sanctioned-exception entries, explicit acknowledgement that the prescription deviates from a stricter rule (typically the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) or [host-side scope discipline](port_op_to_metal2_recipe.md#host-side-stay-in-the-lane)), with the why-this-is-legitimate reasoning. Paired with the Category suffix.
+- **Prerequisite**: Metal 2.0 framework commit / PR / version below which the pattern doesn't apply.
 - **See also**: cross-references.
 
 ## Entries
