@@ -7,6 +7,7 @@
 #include <variant>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt_stl/reflection.hpp>  // ttsl::hash::hash_t
 
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
