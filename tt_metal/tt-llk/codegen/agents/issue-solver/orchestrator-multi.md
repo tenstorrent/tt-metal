@@ -126,13 +126,29 @@ export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_multi_$(head -c 4 /dev/ura
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
 export GIT_COMMIT=$(git -C "$WORKTREE_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
 export GIT_BRANCH=$(git -C "$WORKTREE_DIR" branch --show-current 2>/dev/null || echo "$WORKTREE_BRANCH")
+# Issue-solver-local version string (independent of Quasar codegen). Edit it by
+# hand in codegen/agents/issue-solver/VERSION when you want.
+export CODEGEN_VERSION=$(tr -d '[:space:]' < codegen/agents/issue-solver/VERSION 2>/dev/null || echo "")
 export COMPILATION_ATTEMPTS=0
 export DEBUG_CYCLES=0
 export TESTS_TOTAL=0
 export TESTS_PASSED=0
+export PERF_RETRIES=0
+export MAX_PERF_RETRIES=2
 export OBSTACLE=
 export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 export TEST_BACKEND CREATE_LOCAL_BRANCH CREATE_PR
+
+# PERF_GOAL drives the perf stage (Step 5.5). Optimization issues must get
+# faster; everything else must not regress. Refined from the analyzer's
+# perf_intent line in Step 1.
+if echo "${ISSUE_TITLE} ${ISSUE_LABELS} ${ISSUE_BODY}" | grep -qiE \
+   'perf|performance|optimi|speed|slow|cycles|latency|throughput|regression|recover'; then
+  export PERF_GOAL=improve
+else
+  export PERF_GOAL=no_regress
+fi
+
 mkdir -p "$LOG_DIR/instructions" codegen/artifacts
 
 cp codegen/agents/issue-solver/*.md "$LOG_DIR/instructions/" 2>/dev/null || true
@@ -144,7 +160,8 @@ PIPELINE_STEPS='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement one coordinated multi-arch fix"},
   {"id":"tester","name":"Test","desc":"Run selected backend tests for each target arch"},
-  {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after test failure"}
+  {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline per BH/WH arch (local only)"},
+  {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after a test or perf failure"}
 ]'
 ```
 
@@ -229,6 +246,7 @@ python codegen/scripts/run_json_writer.py init \
   --run-type "${CODEGEN_RUN_TYPE:-manual}" \
   --git-commit "$GIT_COMMIT" \
   --git-branch "$GIT_BRANCH" \
+  --version "$CODEGEN_VERSION" \
   --description "#${ISSUE_NUMBER}: ${ISSUE_TITLE}" \
   --phases-total "$ARCH_COUNT" \
   --pipeline-steps "$PIPELINE_STEPS" \
@@ -263,6 +281,18 @@ Agent:
 The analyzer must write `codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md` and `${LOG_DIR}/agent_issue_analyzer.md`.
 
 If the analyzer declares the issue out of scope for every requested arch, finalize as `skipped`. If only some arches are out of scope, keep the run alive and mark those arches `skipped` in `arch_results`.
+
+**Refine `PERF_GOAL`** from the analyzer's `perf_intent:` line (`optimize` →
+`improve`, `maintain` → `no_regress`), preferring it over the Step 0 keyword guess:
+
+```bash
+PERF_INTENT=$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain)' \
+  "codegen/artifacts/issue_${ISSUE_NUMBER}_analysis.md" | head -1 | grep -ioE 'optimize|maintain')
+case "$PERF_INTENT" in
+  optimize) export PERF_GOAL=improve ;;
+  maintain) export PERF_GOAL=no_regress ;;
+esac
+```
 
 ## Step 2: Research If Needed
 
@@ -380,6 +410,70 @@ The retry worker reads the existing plan plus the combined tester evidence, patc
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Mark the affected arch failed with a simulator obstacle. Continue evaluating other arches when possible.
 
+## Step 5.5: Measure Perf Per Arch and Feed Back
+
+Run this only for arches whose functional result is **green**. Perf is gated to
+**local Blackhole/Wormhole** — skip Quasar and any non-`local` backend.
+
+```bash
+PERF_ARCHES=$(python - <<'PY'
+import json, os
+arches = json.loads(os.environ["TARGET_ARCHES_JSON"])
+backend = os.environ.get("TEST_BACKEND", "")
+keep = [a for a in arches if backend == "local" and a in ("blackhole", "wormhole")]
+print(" ".join(keep))
+PY
+)
+```
+
+If `PERF_ARCHES` is empty, record `perf` as not measured for the run and skip to
+Step 6:
+
+```bash
+python codegen/scripts/run_json_writer.py metric --log-dir "$LOG_DIR" \
+  --patch-json "{\"perf\": {\"measured\": false, \"verdict\": \"not_measured\", \"reason\": \"perf only runs on local Blackhole/Wormhole silicon\"}}"
+```
+
+Otherwise advance to the `perf` step and run the perf-tester **once per
+`PERF_ARCHES` entry** whose functional verdict was `SUCCESS`:
+
+```bash
+python codegen/scripts/run_json_writer.py advance --log-dir "$LOG_DIR" \
+  --new-step "perf" \
+  --new-message "Measuring perf for issue #${ISSUE_NUMBER} on ${PERF_ARCHES} (goal=${PERF_GOAL})" \
+  --prev-result "success" --prev-message "Functional tests passed" --agent "perf"
+```
+
+For each `arch` in `PERF_ARCHES`, spawn `perf-tester.md` with that single
+`TARGET_ARCH`, `TEST_BACKEND=local`, `PERF_GOAL`, the changed op, fix plan path,
+changed files, `WORKTREE_DIR`, and `LOG_DIR`. The perf-tester writes its result
+to the fixed file `$LOG_DIR/perf_result.json`. **Read it immediately** after each
+arch (the next arch overwrites it) and record that arch's result under
+`arch_results.<arch>.perf` via `metric`:
+
+```bash
+python codegen/scripts/run_json_writer.py metric --log-dir "$LOG_DIR" \
+  --patch-json "{\"arch_results\": {\"${arch}\": {\"perf\": $(cat "$LOG_DIR/perf_result.json")}}}"
+```
+
+**Perf feedback loop (shared fix).** Collect the per-arch perf verdicts. A *miss*
+is any `PERF_REGRESSED`, or `PERF_NOT_IMPROVED` when `PERF_GOAL=improve`. If at
+least one arch missed and `PERF_RETRIES < MAX_PERF_RETRIES`: record a `failure`,
+advance to `fix_tests`, and spawn `issue-worker.md` once in perf mode
+(`FAILURE_CLASS=PERF_REGRESSION`/`PERF_NOT_IMPROVED`) with the missing arches and
+their `perf_baseline_*`/`perf_current_*` CSV paths. The worker makes one shared
+correctness-preserving change. Then `PERF_RETRIES=$((PERF_RETRIES+1))`,
+`DEBUG_CYCLES=$((DEBUG_CYCLES+1))`, re-run **Step 4 (functional Test)** for the
+affected arches, and if still green re-run this Step 5.5 for them.
+
+**When the perf budget is exhausted** (still a miss, or `HYPOTHESIS_REFUTED`):
+
+- `PERF_GOAL=no_regress` + any arch still regressed → that arch's `arch_results`
+  verdict becomes a failure with `obstacle=perf_regression`; fold it into
+  `combined_status` (a regressed arch counts as failed for Step 6).
+- `PERF_GOAL=improve` + not improved → keep the functional verdict; leave
+  `perf.verdict=not_improved` on that arch and note it in the report.
+
 ## Step 6: Finalize One Run
 
 Pick `combined_status`:
@@ -420,8 +514,9 @@ case "$STATUS" in
 esac
 
 export END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only)
-export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps(os.environ['CHANGED_FILES'].splitlines()))")
+# Exclude perf_data/ — regenerated by the perf stage as a measurement artifact.
+export CHANGED_FILES=$(git -C "$WORKTREE_DIR" diff --name-only | grep -v '/perf_data/' | grep -v '^perf_data/' || true)
+export CHANGED_FILES_JSON=$(python -c "import json,os; print(json.dumps([l for l in os.environ['CHANGED_FILES'].splitlines() if l]))")
 
 python codegen/scripts/run_json_writer.py finalize \
   --log-dir "$LOG_DIR" \
@@ -444,6 +539,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
 ]:
     if os.path.exists(os.path.join(log_dir, filename)) and agent not in agents:
@@ -491,11 +587,13 @@ Return:
 Multi-Arch Issue-Solver Result:
   status: success|compiled|failed|skipped
   combined_status: success|partial|failed|skipped
+  codegen_version: ${CODEGEN_VERSION}
   run_id: ${RUN_ID}
   log_dir: ${LOG_DIR}
   target_arches:
     - ...
   test_backend: ${TEST_BACKEND}
+  perf_goal: ${PERF_GOAL}
   create_local_branch_requested: ${CREATE_LOCAL_BRANCH}
   create_pr_requested: ${CREATE_PR}
   arch_results:
@@ -503,6 +601,7 @@ Multi-Arch Issue-Solver Result:
       verdict: SUCCESS|COMPILE_FAILED|TESTS_FAILED|SIM_ISA_GAP|ENV_ERROR|COMPILED_ONLY|SKIPPED
       tests_total: N
       tests_passed: N
+      perf_verdict: improved|neutral|regressed|not_improved|no_baseline|not_measured
       obstacle: ...
   changed_files:
     ...
