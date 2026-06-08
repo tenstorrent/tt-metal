@@ -184,6 +184,9 @@ void kernel_main() {
     constexpr uint32_t NHV = get_compile_time_arg_val(30);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
+    // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
+    // reader never materializes V. Shared with the program factory and compute kernel.
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     constexpr uint32_t q_heads_per_v = NH / NHV;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
@@ -606,7 +609,9 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                if constexpr (v_shares_k_buffer) {
+                // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
+                // from the K^T already pushed above, so neither branch below runs for that case.
+                if constexpr (v_shares_k_buffer && !kt_inplace_v) {
                     bool skip_v_materialization = false;
                     uint32_t v_rows_to_materialize = Sk_chunk_t;
                     if constexpr (is_causal && !chunked_enabled) {
@@ -638,7 +643,7 @@ void kernel_main() {
                         materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                             cb_k_start_address, v_rows_to_materialize);
                     }
-                } else {
+                } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
                     const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
@@ -673,12 +678,15 @@ void kernel_main() {
             }
         }
         for (uint32_t dummy_chunk = 0;
-             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
+             dummy_chunk <
+             dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
              ++dummy_chunk) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
-            cb_reserve_back(cb_v_in, v_cb_entry_tiles);
-            cb_push_back(cb_v_in, v_cb_entry_tiles);
+            if constexpr (!kt_inplace_v) {
+                cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                cb_push_back(cb_v_in, v_cb_entry_tiles);
+            }
         }
     }
 }
