@@ -512,7 +512,9 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
 
-    auto lock = lock_api_function_();
+    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
         this->get_target_device_type() == tt::TargetDevice::Emule) {

@@ -146,8 +146,9 @@ void write_to_core_unchecked(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    // Same command sequence as write_to_core, minus the bounds validation and bank
-    // offset: `address` is taken as the full device destination.
+    // Same command sequence as write_to_core, minus the bounds validation: `address` is
+    // taken as the full device destination verbatim (write_to_core applies no bank offset
+    // either, so there is nothing extra to skip here).
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();

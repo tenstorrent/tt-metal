@@ -49,10 +49,11 @@ void write_to_core(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-// Like write_to_core, but skips validate_core_read_write_bounds and the DRAM-bank
-// offset. `address` must already be the full device destination. Used for writes
-// to programmable DRAM-core (DRISC) L1, which the bounds check (DRAM-banked-memory
-// semantics) would otherwise reject.
+// Like write_to_core, but skips validate_core_read_write_bounds. That is the only
+// functional difference: as with write_to_core, `address` is used verbatim as the full
+// device destination with no bank/channel translation. Used for writes to programmable
+// DRAM-core (DRISC) L1, which the bounds check (DRAM-banked-memory semantics) would
+// otherwise reject.
 void write_to_core_unchecked(
     IDevice* device,
     const CoreCoord& virtual_core,

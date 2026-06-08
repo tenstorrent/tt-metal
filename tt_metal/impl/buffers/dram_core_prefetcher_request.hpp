@@ -122,7 +122,15 @@ struct DramCorePrefetcherRequestHeader {
         DramCorePrefetcherPrefetchCmd prefetch;
         DramCorePrefetcherWaitCqCmd wait_cq;
     } __attribute__((packed));
-};
+} __attribute__((packed));
+
+// The host fills this header and the kernel parses it field-by-field, so its layout is a
+// host↔kernel wire contract. Pin the size (and pack the struct above) so a difference in
+// padding/alignment between host and JIT compiler settings can't silently shift cmd_id,
+// the payload union, or the layout-table offsets.
+static_assert(
+    sizeof(DramCorePrefetcherRequestHeader) == 12,
+    "DramCorePrefetcherRequestHeader must be 12 bytes (host↔kernel wire contract)");
 
 // A single tensor must fit in an otherwise-empty PREFETCH page (header + one layout + one entry).
 static_assert(

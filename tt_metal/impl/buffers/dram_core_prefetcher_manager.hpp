@@ -143,7 +143,7 @@ private:
     // Host-side monotonic signal counter per command queue. enqueue_cq_signal_and_wait
     // pre-increments cq_signal_counter_[cq_id] and uses it for both the dispatcher
     // write and the WAIT_CQ request value.
-    std::array<uint32_t, 2> cq_signal_counter_{};
+    std::array<uint32_t, kNumCqSignalSlots> cq_signal_counter_{};
 
     // sender_logical_cores_[s] = logical DRAM core for bank s. Picked at start
     // via pick_unused_dram_logical_core(s); GCBs queued must use the same

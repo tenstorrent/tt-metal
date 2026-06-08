@@ -313,7 +313,9 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
-    auto lock = lock_api_function_();
+    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
 
     // Slow-dispatch analog of the fast-dispatch leading dispatch wait: ensure any

@@ -138,10 +138,12 @@ public:
 
     // Write `value` (a uint32 counter) to one L1 address on each of `targets`,
     // ordered after prior worker programs / buffer writes on this queue. Each
-    // target's `address` is the FULL device destination (callers writing to DRAM
-    // programmable-core L1 must pre-apply the DRAM L1 NOC offset). Used by the
-    // DRAM-core prefetcher's WaitForCq command. Fast/slow dispatch perform the
-    // write; the dummy (inactive-rank) queue is a no-op.
+    // target's `address` is the full device destination. Must be called with the
+    // MeshDevice api lock already held — unlike the other queue APIs this does NOT
+    // re-lock, so the caller can keep the lock across the surrounding sequence (the
+    // DRAM-core prefetcher's WaitForCq needs the counter bump and the WAIT_CQ enqueue
+    // to be atomic). Fast/slow dispatch perform the write; the dummy (inactive-rank)
+    // queue is a no-op.
     virtual void enqueue_write_dram_core_counter(
         tt::stl::Span<const DeviceMemoryAddress> targets,
         uint32_t value,
