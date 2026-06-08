@@ -108,22 +108,6 @@ uint32_t worker_idx_from_xy(const tt::tt_metal::CoreRange& worker_cores, uint32_
            (x - worker_cores.start_coord.x);
 }
 
-tt::tt_metal::CoreRangeSet worker_cores_excluding_master(
-    const tt::tt_metal::CoreRange& worker_cores, const tt::tt_metal::CoreCoord& master) {
-    std::vector<tt::tt_metal::CoreRange> ranges;
-    for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
-        for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
-            if (x == master.x && y == master.y) {
-                continue;
-            }
-            const tt::tt_metal::CoreCoord c{x, y};
-            ranges.emplace_back(c, c);
-        }
-    }
-    TT_FATAL(!ranges.empty(), "worker_cores must contain at least one non-master core");
-    return tt::tt_metal::CoreRangeSet(ranges);
-}
-
 // Stage the per-iter metadata as the device-produced source: the same blob is
 // written (replicated) to every worker core's metadata L1 on every device. The
 // master forwarder reads its own local copy and writes it to the service-core
@@ -145,9 +129,10 @@ void write_worker_metadata(
     }
 }
 
-// Build the metadata-enabled worker workload: the fixed master_forwarder_core
-// runs persistent_d2h_master_forwarder.cpp; every other worker runs
-// persistent_d2h_worker.cpp with metadata_peer_enabled=1.
+// Build the metadata-enabled worker workload: every worker core runs the single
+// persistent_d2h_worker.cpp kernel. The master (is_master runtime arg) fans the
+// replicated metadata in to the service core before acking; all other workers
+// just write their backing slice and ack.
 tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::D2HStreamService& service,
@@ -186,21 +171,17 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
                           .set_page_size(scratch_cb_index, page_size);
         tt::tt_metal::CreateCircularBuffer(program, tt::tt_metal::CoreRangeSet(worker_cores), cb_cfg);
 
-        const auto start_phys = device->worker_core_from_logical_core(worker_cores.start_coord);
-        const auto end_phys = device->worker_core_from_logical_core(worker_cores.end_coord);
         const tt::tt_metal::CoreCoord master_forwarder = service.get_master_forwarder_core();
-        const tt::tt_metal::CoreCoord master_phys = device->worker_core_from_logical_core(master_forwarder);
-        const auto peer_worker_cores = worker_cores_excluding_master(worker_cores, master_forwarder);
-        const tt::tt_metal::CoreRangeSet master_core_set(tt::tt_metal::CoreRange(master_forwarder, master_forwarder));
-        const uint32_t worker_done_counter_addr = static_cast<uint32_t>(service.get_worker_done_counter_addr());
-        const uint32_t metadata_ready_sem_addr = static_cast<uint32_t>(service.get_metadata_ready_sem_addr());
         const uint32_t worker_metadata_l1_addr = static_cast<uint32_t>(service.get_worker_metadata_addr());
         const uint32_t metadata_input_addr = static_cast<uint32_t>(service.get_metadata_input_addr(coord));
 
-        auto peer_kernel = tt::tt_metal::CreateKernel(
+        // Single worker kernel on every core; the master (is_master runtime arg)
+        // fans the replicated metadata in to the service core before acking. No
+        // inter-worker cross-talk — the sender waits for all acks before streaming.
+        auto worker_kernel = tt::tt_metal::CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/persistent_d2h_worker.cpp",
-            peer_worker_cores,
+            worker_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -210,72 +191,32 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_metadata_worker_workload(
                         backing_tensor_addr,
                         page_size,
                         static_cast<uint32_t>(scratch_cb_index),
-                        /*metadata_peer_enabled=*/1u,
-                        static_cast<uint32_t>(master_phys.x),
-                        static_cast<uint32_t>(master_phys.y),
-                        worker_done_counter_addr,
-                        metadata_ready_sem_addr};
+                        static_cast<uint32_t>(service.metadata_size_bytes()),
+                        worker_metadata_l1_addr,
+                    };
                     ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
                     return ct_args;
                 }()});
         for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
             for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
                 const tt::tt_metal::CoreCoord core{x, y};
-                if (core.x == master_forwarder.x && core.y == master_forwarder.y) {
-                    continue;
-                }
                 const uint32_t grid_idx = worker_idx_from_xy(worker_cores, x, y);
                 const uint32_t start_page = grid_idx * pages_per_worker;
+                const bool is_master = core.x == master_forwarder.x && core.y == master_forwarder.y;
                 tt::tt_metal::SetRuntimeArgs(
                     program,
-                    peer_kernel,
+                    worker_kernel,
                     core,
                     {start_page,
                      start_page + pages_per_worker,
                      fill_seed,
                      service_phys.x,
                      service_phys.y,
-                     write_ack_counter_addr});
+                     write_ack_counter_addr,
+                     is_master ? 1u : 0u,
+                     is_master ? metadata_input_addr : 0u});
             }
         }
-        auto master_kernel = tt::tt_metal::CreateKernel(
-            program,
-            "tests/ttnn/unit_tests/gtests/tensor/kernels/persistent_d2h_master_forwarder.cpp",
-            master_core_set,
-            tt::tt_metal::DataMovementConfig{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = [&] {
-                    std::vector<uint32_t> ct_args = {
-                        transfer_done_sem_addr,
-                        backing_tensor_addr,
-                        page_size,
-                        static_cast<uint32_t>(scratch_cb_index),
-                        worker_done_counter_addr,
-                        num_workers - 1,
-                        static_cast<uint32_t>(service.metadata_size_bytes()),
-                        worker_metadata_l1_addr,
-                        metadata_ready_sem_addr,
-                        static_cast<uint32_t>(start_phys.x),
-                        static_cast<uint32_t>(start_phys.y),
-                        static_cast<uint32_t>(end_phys.x),
-                        static_cast<uint32_t>(end_phys.y)};
-                    ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
-                    return ct_args;
-                }()});
-        const uint32_t master_idx = worker_idx_from_xy(worker_cores, master_forwarder.x, master_forwarder.y);
-        const uint32_t master_start_page = master_idx * pages_per_worker;
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            master_kernel,
-            master_forwarder,
-            {master_start_page,
-             master_start_page + pages_per_worker,
-             fill_seed,
-             service_phys.x,
-             service_phys.y,
-             write_ack_counter_addr,
-             metadata_input_addr});
 
         workloads.add_program(tt::tt_metal::distributed::MeshCoordinateRange(coord), std::move(program));
     }

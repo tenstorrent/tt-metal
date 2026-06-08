@@ -485,6 +485,13 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    // A connector process drains the FIFO: it advances read_ptr and bytes_acked in
+    // the shared connector state (and notify_sender PCIe-writes bytes_acked to the
+    // device's config buffer), leaving the owner's in-process bytes_acked_/read_ptr_
+    // behind. Refresh them from the shared state so the owner's barrier observes the
+    // connector's drain progress; without this the device kernel may stall thinking
+    // the FIFO is full while the new connector waits for fresh data. For a fresh
+    // socket this copies 0 over 0 — a no-op.
     auto refresh_connector_read_state = [this]() {
         if (connector_state_) {
             bytes_acked_ = connector_state_->bytes_acked;

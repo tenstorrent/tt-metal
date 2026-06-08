@@ -1073,27 +1073,6 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
 
         if (cfg_.metadata_size_bytes > 0) {
             const uint32_t l1_align = hal::get_l1_alignment();
-            const DeviceAddr aligned_counter_size =
-                tt::align(static_cast<DeviceAddr>(sizeof(uint32_t)), static_cast<DeviceAddr>(l1_align));
-            const CoreRangeSet master_grid(CoreRange(master_forwarder_core_, master_forwarder_core_));
-            distributed::DeviceLocalBufferConfig worker_done_local = {
-                .page_size = aligned_counter_size,
-                .buffer_type = BufferType::L1,
-                .sharding_args = BufferShardingArgs(
-                    ShardSpecBuffer(master_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
-                    TensorMemoryLayout::HEIGHT_SHARDED),
-                .bottom_up = std::nullopt,
-                .sub_device_id = std::nullopt,
-            };
-            distributed::MeshBufferConfig worker_done_mesh = distributed::ReplicatedBufferConfig{
-                .size = aligned_counter_size,
-            };
-            worker_done_counter_buffer_ =
-                distributed::MeshBuffer::create(worker_done_mesh, worker_done_local, mesh_device_.get());
-            worker_done_counter_addr_ = worker_done_counter_buffer_->address();
-
-            metadata_ready_sem_.emplace(ttnn::global_semaphore::create_global_semaphore(
-                mesh_device_.get(), CoreRangeSet(worker_range), /*initial_value=*/0, BufferType::L1));
 
             // Per-worker metadata source: one L1 shard per worker core, all at the
             // same L1 address (sharded buffer). The replicated metadata lives here;
@@ -1129,14 +1108,18 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         // persistent sender reads it from here and ships it as the trailing socket
         // page. Zero-initialized so a stale read can't masquerade as valid metadata.
         const uint32_t l1_align = hal::get_l1_alignment();
-        const DeviceAddr aligned_metadata_size =
-            tt::align(static_cast<DeviceAddr>(cfg_.metadata_size_bytes), static_cast<DeviceAddr>(l1_align));
+        // The sender ships the metadata as one full trailing socket page straight
+        // from this region (NOC write, no intermediate CB copy), so size it to a
+        // full page. The master writes only the leading metadata_size_bytes each
+        // iteration; the trailing pad stays zero from this init.
+        const DeviceAddr aligned_staging_size =
+            tt::align(static_cast<DeviceAddr>(socket_page_size_), static_cast<DeviceAddr>(l1_align));
         for (const auto& coord : coords) {
             auto* d = mesh_device_->get_device(coord);
             const CoreCoord chosen = service_cores_.at(coord);
-            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_metadata_size);
+            const DeviceAddr addr = svc.allocate_l1(d, chosen, aligned_staging_size);
             metadata_input_addrs_.emplace(coord, addr);
-            std::vector<uint8_t> zero_meta(aligned_metadata_size, 0);
+            std::vector<uint8_t> zero_meta(aligned_staging_size, 0);
             tt::tt_metal::detail::WriteToDeviceL1(d, chosen, static_cast<uint32_t>(addr), zero_meta, CoreType::WORKER);
         }
         metadata_scratch_.assign(socket_page_size_, std::byte{0});
@@ -1255,9 +1238,6 @@ D2HStreamService::~D2HStreamService() {
             }
             write_ack_addrs_.clear();
 
-            worker_done_counter_buffer_.reset();
-            worker_done_counter_addr_ = 0;
-            metadata_ready_sem_.reset();
             metadata_worker_buffer_.reset();
             metadata_worker_l1_addr_ = 0;
 
@@ -1360,22 +1340,6 @@ DeviceAddr D2HStreamService::get_write_ack_counter_addr(const distributed::MeshC
         "D2HStreamService::get_write_ack_counter_addr: no write-ack counter at coord {}",
         coord);
     return it->second;
-}
-
-DeviceAddr D2HStreamService::get_worker_done_counter_addr() const {
-    require_d2h_owner(is_owner_, "D2HStreamService::get_worker_done_counter_addr");
-    TT_FATAL(
-        worker_done_counter_addr_ != 0,
-        "D2HStreamService::get_worker_done_counter_addr: metadata forwarding was not configured.");
-    return worker_done_counter_addr_;
-}
-
-DeviceAddr D2HStreamService::get_metadata_ready_sem_addr() const {
-    require_d2h_owner(is_owner_, "D2HStreamService::get_metadata_ready_sem_addr");
-    TT_FATAL(
-        metadata_ready_sem_.has_value(),
-        "D2HStreamService::get_metadata_ready_sem_addr: metadata forwarding was not configured.");
-    return metadata_ready_sem_->address();
 }
 
 DeviceAddr D2HStreamService::get_worker_metadata_addr() const {

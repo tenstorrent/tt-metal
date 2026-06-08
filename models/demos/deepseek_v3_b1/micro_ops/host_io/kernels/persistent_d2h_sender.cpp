@@ -87,12 +87,20 @@ void kernel_main() {
     bool terminated = false;
     while (!terminated) {  // main loop that runs until the termination semaphore is signaled
         if constexpr (worker_sync_enabled) {
-            // Phase 1: unlock backing DRAM for worker writes this iteration.
+            // Phase 1: unlock backing DRAM for worker writes this iteration. The
+            // workers' transfer_done global semaphore starts at 0 (= locked) so they
+            // block until the service core releases the backing tensor memory region;
+            // hence the very first thing this loop does each iteration is unlock it.
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
             noc_async_atomic_barrier();
         }
 
-        // Phase 2: wait for all producers to ack (host-only: one ack via notify_backing_ready).
+        // Phase 2: wait for all producers to ack. With worker-sync, each worker core
+        // is a producer that writes its backing slice and bumps write_ack. In the
+        // host-only test path (worker_sync_enabled == 0, num_workers == 1) there are
+        // no device producers, so the host itself plays the producer: it writes the
+        // backing tensor and calls notify_backing_ready() to bump write_ack once,
+        // which is what releases this gate so the sender streams the host's data.
         while (true) {
             invalidate_l1_cache();
             const uint32_t cur = *write_ack_ptr;
@@ -147,25 +155,20 @@ void kernel_main() {
             break;
         }
 
-        if constexpr (metadata_enabled) {  // if metadata_enabled is true, then we need to read the metadata from the L1
-                                           // location on the service core and write it to the scratch CB
+        if constexpr (metadata_enabled) {
+            // Ship the metadata as the trailing socket page. metadata_l1_addr is the
+            // service-core staging region the master forwarder fanned the metadata
+            // in to: it is a full, zero-padded socket page on this same service core
+            // and is NOC-accessible, so write it straight to the host FIFO — no
+            // intermediate scratch-CB copy needed.
             if (!deepseek_b1_ops::socket_reserve_pages_with_termination(sender_socket, 1, termination_semaphore)) {
                 terminated = true;
                 break;
             }
 
-            auto* metadata_src = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(metadata_l1_addr);
-            auto* metadata_dst = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_l1_addr);
-            for (uint32_t i = 0; i < metadata_size_bytes; ++i) {
-                metadata_dst[i] = metadata_src[i];
-            }
-            for (uint32_t i = metadata_size_bytes; i < socket_page_size; ++i) {
-                metadata_dst[i] = 0;
-            }
-
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
-                cb_l1_addr,
+                metadata_l1_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,

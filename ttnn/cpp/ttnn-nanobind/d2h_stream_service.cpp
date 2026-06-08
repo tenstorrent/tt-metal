@@ -111,8 +111,6 @@ void py_module_types(nb::module_& mod) {
         .def("get_master_forwarder_core", &tt::tt_metal::D2HStreamService::get_master_forwarder_core)
         .def("get_transfer_done_sem_addr", &tt::tt_metal::D2HStreamService::get_transfer_done_sem_addr)
         .def("get_write_ack_counter_addr", &tt::tt_metal::D2HStreamService::get_write_ack_counter_addr)
-        .def("get_worker_done_counter_addr", &tt::tt_metal::D2HStreamService::get_worker_done_counter_addr)
-        .def("get_metadata_ready_sem_addr", &tt::tt_metal::D2HStreamService::get_metadata_ready_sem_addr)
         .def("get_worker_metadata_addr", &tt::tt_metal::D2HStreamService::get_worker_metadata_addr)
         .def("get_service_core", &tt::tt_metal::D2HStreamService::get_service_core)
         .def("get_metadata_input_addr", &tt::tt_metal::D2HStreamService::get_metadata_input_addr)

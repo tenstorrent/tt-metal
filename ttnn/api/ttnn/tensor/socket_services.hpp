@@ -293,21 +293,18 @@ public:
 
     std::vector<distributed::D2HSocket*> get_sockets() const;
 
-    // Owner-only getters for wiring up the device workload (worker/master-forwarder
-    // kernels) that produces the backing tensor and, when enabled, the metadata.
+    // Owner-only getters for wiring up the device workload (the single worker
+    // kernel) that produces the backing tensor and, when enabled, the metadata.
     // The metadata fan-in uses:
     //   * get_worker_metadata_addr()       — per-worker L1 holding the replicated
     //     metadata; the master reads its own copy from here (the source).
     //   * get_metadata_input_addr(coord)   — per-coord service-core L1 the master
     //     writes the metadata to and the sender ships from (the destination).
-    //   * get_worker_done_counter_addr() / get_metadata_ready_sem_addr() — the
-    //     master/peer handshake (peers report done, wait for metadata_ready, ack).
+    // The master role is a worker runtime arg; there is no inter-worker handshake.
     CoreRange get_worker_cores() const;
     CoreCoord get_master_forwarder_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
-    DeviceAddr get_worker_done_counter_addr() const;
-    DeviceAddr get_metadata_ready_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_metadata_input_addr(const distributed::MeshCoordinate& coord) const;
@@ -348,9 +345,6 @@ private:
     std::optional<GlobalSemaphore> transfer_done_sem_;                   // service core -> workers: backing unlocked
     std::map<distributed::MeshCoordinate, DeviceAddr> write_ack_addrs_;  // workers -> service core: write done
     // Metadata fan-in state (additionally populated when metadata_size_bytes > 0).
-    std::shared_ptr<distributed::MeshBuffer> worker_done_counter_buffer_;
-    DeviceAddr worker_done_counter_addr_ = 0;            // peers -> master: slice written, roll call
-    std::optional<GlobalSemaphore> metadata_ready_sem_;  // master -> peers: you may ack now
     // Per-worker L1 holding the replicated metadata (the master reads its own copy).
     std::shared_ptr<distributed::MeshBuffer> metadata_worker_buffer_;
     DeviceAddr metadata_worker_l1_addr_ = 0;
