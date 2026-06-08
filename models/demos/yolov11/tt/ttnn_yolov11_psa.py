@@ -13,9 +13,9 @@ class TtnnPSABlock:
         self.ffn_conv1 = TtnnConv(device, parameter.ffn[0], conv_pt.ffn[0])
         self.ffn_conv2 = TtnnConv(device, parameter.ffn[1], conv_pt.ffn[1], enable_act=False)
 
-    def __call__(self, device, x):
+    def __call__(self, device, x, batch_size=1):
         x1 = x
-        x = self.attn(device, x)
+        x = self.attn(device, x, batch_size=batch_size)
         x = ttnn.add(x1, x, memory_config=x.memory_config())
         x1 = x
         x = self.ffn_conv1(device, x)

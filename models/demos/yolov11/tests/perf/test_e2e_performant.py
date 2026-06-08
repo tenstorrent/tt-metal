@@ -75,7 +75,7 @@ def run_yolov11_inference(
         (640, 640),
     ],
 )
-@run_for_wormhole_b0()
+# @run_for_wormhole_b0()  # removed: allow running on Blackhole (P150a)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
@@ -112,7 +112,7 @@ def test_e2e_performant(
 )
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@run_for_wormhole_b0()
+# @run_for_wormhole_b0()  # removed: allow running on Blackhole (P150a)
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],

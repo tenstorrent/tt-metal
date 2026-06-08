@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import ttnn
 from models.common.utility_functions import roundup32
+from models.experimental.yolo_common.yolo_utils import get_core_grid_from_num_cores
 
 
 class Yolov11Conv2D:
@@ -49,14 +51,17 @@ class Yolov11Conv2D:
             math_approx_mode=True,
         )
         self.activation_dtype = activation_dtype
+        _dblbuf = os.environ.get("YOLO_NO_DBLBUF") != "1"  # disable to relieve L1 pressure (large batch)
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=True,
-            reshard_if_not_optimal=True if self.reshard else False,
+            enable_act_double_buffer=_dblbuf,
+            reshard_if_not_optimal=True
+            if (self.reshard or os.environ.get("YOLO_RESHARD_ALL") == "1")
+            else False,
             activation=self.activation,
-            enable_weights_double_buffer=True,
+            enable_weights_double_buffer=_dblbuf,
             output_layout=ttnn.TILE_LAYOUT,
         )
         if config_override and "act_block_h" in config_override:
@@ -70,11 +75,13 @@ class Yolov11Conv2D:
         weight = ttnn.from_device(conv_pth.weight)
         self.weight = weight
 
-    def __call__(self, x, output_rm_needed=False, to_interleaved=False):
+    def __call__(self, x, output_rm_needed=False, to_interleaved=False, batch_size=None):
         if self.is_detect:
-            input_height = int(math.sqrt(x.shape[2]))
-            input_width = int(math.sqrt(x.shape[2]))
-            batch_size = x.shape[0]
+            # x is collapsed to [1, 1, N*H*W, C]; recover per-image side from H*W = shape[2]//N
+            bs = batch_size if batch_size is not None else x.shape[0]
+            input_height = int(math.sqrt(x.shape[2] // bs))
+            input_width = int(math.sqrt(x.shape[2] // bs))
+            batch_size = bs
         elif self.is_dfl:
             input_height = x.shape[1]
             input_width = x.shape[2]
@@ -108,7 +115,9 @@ class Yolov11Conv2D:
             dtype=self.activation_dtype,
             slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
-        hw = output_height * output_width
+        # valid rows = batch_size * H' * W'; without the batch factor the slices
+        # below would drop every image past the first when batch_size > 1.
+        hw = batch_size * output_height * output_width
         if to_interleaved:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
@@ -137,10 +146,40 @@ def reshard_if_possible(x, core_grid=None):  # reshards if shard_spec is not mul
     return x
 
 
+def _concat_shard_grid(nhw, default_cores=64):
+    """Pick a (num_cores, shard_grid) for height-sharded concat that keeps
+    #shards == #cores (no fit error) and scales with batch.
+
+    Concat is a numerically-lossless layout op, so changing the core grid does
+    not affect PCC. On WH the defaults reproduce the original 8x8/64-core path;
+    on Blackhole P150a set YOLO_MAX_CORES (e.g. 100) + YOLO_GRID_ROWS/COLS so the
+    larger batch's shard count still fits within the 11x10=110 core grid.
+    """
+    max_cores = int(os.environ.get("YOLO_MAX_CORES", str(default_cores)))
+    grid_rows = int(os.environ.get("YOLO_GRID_ROWS", "8"))
+    grid_cols = int(os.environ.get("YOLO_GRID_COLS", "8"))
+    # largest divisor of nhw that is <= max_cores -> exact, padding-free sharding
+    num_cores = 1
+    for c in range(min(max_cores, grid_rows * grid_cols), 0, -1):
+        if nhw % c == 0:
+            num_cores = c
+            break
+    shard_grid = get_core_grid_from_num_cores(num_cores, grid_rows=grid_rows, grid_cols=grid_cols)
+    return num_cores, shard_grid
+
+
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    if os.environ.get("YOLO_DEBUG_CONCAT"):
+        import sys as _sys
+
+        print(
+            f"[concat] shapes={[tuple(t.shape) for t in input_tensors]} default_cores={num_cores}",
+            file=_sys.stderr,
+            flush=True,
+        )
+    num_cores, shard_grid = _concat_shard_grid(input_tensors[0].shape[2], default_cores=num_cores)
     in_shard_width = input_tensors[0].shape[-1]
-    shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
+    shard_height = input_tensors[0].shape[2] // num_cores
     input_sharded_memory_config = ttnn.create_sharded_memory_config(
         (shard_height, in_shard_width),
         core_grid=shard_grid,
@@ -174,31 +213,20 @@ def sharded_concat_2(
     if input_tensor_2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
         input_tensor_2 = ttnn.to_layout(input_tensor_2, ttnn.ROW_MAJOR_LAYOUT)
 
-    shard_height = (input_tensor_1.shape[2] + num_cores - 1) // num_cores
+    # default 8x8 grid maps to coords 0..7; reproduce that as the default core count
+    default_cores = (shard_grid_coord_max - shard_grid_coord_min + 1) ** 2
+    num_cores, shard_grid = _concat_shard_grid(input_tensor_1.shape[2], default_cores=default_cores)
+    shard_height = input_tensor_1.shape[2] // num_cores
 
     input_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
         (shard_height, input_tensor_1.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
-                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
-                )
-            }
-        ),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
     input_sharded_memory_config_2 = ttnn.create_sharded_memory_config(
         (shard_height, input_tensor_2.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
-                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
-                )
-            }
-        ),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
@@ -206,14 +234,7 @@ def sharded_concat_2(
     input_tensor_2 = ttnn.to_memory_config(input_tensor_2, input_sharded_memory_config_2)
     out_sharded_memory_config_ = ttnn.create_sharded_memory_config(
         (shard_height, input_tensor_1.shape[-1] + input_tensor_2.shape[-1]),
-        core_grid=ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(shard_grid_coord_min, shard_grid_coord_min),
-                    ttnn.CoreCoord(shard_grid_coord_max, shard_grid_coord_max),
-                )
-            }
-        ),
+        core_grid=shard_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         use_height_and_width_as_shard_shape=True,
     )
@@ -248,8 +269,8 @@ class TtnnConv:
             split_weights=split_weights,
         )
 
-    def __call__(self, device, x, output_rm_needed=False, to_interleaved=False):
-        x = self.conv(x, output_rm_needed, to_interleaved)
+    def __call__(self, device, x, output_rm_needed=False, to_interleaved=False, batch_size=None):
+        x = self.conv(x, output_rm_needed, to_interleaved, batch_size=batch_size)
         return x
 
 

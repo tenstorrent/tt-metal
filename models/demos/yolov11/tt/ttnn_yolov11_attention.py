@@ -20,7 +20,9 @@ class TtnnAttention:
         qkv = self.qkv(device, x)
         qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))
-        qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
+        qkv = ttnn.reshape(
+            qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1] // batch_size)
+        )
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
             qkv[:, :, self.key_dim : self.head_dim, :],
@@ -32,10 +34,13 @@ class TtnnAttention:
         attn = ttnn.softmax_in_place(attn, dim=-1, numeric_stable=False)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
         x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
-        x1 = ttnn.permute(x1, (0, 1, 3, 2))
-        v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
-        v = ttnn.permute(v, (0, 1, 3, 2))
+        # (N, heads, head_dim, hw) -> (1, 1, N*hw, heads*head_dim): permute first so
+        # the batch stays in the row dim (the old reshape-then-permute folded batch
+        # into channels, which only happens to be a no-op when N == 1).
+        x1 = ttnn.permute(x1, (0, 3, 1, 2))
+        x1 = ttnn.reshape(x1, (1, 1, x1.shape[0] * x1.shape[1], x1.shape[2] * x1.shape[3]))
+        v = ttnn.permute(v, (0, 3, 1, 2))
+        v = ttnn.reshape(v, (1, 1, v.shape[0] * v.shape[1], v.shape[2] * v.shape[3]))
         x2 = self.pe(device=device, x=v)
         x = ttnn.add(x1, x2, memory_config=x1.memory_config())
         x = self.proj(device=device, x=x)

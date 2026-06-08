@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
@@ -60,10 +62,12 @@ class YOLOv11PerformanceRunnerInfra:
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
     def _setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
-        if is_wormhole_b0():
-            core_grid = ttnn.CoreGrid(y=8, x=8)
-        else:
-            exit("Unsupported device")
+        # Core grid for the L1-sharded input. P150a (Blackhole) exposes 11x10=110
+        # worker cores vs WH's 8x8=64; allow overriding via YOLO_GRID="x,y".
+        gx, gy = 8, 8
+        if os.environ.get("YOLO_GRID"):
+            gx, gy = (int(v) for v in os.environ["YOLO_GRID"].split(","))
+        core_grid = ttnn.CoreGrid(x=gx, y=gy)
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
@@ -76,15 +80,24 @@ class YOLOv11PerformanceRunnerInfra:
         n = n // self.num_devices if n // self.num_devices != 0 else n
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
-            ttnn.CoreGrid(x=8, y=8),
+            core_grid,
             ttnn.ShardStrategy.HEIGHT,
         )
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        )
+        if self.num_devices == 1:
+            # Single-device batching: keep the whole [N, C, H, W] as one tensor that
+            # gets height-sharded across cores. (The mesh path below splits the batch
+            # into one shard per device, which requires #shards == mesh size.)
+            tt_inputs_host = ttnn.from_torch(
+                torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        else:
+            input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+            tt_inputs_host = ttnn.from_host_shards(
+                [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor],
+                device.shape,
+            )
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):

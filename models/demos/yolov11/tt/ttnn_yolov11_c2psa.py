@@ -14,11 +14,13 @@ class TtnnC2PSA:
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2)
         self.psablock = TtnnPSABlock(device, parameter.m[0], conv_pt.m[0])
 
-    def __call__(self, device, x, hw=400):
+    def __call__(self, device, x, batch_size=1, hw=400):
         x = self.cv1(device, x)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        a, b = x[:, :, :hw, : int(self.out_channel_0 / 2)], x[:, :, :hw, int(self.out_channel_0 / 2) :]
-        x = self.psablock(device, b)
+        # valid rows span the whole batch (N*hw); slicing only :hw drops images past the first
+        bhw = batch_size * hw
+        a, b = x[:, :, :bhw, : int(self.out_channel_0 / 2)], x[:, :, :bhw, int(self.out_channel_0 / 2) :]
+        x = self.psablock(device, b, batch_size=batch_size)
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, x)

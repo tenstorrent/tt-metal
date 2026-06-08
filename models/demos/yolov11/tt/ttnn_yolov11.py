@@ -44,6 +44,10 @@ class TtnnYoloV11:
     def __call__(self, input, min_channels=8):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
+        if n > 2:
+            # Large batch: the full-res stem ([N,16,640,640]) does not fit in L1;
+            # stage pad/permute/reshape in the 32 GB DRAM. conv1 reshards back to L1.
+            input = ttnn.to_memory_config(input, ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
@@ -60,10 +64,11 @@ class TtnnYoloV11:
         x = self.conv6(self.device, x)
         x = self.c3k2_4(self.device, x)
         x = self.sppf(self.device, x)
-        x = self.c2psa(self.device, x)
+        x = self.c2psa(self.device, x, batch_size=n)
         x10 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
+        side = int(math.sqrt(x.shape[2] // n))
+        x = ttnn.reshape(x, (n, side, side, x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores(nhw, x.shape[2])
         core_grid = get_core_grid_from_num_cores(num_cores)
@@ -83,7 +88,8 @@ class TtnnYoloV11:
         x = self.c3k2_5(self.device, x)
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
+        side = int(math.sqrt(x.shape[2] // n))
+        x = ttnn.reshape(x, (n, side, side, x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores(nhw, x.shape[2])
         core_grid = get_core_grid_from_num_cores(num_cores)
@@ -117,7 +123,7 @@ class TtnnYoloV11:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.c3k2_8(self.device, x)
         x22 = x
-        x = self.detect(self.device, x16, x19, x22)
+        x = self.detect(self.device, x16, x19, x22, batch_size=n)
         deallocate_tensors(x16, x19, x22)
 
         return x

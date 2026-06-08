@@ -42,35 +42,36 @@ class TtnnDetect:
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
 
-    def __call__(self, device, y1, y2, y3, tile_size=32):
-        x1 = self.cv2_0_0(device, y1)
-        x1 = self.cv2_0_1(device, x1)
-        x1 = self.cv2_0_2(x1)
-        x2 = self.cv2_1_0(device, y2)
-        x2 = self.cv2_1_1(device, x2)
-        x2 = self.cv2_1_2(x2)
+    def __call__(self, device, y1, y2, y3, batch_size=1, tile_size=32):
+        bs = batch_size
+        x1 = self.cv2_0_0(device, y1, batch_size=bs)
+        x1 = self.cv2_0_1(device, x1, batch_size=bs)
+        x1 = self.cv2_0_2(x1, batch_size=bs)
+        x2 = self.cv2_1_0(device, y2, batch_size=bs)
+        x2 = self.cv2_1_1(device, x2, batch_size=bs)
+        x2 = self.cv2_1_2(x2, batch_size=bs)
 
-        x3 = self.cv2_2_0(device, y3)
-        x3 = self.cv2_2_1(device, x3)
-        x3 = self.cv2_2_2(x3)
+        x3 = self.cv2_2_0(device, y3, batch_size=bs)
+        x3 = self.cv2_2_1(device, x3, batch_size=bs)
+        x3 = self.cv2_2_2(x3, batch_size=bs)
 
-        x4 = self.cv3_0_0_0(device, y1)
-        x4 = self.cv3_0_0_1(device, x4)
-        x4 = self.cv3_0_1_0(device, x4)
-        x4 = self.cv3_0_1_1(device, x4)
-        x4 = self.cv3_0_2_0(x4)
+        x4 = self.cv3_0_0_0(device, y1, batch_size=bs)
+        x4 = self.cv3_0_0_1(device, x4, batch_size=bs)
+        x4 = self.cv3_0_1_0(device, x4, batch_size=bs)
+        x4 = self.cv3_0_1_1(device, x4, batch_size=bs)
+        x4 = self.cv3_0_2_0(x4, batch_size=bs)
 
-        x5 = self.cv3_1_0_0(device, y2)
-        x5 = self.cv3_1_0_1(device, x5)
-        x5 = self.cv3_1_1_0(device, x5)
-        x5 = self.cv3_1_1_1(device, x5)
-        x5 = self.cv3_1_2_0(x5)
+        x5 = self.cv3_1_0_0(device, y2, batch_size=bs)
+        x5 = self.cv3_1_0_1(device, x5, batch_size=bs)
+        x5 = self.cv3_1_1_0(device, x5, batch_size=bs)
+        x5 = self.cv3_1_1_1(device, x5, batch_size=bs)
+        x5 = self.cv3_1_2_0(x5, batch_size=bs)
 
-        x6 = self.cv3_2_0_0(device, y3)
-        x6 = self.cv3_2_0_1(device, x6)
-        x6 = self.cv3_2_1_0(device, x6)
-        x6 = self.cv3_2_1_1(device, x6)
-        x6 = self.cv3_2_2_0(x6)
+        x6 = self.cv3_2_0_0(device, y3, batch_size=bs)
+        x6 = self.cv3_2_0_1(device, x6, batch_size=bs)
+        x6 = self.cv3_2_1_0(device, x6, batch_size=bs)
+        x6 = self.cv3_2_1_1(device, x6, batch_size=bs)
+        x6 = self.cv3_2_2_0(x6, batch_size=bs)
 
         y1 = sharded_concat_2(x1, x4)
         y2 = sharded_concat_2(x2, x5)
@@ -79,9 +80,14 @@ class TtnnDetect:
         y1 = ttnn.sharded_to_interleaved(y1, memory_config=ttnn.L1_MEMORY_CONFIG)
         y2 = ttnn.sharded_to_interleaved(y2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y3 = ttnn.sharded_to_interleaved(y3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Keep batch in dim 0: reshape each scale [1,1,N*HiWi,144] -> [N, HiWi, 144]
+        # and concat over the anchor axis (dim=1) -> [N, 8400, 144]. The original
+        # concat(dim=2)+squeeze(dim=0) is the N==1 special case of this.
+        y1 = ttnn.reshape(y1, (bs, y1.shape[2] // bs, y1.shape[3]))
+        y2 = ttnn.reshape(y2, (bs, y2.shape[2] // bs, y2.shape[3]))
+        y3 = ttnn.reshape(y3, (bs, y3.shape[2] // bs, y3.shape[3]))
+        y = ttnn.concat((y1, y2, y3), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
-        y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
         deallocate_tensors(y1, y2, y3, x1, x2, x3, x4, x5, x6, y)
         ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
@@ -91,8 +97,10 @@ class TtnnDetect:
         ttnn.deallocate(ya)
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
         c = ttnn.permute(c, (0, 3, 1, 2))
-        c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
-        c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
+        # DFL output is collapsed image-major as [1,1,1,N*4*8400] with per-image
+        # order (coord in 4, anchor in 8400); split batch back into dim 0 so the
+        # [1,2,8400] anchors broadcast per image. (N==1 -> [1,4,8400] as before.)
+        c = ttnn.reshape(c, (bs, 4, int(c.shape[3] / (4 * bs))))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
         anchor, strides = self.anchors, self.strides
         anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
