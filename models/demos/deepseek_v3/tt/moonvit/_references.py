@@ -127,7 +127,7 @@ class _EncoderLayerRef(_DelegatingModule):
     _INNER = "layer"
 
     def __init__(self, layer):
-        super(_DelegatingModule, self).__init__()
+        torch.nn.Module.__init__(self)
         self.layer = layer
         # Default to the correctly-masked sdpa; tests may override.
         self.attn_implementation = "sdpa"
