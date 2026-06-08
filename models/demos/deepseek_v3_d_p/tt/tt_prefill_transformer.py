@@ -22,6 +22,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -116,11 +117,26 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
         lm_head_is_column_parallel: bool = False,
+        is_chunked: bool = False,
+        slot_num: int = 1,
+        mla_seq_len: Optional[int] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
         self.padding_side = padding_side
+        self.is_chunked = is_chunked
+        self.num_layers = num_layers
+        # Chunked prefill: ONE shared KV cache [slot_num*num_layers, 1, seq, 576]; each layer selects
+        # its slot via cache_layer_idx in forward (cache_batch_idx = user*layer_num + layer_idx). The
+        # ring_mla scratch buffer holds no per-layer state, so we allocate it ONCE here and share it
+        # across all layers' ttMLA (chunked_kv_buf) -- a per-layer buffer would scale as depth^2.
+        layer_num = num_layers if is_chunked else 61
+        shared_chunked_kv_buf = None
+        if is_chunked:
+            buf_seq = mla_seq_len if mla_seq_len is not None else seq_len
+            kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
+            shared_chunked_kv_buf = ttMLA.make_chunked_kv_buf(mesh_device, slot_num * layer_num, buf_seq, kvpe_dim)
 
         # Log environment variables that define reference output cache and TTNN weights cache.
         # This is to prevent accidental cache creation at unusual places and fill disk space.
@@ -175,6 +191,11 @@ class TtPrefillTransformer(LightweightModule):
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
+                is_chunked=is_chunked,
+                slot_num=slot_num,
+                layer_num=layer_num,
+                mla_seq_len=mla_seq_len,
+                chunked_kv_buf=shared_chunked_kv_buf,
             )
             self.layers.append(layer)
 
@@ -320,6 +341,53 @@ class TtPrefillTransformer(LightweightModule):
             intermediates["first_token"] = sweep_results
 
         return first_token_id, first_token_prob, intermediates
+
+    def forward_chunk(
+        self,
+        token_ids: ttnn.Tensor,
+        kvpe_cache: ttnn.Tensor,
+        indexed_rope: dict,
+        kv_actual_isl: int,
+        cache_user_id: int = 0,
+        return_layer_outputs: bool = False,
+    ):
+        """Run ONE chunked-prefill chunk through embed -> [block x N] (no final norm / lm_head).
+
+        Layer i attends to its slot (cache_layer_idx=i) of the single shared num_layers-slot cache
+        over the [0, kv_actual_isl+chunk) prefix and writes this chunk at the kv_actual_isl offset.
+        Chunks must be driven in order so each layer's KV is populated before the next chunk reads it.
+
+        Args:
+            token_ids: [1, 1, chunk_per_chip] uint32, SP-sharded (block-cyclic chunk order)
+            kvpe_cache: ONE shared KV cache [slot_num*num_layers, 1, seq_len_local, 576] from
+                init_kvpe_cache(num_kvpe_cache_layers=num_layers, num_users=slot_num)
+            indexed_rope: tensors from RotarySetup.get_rope_tensors_indexed(...)
+            kv_actual_isl: cumulative valid KV tokens before this chunk (chunk-aligned multiples)
+            cache_user_id: cache slot (default 0)
+            return_layer_outputs: if True, also return {f"layer_{i}": device tensor} per layer
+
+        Returns:
+            (h, layer_outputs_dict_or_None) where h is the chunk hidden after the last layer.
+        """
+        assert self.is_chunked, "forward_chunk requires the transformer to be built with is_chunked=True"
+        h = self.embed(token_ids)  # [1, chunk_per_chip, emb_dim/tp]
+        h = ttnn.unsqueeze_to_4D(h)  # [1, 1, chunk_per_chip, emb_dim/tp]
+
+        layer_outputs = {} if return_layer_outputs else None
+        for i, layer in enumerate(self.layers):
+            signpost(f"forward_chunk_layer_{i}_start")
+            h, _ = layer(
+                h,
+                indexed_rope,
+                kvpe_cache,
+                cache_layer_idx=i,
+                kv_actual_isl=kv_actual_isl,
+                cache_user_id=cache_user_id,
+            )
+            signpost(f"forward_chunk_layer_{i}_end")
+            if return_layer_outputs:
+                layer_outputs[f"layer_{i}"] = ttnn.clone(h)
+        return h, layer_outputs
 
     def _lm_head_and_extract(
         self,
