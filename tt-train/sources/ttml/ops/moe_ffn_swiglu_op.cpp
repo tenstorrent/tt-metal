@@ -22,14 +22,20 @@ namespace ttml::ops {
 
 namespace {
 
-const ttml::metal::VariableMatmulConfig kVarMmConfig{
-    .M_block_size = 4,
-    .K_block_size = 8,
-    .N_block_size = 8,
-    .subblock_h = 2,
-    .subblock_w = 2,
-    .compute_with_storage_grid_size = {10, 10},
-};
+// Build the variable_matmul config for moe_ffn. Block sizes are tuned; grid is
+// device->compute_with_storage_grid_size() so we always use the full grid (110 cores on
+// Blackhole, 64 on Wormhole, etc.) without per-arch hardcoding.
+ttml::metal::VariableMatmulConfig make_var_mm_config(ttnn::distributed::MeshDevice* device) {
+    const auto grid = device->compute_with_storage_grid_size();
+    return ttml::metal::VariableMatmulConfig{
+        .M_block_size = 4,
+        .K_block_size = 8,
+        .N_block_size = 8,
+        .subblock_h = 2,
+        .subblock_w = 2,
+        .compute_with_storage_grid_size = grid,
+    };
+}
 
 }  // namespace
 
@@ -90,6 +96,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     // expert slots). So skip the zero for those two and leave them uninitialized.
     const uint32_t intermediate_dim = wg0_shape[-2];
     auto* device = &ttml::autograd::ctx().get_device();
+    const auto cfg = make_var_mm_config(device);
     const auto dtype = grouped_value.dtype();
     auto y = ttnn::moreh_full_like(
         ttnn::empty(
@@ -114,7 +121,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             /*input_tensor=*/grouped_value,
             /*weight_tensor=*/w_gate_e,
-            /*config=*/kVarMmConfig,
+            /*config=*/cfg,
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
@@ -126,7 +133,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             /*input_tensor=*/grouped_value,
             /*weight_tensor=*/w_up_e,
-            /*config=*/kVarMmConfig,
+            /*config=*/cfg,
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
@@ -153,7 +160,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         ttml::metal::variable_matmul(
             /*input_tensor=*/activated,
             /*weight_tensor=*/w_down_e,
-            /*config=*/kVarMmConfig,
+            /*config=*/cfg,
             /*offsets_tensor=*/offsets,
             /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
@@ -189,6 +196,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         // zero. The matmul writes the full expert slot for each variable_matmul, so within-slot
         // pad rows (in the last tile of each expert) compute correctly from zero K-inputs.
         auto* device = &ttml::autograd::ctx().get_device();
+        const auto cfg = make_var_mm_config(device);
         const auto dtype = grouped_value.dtype();
         auto zeros_device = [&](const ttnn::Shape& shape) {
             return ttnn::moreh_full_like(
@@ -214,7 +222,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             ttml::metal::variable_matmul(
                 /*input_tensor=*/dY,
                 /*weight_tensor=*/w_down_e,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
@@ -235,7 +243,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_down_e = ttml::metal::variable_matmul(
                 /*input_tensor=*/dY,
                 /*weight_tensor=*/activated,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
@@ -261,7 +269,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_gate_e = ttml::metal::variable_matmul(
                 /*input_tensor=*/d_gate_proj,
                 /*weight_tensor=*/grouped_value,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
@@ -273,7 +281,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             auto dW_up_e = ttml::metal::variable_matmul(
                 /*input_tensor=*/d_up_proj,
                 /*weight_tensor=*/grouped_value,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
@@ -288,7 +296,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             ttml::metal::variable_matmul(
                 /*input_tensor=*/d_gate_proj,
                 /*weight_tensor=*/w_gate_e,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
@@ -300,7 +308,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             ttml::metal::variable_matmul(
                 /*input_tensor=*/d_up_proj,
                 /*weight_tensor=*/w_up_e,
-                /*config=*/kVarMmConfig,
+                /*config=*/cfg,
                 /*offsets_tensor=*/offsets,
                 /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
