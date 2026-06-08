@@ -202,7 +202,7 @@ AllGatherDeviceOperation::create_op_performance_model(
     // =========================================================================
     // AllGather roofline performance model
     //
-    // Fabric perf (bandwidth + latency):
+    // Fabric perf (bandwidth and latency):
     //   bandwidth: the worst-connected device must still receieve the (N-1) slices
     //       it lacks, i.e. (N-1)*S bytes, pulled in over its K inbound links. A
     //       wrapped axis (Ring/Torus) gives that node 2 links on that axis, else 1.
@@ -219,10 +219,10 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     // Architecture and clock detection
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
-    float clock_rate_ghz = 1.0f;
+    int clock_rate_mhz = 1000;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
-        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+        clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
     }
 
     // Data size: bytes each device contributes
@@ -246,20 +246,15 @@ AllGatherDeviceOperation::create_op_performance_model(
         diameter_hops += axis_wraps ? (axis_devices / 2u) : (axis_devices - 1u);
     }
 
-    // (N-1)*S bytes must be received over K links, having travelled `diameter_hops` hops
+    // (N-1)*S bytes must be received over K links, farthest byte travels `diameter_hops` hops.
     const uint64_t fabric_bytes = static_cast<uint64_t>(num_devices - 1) * input_size_bytes;
-    const double fabric_time_ns =
-        ttnn::ccl::estimate_fabric_transfer_ns(arch, fabric_bytes, bottleneck_links, diameter_hops);
-
-    // Convert fabric time (ns) to device clock cycles.
-    // clock_rate_ghz cycles/ns * ns = cycles
-    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, fabric_bytes, bottleneck_links, diameter_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
-    // (hardware max parallelism). BW competes with fabric (max); latencies
-    // are additive (pipeline fill/drain).
+    // (hardware max parallelism). DRAM terms compete (overlap) with Fabric.
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
@@ -283,7 +278,12 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
-    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
+
+    // Throughput and latency don't add, they overlap; since the ingest link carries data from nearby
+    // devices (throughput) while in parallel the farthest data is travelling over the network (latency).
+    const int throughput_cycles = std::max(local_bw_cycles, fabric_bw_cycles);
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);

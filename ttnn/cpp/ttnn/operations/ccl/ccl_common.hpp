@@ -819,4 +819,13 @@ double estimate_fabric_transfer_ns(
     uint32_t num_links,
     uint32_t num_hops);
 
+// TODO replace with PR 46405
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops);
+
 }  // namespace ttnn::ccl

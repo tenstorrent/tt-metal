@@ -2006,6 +2006,16 @@ double lookup_fabric_hop_latency_ns(tt::ARCH arch) {
     }
 }
 
+// TODO replace with PR 46405
+double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return is_2d ? 874.0 : 711.0;
+        case tt::ARCH::BLACKHOLE: return is_2d ? 619.0 : 515.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
 }  // namespace
 
 double estimate_fabric_transfer_ns(tt::ARCH arch, uint64_t data_bytes, uint32_t num_links, uint32_t num_hops) {
@@ -2017,6 +2027,28 @@ double estimate_fabric_transfer_ns(tt::ARCH arch, uint64_t data_bytes, uint32_t 
     const double latency_ns = hop_lat * num_hops;
 
     return transfer_ns + latency_ns;
+}
+
+// TODO replace with PR 46405
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops) {
+    const double bw_per_link = lookup_fabric_bw(arch);
+    const double total_bw = bw_per_link * num_links;
+    const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+
+    const double hop_lat = lookup_fabric_hop_latency_ns(arch, fabric_config);
+    const double latency_ns = hop_lat * num_hops;
+
+    // Convert ns -> device clock cycles
+    const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    return {
+        static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
 }
 
 }  // namespace ttnn::ccl
