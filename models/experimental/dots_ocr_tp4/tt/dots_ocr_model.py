@@ -23,6 +23,8 @@ existing ``dots_ocr_tp4`` test feeds the text path and keeps the replicated-hidd
 prefill/decode untouched.
 """
 
+import time
+
 import torch
 import ttnn
 
@@ -80,6 +82,8 @@ class DotsOCRModelTP4:
         self.embed_tokens = embed_tokens  # host (CPU) nn.Embedding
         self.image_token_id = int(image_token_id)
         self.eos_ids = set(eos_ids or [])
+        # Device timings (seconds) from the most recent generate(); see generate().
+        self.last_timings = {}
 
     # ------------------------------------------------------------------ build
     @classmethod
@@ -198,19 +202,29 @@ class DotsOCRModelTP4:
 
         cache = create_paged_kv_cache(self.config, self.mesh_device, batch_size=1)
 
+        # Device timing is measured as wall-clock bracketed by synchronize_device,
+        # so each interval reflects when the device actually finished that work.
+        ttnn.synchronize_device(self.mesh_device)
+        t_start = time.perf_counter()
+
         # --- Build the (merged) input embedding sequence on host. ---
         if pixel_values is not None:
             if image_grid_thw is None:
                 raise ValueError("image_grid_thw is required when pixel_values is provided")
+            # _vision_embeds_host syncs the device internally, so t_vision below
+            # captures the vision tower's device time.
             vision_embeds = self._vision_embeds_host(pixel_values, image_grid_thw)
+            t_vision = time.perf_counter()
             embeds = self._merge_embeds_host(input_ids, vision_embeds)
         else:
             embeds = self.embed_tokens(input_ids).to(torch.bfloat16)
+            t_vision = time.perf_counter()
 
         # --- Prefill: fill the KV cache, read the first token at the real last pos. ---
         x_tt, L0 = self._embeds_to_replicated(embeds)
         _, tok = self.text_model.prefill_with_head(x_tt, cache, token_index=L0 - 1, return_token=True)
         ttnn.synchronize_device(self.mesh_device)
+        t_prefill = time.perf_counter()
         first = int(tok.flatten()[0])
 
         # --- Decode: one token at a time, reading/extending the paged cache. ---
@@ -229,5 +243,18 @@ class DotsOCRModelTP4:
             out_ids.append(nxt)
             prev = nxt
             pos += 1
+        ttnn.synchronize_device(self.mesh_device)
+        t_end = time.perf_counter()
 
+        n_decode = len(out_ids) - 1  # tokens from the decode loop (first came from prefill)
+        decode_s = t_end - t_prefill
+        self.last_timings = {
+            "vision_s": t_vision - t_start,
+            "prefill_s": t_prefill - t_vision,
+            "vision_prefill_s": t_prefill - t_start,
+            "decode_s": decode_s,
+            "decode_tokens": n_decode,
+            "decode_ms_per_token": (decode_s / n_decode * 1000.0) if n_decode else 0.0,
+            "decode_tok_per_s": (n_decode / decode_s) if decode_s > 0 and n_decode else 0.0,
+        }
         return out_ids

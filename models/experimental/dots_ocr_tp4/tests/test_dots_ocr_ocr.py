@@ -152,4 +152,13 @@ def test_dots_ocr_tp4_ocr(mesh_device, max_new_tokens):
     print(f"OCR OUTPUT:\n{text}")
     print("=" * 70)
 
+    t = model.last_timings
+    print(
+        f"[dots_ocr_tp4 OCR] device time -- vision+prefill: {t['vision_prefill_s'] * 1000:.1f} ms "
+        f"(vision {t['vision_s'] * 1000:.1f} ms, prefill {t['prefill_s'] * 1000:.1f} ms)  |  "
+        f"decode: {t['decode_s'] * 1000:.1f} ms for {t['decode_tokens']} tok "
+        f"({t['decode_ms_per_token']:.1f} ms/tok, {t['decode_tok_per_s']:.1f} tok/s)"
+    )
+    print("=" * 70)
+
     assert len(text.strip()) > 0, "OCR output should not be empty"
