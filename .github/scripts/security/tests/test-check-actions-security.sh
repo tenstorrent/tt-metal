@@ -2086,6 +2086,167 @@ jobs:
       - run: echo test
 EOF
 
+# =============================================================================
+# Checks 67-69: Supply chain, OIDC, and timeout checks
+# =============================================================================
+
+printf '\n'
+printf '%s\n' "--- Checks 67-69: Supply chain and resource checks ---"
+
+# Check 67: actions/cache with sensitive credential directories
+assert_detects "check 67 flags cache with ~/.aws" "67" "sensitive credential directory" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c907fcceea5f9bb3ddf7a8f0ee3e5b7b6f5b9c2
+        with:
+          path: ~/.aws
+          key: aws-creds-${{ runner.os }}
+EOF
+
+assert_detects "check 67 flags cache with ~/.kube" "67" "sensitive credential directory" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c907fcceea5f9bb3ddf7a8f0ee3e5b7b6f5b9c2
+        with:
+          path: ~/.kube
+          key: kube-${{ runner.os }}
+EOF
+
+assert_detects "check 67 flags cache with ~/.ssh" "67" "sensitive credential directory" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c907fcceea5f9bb3ddf7a8f0ee3e5b7b6f5b9c2
+        with:
+          path: ~/.ssh
+          key: ssh-keys-${{ runner.os }}
+EOF
+
+assert_clean "check 67 accepts cache with ~/.npm" "67" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c907fcceea5f9bb3ddf7a8f0ee3e5b7b6f5b9c2
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+EOF
+
+assert_clean "check 67 ignores files without actions/cache" "67" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "~/.aws credentials not used here"
+EOF
+
+# Check 68: id-token: write on untrusted triggers
+assert_detects "check 68 flags id-token: write on pull_request" "68" "id-token: write permission on untrusted trigger" << 'EOF'
+name: test
+on: pull_request
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
+assert_detects "check 68 flags id-token: write on issue_comment" "68" "id-token: write permission on untrusted trigger" << 'EOF'
+name: test
+on: issue_comment
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
+assert_clean "check 68 accepts id-token: write on push" "68" << 'EOF'
+name: test
+on: push
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
+assert_clean "check 68 accepts id-token: none on pull_request" "68" << 'EOF'
+name: test
+on: pull_request
+permissions:
+  id-token: none
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
+# Check 69: missing timeout-minutes at job level
+assert_detects "check 69 flags missing timeout-minutes" "69" "missing timeout-minutes" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make build
+EOF
+
+assert_clean "check 69 accepts job with timeout-minutes" "69" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - run: make build
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 

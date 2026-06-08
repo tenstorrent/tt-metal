@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=66
+MAX_CHECK_NUM=69
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3466,6 +3466,183 @@ check_66() {
     hits=$(grep -nE 'group:[[:space:]].*\$\{\{.*github\.(actor|triggering_actor)' "${file}" 2>/dev/null || true)
     if [[ -n "${hits}" ]]; then
         log_issue "MEDIUM" "${file}" "Contains github.actor/triggering_actor in concurrency group - can enable run cancellation attacks" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 67: actions/cache with sensitive credential directories
+# =============================================================================
+check_67_description="actions/cache with sensitive credential directories"
+check_67_severity="HIGH"
+
+example_check_67() {
+    cat <<'EOF'
+# Why: Caching ~/.aws, ~/.kube, ~/.ssh, ~/.config/gcloud etc. persists cloud
+# credentials, kubeconfig, and SSH keys in the GitHub Actions cache. Cache
+# entries are stored encrypted but can be read by any workflow in the same
+# repository. On public repos or repos with many contributors, this risks
+# credential theft. Use dedicated secret injection (github.secrets) or
+# OIDC instead of caching credential files.
+# Bad:
+- uses: actions/cache@<sha>
+  with:
+    path: ~/.aws
+    key: aws-creds-${{ runner.os }}
+# Good:
+- uses: aws-actions/configure-aws-credentials@<sha>
+  with:
+    role-to-assume: arn:aws:iam::123456789012:role/my-role
+    aws-region: us-east-1
+EOF
+}
+
+check_67() {
+    local file="$1"
+
+    # Only flag if the file uses actions/cache (or cache-related actions)
+    if ! grep -qE 'actions/cache|actions/cache-restore|actions/cache-save' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    local hits
+    # Look for cache path: entries containing sensitive credential directories
+    hits=$(grep -nE '^\s+path:\s*(~|/root|/home/[^/]+)/(\.(aws|kube|ssh|config/gcloud|azure|docker|gnupg|netrc)|\.gitconfig)' "${file}" 2>/dev/null || true)
+    # Also catch multiline path blocks with these patterns on their own lines
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE '^\s+(~|/root|/home/[^/]+)/(\.(aws|kube|ssh|config/gcloud|azure|docker|gnupg|netrc)|\.gitconfig)$' "${file}" 2>/dev/null || true)
+    fi
+
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains actions/cache with sensitive credential directory (e.g. ~/.aws, ~/.kube, ~/.ssh) - cache entries can be exfiltrated; use OIDC or secrets instead" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 68: id-token: write permission on untrusted triggers
+# =============================================================================
+check_68_description="id-token: write permission on untrusted triggers"
+check_68_severity="HIGH"
+
+example_check_68() {
+    cat <<'EOF'
+# Why: id-token: write grants the workflow permission to mint OIDC tokens,
+# which are used to authenticate to cloud providers (AWS, GCP, Azure) without
+# static credentials. Granting this permission on pull_request (which runs fork
+# contributor code) or issue_comment/pull_request_comment triggers allows an
+# attacker to mint OIDC tokens by submitting a PR or posting a comment —
+# gaining cloud access they should not have.
+# Bad:
+on: pull_request
+permissions:
+  id-token: write
+# Good:
+on: pull_request
+permissions:
+  id-token: none   # or omit entirely
+EOF
+}
+
+check_68() {
+    local file="$1"
+
+    # Only flag if id-token: write is present
+    if ! grep -qE 'id-token:[[:space:]]*write' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    # Only flag on untrusted triggers where fork contributors can run code
+    local untrusted_trigger
+    untrusted_trigger=$(grep -E '^on:|^\s+(pull_request|pull_request_comment|issue_comment|fork|watch|star|public)[[:space:]]*(:|$)' "${file}" 2>/dev/null \
+        | grep -vE 'workflow_call|workflow_dispatch|push|schedule|pull_request_review' \
+        | grep -E 'pull_request[^_]|pull_request$|issue_comment|pull_request_comment|fork|watch|star|public' \
+        || true)
+
+    if [[ -n "${untrusted_trigger}" ]]; then
+        local hits
+        hits=$(grep -nE 'id-token:[[:space:]]*write' "${file}" 2>/dev/null || true)
+        log_issue "HIGH" "${file}" "Contains id-token: write permission on untrusted trigger (pull_request/issue_comment) - grants OIDC token minting to fork contributors" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 69: missing timeout-minutes at job level
+# =============================================================================
+check_69_description="missing timeout-minutes at job level"
+check_69_severity="LOW"
+
+example_check_69() {
+    cat <<'EOF'
+# Why: Without timeout-minutes, GitHub-hosted runners default to 360 minutes
+# (6 hours) and self-hosted runners have no timeout at all. A runaway job
+# (infinite loop, hung test, deadlocked service) can consume runner capacity
+# for hours, masking real failures and enabling denial-of-service by external
+# contributors on public repos. Setting explicit timeouts ensures jobs fail fast.
+# Bad:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make test
+# Good:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: make test
+EOF
+}
+
+check_69() {
+    local file="$1"
+
+    # Extract job names and check each job block for timeout-minutes
+    # Strategy: use awk to walk the YAML structure, identifying job-level keys
+    local missing_timeout
+    missing_timeout=$(awk '
+        # Track current indentation depth
+        # Jobs section starts with "jobs:" at column 0
+        /^jobs:[[:space:]]*$/ { in_jobs=1; next }
+        in_jobs && /^[a-zA-Z0-9_-]+:/ {
+            # Top-level non-jobs key — left the jobs section
+            if (!in_job) { in_jobs=0 }
+            next
+        }
+        # Job identifiers: 2-space indent + name:
+        in_jobs && /^  [a-zA-Z0-9_][a-zA-Z0-9_-]*:[[:space:]]*$/ {
+            # Save previous job result if we accumulated one
+            if (current_job != "" && !has_timeout) {
+                print current_job_line ": " current_job
+            }
+            current_job=$0
+            gsub(/^[[:space:]]+|:[[:space:]]*$/, "", current_job)
+            current_job_line=NR
+            has_timeout=0
+            in_job=1
+            next
+        }
+        # timeout-minutes inside a job (4-space indent)
+        in_job && /^    timeout-minutes:/ { has_timeout=1 }
+        # Next top-level job or end of jobs section
+        in_jobs && in_job && /^  [a-zA-Z0-9_][a-zA-Z0-9_-]*:/ && !/^  [a-zA-Z0-9_][a-zA-Z0-9_-]*:[[:space:]]*$/ {
+            # inline value job definition (unusual but handle)
+            next
+        }
+        END {
+            if (in_job && current_job != "" && !has_timeout) {
+                print current_job_line ": " current_job
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${missing_timeout}" ]]; then
+        log_issue "LOW" "${file}" "One or more jobs are missing timeout-minutes - default is 360 min (6h) for hosted runners, infinite for self-hosted; set explicit timeouts to fail fast" "$(_extract_lines "${missing_timeout}")"
         return 1
     fi
     return 0
