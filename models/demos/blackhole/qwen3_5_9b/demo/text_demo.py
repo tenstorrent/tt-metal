@@ -196,7 +196,12 @@ def _blocks_for(seqlen, max_generated_tokens):
     space. Floored at 64 blocks (4k) so short prompts still get a sane cache."""
     bucket = ((seqlen + PREFILL_CHUNK - 1) // PREFILL_CHUNK) * PREFILL_CHUNK
     needed = bucket + max_generated_tokens
-    return min(MAX_BLOCK_BUDGET, max(64, (needed + BLOCK_SIZE - 1) // BLOCK_SIZE))
+    blocks = max(64, (needed + BLOCK_SIZE - 1) // BLOCK_SIZE)
+    # Flexible chunked SDPA reads the page table as a ROW_MAJOR int32 stick of width num_blocks;
+    # sdpa_program_factory requires page_table_stick_size (= num_blocks * 4 bytes) % 32 == 0, i.e.
+    # num_blocks % 8 == 0. Round up (only enlarges the cache by <=7 blocks; the 4096 cap is %8).
+    blocks = ((blocks + 7) // 8) * 8
+    return min(MAX_BLOCK_BUDGET, blocks)
 
 
 @run_for_blackhole()
