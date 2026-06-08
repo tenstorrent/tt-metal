@@ -330,6 +330,7 @@ def test_generalized_moe_gate_512_per_block(device, diag_block, enable_sigmoid, 
         f"block {diag_block} not a valid top-8.\n dev_idx={dev_idx}\n gold={gold_local}\n"
         f" dev_key={dev_key}\n gold_key={gold_key}"
     )
+    breakpoint()
 
 
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
@@ -567,6 +568,76 @@ def test_dump_stash_run(device):
     logger.info(f"golden ids found per column: {cols_with_gold}")
     allpresent = sorted(int(v) for v in dump.flatten().tolist() if int(v) in set(goldset))
     logger.info(f"golden ids present anywhere in the 16x16: {allpresent}")
+
+
+def test_dump_combine_run(device):
+    """DEBUG: 512 combine in DUMP mode (kernel packs the PLACED idx region (tile1) -> output_indices and the
+    bias region (tile2) -> output_cb, merge SKIPPED). Uses a 32x32 output so the FULL 16x16 face is readable.
+    Shows both placed runs: block1 at rows {0,2}, block0 at rows {4,6}. Compare to each block's local top-8."""
+    num_experts, num_blocks, batch_size = 512, 2, 1
+    tile = ttnn.Tile((32, 32))
+    torch.manual_seed(42)
+    torch_input = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
+    torch_bias = (2 * torch.rand((batch_size, num_experts), dtype=torch.bfloat16)) - 1
+    key = torch.sigmoid(torch_input).float() + torch_bias.float()
+    for b in range(num_blocks):
+        _, gl = torch.topk(key[:, b * 256 : (b + 1) * 256], 8, dim=-1, sorted=True)
+        logger.info(f"block {b} local top8 (global ids): {sorted((gl[0] + b * 256).tolist())}")
+    _, gg = torch.topk(key, 8, dim=-1, sorted=True)
+    logger.info(f"512 global top8: {sorted(gg[0].tolist())}")
+
+    logits_blocks = torch_input.reshape(batch_size, num_blocks, 16, 16)
+    bias_blocks = torch.transpose(torch_bias.reshape(batch_size, num_blocks, 16, 16), -2, -1).contiguous()
+    grid = device.compute_with_storage_grid_size()
+    core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
+
+    def mem(shard):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_grid, shard, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    multi = (num_blocks * 32, 32)
+    ttnn_input = ttnn.from_torch(
+        logits_blocks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
+    )
+    ttnn_bias = ttnn.from_torch(
+        bias_blocks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
+    )
+    ar = torch.arange(256, dtype=torch.int32).reshape(1, 1, 16, 16)
+    offs = (torch.arange(num_blocks, dtype=torch.int32) * 256).reshape(1, num_blocks, 1, 1)
+    idx_blocks = torch.transpose(ar + offs, -2, -1).contiguous().to(torch.uint16)
+    ttnn_input_indices = ttnn.from_torch(
+        idx_blocks, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem(multi), tile=tile
+    )
+    out32 = (batch_size, 32, 32)
+    ttnn_output = ttnn.from_torch(
+        torch.zeros(out32, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem((32, 32)),
+        tile=tile,
+    )
+    ttnn_output_indices = ttnn.from_torch(
+        torch.zeros(out32, dtype=torch.uint16),
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem((32, 32)),
+        tile=tile,
+    )
+
+    GeneralizedMoeGateOp.op(
+        ttnn_input, ttnn_bias, ttnn_output, ttnn_input_indices, ttnn_output_indices, 1e-20, 2.5, True
+    )
+
+    ids = ttnn.to_torch(ttnn_output_indices)[0].to(torch.int32)
+    scr = ttnn.to_torch(ttnn_output)[0].float()  # bias region (dump mode: tile2 -> output_cb)
+    torch.set_printoptions(linewidth=260)
+    logger.info(f"PLACED idx region full 16x16 (block1 rows 0,2; block0 rows 4,6):\n{ids[:16, :16]}")
+    logger.info(f"PLACED bias region full 16x16 (sort key):\n{scr[:16, :16]}")
 
 
 if __name__ == "__main__":

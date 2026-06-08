@@ -116,10 +116,13 @@ struct GeneralizedMoeGate {
             reconfig_data_format_srca(CTArgs::input_indices_cb);
             copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
             tile_regs_acquire();
-            copy_tile(CTArgs::input_indices_cb, 0, 1);
+            // Per-block GLOBAL indices: block b uses indices tile b (uploaded as arange + b*256). The
+            // in-kernel idx_offset add was a no-op (sfpi/TTI both failed), so global ids come from the
+            // per-block indices tile, with idx_offset=0.
+            copy_tile(CTArgs::input_indices_cb, b, 1);
             reconfig_data_format_srca(CTArgs::input_cb);
             generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-            generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, b * 256>(
+            generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
                 CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // math run at {0,2}
             // Relocate {0,2}->{0,4} BEFORE step2: step2 is built for the finalize layout (store8_even_cols
             // at offsets {0,4}); applied to a {0,2} run it mis-strides and 2-period-duplicates col 2. This
@@ -281,30 +284,28 @@ struct GeneralizedMoeGate {
                 tilize_uninit(CTArgs::run_idx_cb, CTArgs::cb_tilize_idx);
                 cb_pop_front(CTArgs::run_idx_cb, 1);
                 cb_pop_front(CTArgs::run_bias_cb, 1);  // bias not restored in this test
-                // ---- transpose_wh each (STANDARD tiled -> DEST math): scores -> tile 0, idx -> tile 1. ----
+                // ---- DIAGNOSTIC (option A): transpose_wh scores -> interm (tile 3), then DUMP interm RAW two
+                //      ways (bf16 via output_cb, uint16 via output_indices) — NO place/normalize. Shows where
+                //      transpose_wh puts the score in the interm cell: which OFFSET (expect {0,4}) and which
+                //      16-bit half (bf16 view shows the score 0.6-0.7 values; uint16 view shows the raw bits).
+                //      This tells us the load/store modes place_field_from_interm needs for the standalone field. ----
+                // PLACE isolation (srcb FIXED): transpose_wh each field -> interm (tile 3) [NO srcb_dummy_valid
+                // before — the transpose's TRNSPSRCB must NOT read a dummy SrcB], SFPU place src{0,4} -> home
+                // {0,4}; THEN combine_init + srcb_dummy_valid (for step2) + normalize_step2. Validates place
+                // against the 256 golden. (idst=2/3 are reachable; earlier all-0 was the srcb-before-transpose bug.)
                 cb_wait_front(CTArgs::cb_tilize, 1);
                 cb_wait_front(CTArgs::cb_tilize_idx, 1);
-                reconfig_data_format_srca(CTArgs::cb_tilize);  // idx tilize left srca=uint16; back to bf16
-                transpose_wh_init_short(CTArgs::cb_tilize);
                 tile_regs_acquire();
-                transpose_wh_tile(CTArgs::cb_tilize, 0, 0);  // scores: standard tiled -> DEST math {0,2} (tile 0)
-                // idx: transpose_wh cb_tilize_idx (STANDARD uint16) -> DEST math {0,2} (tile 1). Reconfig
-                // srca to uint16 first (the scores transpose_wh left it bf16); if transpose_wh has the same
-                // bf16-vs-uint16 decode issue as tilize did, the idx will corrupt again and need its own setup.
+                reconfig_data_format_srca(CTArgs::cb_tilize);
+                transpose_wh_init_short(CTArgs::cb_tilize);
+                transpose_wh_tile(CTArgs::cb_tilize, 0, 3);                     // scores -> interm (tile 3)
+                generalized_moe_gate_place_field_from_interm<2, 0, 4, 0, 4>();  // score: interm{0,4} -> scores {0,4}
                 reconfig_data_format_srca(CTArgs::cb_tilize_idx);
                 transpose_wh_init_short(CTArgs::cb_tilize_idx);
-                transpose_wh_tile(CTArgs::cb_tilize_idx, 0, 1);  // idx: standard -> DEST math {0,2} (tile 1)
-                // Run is now restored at math {0,2} (scores tile0, idx tile1, cell-paired). transpose_wh used
-                // FPU addrmods; combine_init restores the transpose-dest addrmods + topk SFPU setup that
-                // relocate/normalize need. relocate {0,2}->{0,4} (normalize_run reads scores at {0,4}), then
-                // normalize+step2 -> output. (bias not restored: normalize_run reads only scores_offset.)
+                transpose_wh_tile(CTArgs::cb_tilize_idx, 0, 3);  // idx -> interm (tile 3, overwrites score interm)
+                generalized_moe_gate_place_field_from_interm<1, 0, 4, 0, 4>();  // idx: interm{0,4} -> indices {0,4}
                 generalized_moe_gate_combine_init<false>();
-                // SrcB dummy-valid: normalize_step2's step2 is an FPU TRNSPSRCB that stalls (hang) unless
-                // SrcB is marked valid. transpose_wh consumed the prior valid; re-set it (as the full op and
-                // place_run_at do) so the step2 transpose runs.
-                UNPACK((llk_unpack_set_srcb_dummy_valid()));
-                // No relocate here: process_block_to_run already moved the run to {0,4} before step2, so the
-                // restored run is at math {0,4} — exactly where normalize_run reads scores (offsets 0,4).
+                UNPACK((llk_unpack_set_srcb_dummy_valid()));  // AFTER transposes, before step2
                 generalized_moe_gate_normalize_step2<false>(CTArgs::eps, CTArgs::scaling_factor);
                 tile_regs_commit();
                 cb_pop_front(CTArgs::cb_tilize, 1);
@@ -394,63 +395,83 @@ struct GeneralizedMoeGate {
             } else {
                 // ============ multi-block path ============
 #ifndef GMG_DIAG_BLOCK
-                // A2 combine (L1 stash). block0's run is produced at {0,2} and PACKED to the L1 stash CBs
-                // (run_scores/idx/bias). step2_init (addrmod config only, no DEST change) resets the
-                // state so block1's transpose_wh pipeline starts cleanly, WITHOUT scrambling the run
-                // before the pack. block1 produces its run at {0,2}, unpacks block0's run from L1 (->
-                // interm -> SFPU place at {4,6}), and merges the two -> global top-8. Indices already
-                // carry global ids (per-block indices tile), so no offset add. (v1: num_blocks==2.)
-                // ---- block 0: produce run at {0,2} -> pack to L1 ----
-                cb_wait_front(CTArgs::bias_cb, 1);
-                cb_wait_front(CTArgs::input_cb, 1);
-                reconfig_data_format_srca(CTArgs::input_indices_cb);
-                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+                // A2 combine (L1 stash, v3 — MERGE-ONLY acquire). Both blocks are stashed to L1 via the
+                // proven round-trip (process_block_to_run). Then ALL fields are tilize'd into scratch, and a
+                // SINGLE merge-only acquire (NO produce_run inside it — produce_run's SFPU/srcb state poisons a
+                // same-acquire transpose_wh) restores both runs via transpose_wh -> interm -> SFPU place
+                // (block1->{0,2}, block0->{4,6}) and merges them. This mirrors the clean state of the proven
+                // 256 place-isolation. Per-block indices carry global ids.
+                process_block_to_run<0>();  // -> L1 run CBs page 0
+                process_block_to_run<1>();  // -> L1 run CBs page 1
+                // ---- tilize all fields BEFORE the merge acquire (tilize self-manages DEST). cb_tilize (bf16):
+                //      p0=b0 score, p1=b1 score, p2=b0 bias, p3=b1 bias. cb_tilize_idx (uint16): p0=b0 idx, p1=b1 idx.
+                compute_kernel_hw_startup(CTArgs::run_scores_cb, CTArgs::cb_tilize);
+                cb_wait_front(CTArgs::run_scores_cb, CTArgs::num_blocks);
+                reconfig_data_format_srca(CTArgs::run_scores_cb);
+                tilize_init(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
+                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                    cb_reserve_back(CTArgs::cb_tilize, 1);
+                    tilize_block(CTArgs::run_scores_cb, 1, CTArgs::cb_tilize);
+                    cb_push_back(CTArgs::cb_tilize, 1);
+                    cb_pop_front(CTArgs::run_scores_cb, 1);
+                }
+                tilize_uninit(CTArgs::run_scores_cb, CTArgs::cb_tilize);
+                cb_wait_front(CTArgs::run_bias_cb, CTArgs::num_blocks);
+                reconfig_data_format_srca(CTArgs::run_bias_cb);
+                tilize_init(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
+                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                    cb_reserve_back(CTArgs::cb_tilize, 1);
+                    tilize_block(CTArgs::run_bias_cb, 1, CTArgs::cb_tilize);
+                    cb_push_back(CTArgs::cb_tilize, 1);
+                    cb_pop_front(CTArgs::run_bias_cb, 1);
+                }
+                tilize_uninit(CTArgs::run_bias_cb, CTArgs::cb_tilize);
+                compute_kernel_hw_startup(CTArgs::run_idx_cb, CTArgs::cb_tilize_idx);
+                cb_wait_front(CTArgs::run_idx_cb, CTArgs::num_blocks);
+                reconfig_data_format_srca(CTArgs::run_idx_cb);
+                tilize_init(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
+                for (uint32_t b = 0; b < CTArgs::num_blocks; ++b) {
+                    cb_reserve_back(CTArgs::cb_tilize_idx, 1);
+                    tilize_block(CTArgs::run_idx_cb, 1, CTArgs::cb_tilize_idx);
+                    cb_push_back(CTArgs::cb_tilize_idx, 1);
+                    cb_pop_front(CTArgs::run_idx_cb, 1);
+                }
+                tilize_uninit(CTArgs::run_idx_cb, CTArgs::cb_tilize_idx);
+                // ---- merge-only acquire: restore block1 -> {0,2}, block0 -> {4,6}, then merge ----
+                cb_wait_front(CTArgs::cb_tilize, 2 * CTArgs::num_blocks);
+                cb_wait_front(CTArgs::cb_tilize_idx, CTArgs::num_blocks);
                 tile_regs_acquire();
-                copy_tile(CTArgs::input_indices_cb, 0, 1);  // block 0 indices (global 0-255)
-                reconfig_data_format_srca(CTArgs::input_cb);
-                generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-                generalized_moe_gate<CTArgs::enable_sigmoid, false, true, 0, 2, 0>(
-                    CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
-                // step2 transposes the run math->STANDARD layout (which survives pack_tile/copy_tile,
-                // unlike the math layout) AND settles the math state so block1's pipeline starts cleanly.
-                // block1 inverts it with transpose_wh on unpack (standard->math).
-                generalized_moe_gate_step2_only<false>();
-                tile_regs_commit();
-                cb_reserve_back(CTArgs::run_scores_cb, 1);
-                cb_reserve_back(CTArgs::run_idx_cb, 1);
-                cb_reserve_back(CTArgs::run_bias_cb, 1);
-                tile_regs_wait();
-                pack_reconfig_data_format(CTArgs::run_scores_cb);
-                pack_tile(0, CTArgs::run_scores_cb);  // scores region (DEST tile 0)
-                cb_push_back(CTArgs::run_scores_cb, 1);
-                pack_reconfig_data_format(CTArgs::run_idx_cb);
-                pack_tile(1, CTArgs::run_idx_cb);  // indices region (DEST tile 1)
-                cb_push_back(CTArgs::run_idx_cb, 1);
-                pack_reconfig_data_format(CTArgs::run_bias_cb);
-                pack_tile(2, CTArgs::run_bias_cb);  // bias region (DEST tile 2)
-                cb_push_back(CTArgs::run_bias_cb, 1);
-                tile_regs_release();
-                cb_pop_front(CTArgs::input_cb, 1);
-                cb_pop_front(CTArgs::bias_cb, 1);
-                // ---- block 1: produce run at {0,2}; unpack block0 from L1 (transpose_wh: standard->math)
-                //      -> place at {4,6}; merge ----
-                cb_wait_front(CTArgs::bias_cb, 1);
-                cb_wait_front(CTArgs::input_cb, 1);
-                cb_wait_front(CTArgs::run_scores_cb, 1);
-                cb_wait_front(CTArgs::run_idx_cb, 1);
-                cb_wait_front(CTArgs::run_bias_cb, 1);
-                reconfig_data_format_srca(CTArgs::input_indices_cb);
-                copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
-                tile_regs_acquire();
-                copy_tile(CTArgs::input_indices_cb, 1, 1);  // block 1 indices (global 256-511)
-                reconfig_data_format_srca(CTArgs::input_cb);
-                generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-                generalized_moe_gate<CTArgs::enable_sigmoid, false, true, 0, 2, 0>(
-                    CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // run1 at {0,2}
-                place_run_at<4, 6>(0);  // unpack block0 (page 0) -> interm -> SFPU place to {4,6}
+                // block1 -> {0,2}: scores(cb_tilize p1), idx(cb_tilize_idx p1), bias(cb_tilize p3)
+                reconfig_data_format_srca(CTArgs::cb_tilize);
+                transpose_wh_init_short(CTArgs::cb_tilize);
+                transpose_wh_tile(CTArgs::cb_tilize, 1, 3);
+                generalized_moe_gate_place_field_from_interm<2, 0, 2, 0, 4>();
+                reconfig_data_format_srca(CTArgs::cb_tilize_idx);
+                transpose_wh_init_short(CTArgs::cb_tilize_idx);
+                transpose_wh_tile(CTArgs::cb_tilize_idx, 1, 3);
+                generalized_moe_gate_place_field_from_interm<1, 0, 2, 0, 4>();
+                reconfig_data_format_srca(CTArgs::cb_tilize);
+                transpose_wh_init_short(CTArgs::cb_tilize);
+                transpose_wh_tile(CTArgs::cb_tilize, 3, 3);
+                generalized_moe_gate_place_field_from_interm<0, 0, 2, 0, 4>();
+                // block0 -> {4,6}: scores(cb_tilize p0), idx(cb_tilize_idx p0), bias(cb_tilize p2)
+                transpose_wh_tile(CTArgs::cb_tilize, 0, 3);
+                generalized_moe_gate_place_field_from_interm<2, 4, 6, 0, 4>();
+                reconfig_data_format_srca(CTArgs::cb_tilize_idx);
+                transpose_wh_init_short(CTArgs::cb_tilize_idx);
+                transpose_wh_tile(CTArgs::cb_tilize_idx, 0, 3);
+                generalized_moe_gate_place_field_from_interm<1, 4, 6, 0, 4>();
+                reconfig_data_format_srca(CTArgs::cb_tilize);
+                transpose_wh_init_short(CTArgs::cb_tilize);
+                transpose_wh_tile(CTArgs::cb_tilize, 2, 3);
+                generalized_moe_gate_place_field_from_interm<0, 4, 6, 0, 4>();
+                // merge {0,2}+{4,6} -> global top-8 + normalize + step2. srcb dummy-valid AFTER the transposes.
+                generalized_moe_gate_combine_init<false>();
+                UNPACK((llk_unpack_set_srcb_dummy_valid()));
                 generalized_moe_gate_combine_finalize<false>(CTArgs::eps, CTArgs::scaling_factor);
                 tile_regs_commit();
-
+                cb_pop_front(CTArgs::cb_tilize, 2 * CTArgs::num_blocks);
+                cb_pop_front(CTArgs::cb_tilize_idx, CTArgs::num_blocks);
                 cb_reserve_back(CTArgs::output_cb, 1);
                 cb_reserve_back(CTArgs::output_indices_cb, 1);
                 tile_regs_wait();
@@ -461,11 +482,6 @@ struct GeneralizedMoeGate {
                 pack_tile(1, CTArgs::output_indices_cb);
                 cb_push_back(CTArgs::output_indices_cb, 1);
                 tile_regs_release();
-                cb_pop_front(CTArgs::input_cb, 1);
-                cb_pop_front(CTArgs::bias_cb, 1);
-                cb_pop_front(CTArgs::run_scores_cb, 1);
-                cb_pop_front(CTArgs::run_idx_cb, 1);
-                cb_pop_front(CTArgs::run_bias_cb, 1);
 #else
                 // A1 diagnostic: run the full per-256 pipeline on each block and OUTPUT only block
                 // GMG_DIAG_BLOCK, to validate each block's top-8 in isolation.

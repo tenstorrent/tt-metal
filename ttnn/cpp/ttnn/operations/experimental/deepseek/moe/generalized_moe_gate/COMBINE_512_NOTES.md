@@ -1,156 +1,134 @@
-# Generalized MoE Gate — 512/384-expert combine (A2): status, progress, blockers
+# Generalized MoE Gate — 512-expert combine (A2): design, journey, pitfalls & solutions
 
-Target: **Wormhole B0**. Generalize the fused single-op gate from 256 → 256/384/512 experts in **one op**,
-computing the true **global top-8** (k=8). 256 stays the fast single op (~2.48 µs). Kimi=384, Qwen=512.
-Softmax will later be fused in, so a single op is required (can't split into two ops).
+Status: **✅ DONE.** `generalized_moe_gate` computes the true **global top-8** over **512 experts** in **one op**
+on **Wormhole B0**. `test_generalized_moe_gate_512_global` passes (all params); the 256 path is not regressed.
+(Chinese version: `COMBINE_512_NOTES.zh.md`.)
 
-## Architecture (per-block run + combine)
-- **Input layout (slice)**: each 256-block → face0 of its own 32×32 tile; logits/bias sharded `num_blocks`
-  tiles/core. `num_blocks = ceil(N/256)`.
-- **Per block**: run the proven 256 ungrouped pipeline up to a **re-mergeable top-8 RUN**
-  (`merge16_to_run`): the run = `(bias, idx, score)` stored at DEST cols `{0,2}` of the
-  scores/indices/bias regions (bias=rank key, idx=expert id, score=value).
-- **Combine**: place the 2 block-runs at cols `{0,2}` and `{4,6}` and run the proven `finalize`
-  (merge16 of the 16 candidates → global top-8 + normalize) + step2.
+---
 
-## DEST layout facts (WH B0, verified)
-- Regions: scores @ off 0, indices @ 64, bias @ 128, interm @ 192 (`dst_tile_offset=64`).
-  `copy_tile`/`pack_tile` tile index k ↔ SFPU offset k*64.
-- **SFPU offsets are mod-32** (offset 32 aliases col 0). Park must be in 16-31, not 32+.
-- A run lives at **2 columns** (`{store_lo, store_hi}`), 4 values each. The merge reads cols `{0,2,4,6}`.
-- Occupancy probe (arange sentinel in indices region, one full pipeline pass): the pipeline **writes cols
-  0-15** of each region; **cols 16-31 are FREE in the *indices* region** (idx isn't transposed). NOT
-  verified free for scores/bias (the transpose likely uses 16-31 there).
-- `fp32_dest_acc_en = false` (16-bit dest). `dst_full_sync_en = true` (set for the combine).
+## 1. Goal & constraints
 
-## What WORKS (verified on device)
-1. **`produce_run`** (template `produce_run` on `generalized_moe_gate` → ends at `merge16_to_run`,
-   skips normalize/step2): 256 via `produce_run + relocate<0,2,0,4> + normalize_step2` PASSES.
-2. **Global indices via per-block `input_indices` tiles** (block b's tile = `arange + b*256`): block1's
-   output idx come out correctly global (256-511). Reader sets up `num_blocks` indices tiles; block b
-   copies tile b. (The in-kernel offset add was abandoned — see blocker (e).)
-3. **block1's pipeline runs correctly as the 2nd block IFF the previous block ended with a full `step2`
-   (the OP, not just `step2_init`)**: confirmed — block1 then emits its exact top-8.
-4. The proven `finalize`/`merge16` brick, `relocate` (=`copy_topk_run`), `normalize`.
+- Generalize the fused single-op gate from 256 → **256 / 384 / 512** experts in **ONE op**, computing the true
+  **global top-8** (k=8). 256 stays the fast single op (~2.48 µs). Kimi = 384, Qwen = 512.
+- **Single op is required** — softmax will be fused in later, so it cannot be split into two ops.
+- Target arch: **Wormhole B0**. `fp32_dest_acc_en = false` (16-bit DEST); `dst_full_sync_en = true`.
 
-## The BLOCKER: a tight constraint web (why the one-op combine doesn't close)
-The two runs must be **co-resident in the SFPU "math" DEST layout** at `{0,2}` and `{4,6}` for the merge.
-Getting block0's run to survive block1's processing and land at `{4,6}` hits ALL of:
+## 2. Architecture — per-block "run" + combine
 
-- **(a)** block1's `produce_run` pipeline writes all of scores/idx/bias **cols 0-15** (the 16×16 face),
-  the transpose writes **cols 16-31**, and it uses the **interm** region. → No free 2-col slot in
-  scores/bias to park a run during block1's pipeline. (indices 16-31 is free, but a run needs bias+score
-  too.) → **in-DEST park is dead.**
-- **(b)** The run is in the SFPU **"math" (transposed) layout**; `pack_tile`/`copy_tile` use **standard
-  row-major**, so the run does **NOT round-trip through L1** (dump: score bf16 bits land in idx slots).
-  → **naive L1 stash is dead.**
-- **(c)** The **next FPU op after a `produce_run`** (block1's `transpose_wh`, or the `copy_tile`/
-  `transpose_wh` that restores block0) **does not start unless the previous step ended with a full
-  `step2`** (resets SrcB/RWC; `step2_init` alone is NOT enough).
-- **(d)** But `step2` **(1) scrambles the run still in DEST** and **(2) writes cols 0-31** (incl any park).
-  → can't both `step2`-reset AND keep a run parked in DEST.
+- **Input layout (slice):** each 256-expert block → face 0 of its own 32×32 tile; logits/bias sharded
+  `num_blocks` tiles/core. `num_blocks = ceil(N/256)` (512 → 2).
+- **Per block (`produce_run`):** run the proven 256 ungrouped pipeline up to a **re-mergeable top-8 RUN**
+  (`merge16_to_run`, skipping normalize/step2). A "run" = `(bias, idx, score)` for 8 experts:
+  - `bias` = the rank key (sigmoid_score + bias term),
+  - `idx`  = the global expert id (uint16),
+  - `score`= the sigmoid value (the output weight).
+- **Combine:** get the two block-runs co-resident in DEST at SFPU offsets `{0,2}` (block1) and `{4,6}` (block0),
+  then run the proven `combine_finalize` (`merge16_core` reads the 16 candidates at `{0,2,4,6}`, full bitonic
+  sort → global top-8, normalize, step2 → output).
 
-Every ordering hits one of (a)-(d). Concretely, the L1-stash-with-step2-convert attempt:
-- block0: `produce_run → step2 (math→standard, survives L1) → pack standard run to L1`.
-- block1: `produce_run → [restore block0 from L1 via transpose_wh standard→math, place at {4,6}] → finalize`.
-- The restore (transpose_wh/copy_tile) is AFTER block1's produce_run → broken by (c). Placing it BEFORE
-  produce_run → produce_run clobbers {4,6} (a). A step2 reset between → scrambles block1's run (d).
-- Symptom: dev_idx = `[506,315,506,315,8062,342,8062,4734]` — block1's experts (256-511) partly present,
-  block0 entirely absent, garbage (block1 pipeline leftover at {4,6}). IDENTICAL across copy_tile vs
-  transpose_wh vs step2-before-pack → confirms block0 never lands at {4,6} (the restore-after-produce_run
-  is consistently broken by (c)).
-- **(e)** In-kernel `idx += b*256`: both `sfpi l_reg[LReg4]+o` (SSA doesn't write back to the physical
-  LREG the raw TTI_SFPSTORE reads → no-op) and `TTI_SFPIADD(...ARG_IMM)` (no observable change, likely
-  SFPCONFIG index-tracking mode) FAILED. → sidestepped with per-block indices (works, see 2).
+**The hard part** is getting *both* runs co-resident in DEST in the SFPU "math" layout that `merge16_core`
+reads — block0's run has to survive while block1 is produced, and land at `{4,6}`. The final, working answer is
+the **merge-only acquire** (§3).
 
-## MOST PROMISING UNTRIED idea: a 3rd "merge-only" acquire
-Stash BOTH block-runs to L1 in **standard** layout (via step2 before pack), then a **separate merge
-acquire that has NO `produce_run`** — so (c) doesn't bite, and the only FPU op is `transpose_wh` which
-**writes DEST cols 0-15 only** (SrcB rows 16-31 are scratch), leaving **cols 16-31 free to park**:
-1. block0: `produce_run → step2 → pack standard to L1`.
-2. block1: `produce_run → step2 → pack standard to L1`.
-3. merge acquire (no produce_run):
-   - `transpose_wh`-unpack block0 (standard→math) → run at math `{0,2}`.
-   - `relocate {0,2}→{16,18}` (park; SFPU copy_topk_run, row-selective).
-   - `transpose_wh`-unpack block1 (standard→math) → run at math `{0,2}` (writes cols 0-15 only, so the
-     `{16,18}` park survives — needs verifying transpose_wh really doesn't touch 16-31 here).
-   - `relocate {16,18}→{4,6}` (restore block0). Now `{0,2}`=block1, `{4,6}`=block0.
-   - `finalize` (+ step2) → global top-8.
-Key bet: in a merge-only acquire (no produce_run-tail), `transpose_wh`-unpack works AND only touches
-cols 0-15, so a `{16,18}` park survives. Each transpose_wh-unpack is 3 fields (scores/idx/bias),
-done one-at-a-time into the regions (or via interm). Needs: a 2nd run CB set (or 2 pages) for block1's
-stash; confirming transpose_wh-unpack→math is the clean inverse of the step2-before-pack; checking that
-the per-field transpose_wh + relocate sequence doesn't re-trigger (c) among themselves.
+## 3. The working recipe
 
-## Linchpin test result (U1+U2) — FAILED
-256 path: `produce_run → step2(math→standard) → pack standard to L1 → transpose_wh-unpack(standard→math)
-→ relocate<0,2,0,4> → normalize` → **all-0** (dev_idx all 0). So the L1 round-trip + layout-convert does
-NOT recover the run. (The earlier math-pack + copy_tile L1 round-trip ALSO gave all-0.) **=> the "stash to
-L1" direction is dead** for the run as currently packed. Caveat: all-0 is uninformative — it could be the
-L1 round-trip itself, OR transpose_wh-unpack not working on the run CB (needs more setup than just
-init_short + srcb_dummy_valid), OR the relocate/normalize AFTER the 3 transpose_wh ops getting broken by an
-FPU-tail (the same "op-after-an-FPU-op needs a reset" class of issue that pervades this whole effort). Not
-yet localized.
+```
+num_blocks == 2 (combine path):
 
-## UPDATE — L1 round-trip WORKS; blocker narrowed to the standard→math DEST convert
-New finding (256, GMG_TEST_STASH): `produce_run → step2(math→standard) → pack standard to L1 → copy_tile
-unpack` → **block0's run comes back** (golden top-8 ids all present in the dumped idx region, in a
-STANDARD layout: the run as a ROW (row 0, cols 0-7), plus the transposed face in cols 0-3). So:
-- **The L1 stash is viable** — packing the run in STANDARD layout (step2 BEFORE pack) survives the
-  round-trip (the math layout does not; that was the earlier all-0).
-- **Remaining blocker = converting the recovered STANDARD run back to MATH `{0,2}`** for the merge.
-  Both DEST transposes fail in this standalone (post-copy_tile, fresh-acquire) context:
-  - `step2` (DEST→DEST, MOVD2B/TRNSPSRCB/MOVB2D): **HANGS** even with transpose_common_init +
-    step2_init + srcb_dummy_valid. step2 is NOT standalone-callable — its TRNSPSRCB depends on the
-    SrcB state that step0/step1 set up earlier in the pipeline; called alone it stalls waiting for SrcB.
-  - `transpose_wh` (CB→DEST, the input transpose, which IS step2's logical inverse standard→math):
-    gives **all-0** for BOTH the bf16 score region AND the uint16 idx region → transpose_wh-unpack is
-    totally broken in this fresh-acquire/post-copy_tile context (a setup issue — not just uint16). The
-    transpose_wh setup it gets (transpose_wh_init_short + srcb_dummy_valid) is insufficient on its own.
-- NEXT to try: (1) a standalone standard→math DEST transpose that actually works (find the right op +
-  SrcB/addrmod setup — maybe step0 or step1 rather than step2; ask someone who knows the transpose LLK);
-  (2) handle the idx field's transpose separately (it's uint16; bf16 transpose_wh may drop it);
-  (3) a small SFPU rearrange (row-0 8-vector → cols {0,2}) instead of a full-face transpose.
+  # --- stash BOTH blocks to L1 (each via the proven round-trip) ---
+  process_block_to_run<0>()    # block0 -> L1 run CBs page 0
+  process_block_to_run<1>()    # block1 -> L1 run CBs page 1
+    # process_block_to_run<b>:
+    #   copy_tile(input_indices, b, 1)                 # per-block GLOBAL indices (tile b = arange + b*256)
+    #   produce_run<...,0,2,idx_offset=0>              # run at math {0,2}
+    #   relocate_run<0,2,0,4>                          # {0,2} -> {0,4}  (step2 expects the {0,4} finalize layout)
+    #   step2_only<false>                              # math -> standard (now transposes 3 tiles: score+idx+BIAS)
+    #   per field: pack_untilize_dest(tile_dst_rt_offset = 0/1/2)  # standard DEST -> row-major L1
 
-## The crisp open question (for a transpose/LLK owner)
-We have a top-8 RUN packed to a CB in STANDARD layout (it was step2'd math→standard before pack;
-copy_tile loads it back fine, confirming the data is there). We need to load it back into DEST in the
-SFPU **"math" layout** — i.e. the pre-step2 layout that the proven `merge16_core` reads at cols {0,2}
-(so two runs at {0,2} and {4,6} can be merged). Tried, in a fresh tile_regs_acquire right after a
-copy_tile:
-- `copy_tile` (unpack + A2D datacopy, no transpose): loads the run but in STANDARD layout (wrong for the merge).
-- `step2` (DEST→DEST transpose; transpose_dest_single_face_step2, MOVD2B/TRNSPSRCB/MOVB2D): **HANGS**
-  even after transpose_dest_common_init + step2_init + srcb_dummy_valid. Seems not standalone-callable
-  (its TRNSPSRCB depends on SrcB state that step0/step1 set up earlier in the pipeline).
-- `transpose_wh` (CB→DEST input transpose, the logical standard→math inverse): **all-0**, with BOTH
-  transpose_wh_init_short AND the full transpose_wh_init(icb, ocb). Produces nothing in DEST.
-**Question: what is the correct standalone way to load a CB tile into DEST *transposed* (standard→math),
-in a fresh acquire after a copy_tile, for this single-face gate?** (Or: which of step0/step1/step2 is the
-standalone standard→math DEST transpose + its exact SrcB/addrmod/init setup.) Once that one primitive
-works, the combine closes: stash one block's run to L1 (standard, step2 before pack — VERIFIED), in the
-merge place it at {4,6} via this transpose-load, the other block's run is already at {0,2}, then the
-proven finalize → global top-8.
+  # --- tilize all fields BEFORE the merge acquire (tilize self-manages DEST) ---
+  hw_startup(run_scores_cb, cb_tilize);  tilize run_scores x num_blocks -> cb_tilize p0,p1   (bf16)
+  (reuse)                                tilize run_bias   x num_blocks -> cb_tilize p2,p3   (bf16)
+  hw_startup(run_idx_cb, cb_tilize_idx); tilize run_idx    x num_blocks -> cb_tilize_idx p0,p1 (uint16)
 
-## Overall status: one-op combine BLOCKED
-Both stash directions are dead (in-DEST park: no free DEST cols during block1's pipeline; L1 stash: run
-doesn't survive the round-trip). The recurring obstacle across ALL attempts is a web of WH B0
-micro-architectural constraints that have to be threaded simultaneously: (i) op-sequencing — many FPU/SFPU
-ops only start correctly if the previous op ended a certain way (e.g. a full step2 reset); (ii) layout —
-the run is in a transposed "math" layout that standard pack/unpack scrambles; (iii) DEST coexistence — two
-runs can't both sit in the SFPU-addressable regions while block1's pipeline runs. The proven 256 pipeline
-threads (i) internally; every ADDED op (stash/2nd-produce_run/unpack/relocate) re-trips (i)/(ii)/(iii).
+  # --- merge-only acquire: NO produce_run inside it ---
+  tile_regs_acquire()
+  for (run, dst) in [(block1, {0,2}), (block0, {4,6})]:
+     for field in [score(HI16), idx(LO16), bias(mode0)]:
+        reconfig_data_format_srca(cb_tilize / cb_tilize_idx)
+        transpose_wh_init_short(...)
+        transpose_wh_tile(cb_tilize[page], 0, 3)                 # standard tiled -> interm (DEST tile 3), math {0,4}
+        place_field_from_interm<field, dst_lo, dst_hi, src=0,4>()# SFPU row/col-selective copy interm{0,4} -> home{dst}
+  combine_init()
+  UNPACK(set_srcb_dummy_valid())                                 # AFTER the transposes, before step2
+  combine_finalize()                                             # merge16 {0,2}+{4,6} -> top8 + normalize + step2
+  tile_regs_commit(); pack tile0->scores_out, tile1->idx_out
+```
 
-## Possible directions (not yet tried / need expertise)
-- Localize the linchpin all-0 (dump the regions right after transpose_wh-unpack) to learn whether
-  transpose_wh-unpack on a run CB even works.
-- FPU-park in DEST tiles 4-7 (dst_full_sync_en=true gives 16 tiles; the gate uses 0-3): move block0's run
-  to tile 4+ via FPU (copy4rows-style) during block1's pipeline, move back for the merge. Open question:
-  can the SFPU address tiles 4-7 (offset ≥256), or only the FPU? If only FPU, need an FPU move back.
-- Deep WH B0 LLK/SFPU expertise on the exact transpose layouts, SFPU offset addressing, and op-sequencing
-  resets — these have been reverse-engineered expensively via iteration.
+Why **merge-only acquire**: `produce_run` leaves SFPU/SrcB/addrmod state that *poisons a same-acquire
+`transpose_wh`*. By stashing both blocks first and doing the restore+merge in a fresh acquire with no
+`produce_run`, the restore runs in a clean state (the same state the proven 256 stash-isolation runs in).
 
-## Test/debug macros (in `generalized_moe_gate_kernel.cpp`)
-`GMG_UNGROUPED_TOP8` (default), `GMG_DIAG_BLOCK` (A1: per-block output), `GMG_TEST_PRODUCE_RUN`,
-`GMG_TEST_STASH`, `GMG_TEST_PARK`, `GMG_TEST_PARK2`, `GMG_DUMP_OCCUPANCY`, `GMG_COMBINE_DIAG`. Tests:
-`test_generalized_moe_gate_512_global`, `test_dump_stash_run` (occupancy). User builds + pastes to
-`/home/yuqiaoli/log.txt`.
+## 4. DEST layout facts (WH B0, verified)
+
+- Regions: `scores @ off 0`, `indices @ 64`, `bias @ 128`, `interm @ 192` (`dst_tile_offset = 64`).
+  `copy_tile`/`pack_tile`/`transpose_wh_tile` tile index k ↔ SFPU offset k*64 (tile 0/1/2/3).
+- A run lives at **2 SFPU offset-pairs** `{store_lo, store_hi}` (4 candidates each). `merge16_core` reads
+  `{0,2,4,6}` (two runs: `{0,2}` and `{4,6}`).
+- **`merge16_core`'s `{0,2,4,6}` offsets are ROWS** of the face (each SFPLOAD reads a row's lanes), not columns.
+- **Concatted field encoding:** a candidate is `idx (LO16) | score (HI16)` in one 32-bit SFPU LREG; stored SPLIT
+  as `score → scores region (HI16)`, `idx → indices region (LO16)`, `bias → bias region (mode 0 / full)`.
+  `merge16_core` re-loads `idx (LO16)` + `score (HI16)` and concats; it **sorts by `bias`** and index-tracks the
+  `idx|score` along the swaps.
+- `fp32_dest_acc_en = false` (16-bit dest). `dst_full_sync_en = true`.
+- **bf16 ↔ raw 16-bit:** the DEST datatype is determined by the **CB compile-time format metadata**
+  (`datatype_to_dataformat_converter`), not page size. `UInt16` is the integer path; `RawUInt16` maps to the
+  float16 pack path (a corruption trap — don't use it for ids).
+
+## 5. Pitfalls & solutions (in the order they were hit)
+
+| # | Symptom | Root cause → fix |
+|---|---------|------------------|
+| 1 | `tilize_block` hangs immediately | The MATH↔PACK DST semaphore is uninitialized → call **`compute_kernel_hw_startup(icb, ocb)` before the first tilize**. |
+| 2 | L1 stash dumps all-zero | PACK only reads the **standard** tile layout, but the run is in the SFPU **"math"/transposed** layout → pack reads empty cells. Insert **`step2_only` (math→standard) before `pack_untilize`** (and `transpose_wh` standard→math on restore). |
+| 3 | scores/idx/bias all pack as **scores** | `pack_untilize_dest` selects the DEST tile via the **runtime `tile_dst_rt_offset` (last arg)**, NOT the 3rd positional arg (that's `block_c_index`). Use `pack_untilize_dest<1,1>(cb, 1, 0, 16, 4, 0/1/2)`. |
+| 4 | idx (uint16) comes back as garbage | The bf16 scores path left the **runtime unpack format at bf16**, and `tilize_uninit` doesn't fully restore it on WH, so the idx `tilize_block` decoded raw uint16 as bf16. → give the idx tilize its **own `compute_kernel_hw_startup(run_idx_cb, cb_tilize_idx)`** (UInt16 CBs). The CB compile-time format was always correct; it was the *runtime* format. **bf16 as a raw-bit carrier is unsafe** (denormal flush — ids 0-255 = 0x00xx are subnormal). |
+| 5 | restored run is **`[a,b,a,b]` 2-period duplicated** | `step2` is built for the FINALIZE layout (`store8_even_cols` at offsets `{0,4}`); applied to `produce_run`'s `{0,2}` run it mis-strides and 2-period-collapses the second half. → **`relocate_run<0,2,0,4>` before `step2`** (align to `{0,4}`). |
+| 6 | place / transpose restore is all-zero | **`llk_unpack_set_srcb_dummy_valid()` placed BEFORE a `transpose_wh`** makes its TRNSPSRCB read the dummy SrcB → all-0. transpose_wh itself needs NO srcb-dummy-valid; it goes **AFTER all transposes**, right before the `step2` (in normalize_step2 / combine_finalize) that needs it. (Also: transpose_wh's `idst` is NOT tile-limited — it writes any DEST tile; the earlier "can't write tile 2/3" was this same srcb bug.) |
+| 7 | combine: garbage + hang, then **wrong half selected** | `produce_run` + restore in the SAME acquire — `produce_run`'s SFPU/SrcB state poisons the same-acquire transpose_wh. → **merge-only acquire** (stash BOTH blocks, restore+merge with no produce_run inside). |
+| 8 | combine: merge picks the **wrong 8** (dev max key == gold min key) | The **bias sort-key was 2-period corrupted** while scores+idx were fine: `step2` used `num_tiles=2`, so it transposed only scores(tile0)+idx(tile1) math→standard, **NOT bias(tile2)** → bias packed in math layout → corrupt round-trip. The 256 output path never reads bias (normalize reads only scores), so this was invisible until the merge sorted by bias. → **`step2_configure_mop<3>`** (transpose tiles 0,1,2). Harmless for the 256/finalize output (they pack only tiles 0,1). |
+
+Bonus: in-kernel `idx += b*256` was a **no-op** (both `sfpi l_reg[]` SSA write-back and `TTI_SFPIADD ARG_IMM`
+showed no effect) → sidestepped with **per-block `input_indices` tiles** (tile b = `arange + b*256`).
+
+## 6. Key files & functions
+
+- **`device/unified_kernels/generalized_moe_gate.hpp`** — TRISC op. `process_block_to_run<b>()` (stash one
+  block to L1), the multi-block combine path (merge-only acquire), the 256 path.
+- **`.../compute_kernel_api/generalized_moe_gate.h`** — ALWI wrappers: `generalized_moe_gate<...,produce_run,...>`,
+  `relocate_run`, `step2_only`, `combine_init`, `combine_finalize`, `place_field_from_interm<field,dst_lo,dst_hi,
+  src_lo,src_hi>`.
+- **`.../tt_llk/.../ckernel_sfpu_generalized_moe_gate_topk_single_face.h`** — `merge16_to_run`, `merge16_core`,
+  `copy_topk_run` (relocate), `normalize_run`, `place_field_from_interm`.
+- **`.../tt_llk/.../llk_math_generalized_moe_gate_transpose_dest_single_face.h`** — step0/step1/step2 transposes.
+  **`step2_init` now uses `step2_configure_mop<3>`** (pitfall 8).
+- **`device/generalized_moe_gate_program_descriptor_builder.cpp`** — CBs: `run_scores/idx/bias_cb` (5/6/7,
+  L1 stash, `num_blocks` tiles), `cb_tilize` (8, bf16, `2*num_blocks` tiles), `cb_tilize_idx` (9, uint16,
+  `num_blocks` tiles).
+
+## 7. Test / debug macros (`generalized_moe_gate_kernel.cpp`) & tests
+
+Macros: `GMG_UNGROUPED_TOP8` (default), `GMG_DIAG_BLOCK`, `GMG_TEST_PRODUCE_RUN`, `GMG_TEST_STASH` (256 stash
+isolation), `GMG_TEST_PARK/PARK2`, `GMG_DUMP_OCCUPANCY`, `GMG_COMBINE_DIAG`. Tests (in
+`models/demos/deepseek_v3/tests/test_generalized_moe_gate.py`): `test_generalized_moe_gate` (256),
+`test_generalized_moe_gate_512_global` (the combine), `test_generalized_moe_gate_512_per_block`,
+`test_dump_stash_run` (256 full-16×16 region dump), `test_dump_combine_run` (512 full-16×16 dump of the placed
+runs — the tool that finally localized the bias bug: dump a 32×32 output to read the whole face).
+
+## 8. Remaining work (none block 512)
+
+1. **Cleanup:** `GMG_TEST_STASH` is still ON → the 256 (`num_blocks==1`) path runs through the stash+place
+   isolation (slower). Turn it OFF so 256 uses the original fast single op. (Only affects `num_blocks==1`.)
+2. **Kimi 384:** `num_blocks=2` with block1 = 256-383 (+128 padding). Likely just an op.py/test concern — set the
+   padding experts' keys very low so they're never selected; the kernel combine should be unchanged.
+3. **>512:** needs a combine **tree** (the current path is a single 2-run merge).
+4. **Perf** + softmax fusion.

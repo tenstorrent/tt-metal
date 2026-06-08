@@ -47,11 +47,16 @@ ALWI void generalized_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 // (just unpacked from the L1 run stash via copy_tile) into its home region (bias/indices/scores)
 // at rows {dst_lo,dst_hi}. Row-selective, so it drops a block's run at the {4,6} merge slot without
 // disturbing the run already placed at {0,2}.
-template <uint32_t field, uint32_t dst_lo, uint32_t dst_hi>
+template <uint32_t field, uint32_t dst_lo, uint32_t dst_hi, uint32_t src_lo = 0, uint32_t src_hi = 2>
 ALWI void generalized_moe_gate_place_field_from_interm() {
-    MATH((
-        llk_math_sfpu_generalized_moe_gate_place_field_from_interm<APPROX, DST_ACCUM_MODE, field, 0, 2, dst_lo, dst_hi>(
-            0)));
+    MATH((llk_math_sfpu_generalized_moe_gate_place_field_from_interm<
+          APPROX,
+          DST_ACCUM_MODE,
+          field,
+          src_lo,
+          src_hi,
+          dst_lo,
+          dst_hi>(0)));
 }
 
 // Finalize the combine: the two block runs sit at scores/idx/bias {0,2} and {4,6}; bitonically sort

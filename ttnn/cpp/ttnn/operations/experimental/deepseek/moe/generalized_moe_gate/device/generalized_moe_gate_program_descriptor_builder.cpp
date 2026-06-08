@@ -129,24 +129,26 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     set_cb_page_size_for_tile(in_indices_cb_desc, input_indices_tensor);
     set_cb_page_size_for_tile(out_indices_cb_desc, output_indices_tensor);
 
-    // Build an intermediate (non-tensor) L1 CB sized for num_blocks tiles of fmt_tensor's format.
-    auto make_run_cb = [&](uint8_t cb_id, const tt::tt_metal::Tensor& fmt_tensor) {
+    // Build an intermediate (non-tensor) L1 CB sized for `num_tiles` tiles of fmt_tensor's format.
+    auto make_run_cb = [&](uint8_t cb_id, const tt::tt_metal::Tensor& fmt_tensor, uint32_t num_tiles) {
         const auto& spec = fmt_tensor.tensor_spec();
         const auto& tile = spec.tile();
         auto df = tt::tt_metal::datatype_to_dataformat_converter(spec.data_type());
         uint32_t tsz = tile.get_tile_size(df);
         tt::tt_metal::CBDescriptor d;
-        d.total_size = num_blocks * tsz;
+        d.total_size = num_tiles * tsz;
         d.core_ranges = all_cores;
         d.format_descriptors.push_back(
             tt::tt_metal::CBFormatDescriptor{cb_id, df, tsz, tt::tt_metal::TileDescriptor(tile)});
         return d;
     };
-    auto run_scores_cb_desc = make_run_cb(run_scores_cb, input_tensor);          // bf16 (score)
-    auto run_idx_cb_desc = make_run_cb(run_idx_cb, input_indices_tensor);        // uint16 (idx)
-    auto run_bias_cb_desc = make_run_cb(run_bias_cb, input_tensor);              // bf16 (bias)
-    auto cb_tilize_desc = make_run_cb(cb_tilize, input_tensor);                  // bf16 (tilize scratch)
-    auto cb_tilize_idx_desc = make_run_cb(cb_tilize_idx, input_indices_tensor);  // uint16 (idx tilize scratch)
+    auto run_scores_cb_desc = make_run_cb(run_scores_cb, input_tensor, num_blocks);    // bf16 (score), 1/block
+    auto run_idx_cb_desc = make_run_cb(run_idx_cb, input_indices_tensor, num_blocks);  // uint16 (idx), 1/block
+    auto run_bias_cb_desc = make_run_cb(run_bias_cb, input_tensor, num_blocks);        // bf16 (bias), 1/block
+    // cb_tilize holds the bf16 tilize-scratch for BOTH score+bias of every block (the combine tilizes all
+    // fields before the merge acquire), so 2 bf16 tiles per block. cb_tilize_idx holds 1 uint16 idx/block.
+    auto cb_tilize_desc = make_run_cb(cb_tilize, input_tensor, 2 * num_blocks);              // bf16 scratch
+    auto cb_tilize_idx_desc = make_run_cb(cb_tilize_idx, input_indices_tensor, num_blocks);  // uint16 scratch
 
     KernelDescriptor::NamedCompileTimeArgs ncrisc_named = {
         {"moe_gate_input_cb", input_cb},
