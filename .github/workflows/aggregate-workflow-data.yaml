@@ -43,6 +43,7 @@ jobs:
       last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -164,6 +165,7 @@ jobs:
       has_regressions: ${{ steps.set-outputs.outputs.has_regressions }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -288,6 +290,7 @@ jobs:
       slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -332,6 +335,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
