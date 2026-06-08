@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,14 +39,13 @@ void bind_tilize(nb::module_& mod) {
     ttnn::bind_function<"tilize">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::tilize,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("use_low_perf") = false,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::tilize,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("use_low_perf") = false,
+        nb::arg("sub_core_grids") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail

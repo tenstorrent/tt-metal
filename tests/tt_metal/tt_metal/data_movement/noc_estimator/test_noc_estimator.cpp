@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "noc_estimator.hpp"
+#include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
 #include <cmath>
 #include <exception>
 #include <iostream>
 
-using namespace tt::tt_metal::noc_estimator;
+using namespace tt::tt_metal::experimental::noc_estimator;
 
 static int g_failures = 0;
 

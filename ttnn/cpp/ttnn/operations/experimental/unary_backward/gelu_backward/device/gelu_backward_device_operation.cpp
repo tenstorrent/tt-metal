@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,7 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
     const auto& input_tensor = tensor_args.input;
+    const auto& grad_output = tensor_args.grad_output;
     auto out_memory_config = args.output_memory_config;
     auto output_datatype = args.output_dtype;
 
@@ -59,6 +60,32 @@ void GeluBackwardDeviceOperation::validate_on_program_cache_miss(
         "GELU_BW operation requires Interleaved memory layout when working with non-sharded input tensor. Input "
         "memory layout: `{}`",
         static_cast<int>(input_tensor.memory_config().memory_layout()));
+
+    TT_FATAL(
+        grad_output.storage_type() == StorageType::DEVICE,
+        "GELU_BW operation requires grad_output to be on Device. grad_output storage type: {}",
+        static_cast<int>(grad_output.storage_type()));
+
+    TT_FATAL(
+        grad_output.buffer() != nullptr,
+        "GELU_BW operation requires grad_output to be allocated in a buffer on the device. Buffer is null.");
+
+    TT_FATAL(
+        grad_output.layout() == Layout::TILE,
+        "GELU_BW operation requires grad_output to be in Tile layout. grad_output layout: {}",
+        static_cast<int>(grad_output.layout()));
+
+    TT_FATAL(
+        grad_output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "GELU_BW operation requires grad_output to have Interleaved memory layout. grad_output memory layout: {}",
+        static_cast<int>(grad_output.memory_config().memory_layout()));
+
+    TT_FATAL(
+        grad_output.logical_shape() == input_tensor.logical_shape(),
+        "GELU_BW operation requires grad_output and input to have the same logical shape. grad_output logical shape: "
+        "{}, input logical shape: {}",
+        grad_output.logical_shape(),
+        input_tensor.logical_shape());
 
     if (preallocated_input_grad.has_value()) {
         const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();

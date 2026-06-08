@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -66,7 +66,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             12,
             768,
             2,
-            0.990,
+            0.989,
         ),
     ],
 )

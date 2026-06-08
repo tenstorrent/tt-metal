@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,11 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/div_int32_sfpu.h"
-#include "api/compute/remainder_int32.h"
+#include "api/compute/binary_remainder.h"
 #include "api/compute/binary_fmod.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/xlogy.h"
+#include "api/compute/atan2.h"
 #include "api/compute/gcd.h"
 #include "api/compute/lcm.h"
 #include "api/compute/binary_comp.h"
@@ -51,7 +52,7 @@ void kernel_main() {
     unary_op_init_common(cb_in0, cb_out0);
 
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
@@ -132,14 +133,38 @@ void kernel_main() {
 #ifdef LT_INT32_INIT
             LT_INT32_INIT
 #endif
+#ifdef LT_UINT32_INIT
+            LT_UINT32_INIT
+#endif
+#ifdef LT_UINT16_INIT
+            LT_UINT16_INIT
+#endif
 #ifdef GT_INT32_INIT
             GT_INT32_INIT
+#endif
+#ifdef GT_UINT32_INIT
+            GT_UINT32_INIT
+#endif
+#ifdef GT_UINT16_INIT
+            GT_UINT16_INIT
 #endif
 #ifdef GE_INT32_INIT
             GE_INT32_INIT
 #endif
+#ifdef GE_UINT32_INIT
+            GE_UINT32_INIT
+#endif
+#ifdef GE_UINT16_INIT
+            GE_UINT16_INIT
+#endif
 #ifdef LE_INT32_INIT
             LE_INT32_INIT
+#endif
+#ifdef LE_UINT32_INIT
+            LE_UINT32_INIT
+#endif
+#ifdef LE_UINT16_INIT
+            LE_UINT16_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT

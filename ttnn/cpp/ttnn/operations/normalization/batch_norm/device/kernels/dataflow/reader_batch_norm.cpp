@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,9 @@
 #include <cstring>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
@@ -26,15 +26,17 @@ void kernel_main() {
     constexpr auto cb_id_src = get_compile_time_arg_val(0);
     constexpr auto cb_id_eps = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr bool fill_eps_fp32 = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
 
     constexpr uint32_t onetile = 1;
+    constexpr uint32_t k_tile_face_elems = 1024;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_src_obj(cb_id_src);
-    experimental::CircularBuffer cb_id_eps_obj(cb_id_eps);
+    Noc noc;
+    CircularBuffer cb_id_src_obj(cb_id_src);
+    CircularBuffer cb_id_eps_obj(cb_id_eps);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -43,14 +45,13 @@ void kernel_main() {
     uint32_t start_t = start_remaining % HtWt;
 
     cb_id_eps_obj.reserve_back(onetile);
-#ifdef FILL_WITH_VALUE_FLOAT
-    float eps_f = 0;
-    std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
-    FILL_WITH_VALUE_FLOAT(cb_id_eps, eps_f);
-#endif
-#ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(cb_id_eps, eps);
-#endif
+    if constexpr (fill_eps_fp32) {
+        float eps_f = 0;
+        std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
+        fill_with_val<k_tile_face_elems, float>(cb_id_eps, eps_f);
+    } else {
+        fill_with_val_bfloat16(cb_id_eps, eps);
+    }
     cb_id_eps_obj.push_back(onetile);
 
     // Input tile offset

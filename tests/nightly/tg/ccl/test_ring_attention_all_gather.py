@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -203,4 +203,4 @@ def test_ring_attention_all_gather_program_cache(
         )
         ttnn.synchronize_device(submesh_device)
 
-    assert submesh_device.num_program_cache_entries() == 1
+    assert submesh_device.cache_entries_counter.total == 1

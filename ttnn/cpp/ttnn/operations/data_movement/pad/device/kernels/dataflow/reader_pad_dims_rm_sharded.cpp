@@ -1,9 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(0);
@@ -18,17 +23,21 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
+    CircularBuffer cb_in0_exp(cb_in0);
+    CircularBuffer cb_out0_exp(cb_out0);
 
-    cb_reserve_back(cb_out0, num_sticks_padded);
-    uint32_t l1_read_addr = get_write_ptr(cb_in0);
-    uint32_t l1_write_addr = get_write_ptr(cb_out0);
+    Noc noc;
+
+    cb_out0_exp.reserve_back(num_sticks_padded);
+    uint32_t l1_read_addr = cb_in0_exp.get_write_ptr();
+    uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
 
     for (uint32_t curr_core = 0; curr_core < num_cores_read; ++curr_core) {
-        uint64_t src_noc_addr =
-            get_noc_addr(read_noc_x[read_noc_xy_ptr_offset], read_noc_y[read_noc_xy_ptr_offset], l1_read_addr);
+        const uint32_t src_noc_x = read_noc_x[read_noc_xy_ptr_offset];
+        const uint32_t src_noc_y = read_noc_y[read_noc_xy_ptr_offset];
 
         uint32_t curr_core_num_chunks = num_stick_chunks[curr_core];
 
@@ -40,7 +49,13 @@ void kernel_main() {
             uint32_t read_data_size_bytes = curr_num_sticks * stick_size_bytes;
 
             if ((curr_start_id != (uint32_t)-1) and (curr_start_id != (uint32_t)-2)) {
-                noc_async_read(src_noc_addr + l1_read_offset, l1_write_addr, read_data_size_bytes);
+                CoreLocalMem<uint32_t> dst(l1_write_addr);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    dst,
+                    read_data_size_bytes,
+                    {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + l1_read_offset},
+                    {.offset_bytes = 0});
             }
 
             l1_write_addr += read_data_size_bytes;
@@ -50,6 +65,6 @@ void kernel_main() {
         read_noc_xy_ptr_offset += 2;
     }
 
-    noc_async_read_barrier();
-    cb_push_back(cb_out0, num_sticks_padded);
+    noc.async_read_barrier();
+    cb_out0_exp.push_back(num_sticks_padded);
 }

@@ -1,13 +1,13 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -28,9 +28,9 @@ void kernel_main() {
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_dst(cb_id_dst);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_dst(cb_id_dst);
 
     // we only need to fill a tile with the scalar value once
     cb_src.reserve_back(onetile);
@@ -46,7 +46,7 @@ void kernel_main() {
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
     constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
 
     const uint32_t tiles_per_n = C * HtWt;

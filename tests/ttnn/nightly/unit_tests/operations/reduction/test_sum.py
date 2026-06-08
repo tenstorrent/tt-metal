@@ -1,10 +1,12 @@
-# SPDX-FileCopyrightText: © 2023-24 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023-24 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import pytest
 import ttnn
+
+TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
@@ -14,6 +16,7 @@ import ttnn
         ((1, 1, 32, 32), 2),
         ((32, 32, 32, 32), 1),
         ((32, 32, 32, 32), 0),
+        ((32, 32, 31, 31), 3),
     ),  # single tile
 )
 def test_sum_for_dim_hw(device, shape_dim):
@@ -32,6 +35,7 @@ def test_sum_for_dim_hw(device, shape_dim):
     # print(f"x.sum = {value}")
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    dev_x = ttnn.fill_implicit_tile_padding(dev_x, TEST_PADDING_VALUE)
     tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
@@ -44,6 +48,7 @@ def test_sum_for_dim_hw(device, shape_dim):
         (1, 1, 32, 32),
         (32, 32, 32, 32),
         (32, 32, 32, 32),
+        (1, 1, 18, 25),
     ),  # single tile
 )
 def test_sum_global(device, shape):
@@ -60,6 +65,8 @@ def test_sum_global(device, shape):
     torch_output = x.sum()
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
+    dev_x = ttnn.fill_implicit_tile_padding(dev_x, TEST_PADDING_VALUE)
+
     tt_npu = ttnn.sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
     assert torch.equal(tt_dev.bfloat16(), torch_output.bfloat16())

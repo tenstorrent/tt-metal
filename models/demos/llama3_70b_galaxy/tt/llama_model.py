@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -450,10 +450,14 @@ class TtTransformer(LightweightModule):
         self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
     ):
         """
-        Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
+        Inputs are torch tensors or python types. Outputs are ttnn tensors on host
+        (built with device=None); the sharded flags only affect the host tensor's
+        dtype/layout and its mesh_mapper, not its host/device residency.
         NOTE: Tokens and current_pos are padded to batch
-        NOTE: if is_cur_pos_sharded is True, current_pos_tt is returned as a device tensor
-        NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
+        NOTE: if is_cur_pos_sharded is True, current_pos_tt is laid out for sharded
+              placement (repeated across cores) but is still returned on host
+        NOTE: if is_page_table_sharded is True, page_table is laid out for sharded
+              placement (uint16, repeated across cores) but is still returned on host
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
@@ -701,7 +705,6 @@ class TtTransformer(LightweightModule):
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
         return_logits=False,
-        capture_sampling_trace=False,  # If true, return logits so sampling can be traced elsewhere
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -745,15 +748,7 @@ class TtTransformer(LightweightModule):
 
             tt_out_logits_saved.copy_(tt_out_logits)
 
-        if capture_sampling_trace:
-            return tt_logits
-
-        tt_toks, tt_log_probs = self.sampling.sample(
-            tt_logits[0],
-            tt_out_tok=x,
-            enable_trace=False,
-        )
-        return tt_toks, tt_log_probs
+        return tt_logits
 
     def switch_mode(self, mode):
         if mode == "decode":

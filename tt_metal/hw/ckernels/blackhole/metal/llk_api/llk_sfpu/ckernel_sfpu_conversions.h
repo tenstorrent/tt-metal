@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ sfpi_inline sfpi::vInt _float_to_int32_positive_(sfpi::vFloat in) {
     }
     v_else {
         // extract mantissa
-        sfpi::vInt man = exman8(in);
+        sfpi::vInt man = exman(in, sfpi::MantissaMode::ImplicitOne);
         // shift the mantissa by (23-exponent) to the right
         sfpi::vInt shift = exp - 23;  // 23 is number of mantissa bits in float32
         man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));

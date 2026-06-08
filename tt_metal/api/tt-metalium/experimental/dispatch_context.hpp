@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,9 @@
 #include <memory>
 
 namespace tt::tt_metal {
+
+class IDevice;
+class Program;
 
 namespace distributed {
 class MeshDevice;
@@ -31,16 +34,13 @@ public:
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
     void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+    bool is_asynchronous_slow_dispatch_enabled(distributed::MeshDevice* mesh_device) const;
 
-    // Reset DispatchContext state to allow reinitialization
-    void reset() {
-        num_fd_inits_ = 0;
-        fast_dispatch_enabled_ = false;
-    }
+    void reset();
 
 private:
     DispatchContext() = default;
-    ~DispatchContext() = default;
+    ~DispatchContext();
 
     // Custom deleter to allow unique_ptr with private destructor
     struct Deleter {
@@ -50,8 +50,16 @@ private:
 
     bool fast_dispatch_enabled_ = false;
     uint32_t num_fd_inits_ = 0;
+    // SD command queues stashed during an FD session, restored on terminate.
+    // Defined in the .cpp to avoid exposing MeshCommandQueueBase in this header.
+    struct StashedQueues;
+    std::unique_ptr<StashedQueues> stashed_sd_queues_;
     static std::unique_ptr<DispatchContext, Deleter> dispatch_context_ptr_;
 };
+
+// Dispatches a pre-compiled program to a device. Requires prior LaunchProgram call on another device
+// to compile and finalize the program. Uses thread-local launch messages for safe concurrent dispatch.
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 
 }  // namespace experimental
 

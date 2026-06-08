@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 // Version: FFN1.3.0
@@ -32,6 +32,8 @@
 
 #define CMDBUF_0 0
 #define CMDBUF_1 1
+
+namespace overlay {
 
 /* Default transaction ID for both command buffers */
 constexpr uint32_t CMDBUF_DEF_TRID = 0;
@@ -1876,3 +1878,5 @@ inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf
     return SCMDBUF_TR_ACK_TRID(transaction_id) == 0;
 }
 inline __attribute__((always_inline)) bool noc_nonposted_writes_acked_reg_cmdbuf() { return SCMDBUF_TR_ACK() == 0; }
+
+}  // namespace overlay

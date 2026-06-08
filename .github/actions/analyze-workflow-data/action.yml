@@ -34,6 +34,10 @@ inputs:
   last-success-timestamps-path:
     description: 'Path to JSON mapping workflow_name -> last success timestamp info (optional)'
     required: false
+  failures_to_elevate:
+    description: 'TEST MODE. Number of currently stayed-failing JOBS (not pipelines) to artificially elevate to regressions for this run. When set, this EXCLUSIVELY REPLACES the regression output: real Pass->Fail regressions and detectJobLevelRegressions-synthesized entries are discarded so the run produces exactly N regression entries. The alert-all "N other pipelines are failing" footer is also suppressed. Walks stayed-failing pipelines in order, taking failing jobs until N is reached (or the pool is exhausted). Empty/0 = no-op (normal production behavior).'
+    required: false
+    default: ''
 
 outputs:
   report:

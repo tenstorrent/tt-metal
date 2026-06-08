@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,9 @@
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "layernorm.hpp"
-#include "device/layernorm_op_multi_core.hpp"
-#include "device/layernorm_op_multi_core_sharded.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_device_operation_types.hpp"
+#include "ttnn/device_operation.hpp"
 #include "device/layernorm_types.hpp"
 #include "device/layernorm_common.hpp"
 
@@ -190,8 +189,8 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
             - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
-            - If `residual_input_tensor` is provided, it must match the input's padded shape.
-            - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
+            - If `residual_input_tensor` is provided, its shape must match the input's logical and padded shape.
+            - If TILE: `weight` and `bias` last dim must match input's last dim in both logical and padded shape; their padded height (second-to-last dim) must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
 
         )doc";
@@ -199,27 +198,26 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
     ttnn::bind_function<"layer_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                float,
-                const std::optional<const ttnn::Tensor>&,
-                const std::optional<const ttnn::Tensor>&,
-                const std::optional<const ttnn::Tensor>&,
-                const std::optional<ttnn::MemoryConfig>&,
-                const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
-                std::optional<const ttnn::DeviceComputeKernelConfig>,
-                const std::optional<const ttnn::Tensor>&>(&ttnn::layer_norm),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("residual_input_tensor") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("recip_tensor") = nb::none()));
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            float,
+            const std::optional<const ttnn::Tensor>&,
+            const std::optional<const ttnn::Tensor>&,
+            const std::optional<const ttnn::Tensor>&,
+            const std::optional<ttnn::MemoryConfig>&,
+            const std::optional<const ttnn::prim::LayerNormProgramConfig>&,
+            std::optional<const ttnn::DeviceComputeKernelConfig>,
+            const std::optional<const ttnn::Tensor>&>(&ttnn::layer_norm),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("recip_tensor") = nb::none());
 }
 
 void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
@@ -236,10 +234,11 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormInputs>(mod, "LayerNormInputs")
         .def(
             "__init__",
-            [](ttnn::prim::LayerNormInputs* t) {
+            [](ttnn::prim::LayerNormInputs* t, const ttnn::Tensor& input) {
                 new (t) ttnn::prim::LayerNormInputs{
-                    ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
-            })
+                    input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+            },
+            nb::arg("input"))
         .def_rw("input", &ttnn::prim::LayerNormInputs::input)
         .def_rw("residual_input_tensor", &ttnn::prim::LayerNormInputs::residual_input_tensor)
         .def_rw("weight", &ttnn::prim::LayerNormInputs::weight)
@@ -250,6 +249,18 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
 
 void bind_normalization_layernorm_device_operation(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormDeviceOperation>(mod, "LayerNormDeviceOperation")
+        .def_static(
+            "compute_program_hash",
+            [](const ttnn::prim::LayerNormParams& attrs, const ttnn::prim::LayerNormInputs& tensors) {
+                return ttnn::device_operation::detail::compute_program_hash<ttnn::prim::LayerNormDeviceOperation>(
+                    attrs, tensors);
+            },
+            nb::arg("operation_attributes"),
+            nb::arg("tensor_args"),
+            R"doc(
+            Compute the program hash from operation attributes and tensor metadata.
+            Same hash used by the C++ program cache.  Does not run the factory.
+            )doc")
         .def_static(
             "create_output_tensors",
             &ttnn::prim::LayerNormDeviceOperation::create_output_tensors,

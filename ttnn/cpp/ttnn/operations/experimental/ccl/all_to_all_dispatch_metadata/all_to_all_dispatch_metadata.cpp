@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<std::vector<uint32_t>>& shared_expert_ids,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
@@ -77,6 +78,7 @@ std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
         expert_indices_tensor,
         expert_scores_tensor,
         expert_mapping_tensor,
+        shared_expert_ids,
         axis,
         optional_output_tensors,
         num_links_,

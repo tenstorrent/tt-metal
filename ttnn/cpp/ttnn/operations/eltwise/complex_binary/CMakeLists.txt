@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_complex_binary ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Complex::Binary ALIAS ttnn_op_eltwise_complex_binary)
 
@@ -10,9 +12,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES device/complex_binary_op.hpp
+        FILES ${TTNN_OP_ELTWISE_COMPLEX_BINARY_API_HEADERS}
     PRIVATE
-        device/complex_binary_op.cpp
+        ${TTNN_OP_ELTWISE_COMPLEX_BINARY_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_complex_binary PRIVATE ${FixmeOpIncDirs})

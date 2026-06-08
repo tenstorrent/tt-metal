@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,6 +45,7 @@ class Buffer;
 class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
+class MeshTensor;
 
 // ==================================================
 //                  HOST API: Device management
@@ -273,6 +274,9 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
  */
 // clang-format on
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
+void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
 
 // clang-format off
 /**
@@ -291,15 +295,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
-[[deprecated(
-    "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
-    "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "
-    "std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) instead.")]]
-uint32_t CreateSemaphore(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
-    uint32_t initial_value,
-    CoreType core_type);
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**

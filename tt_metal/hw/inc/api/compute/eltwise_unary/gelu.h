@@ -1,23 +1,30 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_gelu.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
+#ifndef ARCH_QUASAR
 /**
  * Please refer to documentation for any_init.
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, fast_and_approx));
+    MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(gelu, sfpu::gelu_init, fast_and_approx, DST_ACCUM_MODE));
+}
+
+template <bool fast_and_approx = true>
+ALWI void gelu_tile_init_pack() {
+    PACK(SFPU_TWO_TEMPLATE_PARAM_INIT(gelu, sfpu::gelu_init, fast_and_approx, DST_ACCUM_MODE));
 }
 
 // clang-format off
@@ -37,9 +44,46 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu, RC, fast_and_approx, idst));
+    MATH(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, VectorMode::RC));
 }
 
-// TODO: Add gelu_derivative
+template <bool fast_and_approx = true>
+ALWI void gelu_tile_pack(uint32_t idst) {
+    PACK(SFPU_TWO_PARAM_KERNEL(calculate_gelu, fast_and_approx, DST_ACCUM_MODE, idst, VectorMode::RC));
+}
 
+/**
+ * Please refer to documentation for any_init.
+ */
+template <bool fast_and_approx = false>
+ALWI void gelu_derivative_tile_init() {
+    MATH(SFPU_INIT_KERNEL_CALL(gelu_derivative, sfpu::gelu_derivative_polynomial_init, fast_and_approx));
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of GELU derivative on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * When fast_and_approx=false (default): uses piecewise polynomial approximation
+ * with Max ULP = 1 across all BF16 inputs.
+ *
+ * When fast_and_approx=true: uses the original formula-based implementation.
+ *
+ * Return value: None
+ *
+ * | Argument         | Description                                                                | Type     | Valid Range                                           | Required |
+ * |------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx  | Computation to be done faster and approximate                              | bool     |                                                       | False    |
+ */
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void gelu_derivative_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_gelu_derivative_polynomial, RC, fast_and_approx, idst));
+}
+
+#endif
 }  // namespace ckernel

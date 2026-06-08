@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -46,7 +46,7 @@ inline void rand(uint32_t from, uint32_t scale) {
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
 
-        TTI_SFPSTORE(0, 3, 3, 0);
+        TTI_SFPSTORE(0, InstrModLoadStore::FP32, 3, 0);
         dst_reg++;
     }
 }

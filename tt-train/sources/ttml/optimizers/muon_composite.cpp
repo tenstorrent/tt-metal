@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,14 +12,41 @@
 
 namespace ttml::optimizers {
 
+namespace {
+
+/**
+ * Check if a parameter is sharded on any mesh axis.
+ */
+bool param_is_sharded(const autograd::Tensor& tensor) {
+    const auto& placements = tensor.get_value(autograd::PreferredPrecision::HALF).tensor_topology().placements();
+    for (const auto& p : placements) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(p)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
+            // FSDP and TP shards parameters along a mesh axis; the Newton-Schulz update in Muon
+            // is not elementwise, so running it against a local shard would produce a
+            // different result than running it against the full weight.
+            // TODO: implement proper FSDP and TP support for Muon
+            if (param_is_sharded(*tensor_ptr)) {
+                throw std::runtime_error(
+                    "MuonComposite: parameter '" + name +
+                    "' appears to be sharded on a mesh axis. Muon's Newton-Schulz update is "
+                    "not elementwise and cannot be applied to a shard independently. ");
+            }
             m_momentum_buffer.emplace(
                 name,
                 autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                     /* requires_grad */ false));
         }
     }
@@ -39,7 +66,7 @@ void MuonComposite::step() {
     }
 
     for (auto& [name, buffer_ptr] : m_momentum_buffer) {
-        auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::HALF);
         const auto& tensor_ptr = m_parameters.at(name);
         if (!tensor_ptr->is_grad_initialized()) {
             continue;
@@ -59,21 +86,27 @@ void MuonComposite::step() {
         const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
 
         tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(update_direction, m_config.lr)));
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
     }
     m_steps++;
 }
 
 serialization::StateDict MuonComposite::get_state_dict() const {
     serialization::StateDict dict;
-    dict["momentum_buffer"] = m_momentum_buffer;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
+    dict["momentum"] = m_config.momentum;
+    dict["ns_steps"] = m_config.ns_steps;
+    dict["momentum_buffer"] = m_momentum_buffer;
     return dict;
 }
 
 void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
-    m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
+    m_config.momentum = serialization::get_value_type<float>(dict, "momentum");
+    m_config.ns_steps = serialization::get_value_type<int>(dict, "ns_steps");
+    m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
 }
 
 size_t MuonComposite::get_steps() const {

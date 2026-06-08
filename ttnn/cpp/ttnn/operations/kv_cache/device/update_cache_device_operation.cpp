@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,9 +56,16 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         "Input tensor height ({}) must equal cache tensor height ({})",
         input_tensor.padded_shape()[1],
         cache_tensor.padded_shape()[1]);
+
     TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Cache tensor memory layout must be INTERLEAVED but got {}",
+        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+            (cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+             cache_tensor.memory_config().created_with_nd_shard_spec() &&
+             cache_tensor.memory_config()
+                 .is_dram()),  // ND_SHARDED layout can collapse to HEIGHT_SHARDED when each bank holds single shard
+        "Cache tensor memory layout must be INTERLEAVED, ND_SHARDED, or HEIGHT_SHARDED (created from ND shard spec) "
+        "but got {}",
         cache_tensor.memory_config().memory_layout());
     if (args.op_type == UpdateCacheOpType::FILL) {
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
@@ -86,8 +93,15 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
-            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
-            "Input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx % TILE_HEIGHT == 0,
+            "Fill update_idx ({}) must be a multiple of TILE_HEIGHT ({})",
+            args.update_idx,
+            TILE_HEIGHT);
+        TT_FATAL(
+            args.update_idx <= cache_tensor.padded_shape()[-2] &&
+                input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2] - args.update_idx,
+            "Fill update_idx ({}) + input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx,
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {

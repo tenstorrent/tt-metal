@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,7 @@ def main(args, eval_data_args):
 
     # Dataset preparation
     dataset = datasets.load_dataset(
-        eval_data_args.dataset, eval_data_args.config, split=eval_data_args.split, ignore_verifications=True
+        eval_data_args.dataset, eval_data_args.config, split=eval_data_args.split, verification_mode="no_checks"
     )
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -98,7 +98,7 @@ void kernel_main() {
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
-        DPRINT << "Send packet" << ENDL();
+        DPRINT("Send packet\n");
         send_packet(
             fwd_packet_header,
             noc_dest_addr,

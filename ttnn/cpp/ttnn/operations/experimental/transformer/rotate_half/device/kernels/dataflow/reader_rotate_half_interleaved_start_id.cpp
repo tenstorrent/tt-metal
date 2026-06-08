@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,7 @@ void kernel_main() {
 
     // in_no_mul, in_mul are from same tensor, so same sizes
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in_no_mul);
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
 
     // Fill tile with zeros
     cb_reserve_back(cb_id_in_scalar, onetile);
@@ -39,14 +38,14 @@ void kernel_main() {
         for (uint32_t j = 0; j < half_row_size; j++) {
             cb_reserve_back(cb_id_in_no_mul, onetile);
             uint32_t in_no_mul_l1_write_addr = get_write_ptr(cb_id_in_no_mul);
-            noc_async_read_tile(in_no_mul_curr_id, s, in_no_mul_l1_write_addr);
+            noc_async_read_page(in_no_mul_curr_id, s, in_no_mul_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in_no_mul, onetile);
             in_no_mul_curr_id++;
 
             cb_reserve_back(cb_id_in_mul, onetile);
             uint32_t in1_l1_write_addr = get_write_ptr(cb_id_in_mul);
-            noc_async_read_tile(in_mul_curr_id, s, in1_l1_write_addr);
+            noc_async_read_page(in_mul_curr_id, s, in1_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in_mul, onetile);
             in_mul_curr_id++;

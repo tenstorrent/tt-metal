@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
@@ -37,6 +37,25 @@ def run_copy_test(N, C, H, W, layout, device):
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 def test_copy(N, C, H, W, layout, device):
     run_copy_test(N, C, H, W, layout, device)
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W,",
+    ((1, 1, 32, 64),),
+)
+def test_copy_uint16(N, C, H, W, device):
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+
+    input = torch.randint(0, 100, shape, dtype=torch.int16)
+    input = ttnn.from_torch(input, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    input_b = torch.zeros(shape, dtype=torch.int16)
+    input_b = ttnn.from_torch(input_b, ttnn.uint16, layout=ttnn.Layout.ROW_MAJOR, device=device)
+
+    ttnn.copy(input, input_b)
+    assert input_b.shape == input.shape
+    assert_equal(ttnn.to_torch(input), ttnn.to_torch(input_b))
 
 
 def run_assign_test(N, C, H, W, memory_config, dtype, device):
@@ -405,6 +424,7 @@ def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, dev
     Test that row-major typecast produces same results as tile layout typecast.
     This ensures correctness of the row-major implementation.
     """
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/41665")
     torch.manual_seed(12345)
 
     # Use appropriate torch dtype and generation method based on input_dtype

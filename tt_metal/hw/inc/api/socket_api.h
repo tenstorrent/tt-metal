@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -284,10 +284,10 @@ bool socket_wait_for_pages(
     do {
         invalidate_l1_cache();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
-        iter_count++;
         if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
             return false;
         }
+        iter_count++;
     } while (bytes_recv < num_bytes);
     return true;
 #endif

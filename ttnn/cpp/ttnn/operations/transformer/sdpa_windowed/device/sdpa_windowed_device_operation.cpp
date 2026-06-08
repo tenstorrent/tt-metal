@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
@@ -162,7 +161,7 @@ WindowedScaledDotProductAttentionDeviceOperation::create_op_performance_model(
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(attrs.compute_kernel_config);
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
                                                                     : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {

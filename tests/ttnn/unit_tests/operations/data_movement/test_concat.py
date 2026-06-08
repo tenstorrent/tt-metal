@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,28 @@ def test_concat(device, height, width, dim, dtype):
     output = ttnn.to_torch(output)
 
     assert_equal(torch_output_tensor, output)
+
+
+def test_concat_size_switches(device):
+    def to_tt(t, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # 1) decode-shape concat — caches a program
+    a = torch.rand(1, 1, 1, 64, dtype=torch.bfloat16)
+    tt_a = to_tt(a, device)
+    ttnn.concat([tt_a, tt_a], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # 2) prefill-shape concat — CRASH on this one
+    b = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    c = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    tt_b, tt_c = to_tt(b, device), to_tt(c, device)
+    ttnn.concat([tt_b, tt_c], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 @pytest.mark.parametrize(
@@ -378,6 +400,33 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
+@pytest.mark.parametrize("num_inputs", [47, 48, 100])
+def test_concat_many_inputs(device, num_inputs):
+    """
+    Regression test for concat hang with many tiled inputs.
+    Fixed by commit 85d11279d27 (re-calculated batch size).
+    Previously hung at 48+ inputs with ETH dispatch on N300.
+    """
+    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
+    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(input_tensor)
+
+    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tiled_tensor)
+
+    output_host = ttnn.to_torch(output_tensor)
+    assert_equal(torch_expected, output_host)
+
+
 @pytest.mark.parametrize(
     "input_shapes,dim",
     [
@@ -419,4 +468,23 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output_tensor, output, 0.99)
+    assert_equal(torch_output_tensor, output)
+
+
+@pytest.mark.parametrize(
+    "shapes, dim",
+    [
+        ([[217413, 1]] * 4, 1),
+    ],
+)
+def test_concat_large_page_l1_budget(device, shapes, dim):
+    torch_inputs = [torch.rand(*shape, dtype=torch.float32) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = [
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32) for t in torch_inputs
+    ]
+    output = ttnn.concat(input_tensors, dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output)

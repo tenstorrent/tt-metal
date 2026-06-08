@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -47,6 +47,8 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)packet_header_ptr, dst_num_hops);
 
+    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // program cache hits.
     const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
     // working memory to hold coalesced packet
@@ -83,7 +85,6 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);

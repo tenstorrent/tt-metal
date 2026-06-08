@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     for (size_t i = 0; i < num_signals_to_wait_for; ++i) {
         sem_addrs[i] = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++)); // hack, we pass in the address instead of the semaphore id
-        DPRINT << "DRAIN WAITING ON SEMAPHORE ADDR " << (uint32_t)sem_addrs[i] << " on core (" << (uint32_t)my_y[0] << ", " << (uint32_t)my_x[0] << ")\n";
+        DPRINT("DRAIN WAITING ON SEMAPHORE ADDR {} on core ({}, {})\n", (uint32_t)sem_addrs[i], (uint32_t)my_y[0], (uint32_t)my_x[0]);
         expected_sem_counts[i] = get_arg_val<uint32_t>(arg_idx++);
         current_sem_counts[i] = 0;
     }
@@ -34,7 +34,7 @@ void kernel_main() {
             }
 
             if (current_sem_counts[i] != *sem_addrs[i]) {
-                DPRINT << "DRAIN GOT SEMINC @ " << (uint32_t)sem_addrs[i] << ". NOW= " << (uint32_t)*sem_addrs[i] << "\n";
+                DPRINT("DRAIN GOT SEMINC @ {}. NOW= {}\n", (uint32_t)sem_addrs[i], (uint32_t)*sem_addrs[i]);
                 current_sem_counts[i] = *sem_addrs[i];
             }
         }
@@ -51,7 +51,7 @@ void kernel_main() {
         }
     }
 
-    DPRINT << "DONE RECEIVING SEMINCS. SHUTTING DOWN FABRIC\n";
+    DPRINT("DONE RECEIVING SEMINCS. SHUTTING DOWN FABRIC\n");
 
     if (send_termination_signals) {
         size_t num_termination_signals = get_arg_val<uint32_t>(arg_idx++);
@@ -59,9 +59,9 @@ void kernel_main() {
             uint32_t termination_addr = get_arg_val<uint32_t>(arg_idx++);
             uint32_t noc_x = get_arg_val<uint32_t>(arg_idx++);
             uint32_t noc_y = get_arg_val<uint32_t>(arg_idx++);
-            DPRINT << "SENDING TERMINATION SIGNAL TO " << (uint32_t)noc_x << " " << (uint32_t)noc_y << " " << (uint32_t)termination_addr << "\n";
+            DPRINT("SENDING TERMINATION SIGNAL TO {} {} {}\n", (uint32_t)noc_x, (uint32_t)noc_y, (uint32_t)termination_addr);
             noc_semaphore_inc(get_noc_addr(noc_x, noc_y, termination_addr), 1);
         }
     }
-    DPRINT << "DRAIN DONE\n";
+    DPRINT("DRAIN DONE\n");
 }

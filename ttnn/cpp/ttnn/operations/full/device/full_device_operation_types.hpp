@@ -1,14 +1,17 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/small_vector.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::full {
 struct operation_attributes_t {
-    const ttnn::SmallVector<uint32_t> shape;
+    const ttsl::SmallVector<uint32_t> shape;
     const std::variant<float, int> fill_value;
     ttnn::MeshDevice* mesh_device;
     const DataType dtype;

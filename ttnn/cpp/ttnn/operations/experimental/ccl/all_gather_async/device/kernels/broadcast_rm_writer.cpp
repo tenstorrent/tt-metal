@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -162,7 +162,7 @@ void kernel_main() {
 
     auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     constexpr auto tensor0_args = TensorAccessorArgs<sharded_args_start_idx>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, out_page_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
     open_connections(fabric_connection, num_connections, arg_for_fab);
@@ -209,9 +209,11 @@ void kernel_main() {
                 break;
             };
             auto out_page_start = l1_read_addr + output * out_page_size;
-            auto tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
-            writer.send(out_page_start, tensor_page_addr);
-            noc_async_write(out_page_start, tensor_page_addr, out_page_size);
+            auto local_tensor_page_addr = tensor0_addrgen.get_noc_addr(page_id + output, 0);
+            auto fabric_tensor_page_addr =
+                tt::tt_fabric::linear::addrgen_detail::get_noc_address(tensor0_addrgen, page_id + output, 0);
+            writer.send(out_page_start, fabric_tensor_page_addr);
+            noc_async_write(out_page_start, local_tensor_page_addr, out_page_size);
         }
         page_id += outputs_per_cb_page;
 

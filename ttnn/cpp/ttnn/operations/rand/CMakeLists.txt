@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_rand ${LIB_TYPE})
 add_library(TTNN::Ops::Rand ALIAS ttnn_op_rand)
 
@@ -20,15 +22,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES rand.hpp
+        FILES ${TTNN_OP_RAND_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        rand.cpp
-        device/rand_device_operation.cpp
-        device/rand_program_factory.cpp
+        ${TTNN_OP_RAND_SRCS}
 )
 
 target_include_directories(ttnn_op_rand PRIVATE ${FixmeOpIncDirs})

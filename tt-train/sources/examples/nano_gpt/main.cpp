@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -149,7 +150,7 @@ using DataLoader = ttml::datasets::DataLoader<
 struct TrainingConfig {
     std::string project_name;
     uint32_t seed = 5489U;
-    uint32_t model_save_interval = 500;
+    uint32_t model_save_interval = 0;
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
     uint32_t max_steps = 5000;
@@ -157,7 +158,6 @@ struct TrainingConfig {
     std::string model_config;
     std::string data_path;
     std::string scheduler_type = "identity";
-    std::string tokenizer_type = "char";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
 };
@@ -167,7 +167,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
-    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
+    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
@@ -179,7 +179,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
-    config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
 
     return config;
 }
@@ -360,6 +359,8 @@ int main(int argc, char **argv) {
         ->default_val(save_and_exit_path);
     app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
         ->default_val(safetensors_path);
+    bool track_memory = false;
+    app.add_flag("--track_memory", track_memory, "Enable memory usage tracking during first iteration");
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
@@ -401,7 +402,11 @@ int main(int argc, char **argv) {
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
-    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+    std::unique_ptr<ttnn::ScopeGuard> memory_usage_guard;
+    if (track_memory) {
+        // NOLINTNEXTLINE(modernize-make-unique): ScopeGuard has deleted move ctor; need direct new for copy elision
+        memory_usage_guard.reset(new ttnn::ScopeGuard(ttml::utils::MemoryUsageTracker::begin_capture()));
+    }
 
     if (multihost_config.enable_mpi || device_config.enable_cp) {
         auto &ctx = ttml::autograd::ctx();
@@ -479,35 +484,43 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    auto create_dataset =
-        [](const auto &data_source, const auto sequence_length, const auto &train_config, auto &model_config) {
-            std::string tokenizer_type = train_config.tokenizer_type;
+    auto create_dataset = [](const auto &data_source, const auto sequence_length, auto &model_config) {
+        auto current_vocab_size =
+            std::visit([](const auto &arg) { return arg.vocab_size; }, model_config.transformer_config);
 
-            if (tokenizer_type == "char") {
-                auto [dataset, tokenizer] =
-                    ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                        std::get<std::string>(data_source), sequence_length);
-
-                std::visit(
-                    [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
-
-                return dataset;
-            } else if (tokenizer_type == "bpe") {
-                auto &yaml_node = std::get<YAML::Node>(data_source);
-
-                auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
-
-                std::visit(
-                    [&](auto &&arg) { arg.vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>(); },
-                    model_config.transformer_config);
-
-                return dataset;
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+        if (std::holds_alternative<std::string>(data_source)) {
+            // Plain text -> character tokenizer; vocab_size must be absent (0) so it can be auto-detected
+            if (current_vocab_size != 0U) {
+                throw std::runtime_error(
+                    "Plain text data uses character tokenization, which auto-detects vocab_size from the "
+                    "text. Remove vocab_size from the model config (or set it to 0). Got vocab_size=" +
+                    std::to_string(current_vocab_size));
             }
-        };
+            auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                std::get<std::string>(data_source), sequence_length);
 
-    auto dataset = create_dataset(text_or_tokens, sequence_length, training_config, model_config);
+            if (!tokenizer) {
+                throw std::runtime_error("Failed to create CharTokenizer");
+            }
+
+            std::visit(
+                [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
+
+            return dataset;
+        } else {
+            // Pre-tokenized YAML data; vocab_size must be explicitly set in the model config
+            if (current_vocab_size == 0U) {
+                throw std::runtime_error(
+                    "Pre-tokenized data requires vocab_size to be set in the model config. "
+                    "Omitting vocab_size is only valid for plain text (character-tokenized) data.");
+            }
+            auto &yaml_node = std::get<YAML::Node>(data_source);
+            auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
+            return dataset;
+        }
+    };
+
+    auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
 
@@ -652,7 +665,9 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
-    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+    if (track_memory) {
+        ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+    }
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
@@ -679,7 +694,7 @@ int main(int argc, char **argv) {
         fmt::print("Model loaded\n");
     }
 
-    fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
+    fmt::print("Total parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer =
         [&model, &optimizer_node, &multihost_config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
@@ -724,7 +739,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+    if (track_memory) {
+        ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+    }
 
     if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
@@ -755,13 +772,16 @@ int main(int argc, char **argv) {
     auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
 
     bool is_everything_compiled = false;
-    auto memory_snapshot = [&is_everything_compiled](const std::string &name) {
-        if (!is_everything_compiled) {
+    auto memory_snapshot = [&is_everything_compiled, track_memory](const std::string &name) {
+        if (track_memory && !is_everything_compiled) {
             ttml::utils::MemoryUsageTracker::snapshot(name);
         }
     };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
+    // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
+    // path is uniformly vocab_parallel_cross_entropy_loss whenever TP is on.
+    const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -778,7 +798,10 @@ int main(int argc, char **argv) {
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
             if (needs_to_call_loss) {
-                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                auto loss = use_vocab_parallel_loss
+                                ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(
+                                      output, target, ttml::autograd::ctx().get_parallelism_context().get_tp_axis())
+                                : ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
@@ -819,23 +842,34 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 ttml::autograd::ctx().get_profiler().read_results(device, "optimizer_step_done");
                 auto global_step = optimizer->get_steps();
+                auto average_loss = gradient_accumulator_helper.average_loss();
+                loss_meter.update(average_loss);
+
+                auto end_timer = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
                 if (needs_to_call_loss) {
                     if (multihost_config.enable_mpi) {
                         fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                     }
-                    fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
+                    fmt::print(
+                        "Step: {}, Loss: {}, Time: {} ms, cache entries: {}\n",
+                        global_step,
+                        average_loss,
+                        (double)duration / 1000,
+                        device->num_program_cache_entries());
                 }
-                loss_meter.update(gradient_accumulator_helper.average_loss());
 
                 if (!multihost_config.enable_mpi) {
                     // save training state if it's not 3 tier training
-                    if (!model_config.model_path.empty() && global_step % training_config.model_save_interval == 0) {
+                    if (!model_config.model_path.empty() && training_config.model_save_interval > 0 &&
+                        global_step % training_config.model_save_interval == 0) {
                         save_training_state(
                             model_config.model_path, model, scheduler, model_config.model_type, optimizer->get_name());
                     }
                 }
 
-                ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
+                ttml::autograd::ctx().get_profiler().read_results(
+                    device, fmt::format("iteration_{}", global_step), /* dump_results */ true);
 
                 if (global_step >= training_config.max_steps) {
                     break;
@@ -846,18 +880,12 @@ int main(int argc, char **argv) {
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
-                    ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
-                    ttml::utils::MemoryUsageTracker::print_memory_usage();
-                    ttml::utils::MemoryUsageTracker::clear();
+                    if (track_memory) {
+                        ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                        ttml::utils::MemoryUsageTracker::print_memory_usage();
+                        ttml::utils::MemoryUsageTracker::clear();
+                    }
                 }
-            }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            if (needs_to_call_loss) {
-                fmt::print(
-                    "Full step time {} ms, cache entries: {}\n",
-                    (double)duration / 1000,
-                    device->num_program_cache_entries());
             }
         }
         if (optimizer->get_steps() >= training_config.max_steps) {
@@ -888,7 +916,7 @@ int main(int argc, char **argv) {
         fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
-    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", /* dump_results */ true, 0);
     ttml::autograd::ctx().close_device();
     ttml::autograd::ctx().close_profiler();
     return 0;

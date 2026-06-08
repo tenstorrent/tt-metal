@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -106,6 +106,10 @@ void enable_fabric(uint32_t num_devices) {
         // No MGD available, use default FABRIC_2D
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
+}
+
+void disable_fabric() {
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

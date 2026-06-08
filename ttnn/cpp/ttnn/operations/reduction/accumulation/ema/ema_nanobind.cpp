@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,15 +70,14 @@ void bind_reduction_ema_operation(nb::module_& mod) {
     ttnn::bind_function<"ema">(
         mod,
         docstring,
-        ttnn::overload_t(
-            &ttnn::ema,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("alpha"),
-            nb::kw_only(),
-            nb::arg("out") = nb::none(),
-            nb::arg("core_grid") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::ema,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("alpha"),
+        nb::kw_only(),
+        nb::arg("out") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

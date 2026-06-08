@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,10 +32,10 @@ void kernel_main() {
     uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(input_cb_id));
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
+    const auto s1 = TensorAccessor(cos_args, cos_addr);
 
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+    const auto s2 = TensorAccessor(sin_args, sin_addr);
 
     // Fill tile with zeros
     const uint32_t scalar_tile_bytes = get_tile_size(scalar_cb_id);
@@ -54,8 +54,8 @@ void kernel_main() {
     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
     for (uint32_t i = 0; i < Wt; i++) {
-        noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
-        noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
+        noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
+        noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
         cos_sin_curr_id++;
         sin_l1_write_addr += sin_tile_bytes;
         cos_l1_write_addr += cos_tile_bytes;
@@ -82,13 +82,13 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(sin_cb_id, onetile);
             uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-            noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
+            noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(sin_cb_id, onetile);
 
             cb_reserve_back(cos_cb_id, onetile);
             uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-            noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
+            noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cos_cb_id, onetile);
             cos_sin_curr_id++;

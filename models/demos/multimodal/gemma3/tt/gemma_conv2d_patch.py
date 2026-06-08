@@ -4,7 +4,7 @@ We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modificati
 We have added a check for weight to convert 4D to 2D
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,15 +108,18 @@ class TtGemmaConv2dPatch(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Bias applied outside ttnn.linear to avoid the FUSE_BIAS matmul kernel path.
         out = ttnn.linear(
             x,
             self._linear_weight,
-            bias=self.bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
+
+        if self.bias is not None:
+            out = ttnn.add(out, self.bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.deallocate(x)
 

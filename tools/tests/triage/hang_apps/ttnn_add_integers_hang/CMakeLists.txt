@@ -1,0 +1,14 @@
+add_executable(triage_hang_app_ttnn_add_integers_hang)
+target_sources(
+    triage_hang_app_ttnn_add_integers_hang
+    PRIVATE
+        ttnn_add_integers_hang.cpp
+        add_integers_hang_op.cpp
+        single_core_program_factory.cpp
+)
+target_link_libraries(
+    triage_hang_app_ttnn_add_integers_hang
+    PUBLIC
+        TT::Metalium
+        TTNN::CPP
+)

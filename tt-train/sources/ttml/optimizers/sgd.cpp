@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& confi
                 m_momentum.emplace(
                     name,
                     autograd::create_tensor(
-                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
                         /* requires_grad */ false));
             }
         }
@@ -51,7 +51,7 @@ void SGD::step() {
             continue;
         }
         auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
+        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         std::optional<ttnn::Tensor> momentum_buffer;
         if (m_config.momentum > 0.0) {
@@ -62,7 +62,7 @@ void SGD::step() {
                     /* requires_grad */ false);
                 it = m_momentum.emplace(name, std::move(buf)).first;
             }
-            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::FULL);
+            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::HALF);
         }
 
         // The first step should not apply dampening
@@ -82,14 +82,24 @@ void SGD::step() {
 
 serialization::StateDict SGD::get_state_dict() const {
     serialization::StateDict dict;
-    dict["momentum"] = m_momentum;
     dict["steps"] = m_steps;
+    dict["lr"] = m_config.lr;
+    dict["momentum_factor"] = m_config.momentum;
+    dict["dampening"] = m_config.dampening;
+    dict["weight_decay"] = m_config.weight_decay;
+    dict["nesterov"] = m_config.nesterov;
+    dict["momentum"] = m_momentum;
     return dict;
 }
 
 void SGD::set_state_dict(const serialization::StateDict& dict) {
-    m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
+    m_config.momentum = serialization::get_value_type<float>(dict, "momentum_factor");
+    m_config.dampening = serialization::get_value_type<float>(dict, "dampening");
+    m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");
+    m_config.nesterov = serialization::get_value_type<bool>(dict, "nesterov");
+    m_momentum = std::get<serialization::NamedParameters>(dict.at("momentum"));
 }
 
 size_t SGD::get_steps() const {

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -271,20 +271,8 @@ class TtMSDeformableAttention3D:
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
 
-            sampling_offsets_reshaped = ttnn.reshape(
-                sampling_offsets, [sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5]]
-            )
-            offset_normalizer_xy_reshaped = ttnn.reshape(
-                offset_normalizer_xy,
-                [offset_normalizer_xy.shape[0], -1, offset_normalizer_xy.shape[4], offset_normalizer_xy.shape[5]],
-            )
-
-            sampling_locations = ttnn.div(sampling_offsets_reshaped, offset_normalizer_xy_reshaped)
-            ttnn.deallocate(sampling_offsets_reshaped)
-            ttnn.deallocate(offset_normalizer_xy_reshaped)
+            sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
             ttnn.deallocate(offset_normalizer_xy)
-
-            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets.shape)
 
             bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_locations.shape
             sampling_locations = ttnn.reshape(
@@ -320,7 +308,6 @@ class TtMSDeformableAttention3D:
 
             ttnn.deallocate(reference_xy_reshaped)
             ttnn.deallocate(sampling_locations_reshaped)
-            ttnn.deallocate(sampling_locations_add)
 
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
@@ -338,6 +325,8 @@ class TtMSDeformableAttention3D:
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(value)
         ttnn.deallocate(sampling_locations)
+        if reference_points.shape[-1] == 2:
+            ttnn.deallocate(sampling_locations_add)
         ttnn.deallocate(attention_weights)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

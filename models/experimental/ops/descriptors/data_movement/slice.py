@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@ import ttnn
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 
 
+@OpDescriptor.create(name="slice")
 def slice(
     input_tensor: "ttnn.Tensor",
     begins: List[int],
@@ -46,8 +47,7 @@ def slice(
     if core_range_set is not None:
         params.sub_core_grids = core_range_set
 
-    tensor_args = ttnn.SliceInputs()
-    tensor_args.input = input_tensor
+    tensor_args = ttnn.SliceInputs(input_tensor)
 
     output_tensor = ttnn.SliceDeviceOperation.create_output_tensors(params, tensor_args)
 
@@ -55,9 +55,8 @@ def slice(
 
     return OpDescriptor(
         descriptor=descriptor,
-        input_tensors=[input_tensor],
+        input_tensors={"input_tensor": input_tensor},
         output_tensors=[output_tensor],
-        name="slice",
     )
 
 

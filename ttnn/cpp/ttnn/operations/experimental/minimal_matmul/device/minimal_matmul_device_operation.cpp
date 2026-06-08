@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -166,8 +166,10 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
+            N,
+            M,
             N,
             ternary_b_logical[-2],
             ternary_b_logical[-1]);
@@ -267,13 +269,15 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
+    const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        arch,
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{

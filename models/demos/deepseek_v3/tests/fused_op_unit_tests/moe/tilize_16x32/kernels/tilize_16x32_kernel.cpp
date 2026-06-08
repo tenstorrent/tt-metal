@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 /**
@@ -28,6 +28,6 @@ void kernel_main() {
     fast_tilize_init(in_cb, block_ct_dim, out_cb);
     fast_tilize_block(in_cb, block_ct_dim, out_cb, 0, 0);
     cb_pop_front(in_cb, block_ct_dim);
-    fast_tilize_uninit(in_cb, out_cb);
+    fast_tilize_uninit(in_cb, out_cb, block_ct_dim);
 #endif
 }

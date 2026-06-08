@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -120,8 +120,10 @@ ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
         args.output_dtype,
         tensor_args.input_tensor_a.dtype(),
         tensor_args.input_tensor_a.memory_config(),
+        tensor_args.input_tensor_a.padded_shape(),  // drives CB total_size (Kt = padded_shape[-1] / TILE_WIDTH)
         tensor_args.input_tensor_b.dtype(),
-        tensor_args.input_tensor_b.memory_config());
+        tensor_args.input_tensor_b.memory_config(),
+        tensor_args.input_tensor_b.padded_shape());
 }
 
 }  // namespace ttnn::experimental::prim

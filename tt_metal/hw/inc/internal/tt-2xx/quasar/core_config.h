@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,8 @@ enum ProgrammableCoreType {
     TENSIX = 0,
     ACTIVE_ETH = 1,
     IDLE_ETH = 2,
-    COUNT = 3,
+    DRAM = 3,
+    COUNT = 4,
 };
 
 enum class TensixProcessorTypes : uint8_t {
@@ -80,10 +81,9 @@ union subordinate_map_t {
             volatile uint8_t neo3_trisc1;
             volatile uint8_t neo3_trisc2;
             volatile uint8_t neo3_trisc3;
-            uint8_t pad[12];
         };
-    } __attribute__((packed));
-} __attribute__((packed));
+    };
+};
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxProcessorsForThreadingVariables =

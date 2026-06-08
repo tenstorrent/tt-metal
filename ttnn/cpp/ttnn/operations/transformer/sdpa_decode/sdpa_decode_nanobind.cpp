@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,6 +44,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
+            share_cache (bool, optional): KV cache sharing across batch for decode. `True` enables, `False` disables. Defaults to `None` (distinct program-cache key from explicit `False`).
 
 
         Returns:
@@ -71,7 +72,8 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("share_cache") = nb::none());
 
     ttnn::bind_function<"paged_scaled_dot_product_attention_decode", "ttnn.transformer.">(
         mod,
@@ -90,7 +92,23 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        // block_size reads the K/V cache through a different (block_size, head_dim)
+        // view than its declared shape; needed for vLLM's shared kv-cache groups. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("block_size") = nb::none(),
+        // num_kv_heads reads the cache through a different per-block kv-head count
+        // than its declared shape. Companion to block_size for HMA cross-group sharing
+        // when sliding/full layers have asymmetric num_kv_heads. See
+        // ttnn.experimental.paged_update_cache's kwarg of the same name.
+        nb::arg("num_kv_heads") = nb::none(),
+        // cache_position_modulo (in tokens) treats the cache as a circular buffer:
+        // every page_table lookup uses cur_pos % cache_position_modulo. Required when
+        // the cache is sized for sliding-window-only allocation (vLLM
+        // SlidingWindowSpec); without it, positions past the bounded capacity collapse
+        // onto physical block 0 and silently corrupt the cache. Must be a multiple of
+        // (effective) block_size and >= sliding_window_size. Paged-mode only.
+        nb::arg("cache_position_modulo") = nb::none());
 
     ttnn::bind_function<"flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,

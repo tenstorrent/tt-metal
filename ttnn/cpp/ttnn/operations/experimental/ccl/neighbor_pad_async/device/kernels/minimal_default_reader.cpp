@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -61,7 +61,7 @@ void kernel_main() {
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
-    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
+    const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {
@@ -79,7 +79,7 @@ void kernel_main() {
                     cb_reserve_back(cb_output_id, 1);
                     uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
 
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+                    uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
                     noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                     src_stick_id++;
@@ -109,7 +109,7 @@ void kernel_main() {
                     cb_reserve_back(cb_output_id, 1);
                     uint32_t src_buffer_l1_addr = get_write_ptr(cb_output_id);
 
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, src_accessor);
+                    uint64_t src_noc_addr = src_accessor.get_noc_addr(src_stick_id);
                     noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
 
                     src_stick_id++;

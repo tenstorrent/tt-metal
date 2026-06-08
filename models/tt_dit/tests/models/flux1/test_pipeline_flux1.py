@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,9 @@ from loguru import logger
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
-from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from ....pipelines.events import profiler_event_callback
+from ....pipelines.flux1.pipeline_flux1 import Flux1Pipeline, Flux1PipelineConfig
 
 
 @pytest.mark.parametrize(
@@ -96,18 +97,9 @@ def test_flux1_pipeline(
         if traced:
             pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
-
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-    encoder_parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=encoder_tp[0], mesh_axis=encoder_tp[1])
-    )
-    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=vae_tp[0], mesh_axis=vae_tp[1]))
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp)
+    encoder_parallel_config = EncoderParallelConfig.from_tuple(encoder_tp)
+    vae_parallel_config = VAEParallelConfig.from_tuple(vae_tp)
 
     logger.info(f"Mesh device shape: {mesh_device.shape}")
     logger.info(f"Parallel config: {parallel_config}")
@@ -115,18 +107,22 @@ def test_flux1_pipeline(
     logger.info(f"VAE parallel config: {vae_parallel_config}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
 
-    pipeline = Flux1Pipeline.create_pipeline(
-        checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
-        mesh_device=mesh_device,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        use_torch_t5_text_encoder=use_torch_t5_text_encoder,
-        use_torch_clip_text_encoder=use_torch_clip_text_encoder,
-        num_links=num_links,
-        topology=topology,
+    pipeline = Flux1Pipeline(
+        device=mesh_device,
+        config=Flux1PipelineConfig.default(
+            mesh_shape=mesh_device.shape,
+            dit_parallel_config=parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            enable_t5_text_encoder=enable_t5_text_encoder,
+            use_torch_t5_text_encoder=use_torch_t5_text_encoder,
+            use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+            num_links=num_links,
+            topology=topology,
+            width=width,
+            height=height,
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
+        ),
     )
 
     prompts = [
@@ -156,15 +152,14 @@ def test_flux1_pipeline(
     def run(*, prompt: str, number: int, seed: int) -> None:
         benchmark_profiler = BenchmarkProfiler()
         with benchmark_profiler("run", iteration=0):
-            images = pipeline.run_single_prompt(
-                width=width,
-                height=height,
-                prompt=prompt,
+            images = pipeline(
+                prompts=[prompt],
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 traced=traced,
-                profiler=benchmark_profiler,
-                profiler_iteration=0,
+                vae_traced=False,
+                encoder_traced=False,
+                on_event=profiler_event_callback(benchmark_profiler, 0),
             )
 
         output_filename = f"{filename_prefix}_{number}.png"

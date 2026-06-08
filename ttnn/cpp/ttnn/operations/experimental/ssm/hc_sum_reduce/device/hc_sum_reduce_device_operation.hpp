@@ -1,21 +1,24 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <functional>
 #include <optional>
+#include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "hc_sum_reduce_program_factory.hpp"
-
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include "hc_sum_reduce_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
+
+struct HCSumReduceProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const HcSumReduceParams& operation_attributes, const HcSumReduceInputs& tensor_args, Tensor& output);
+};
 
 struct HCSumReduceDeviceOperation {
     using operation_attributes_t = HcSumReduceParams;
@@ -30,8 +33,6 @@ struct HCSumReduceDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
-
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -42,6 +43,6 @@ Tensor hc_sum_reduce(
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> dtype = std::nullopt,
-    std::optional<MathFidelity> math_fidelity = std::nullopt);
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity = std::nullopt);
 
 }  // namespace ttnn::prim

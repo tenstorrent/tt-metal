@@ -103,7 +103,7 @@ The reader kernel reads tiles from a single source DRAM buffer and pushes them i
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
             uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-            noc_async_read_tile(i, in0, cb_in0_addr);
+            noc_async_read_page(i, in0, cb_in0_addr);
             noc_async_read_barrier();
             cb_push_back(cb_in0, 1);
         }
@@ -121,7 +121,7 @@ The writer kernel is straightforward: it reads result tiles from the output circ
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);
             uint32_t cb_out0_addr = get_read_ptr(cb_out0);
-            noc_async_write_tile(i, out0, cb_out0_addr);
+            noc_async_write_page(i, out0, cb_out0_addr);
             noc_async_write_barrier();
             cb_pop_front(cb_out0, 1);
         }
@@ -195,7 +195,7 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
     // High-level API function
     // Accepts `edge0`, `edge1` and `inv_delta` as parameters
     inline void my_smoothstep_tile(uint32_t idx_dst0, float edge0, float edge1, float inv_delta) {
-        MATH(_llk_math_eltwise_unary_sfpu_params_<false>(
+        MATH(_llk_math_eltwise_unary_sfpu_params_(
             smoothstep_tile_face,
             idx_dst0,
             VectorMode::RC, // Apply on all 4 faces of the tile

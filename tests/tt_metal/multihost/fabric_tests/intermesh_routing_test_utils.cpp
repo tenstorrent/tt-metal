@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -510,6 +510,21 @@ void RandomizedInterMeshUnicast(BaseFabricFixture* fixture) {
     } else {
         run_unicast_recv_step(fixture, tt::tt_metal::distributed::multihost::Rank{0});
     }
+}
+
+uint32_t get_rank_for_mesh_id(uint32_t target_mesh_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& bindings = control_plane.get_global_logical_bindings();
+    MeshId target{target_mesh_id};
+
+    for (const auto& [rank, mesh_binding] : bindings) {
+        if (mesh_binding.first == target) {
+            return static_cast<uint32_t>(*rank);
+        }
+    }
+
+    TT_FATAL(false, "No rank found owning mesh_id {}", target_mesh_id);
+    return 0;
 }
 
 void InterMeshLineMcast(

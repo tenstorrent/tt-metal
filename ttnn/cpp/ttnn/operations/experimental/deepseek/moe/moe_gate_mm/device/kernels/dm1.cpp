@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -297,6 +297,7 @@ void kernel_main() {
         noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
         noc_semaphore_inc</*posted=*/true>(collector_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+        noc_async_write_set_trid(0, /*noc=*/1);
 
         // We are done with the group scores
         cb_pop_front(cb_c2w_rdy, 1);
@@ -323,6 +324,7 @@ void kernel_main() {
         noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
         noc_semaphore_inc</*posted=*/true>(collector_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+        noc_async_write_set_trid(0, /*noc=*/1);
 
         cb_pop_front(cb_w2c_in8, 1);
     }

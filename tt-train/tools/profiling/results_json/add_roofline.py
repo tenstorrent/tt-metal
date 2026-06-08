@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -160,46 +160,54 @@ def _enrich_one(entry, hardware, peak_tflops_override):
     ccl = result.get("ccl", {})
     peak_tflops = peak_tflops_override or hw.get("peak_tflops_hifi4", DEFAULT_BF16_PEAK_TFLOPS)
 
-    rf_fwd = _extract_phase(timing, "forward")
-    rf_bwd = _extract_phase(timing, "backward")
-    rf_opt = _extract_phase(timing, "optimizer")
+    model_fwd = _extract_phase(timing, "forward")
+    model_bwd = _extract_phase(timing, "backward")
+    model_opt = _extract_phase(timing, "optimizer")
 
+    # Roofline values include recomputation cost for gradient checkpointing;
+    # model (MFU) values reflect only the mathematical work of the model.
     if uses_checkpointing:
-        rf_bwd = {
-            "roofline_ms": rf_bwd["roofline_ms"] + rf_fwd["roofline_ms"],
-            "flops_tflops": rf_bwd["flops_tflops"] + rf_fwd["flops_tflops"],
+        rl_bwd = {
+            "roofline_ms": model_bwd["roofline_ms"] + model_fwd["roofline_ms"],
+            "flops_tflops": model_bwd["flops_tflops"] + model_fwd["flops_tflops"],
         }
+    else:
+        rl_bwd = model_bwd
 
     roofline_data = {"checkpointing_adjusted": uses_checkpointing}
     meas_fwd = get_measured_phase_ms(entry, "forward_ms")
     meas_bwd = get_measured_phase_ms(entry, "backward_ms")
     meas_opt = get_measured_phase_ms(entry, "optimizer_ms")
 
-    for label, rf, meas_ms in [
-        ("forward", rf_fwd, meas_fwd),
-        ("backward", rf_bwd, meas_bwd),
-        ("optimizer", rf_opt, meas_opt),
+    for label, rl, model, meas_ms in [
+        ("forward", model_fwd, model_fwd, meas_fwd),
+        ("backward", rl_bwd, model_bwd, meas_bwd),
+        ("optimizer", model_opt, model_opt, meas_opt),
     ]:
-        r_ms = rf["roofline_ms"]
-        r_flops = rf["flops_tflops"]
-        phase_data = {"roofline_ms": round(r_ms, 4), "flops_tflops": round(r_flops, 4)}
+        phase_data = {
+            "roofline_ms": round(rl["roofline_ms"], 4),
+            "flops_tflops": round(rl["flops_tflops"], 4),
+            "model_flops_tflops": round(model["flops_tflops"], 4),
+        }
         if meas_ms and meas_ms > 0:
             phase_data["measured_ms"] = round(meas_ms, 3)
-            phase_data["roofline_perc"] = round(r_ms / meas_ms * 100, 1)
-            phase_data["mfu_perc"] = round(r_flops / (meas_ms / 1000) / peak_tflops * 100, 1)
+            phase_data["roofline_perc"] = round(rl["roofline_ms"] / meas_ms * 100, 1)
+            phase_data["mfu_perc"] = round(model["flops_tflops"] / (meas_ms / 1000) / peak_tflops * 100, 1)
         roofline_data[label] = phase_data
 
-    rf_total_ms = rf_fwd["roofline_ms"] + rf_bwd["roofline_ms"] + rf_opt["roofline_ms"]
-    rf_total_flops = rf_fwd["flops_tflops"] + rf_bwd["flops_tflops"] + rf_opt["flops_tflops"]
+    rl_total_ms = model_fwd["roofline_ms"] + rl_bwd["roofline_ms"] + model_opt["roofline_ms"]
+    rl_total_flops = model_fwd["flops_tflops"] + rl_bwd["flops_tflops"] + model_opt["flops_tflops"]
+    model_total_flops = model_fwd["flops_tflops"] + model_bwd["flops_tflops"] + model_opt["flops_tflops"]
     meas_total = entry.get("throughput", {}).get("step_time_ms") or get_measured_phase_ms(entry, "total_ms")
     total_data = {
-        "roofline_ms": round(rf_total_ms, 4),
-        "flops_tflops": round(rf_total_flops, 4),
+        "roofline_ms": round(rl_total_ms, 4),
+        "flops_tflops": round(rl_total_flops, 4),
+        "model_flops_tflops": round(model_total_flops, 4),
     }
     if meas_total and meas_total > 0:
         total_data["measured_ms"] = round(meas_total, 3)
-        total_data["roofline_perc"] = round(rf_total_ms / meas_total * 100, 1)
-        total_data["mfu_perc"] = round(rf_total_flops / (meas_total / 1000) / peak_tflops * 100, 1)
+        total_data["roofline_perc"] = round(rl_total_ms / meas_total * 100, 1)
+        total_data["mfu_perc"] = round(model_total_flops / (meas_total / 1000) / peak_tflops * 100, 1)
     roofline_data["total"] = total_data
 
     # --- CCL utilization ---

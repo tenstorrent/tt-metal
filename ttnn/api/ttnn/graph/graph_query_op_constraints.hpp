@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,16 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <ttnn/distributed/tensor_topology.hpp>
 
 namespace ttnn::graph {
+
+// Pairs a TensorSpec with a TensorTopology, allowing callers to specify
+// distribution (shard/replicate) when creating tensors in query_op_constraints.
+struct DistributedTensorSpec {
+    TensorSpec tensor_spec;
+    tt::tt_metal::TensorTopology tensor_topology;
+};
 
 namespace detail {
 // Helper to temporarily change logger level
@@ -119,9 +127,20 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     {
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
-        // helper lambda to transform TensorSpec to DeviceTensor
+        // helper lambda to transform TensorSpec/DistributedTensorSpec to DeviceTensor
         auto transform_arg = [device](auto&& arg) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, DistributedTensorSpec>) {
+                return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<DistributedTensorSpec>>) {
+                return arg ? std::optional<Tensor>(create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
+                           : std::nullopt;
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<DistributedTensorSpec>>) {
+                std::vector<Tensor> result(arg.size());
+                std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
+                    return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
+                });
+                return result;
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
                 return create_device_tensor(arg, device);
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
                 return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
@@ -131,6 +150,10 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
                     return create_device_tensor(item, device);
                 });
                 return result;
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, tt::tt_metal::distributed::MeshDevice>) {
+                // MeshDevice is non-copyable; wrap in reference_wrapper so make_tuple can store it.
+                // reference_wrapper<MeshDevice> implicitly converts to MeshDevice& at the call site.
+                return std::ref(arg);
             } else {
                 return std::forward<decltype(arg)>(arg);
             }
@@ -157,15 +180,13 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     }  // end of outer graph capture
 
     // extract memory footprint from the trace
-    auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
     const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(op_trace, interleaved_storage_cores);
+        extract_resource_usage_per_core(op_trace);
 
     size_t l1_output_buffer_per_core = 0;
     for (const auto& output : outputs) {
         if (!output.buffer()->is_dram()) {
-            l1_output_buffer_per_core +=
-                extract_l1_output_buffer_allocation_size_per_core(output, interleaved_storage_cores);
+            l1_output_buffer_per_core += extract_l1_output_buffer_allocation_size_per_core(output);
         }
     }
 

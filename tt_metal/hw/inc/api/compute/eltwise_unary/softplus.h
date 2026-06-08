@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include "api/compute/common_globals.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "ckernel_sfpu_softplus.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -30,12 +30,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_THREE_PARAM_KERNEL_FN(calculate_softplus, RC, APPROX, idst, beta, beta_reciprocal, threshold));
+    MATH(SFPU_UNARY_THREE_PARAM_KERNEL_WITH_DST_ACCUM(
+        calculate_softplus, RC, APPROX, DST_ACCUM_MODE, idst, beta, beta_reciprocal, threshold));
+}
+
+ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
+    PACK(SFPU_UNARY_THREE_PARAM_KERNEL_WITH_DST_ACCUM(
+        calculate_softplus, RC, APPROX, DST_ACCUM_MODE, idst, beta, beta_reciprocal, threshold));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void softplus_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
+
+ALWI void softplus_tile_init_pack() { PACK(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
 
 }  // namespace ckernel

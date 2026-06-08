@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,7 @@ struct HaloDeviceOperation {
 Tensor halo(
     const Tensor& input_tensor,
     const ttnn::operations::sliding_window::SlidingWindowConfig& config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t pad_val,
     bool remote_read,
     bool transpose_mcast,

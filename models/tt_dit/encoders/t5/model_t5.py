@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tracing import traced_function
 
 
 # Make this a dataclass. Also consider using HF config directly.
@@ -104,10 +105,15 @@ class T5Encoder(Module):
         rename_substate(state, "encoder.final_layer_norm", "final_layer_norm")
         pop_substate(state, "shared")
 
-    def forward(self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
+    def forward(
+        self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
+    ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
+        if zero_masking and attention_mask is not None:
+            output = output * ttnn.unsqueeze(attention_mask, -1)
         hidden_states.append(output)
         return hidden_states
 
@@ -285,7 +291,11 @@ class T5DenseGatedActDense(Module):
 
         if self.parallel_config.tensor_parallel.factor > 1:
             hidden_states = self.ccl_manager.all_gather(
-                hidden_states, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                hidden_states,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
         hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
@@ -421,14 +431,22 @@ class T5Attention(Module):
         orig_shape = list(attn_output.shape)
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = self.ccl_manager.all_gather(
-                attn_output, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                attn_output,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out = self.o_proj(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(
-                dense_out, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                dense_out,
+                dim=3,
+                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                use_hyperparams=True,
+                use_persistent_buffer=True,
             )
 
         dense_out_shape = list(dense_out.shape)

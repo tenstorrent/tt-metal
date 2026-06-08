@@ -1,10 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // X = output width
@@ -68,7 +72,6 @@ void kernel_main() {
     constexpr uint32_t x_block_size = TILE_HEIGHT;
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
-    constexpr uint32_t tile_bytes = TILE_HW * element_size;
     constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
 
     // For x-padding logic:
@@ -110,7 +113,8 @@ void kernel_main() {
     for (int i = RANK - 2; i >= 0; i--) {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
-    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
+    const auto s = TensorAccessor(src_args, src_addr);
+    Noc noc;
 
     // Stride for stepping along x_dim_index_in_input
     const uint32_t X_stride_tile = src_tiled_strides[x_dim_index_in_input];
@@ -179,8 +183,9 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        cb_reserve_back(tt::CBIndex::c_0, 1);
-        uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        CircularBuffer cb(tt::CBIndex::c_0);
+        cb.reserve_back(1);
+        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
 
         // --------------------------------------------------------------------
         // 5.1) Async read for [x_start..x_end)
@@ -191,33 +196,44 @@ void kernel_main() {
 
             for (uint32_t x = x_start; x < x_end; ++x) {
                 uint32_t l1_col_base = src_buffer_l1_addr + page_offset;
-                uint64_t src_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
 
-                // Read each face in [0..real_faces_w)
                 uint16_t w_offset = 0;
                 uint16_t cb_w_offset = 0;
                 for (uint8_t i = 0; i < real_faces_w; i++) {
-                    // For BH - DRAM read alignment require is 64 bytes, and if the last 6 bits of the address are not
-                    // the same as the last 6 bits of the L1 address, we need to read to an aligned location and then
-                    // copy to the final location We just allocate more space into our input cb, read into an aligned
-                    // section in our buffer and then copy to the final location
-                    // TODO: copy to scratch buffer CB and then do an async copy from that scratch buffer CB to the
-                    // final location in the input CB When it's BH float32, or if it's in L1, or if we're on WH/GS, this
-                    // section is skipped at compile time
+                    uint32_t total_offset = base_face_line_offset_bytes + w_offset;
                     if constexpr (misalignment > 0) {
-                        uint64_t final_src_addr = src_noc_addr + w_offset;
+                        // Recompute noc addr only to check alignment vs L1.
+                        uint64_t final_src_addr = s.get_noc_addr((uint32_t)tile, total_offset);
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
                             uint32_t misaligned_addr = l1_base + misalignment;
-                            noc_async_read(final_src_addr, misaligned_addr, SUBTILE_LINE_BYTES);
-                            noc_async_read_barrier();
+                            CoreLocalMem<uint32_t> mis_dst(misaligned_addr);
+                            noc.async_read(
+                                s,
+                                mis_dst,
+                                SUBTILE_LINE_BYTES,
+                                {.page_id = (uint32_t)tile, .offset_bytes = total_offset},
+                                {.offset_bytes = 0});
+                            noc.async_read_barrier();
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
                                 l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
                         } else {
-                            noc_async_read(final_src_addr, l1_col_base + cb_w_offset, SUBTILE_LINE_BYTES);
+                            CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
+                            noc.async_read(
+                                s,
+                                dst,
+                                SUBTILE_LINE_BYTES,
+                                {.page_id = (uint32_t)tile, .offset_bytes = total_offset},
+                                {.offset_bytes = 0});
                         }
                     } else {
-                        noc_async_read(src_noc_addr + w_offset, l1_col_base + cb_w_offset, SUBTILE_LINE_BYTES);
+                        CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
+                        noc.async_read(
+                            s,
+                            dst,
+                            SUBTILE_LINE_BYTES,
+                            {.page_id = (uint32_t)tile, .offset_bytes = total_offset},
+                            {.offset_bytes = 0});
                     }
 
                     w_offset += FACE_HW_BYTES;
@@ -261,8 +277,8 @@ void kernel_main() {
         }
 
         // Wait for reads to complete, push the tile
-        noc_async_read_barrier();
-        cb_push_back(tt::CBIndex::c_0, 1);
+        noc.async_read_barrier();
+        cb.push_back(1);
     }
 
     // ------------------------------------------------------------------------
@@ -270,9 +286,10 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     if constexpr (needs_y_padding) {
         // We store one chunk of padding in c_3
-        cb_reserve_back(tt::CBIndex::c_3, 1);
-        uint32_t l1_write_addr = get_write_ptr(tt::CBIndex::c_3);
+        CircularBuffer cb3(tt::CBIndex::c_3);
+        cb3.reserve_back(1);
+        uint32_t l1_write_addr = cb3.get_write_ptr();
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb_push_back(tt::CBIndex::c_3, 1);
+        cb3.push_back(1);
     }
 }

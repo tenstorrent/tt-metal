@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
 
@@ -75,7 +75,7 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // ldexp(p, k_int) = p * 2^k
     // We do this by adding k_int to the exponent of p
     // Get the current exponent of p (without bias)
-    sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
+    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
@@ -90,7 +90,7 @@ template <bool is_fp32_dest_acc_en>
 sfpi_inline void _xielu_mad_(sfpi::vFloat mul_a, sfpi::vFloat mul_b, sfpi::vFloat addend) {
     sfpi::vFloat result = mul_a * mul_b + addend;
     if constexpr (!is_fp32_dest_acc_en) {
-        result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
     }
     sfpi::dst_reg[0] = result;
 }

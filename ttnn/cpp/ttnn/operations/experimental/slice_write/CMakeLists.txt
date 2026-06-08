@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_slice_write ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::SliceWrite ALIAS ttnn_op_experimental_slice_write)
 
@@ -18,17 +20,13 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES slice_write.hpp
+        FILES ${TTNN_OP_EXPERIMENTAL_SLICE_WRITE_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        slice_write.cpp
-        device/slice_write_device_operation.cpp
-        device/slice_write_rm_sharded_input_program_factory.cpp
-        device/slice_write_tiled_sharded_input_program_factory.cpp
-        device/slice_write_rm_interleaved_program_factory.cpp
+        ${TTNN_OP_EXPERIMENTAL_SLICE_WRITE_SRCS}
 )
 
 target_include_directories(ttnn_op_experimental_slice_write PRIVATE ${FixmeOpIncDirs})

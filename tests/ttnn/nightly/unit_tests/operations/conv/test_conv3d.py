@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@ import pytest
 import ttnn
 import torch.nn as nn
 from tests.ttnn.utils_for_testing import check_with_pcc
+from models.common.utility_functions import skip_with_watcher
 
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,
@@ -242,7 +243,9 @@ def run_conv3d_with_memory_config(
     try:
         tt_output = ttnn.experimental.conv3d(**conv3d_kwargs)
     except Exception as e:
-        if output_mem_config is not None:
+        if "shard width" in str(e).lower() and "aligned" in str(e):
+            pytest.xfail(f"Sharded input has unaligned shard width: {e}")
+        elif output_mem_config is not None:
             pytest.skip(f"Output memory configuration not supported: {e}")
         else:
             raise
@@ -492,6 +495,70 @@ def test_conv3d_sweep_blocks(
             f"W_out_block={W_out_block}, H_out_block={H_out_block}, "
             f"C_in_block={C_in_block}"
         )
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking",
+    [
+        [(1, 96, 3, 16, 16), 3, (3, 3, 3), (1, 1, 1), 1, (1, 1, 1), "zeros", (96, 32, 2, 8, 8)],
+    ],
+    ids=["c_out_3_t_leftover"],
+)
+def test_conv3d_streaming_output_t_leftover(
+    device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, blocking
+):
+    """Regression test for issue #44792: streaming output with a partial T block."""
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        # Keep sequential spatial blocks on one core so the partial T block is followed by another CB read.
+        compute_with_storage_grid_size=(1, 1),
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=groups,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    max_abs_diff = (tt_output - gt_output).abs().max().item()
+    logger.info(f"Conv3d streaming T-leftover: {pcc_message}, max_abs_diff={max_abs_diff:.4f}")
+    assert pcc_passed, pcc_message
+    assert max_abs_diff < 0.1, f"Expected aligned output, got max_abs_diff={max_abs_diff}"
 
 
 @pytest.mark.parametrize(
@@ -816,3 +883,85 @@ def test_conv3d_interleaved_vs_sharded_equivalence(
     pcc_passed_gt, pcc_message_gt = check_with_pcc(gt_output, tt_output_sharded, pcc=PCC_TOLERANCE)
     logger.info(f"Sharded vs PyTorch: {pcc_message_gt}")
     assert pcc_passed_gt, f"{pcc_message_gt} - Sharded output differs from PyTorch"
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        # Issue #35436: large C_in with default config caused L1 OOM because C_in_block
+        # defaulted to full C_in, making patch_size = 3*3*3*768 = 20736 elements (648 tiles).
+        # Fixed by defaulting C_in_block to TILE_WIDTH (32).
+        # Using small spatial dims to keep runtime reasonable; the bug is in C_in blocking, not spatial size.
+        [(1, 768, 4, 8, 8), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+    ],
+    ids=["issue_35436_large_c_in"],
+)
+def test_conv3d_auto_blocking_large_c_in(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+    """Regression test for issue #35436: default conv3d config L1 OOM with large C_in.
+
+    When C_in is large (768) and no config is provided, auto-blocking must pick a
+    C_in_block small enough to fit circular buffers in L1.
+    """
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, padding_mode, device
+    )
+    N, D_out, H_out, W_out = output_dims
+
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    # No config — relies on auto-blocking defaults
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode=padding_mode,
+        groups=1,
+        compute_kernel_config=kernel_config,
+    )
+
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Conv3d auto-blocking large C_in (issue #35436): {pcc_message}")
+    assert pcc_passed, pcc_message
+
+
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
+def test_conv3d_program_cache_batch_size(device):
+    """Regression for issue #44565: B=1 then B=2 on the same device used to produce garbage output for B=2."""
+    grid_size = device.compute_with_storage_grid_size()
+    out_channels = 64
+    kernel_size = (3, 3, 3)
+    stride = (1, 1, 1)
+    groups = 1
+    padding = (0, 1, 1)
+    padding_mode = "zeros"
+
+    for B in (1, 2):
+        input_shape = (B, 12, 8, 10, 9)
+        run_conv3d_test(
+            device,
+            input_shape,
+            out_channels,
+            kernel_size,
+            stride,
+            groups,
+            padding,
+            padding_mode,
+            grid_size=grid_size,
+        )

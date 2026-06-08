@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,6 +26,7 @@
 
 #define NOC_NUM_STREAMS 64
 #define ETH_NOC_NUM_STREAMS 32
+#define DRAM_NOC_NUM_STREAMS 16
 
 #define NUM_MCAST_STREAM_ID_START 0
 #define NUM_MCAST_STREAM_ID_END 3

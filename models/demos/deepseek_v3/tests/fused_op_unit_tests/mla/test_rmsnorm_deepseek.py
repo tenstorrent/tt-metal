@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ def rms_norm_reference(x: torch.Tensor, weight: torch.Tensor, epsilon: float = 1
     "device_params",
     [
         {
-            "trace_region_size": 550912,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

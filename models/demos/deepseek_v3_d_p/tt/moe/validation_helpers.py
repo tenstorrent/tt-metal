@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,17 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+
+
+def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
+    """Calculate average recall of predicted expert selections vs reference."""
+    recall = 0
+    for i in range(predicted_experts.shape[0]):
+        pred_set = set(e.item() for e in predicted_experts[i])
+        ref_set = set(e.item() for e in reference_experts[i])
+        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
+    return recall / predicted_experts.shape[0]
 
 
 def trace_token_source(
@@ -54,11 +65,7 @@ def trace_token_source(
     local_expert_in_group = expert_id % experts_per_group
     local_expert = local_expert_in_group % experts_per_chip
 
-    # Handle both 2D [chip, expert] and 3D [dispatch_group, chip, expert] shapes
-    if expert_token_counts.dim() == 2:
-        total_tokens = expert_token_counts[expert_chip, local_expert].item()
-    else:
-        total_tokens = expert_token_counts[dispatch_group_idx, expert_chip, local_expert].item()
+    total_tokens = expert_token_counts[dispatch_group_idx, 0, expert_id].item()
 
     # Find send order by counting tokens sent before this one
     # This mirrors the kernel's iteration order: for each token routed to this expert
@@ -120,6 +127,17 @@ class ValidationResult:
             else:
                 # Generic fallback
                 logger.error(f"  [{i}] {mismatch}")
+
+    @classmethod
+    def merge(cls, results: List["ValidationResult"], name: str = "merged") -> "ValidationResult":
+        """Combine multiple ValidationResults into one."""
+        passed = all(r.passed for r in results)
+        matches = sum(r.matches for r in results)
+        total = sum(r.total for r in results)
+        mismatches = []
+        for r in results:
+            mismatches.extend(r.mismatches)
+        return cls(passed=passed, matches=matches, total=total, mismatches=mismatches, name=name)
 
     def assert_passed(self, msg: Optional[str] = None):
         """Assert validation passed, with detailed error on failure."""
@@ -412,6 +430,174 @@ def log_per_chip_statistics(
 # Returns (match: bool, error_detail: Optional[str])
 DispatchComparator = Callable[[torch.Tensor, torch.Tensor, int, int, int], Tuple[bool, Optional[str]]]
 
+# Type for composed tensor comparators
+# (actual_chip, expected_chip, group, chip) -> (match, error_detail)
+ComposedComparator = Callable[[torch.Tensor, torch.Tensor, int, int], Tuple[bool, Optional[str]]]
+
+
+def compare_exact(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+    """Exact element-wise comparison."""
+    if torch.equal(actual, expected):
+        return True, None
+    diff = (actual != expected).sum().item()
+    return False, f"{diff}/{actual.numel()} elements differ"
+
+
+def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
+    """Return a PCC comparator with the given threshold."""
+
+    def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+        _, pcc = comp_pcc(actual.float(), expected.float())
+        return (True, None) if pcc >= threshold else (False, f"PCC={pcc:.4f} < {threshold}")
+
+    return _compare
+
+
+def compare_recall(threshold: float = 0.999) -> ComposedComparator:
+    """Return a recall comparator with the given threshold."""
+
+    def _compare(
+        actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int, verbose_histogram: bool = False
+    ) -> Tuple[bool, Optional[str]]:
+        r = calculate_average_recall(actual, expected)
+        if r >= threshold:
+            return (True, f"recall={r:.4f} >= {threshold}")
+        else:
+            from collections import Counter
+
+            total_elements = len(actual)
+            mismatches = []
+
+            # not very efficient
+            for i, (a, e) in enumerate(
+                zip(torch.sort(actual, dim=-1).values.long(), torch.sort(expected, dim=-1).values.long())
+            ):
+                match, error_detail = compare_exact(a, e, 0, 0)
+                if not match:
+                    mismatches.append(error_detail)
+            detail = ""
+            if verbose_histogram:
+                if mismatches:
+                    num_errors = len(mismatches)
+                    total_percent = (num_errors / total_elements) * 100
+
+                    # Header showing (1329/4096 total) [32.4%]
+                    detail = (
+                        f"\n*** Mismatch Histogram ({num_errors}/{total_elements} total) [{total_percent:.1f}%] ***"
+                    )
+
+                    print(detail)
+
+                    counts = Counter(mismatches)
+                    num_matches = total_elements - num_errors
+                    match_label = "0 errors; MATCH"
+                    counts[match_label] = num_matches
+                    # Sort by frequency (most common first)
+                    sorted_counts = counts.most_common()
+
+                    max_label_len = max(len(str(label)) for label in counts.keys())
+                    max_bar_width = 30
+                    max_count = max(counts.values())
+                    scale = max_count / max_bar_width if max_count > max_bar_width else 1
+
+                    for label, count in sorted_counts:
+                        bar = "█" * int(count / scale)
+                        item_percent = (count / total_elements) * 100
+
+                        # Format: Label | Bar (padded) | count/total | [percentage]
+                        print(
+                            f"{str(label).ljust(max_label_len)} | "
+                            f"{bar.ljust(max_bar_width)} "
+                            f"{str(count).rjust(len(str(total_elements)))}/{total_elements} "
+                            f"[{item_percent:5.1f}%]"
+                        )
+
+                    print("-" * (max_label_len + max_bar_width + 25) + "\n")
+                else:
+                    detail = f"*** All {total_elements}/{total_elements} matched! [0.0% errors] ***"
+
+        return (False, f"recall={r:.4f} < {threshold};")
+
+    return _compare
+
+
+def validate_composed(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    num_groups: int,
+    group_size: int,
+    compare_fn: ComposedComparator,
+    name: str = "composed",
+    broadcast_groups: int = 0,
+) -> ValidationResult:
+    """
+    Validate a composed tensor per (group, chip) cell.
+
+    Iterates over actual[group, chip] vs expected[group, chip], calling compare_fn
+    for each cell. Populates validated_cells for the grid visualizer.
+
+    Args:
+        actual: Composed TTNN output, shape [num_groups, group_size, ...]
+        expected: Reference tensor, shape [num_groups, group_size, ...]
+        num_groups: Number of dispatch groups to iterate over
+        group_size: Number of chips per group (mesh rows)
+        compare_fn: (actual_chip, expected_chip, group, chip) -> (match, error_detail)
+        name: Name for logging/result
+        broadcast_groups: If > 0, broadcast validated_cells and mismatches across this many
+            groups in the visualizer. Use for SP-replicated tensors where num_groups=1 but
+            the grid has multiple dispatch group columns.
+    """
+    display_groups = broadcast_groups if broadcast_groups > 0 else num_groups
+    matches, mismatches = 0, []
+    validated_cells = set()
+    for g in range(num_groups):
+        for c in range(group_size):
+            # Mark all display columns as validated for this chip
+            for dg in range(display_groups) if broadcast_groups > 0 else [g]:
+                validated_cells.add((dg, c))
+            match, error_detail = compare_fn(actual[g, c], expected[g, c], g, c)
+            if match:
+                matches += 1
+            else:
+                if broadcast_groups > 0:
+                    for dg in range(display_groups):
+                        mismatches.append((dg, c, error_detail or "mismatch"))
+                else:
+                    mismatches.append((g, c, error_detail or "mismatch"))
+    return ValidationResult(
+        passed=len(mismatches) == 0,
+        matches=matches,
+        total=num_groups * group_size,
+        mismatches=mismatches,
+        name=name,
+        validated_cells=validated_cells,
+    )
+
+
+def validate_replication(
+    tensor: torch.Tensor,
+    name: str = "replication",
+) -> ValidationResult:
+    """Validate tensor is replicated across dim 1 (chips) within each group (dim 0)."""
+    num_groups = tensor.shape[0]
+    group_size = tensor.shape[1]
+    matches, total, mismatches = 0, 0, []
+    for g in range(num_groups):
+        ref = tensor[g, 0]
+        for j in range(1, group_size):
+            total += 1
+            if torch.allclose(tensor[g, j].int(), ref.int(), atol=0, rtol=0):
+                matches += 1
+            else:
+                mismatches.append((g, j, f"group {g} row {j} differs from row 0"))
+    return ValidationResult(
+        passed=len(mismatches) == 0,
+        matches=matches,
+        total=total,
+        mismatches=mismatches,
+        name=name,
+    )
+
 
 def _get_valid_slots(
     expert_dispatch_table: torch.Tensor,
@@ -442,6 +628,7 @@ def _get_valid_slots(
 def validate_dispatch_data(
     torch_data: torch.Tensor,
     ttnn_data: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -458,9 +645,13 @@ def validate_dispatch_data(
     Skips experts not present in EP rank (dispatch_table == -1).
 
     Args:
-        torch_data: Reference data, shape [num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, ...]
+        torch_data: Reference data, shape [num_dispatch_groups, dispatch_group_size, total_buffer_rows, ...]
         ttnn_data: TTNN data, same shape as torch_data
-        expert_token_counts: Token counts per expert, shape [num_dispatch_groups, dispatch_group_size, experts_per_chip]
+        expert_region_offsets: Expert region offsets (shared across source devices in a
+            dispatch group), shape [num_dispatch_groups, dispatch_group_size, num_routed_experts].
+            Gives the expert region start position for each expert directly; no need to
+            read expert_offsets at chip 0.
+        expert_token_counts: Token counts per expert, shape [num_dispatch_groups, dispatch_group_size, num_routed_experts]
         expert_dispatch_table: Expert to chip mapping, shape [num_dispatch_groups, num_routed_experts]
         num_dispatch_groups: Number of EP ranks
         dispatch_group_size: Number of chips in dispatch group
@@ -491,10 +682,21 @@ def validate_dispatch_data(
 
                 total_slots += 1
                 validated_cells.add((r, dst_chip_id))
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=r,
+                    chip=dst_chip_id,
+                    local_expert=expert_id,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
+                count = expert_token_counts[r, 0, global_expert_idx].item()
 
-                torch_slot = torch_data[r, dst_chip_id, expert_id, :count]
-                ttnn_slot = ttnn_data[r, dst_chip_id, expert_id, :count]
+                # expert_region_offsets directly gives the expert region start position
+                start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
+                torch_slot = torch_data[r, dst_chip_id, start : start + count]
+                ttnn_slot = ttnn_data[r, dst_chip_id, start : start + count]
 
                 match, error_detail = compare_fn(torch_slot, ttnn_slot, r, dst_chip_id, expert_id)
 
@@ -532,6 +734,7 @@ def validate_dispatch_data(
 def validate_dispatch_buffer(
     torch_dispatched: torch.Tensor,
     ttnn_dispatched: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -545,6 +748,7 @@ def validate_dispatch_buffer(
     Args:
         torch_dispatched: Reference dispatched buffer
         ttnn_dispatched: TTNN dispatched buffer
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -572,6 +776,7 @@ def validate_dispatch_buffer(
     return validate_dispatch_data(
         torch_dispatched,
         ttnn_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -586,6 +791,7 @@ def validate_dispatch_buffer(
 def validate_dispatch_buffer_pcc(
     torch_dispatched: torch.Tensor,
     ttnn_dispatched: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -603,6 +809,7 @@ def validate_dispatch_buffer_pcc(
     Args:
         torch_dispatched: Reference dispatched buffer
         ttnn_dispatched: TTNN dispatched buffer
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -632,6 +839,7 @@ def validate_dispatch_buffer_pcc(
     return validate_dispatch_data(
         torch_dispatched,
         ttnn_dispatched,
+        expert_region_offsets,
         expert_token_counts,
         expert_dispatch_table,
         num_dispatch_groups,
@@ -646,6 +854,7 @@ def validate_dispatch_buffer_pcc(
 def validate_dispatch_metadata(
     torch_metadata: torch.Tensor,
     ttnn_metadata: torch.Tensor,
+    expert_region_offsets: torch.Tensor,
     expert_token_counts: torch.Tensor,
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -664,6 +873,7 @@ def validate_dispatch_metadata(
     Args:
         torch_metadata: Reference metadata
         ttnn_metadata: TTNN metadata
+        expert_region_offsets: Expert region offsets for slicing flat buffers
         expert_token_counts: Token counts per expert
         expert_dispatch_table: Expert to chip mapping
         num_dispatch_groups: Number of EP ranks
@@ -693,24 +903,36 @@ def validate_dispatch_metadata(
 
                 total_slots += 1
                 validated_cells.add((r, dst_chip_id))
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=r,
+                    chip=dst_chip_id,
+                    local_expert=expert_id,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
+                count = expert_token_counts[r, 0, global_expert_idx].item()
+
+                # expert_region_offsets directly gives the expert region start position
+                start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
 
                 # Compare fields 1-3 directly
-                out = ttnn_metadata[r, dst_chip_id, expert_id, :count, 1:4]
-                ref = torch_metadata[r, dst_chip_id, expert_id, :count, 1:4]
+                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:4]
+                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:4]
 
                 # Both Torch and TTNN now embed linearized mesh coord in field 0
-                out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, expert_id, :count, 0]
-                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, expert_id, :count, 0]
+                out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, start : start + count, 0]
+                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, start : start + count, 0]
 
                 # Compare weights (metadata[4]):
                 # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
                 out_weight_bf16 = (
-                    ttnn_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+                    ttnn_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
                 )
                 # Torch stores bfloat16 value directly
                 ref_weight_bf16 = (
-                    torch_metadata[r, dst_chip_id, expert_id, :count, 4].to(torch.int16).view(torch.bfloat16)
+                    torch_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
                 )
 
                 metadata_match = torch.allclose(out, ref, atol=1e-6)
@@ -730,8 +952,8 @@ def validate_dispatch_metadata(
 
                     if verbose:
                         for slot in range(count):
-                            torch_data = torch_metadata[r, dst_chip_id, expert_id, slot, :4]
-                            kernel_data = ttnn_metadata[r, dst_chip_id, expert_id, slot, :4]
+                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :4]
+                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :4]
                             slot_data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
                             if not slot_data_match:
                                 logger.error(

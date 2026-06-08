@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,14 +34,5 @@ struct UntilizeOperationAttributes {
 using UntilizeTensorReturnValue = Tensor;
 using UntilizeSpecReturnValue = ttnn::TensorSpec;
 using UntilizeShapeReturnValue = ttnn::Shape;
-
-struct UntilizeSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::CBHandle cb_src0{};
-    tt::tt_metal::CBHandle cb_output{};
-    std::vector<CoreCoord> cores_with_runtime_args;
-    bool has_uneven_sharding = false;
-};
 
 }  // namespace ttnn::prim

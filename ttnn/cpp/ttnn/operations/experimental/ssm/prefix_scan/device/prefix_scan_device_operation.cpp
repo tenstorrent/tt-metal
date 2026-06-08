@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prefix_scan_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -61,16 +62,6 @@ Tensor PrefixScanDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.a.device());
 }
 
-ttsl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& a = tensor_args.a;
-    const auto& a_shape = a.padded_shape();
-    operation::Hash hash = operation::hash_operation<PrefixScanDeviceOperation>(
-        args.math_fidelity, a.dtype(), a.memory_config(), a_shape.volume());
-
-    return hash;
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -81,13 +72,13 @@ ttnn::experimental::prim::PrefixScanDeviceOperation::tensor_return_value_t prefi
     const Tensor& h_prev,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> dtype,
-    std::optional<MathFidelity> math_fidelity) {
+    std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
     using OperationType = ttnn::experimental::prim::PrefixScanDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .memory_config = memory_config.value_or(a.memory_config()),
         .dtype = dtype.value_or(a.dtype()),
-        .math_fidelity = math_fidelity.value_or(MathFidelity::HiFi4),
+        .math_fidelity = math_fidelity.value_or(tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{.a = a, .bx = bx, .h_prev = h_prev};
 

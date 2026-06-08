@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
     const tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<const Tensor>& bias,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config_rs,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
     const ttnn::ccl::Topology topology,
@@ -90,7 +90,7 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
 
         Keyword Args:
             * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`num_links` (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter phase. Defaults to `ttnn.Topology.Ring`.
             * :attr:`memory_config_rs` (Optional[ttnn.MemoryConfig]): Memory configuration for the Reduce Scatter operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
@@ -102,31 +102,30 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
             * :attr:`core_grid` (Optional[ttnn.CoreGrid])
         )doc",
-        ttnn::overload_t(
-            matmul_reduce_scatter_async_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("persistent_intermediate_buffer"),
-            nb::arg("persistent_output_buffer"),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("reduce_scatter_core_grid_offset"),
-            nb::kw_only(),
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config_rs") = nb::none(),
-            nb::arg("intermediate_memory_config_rs") = nb::none(),
-            nb::arg("topology") = ttnn::ccl::Topology::Ring,
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config_mm") = nb::none(),
-            nb::arg("transpose_a") = false,
-            nb::arg("transpose_b") = false,
-            nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("activation") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("core_grid") = nb::none()));
+        matmul_reduce_scatter_async_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("persistent_intermediate_buffer"),
+        nb::arg("persistent_output_buffer"),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("reduce_scatter_core_grid_offset"),
+        nb::kw_only(),
+        nb::arg("barrier_semaphore") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("memory_config_rs") = nb::none(),
+        nb::arg("intermediate_memory_config_rs") = nb::none(),
+        nb::arg("topology") = ttnn::ccl::Topology::Ring,
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config_mm") = nb::none(),
+        nb::arg("transpose_a") = false,
+        nb::arg("transpose_b") = false,
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("activation") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,14 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
+namespace {
+
+uint64_t expected_mean_rstd_volume_input_grad(const Tensor& output_grad, uint32_t num_groups) {
+    return static_cast<uint64_t>(output_grad.logical_shape()[0]) * num_groups;
+}
+
+}  // namespace
+
 void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
@@ -50,8 +58,18 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
 
     // mean (1, 1, N, num_groups)
     TT_FATAL(mean.logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+    TT_FATAL(
+        mean.logical_volume() == expected_mean_rstd_volume_input_grad(output_grad, num_groups),
+        "mean must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_input_grad(output_grad, num_groups),
+        mean.logical_volume());
     // rstd (1, 1, N, num_groups)
     TT_FATAL(rstd.logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+    TT_FATAL(
+        rstd.logical_volume() == expected_mean_rstd_volume_input_grad(output_grad, num_groups),
+        "rstd must have logical volume {}. Got {}.",
+        expected_mean_rstd_volume_input_grad(output_grad, num_groups),
+        rstd.logical_volume());
 }
 
 void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_miss(
@@ -101,7 +119,7 @@ moreh_group_norm_backward_input_grad(
     OperationType::operation_attributes_t operation_attributes{
         num_groups,
         input_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

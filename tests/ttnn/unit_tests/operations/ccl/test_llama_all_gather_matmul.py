@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -348,33 +348,34 @@ def run_llama_all_gather_matmul_impl(
     ##################################
     def run_op(n_iters, store_all_results=True):
         outs = []
-        for i in range(n_iters):
-            out = ttnn.experimental.llama_all_gather_matmul_async(
-                tt_input_tensor,
-                tt_in1_tensor,
-                tt_intermediate_tensors[i % num_buffers],
-                dim=3,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                ag_memory_config=ag_output_mem_config,
-                mm_memory_config=mm_output_sharded_mem_config,
-                topology=all_gather_replicate_topology,
-                num_links=num_links,
-                subdevice_id=worker_sub_device_id,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                dtype=output_dtype,
-                global_cb=global_cb,
-            )
+        with mesh_device.cache_entries_counter.measure():
+            for i in range(n_iters):
+                out = ttnn.experimental.llama_all_gather_matmul_async(
+                    tt_input_tensor,
+                    tt_in1_tensor,
+                    tt_intermediate_tensors[i % num_buffers],
+                    dim=3,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
+                    ag_memory_config=ag_output_mem_config,
+                    mm_memory_config=mm_output_sharded_mem_config,
+                    topology=all_gather_replicate_topology,
+                    num_links=num_links,
+                    subdevice_id=worker_sub_device_id,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    dtype=output_dtype,
+                    global_cb=global_cb,
+                )
 
-            # TODO: Change when actual output is integrated
-            # out = tt_intermediate_tensors[i % num_buffers]
+                # TODO: Change when actual output is integrated
+                # out = tt_intermediate_tensors[i % num_buffers]
 
-            if not trace_mode:
-                ttnn.synchronize_device(mesh_device)
-            if store_all_results:
-                outs.append(out)
+                if not trace_mode:
+                    ttnn.synchronize_device(mesh_device)
+                if store_all_results:
+                    outs.append(out)
 
         if store_all_results:
             return outs
@@ -433,7 +434,7 @@ def run_llama_all_gather_matmul_impl(
         validate(tt_out_tensor, output_tensor)
 
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
 
     mesh_device.reset_sub_device_stall_group()

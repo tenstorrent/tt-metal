@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 # Hardcoded grid from PREFETCHER_NOC1_OUTPUT_GRID adjusted to work on smaller grids like on an x2
 GRID = [
@@ -149,8 +149,15 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
         # --- Torch reference ---
         torch_out = in0 @ in1.to(torch.bfloat16)
 
-        # --- PCC comparisons ---
-        assert_with_pcc(ring_out, torch_out, 0.9)
+        # --- Numeric comparisons ---
+        assert_numeric_metrics(
+            torch_out,
+            ring_out,
+            atol=0.1868 * 1280,
+            rtol=2.125 * 1280,
+            frobenius_threshold=0.0004 * 1280,
+            pcc_threshold=0.9,
+        )
 
 
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")

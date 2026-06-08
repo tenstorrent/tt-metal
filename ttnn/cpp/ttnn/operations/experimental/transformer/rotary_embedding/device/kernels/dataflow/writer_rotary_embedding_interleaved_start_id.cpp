@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,8 +16,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifndef OUT_SHARDED
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    const auto s = TensorAccessor(dst_args, dst_addr);
 #endif
 
 #ifdef DECODE_MODE
@@ -55,7 +54,7 @@ void kernel_main() {
         cb_wait_front(cb_id_out, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
 
-        noc_async_write_tile(i, s, l1_read_addr);
+        noc_async_write_page(i, s, l1_read_addr);
 
         noc_async_write_barrier();
 

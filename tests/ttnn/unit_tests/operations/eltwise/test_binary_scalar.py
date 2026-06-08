@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 import random
-from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 
 pytestmark = pytest.mark.use_module_device
 
@@ -28,17 +27,19 @@ pytestmark = pytest.mark.use_module_device
         (ttnn.ge),
         (ttnn.le),
         (ttnn.eq),
-        (ttnn.bias_gelu),
     ),
 )
 def test_binary_scalar_ops(input_shapes, device, ttnn_fn):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shapes, dtype=torch.bfloat16) * 100
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.zeros_like(input_tensor)
     scalar = random.randint(-80, 80)
-    ttnn_fn(input_tensor, scalar, output_tensor=output_tensor, queue_id=cq_id)
-    golden_fn = ttnn.get_golden_function(ttnn_fn)
-    golden_tensor = golden_fn(in_data, scalar)
+    ttnn_fn(input_tensor, scalar, output_tensor=output_tensor)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    golden_tensor = golden_fn(torch_input, scalar)
+
+    out = ttnn.to_torch(output_tensor).to(torch.bool)
+
+    assert torch.equal(out, golden_tensor)

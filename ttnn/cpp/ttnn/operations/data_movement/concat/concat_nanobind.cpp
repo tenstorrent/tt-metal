@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,15 +39,14 @@ void bind_concat(nb::module_& mod) {
     ttnn::bind_function<"concat">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::concat,
-            nb::arg("tensors"),
-            nb::arg("dim") = 0,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor").noconvert() = nb::none(),
-            nb::arg("groups") = 1,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::concat,
+        nb::arg("tensors"),
+        nb::arg("dim") = 0,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("groups") = 1,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

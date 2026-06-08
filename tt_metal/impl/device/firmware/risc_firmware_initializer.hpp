@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,9 +50,11 @@ private:
     // Take the cores out of reset state. This should be called after setting the correct program counter for execution.
     void reset_cores(tt::ChipId device_id);
 
+    void terminate_active_ethernet_cores_on_all_chips();
     void assert_active_ethernet_cores_to_reset(tt::ChipId device_id);
     void assert_tensix_workers_impl(tt::ChipId device_id);
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
+    void assert_dram_cores(tt::ChipId device_id);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
@@ -87,6 +89,14 @@ private:
     uint32_t get_active_erisc_launch_flag_addr();
     bool erisc_app_still_running(tt::ChipId device_id, CoreCoord virtual_core);
     void erisc_send_exit_signal(tt::ChipId device_id, CoreCoord virtual_core, bool is_idle_eth);
+
+    // Wait for base FW to reach a terminal postcode (PASS/FAIL/SKIP). Idle eth only —
+    // any terminal state, as long as we don't assert/deassert during that process
+    bool wait_for_eth_fw_ready(tt::ChipId device_id, const CoreCoord& virtual_core, int timeout_ms = 20000);
+
+    // Zero all ETH RISC interrupt-mode registers on core. No-op on archs that don't
+    // expose this (num_interrupt_vecs == 0)
+    void disable_eth_interrupts(tt::ChipId device_id, const CoreCoord& virtual_core);
 
     void assert_cores(tt::ChipId device_id);
     void teardown_simulator_ethernet_cores();

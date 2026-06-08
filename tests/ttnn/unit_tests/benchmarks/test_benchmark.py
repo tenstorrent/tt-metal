@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -606,9 +606,9 @@ def test_matmul_2d_host_perf_out_of_box(
         for dtype, use_trace in matmul_configs_oob:
             matmul_shapes = matmul_shapes_oob
             if dtype == ttnn.bfloat16:
-                math_fidelity = ttnn.MathFidelity.HiFi4  # to match hand-tuned
-            elif dtype == ttnn.bfloat8_b:
                 math_fidelity = ttnn.MathFidelity.HiFi2
+            elif dtype == ttnn.bfloat8_b:
+                math_fidelity = ttnn.MathFidelity.LoFi
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:

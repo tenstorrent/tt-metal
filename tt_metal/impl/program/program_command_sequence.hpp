@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <numeric>
 
 struct CQDispatchWritePackedCmd;
@@ -21,6 +22,13 @@ constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
 
 struct ProgramCommandSequence {
+    ProgramCommandSequence() = default;
+    ProgramCommandSequence(const ProgramCommandSequence&) = delete;
+    ProgramCommandSequence& operator=(const ProgramCommandSequence&) = delete;
+
+    ProgramCommandSequence(ProgramCommandSequence&&) = default;
+    ProgramCommandSequence& operator=(ProgramCommandSequence&&) = default;
+
     struct RtaUpdate {
         const void* src;
         void* dst;
@@ -43,10 +51,19 @@ struct ProgramCommandSequence {
     HostMemDeviceCommand program_config_buffer_command_sequence;
     HostMemDeviceCommand program_binary_setup_prefetcher_cache_command;
     HostMemDeviceCommand program_binary_command_sequence;
+    // When the program_binary_command_sequence is skipped, this command sequence is used to wait for the writes for
+    // the runtime_args_command_sequences and program_config_buffer_command_sequence to complete, to ensure that all
+    // writes have landed before the launch message is sent and the worker starts loading data. This isn't needed when
+    // writing program binaries, because writing binaries always barriers (as a workaround for an mcast hang).
+    HostMemDeviceCommand wait_barrier_command_sequence;
     HostMemDeviceCommand launch_msg_command_sequence;
     HostMemDeviceCommand go_msg_command_sequence;
     std::vector<uint32_t*> cb_configs_payloads;
     std::vector<std::vector<std::shared_ptr<CircularBufferImpl>>> circular_buffers_on_core_ranges;
+    // Parallel to cb_configs_payloads/circular_buffers_on_core_ranges but for Dataflow Buffers.
+    std::vector<uint8_t*> dfb_configs_payloads;
+    std::vector<std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>>
+        dataflow_buffers_on_core_ranges;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
@@ -74,7 +91,7 @@ struct ProgramCommandSequence {
             get_rt_args_size() +
             (send_binary ? program_binary_command_sequence.size_bytes() +
                                program_binary_setup_prefetcher_cache_command.size_bytes()
-                         : 0) +
+                         : wait_barrier_command_sequence.size_bytes()) +
             launch_msg_command_sequence.size_bytes() + go_msg_command_sequence.size_bytes();
         return one_shot_fetch_size;
     }

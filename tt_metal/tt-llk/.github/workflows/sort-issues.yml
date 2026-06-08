@@ -1,0 +1,136 @@
+name: 📋 List Open Issues and Pull Requests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  generate_reports:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run information collection scripts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node .github/scripts/sort-issues.js
+          node .github/scripts/list-pending-prs.js
+
+      - name: Organize files for deployment
+        run: |
+          # Create reports directory structure
+          mkdir -p reports
+
+          # Move generated reports to reports directory
+          mv sorted-issues.html reports/
+          mv pending-prs.html reports/
+
+          # Create dashboard in reports directory
+          TIMESTAMP=$(date '+%B %d, %Y at %H:%M UTC')
+          cat > reports/index.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta charset="UTF-8">
+              <title>LLK GitHub Reports</title>
+              <style>
+                  body {
+                      font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                      background-color: #f4f6f9;
+                      color: #333;
+                      padding: 40px;
+                      text-align: center;
+                  }
+                  h1 {
+                      color: #007bff;
+                      margin-bottom: 30px;
+                  }
+                  .report-links {
+                      display: flex;
+                      justify-content: center;
+                      gap: 30px;
+                      margin-top: 30px;
+                  }
+                  .report-card {
+                      background: white;
+                      border-radius: 8px;
+                      padding: 30px;
+                      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                      text-decoration: none;
+                      color: #333;
+                      transition: transform 0.2s;
+                      min-width: 250px;
+                  }
+                  .report-card:hover {
+                      transform: translateY(-2px);
+                      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                  }
+                  .report-card h2 {
+                      color: #007bff;
+                      margin-bottom: 15px;
+                  }
+                  .report-card p {
+                      margin: 0;
+                      color: #666;
+                  }
+                  .last-updated {
+                      margin-top: 40px;
+                      color: #666;
+                      font-size: 14px;
+                  }
+              </style>
+          </head>
+          <body>
+              <h1>LLK GitHub Reports Dashboard</h1>
+              <p>Automatically generated reports for repository insights</p>
+
+              <div class="report-links">
+                  <a href="sorted-issues.html" class="report-card">
+                      <h2>📝 Issues Report</h2>
+                      <p>Browse and filter open issues by priority, labels, and assignees</p>
+                  </a>
+
+                  <a href="pending-prs.html" class="report-card">
+                      <h2>🚀 Pull Requests Report</h2>
+                      <p>Track pending PRs with LLK team reviewers and sort by various criteria</p>
+                  </a>
+              </div>
+
+              <div class="last-updated">
+                  Last updated: $TIMESTAMP
+              </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

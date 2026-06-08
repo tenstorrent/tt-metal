@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,18 +11,18 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
-    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters,cluster_axis",
     [
         # Perf variants (with tracing)
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
-        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # from CSV
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # use batching when fused
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, 0),  # from CSV
         # Check variants (without tracing)
-        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
-        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # from CSV
+        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 1),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # use batching when fused
+        (8, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # use batching when fused
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, 0),  # from CSV
     ],
     ids=[
         "batch_8-perf",
@@ -89,9 +89,12 @@ def test_reduce_scatter_async(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
+    cluster_axis,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    if cluster_axis == 0:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    else:
+        submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_reduce_scatter_impl(
         submesh_device,
         num_devices,

@@ -159,7 +159,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 16 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -240,7 +240,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -322,7 +322,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 48 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
   connections {
@@ -403,7 +403,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 4 policy: RELAXED }
+    channels { count: 16 policy: RELAXED }
     assign_z_direction: true
   }
 }

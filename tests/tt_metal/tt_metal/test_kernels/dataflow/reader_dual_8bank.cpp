@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,8 +27,8 @@ void kernel_main() {
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-    const auto s0 = TensorAccessor(src0_args, src0_addr, ublock_size_bytes_0);
-    const auto s1 = TensorAccessor(src1_args, src1_addr, ublock_size_bytes_1);
+    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {

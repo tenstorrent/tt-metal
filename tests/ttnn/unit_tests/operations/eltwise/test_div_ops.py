@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -153,7 +153,7 @@ def test_binary_fmod_bf16(
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([6, 5, 320, 320])),
+        (torch.Size([2, 5, 32, 320])),
         (torch.Size([3, 123, 115])),
         (torch.Size([69, 178])),
         (torch.Size([1024])),

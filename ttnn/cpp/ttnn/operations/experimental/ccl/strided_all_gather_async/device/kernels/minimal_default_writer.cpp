@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -34,27 +36,26 @@ constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
 constexpr bool fuse_op = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
 constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
-constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
-constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
-constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
-constexpr bool is_termination_master = get_compile_time_arg_val(12);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
+constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(9);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(10);
+constexpr bool is_termination_master = get_compile_time_arg_val(11);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(14);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(23);
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<24>();
 
-inline constexpr uint32_t sharded_args_start_idx = 25 + ccl_routing_utils::num_line_unicast_args;
+inline constexpr uint32_t sharded_args_start_idx = 24 + ccl_routing_utils::num_line_unicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -104,7 +105,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
@@ -191,6 +192,8 @@ void kernel_main() {
             writes_expected = num_targets_forward_direction - 1;
         }
     }
+
+    Noc noc_obj;
 
     uint32_t batch_output_tile_offset = output_worker_tile_offset;
     uint32_t global_tile_index = 0;
@@ -287,22 +290,25 @@ void kernel_main() {
         batch_output_tile_offset += output_tiles_per_batch;
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
         if constexpr (is_termination_master) {
+            // Device 2.0: legacy primitive retained, termination_sync_address is used both
+            // as a local L1 pointer here and as a remote noc target via safe_get_noc_addr below.
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
+            // Legacy primitive retained: precomposed uint64_t dst addr.
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

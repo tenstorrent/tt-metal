@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,14 +12,13 @@ namespace ckernel {
 
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP>
 inline void llk_math_eltwise_binary_sfpu_binop_init() {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROXIMATE>(
-        ckernel::sfpu::sfpu_binary_init<APPROXIMATE, BINOP>);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::sfpu_binary_init<APPROXIMATE, BINOP>);
 }
 
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binop(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_sfpu_binary<APPROXIMATE, BINOP, 8, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,
@@ -29,8 +28,8 @@ inline void llk_math_eltwise_binary_sfpu_binop(
 
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binop_mul(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_sfpu_binary_mul<APPROXIMATE, BINOP, 8, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,
@@ -40,8 +39,8 @@ inline void llk_math_eltwise_binary_sfpu_binop_mul(
 
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_binary_sfpu_binop_div(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_sfpu_binary_div<APPROXIMATE, BINOP, 8, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,

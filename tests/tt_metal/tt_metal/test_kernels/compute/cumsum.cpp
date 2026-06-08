@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/cumsum.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -26,14 +26,14 @@ void kernel_main() {
 #endif
     cumsum_tile_init();
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 cb16.reserve_back(onetile);
-                acquire_dst();
+                tile_regs_acquire();
                 cb0.wait_front(onetile);
 
 #ifndef ROWWISE
@@ -48,10 +48,13 @@ void kernel_main() {
                 transpose_wh_dest(0);
 #endif
 
+                tile_regs_commit();
+                tile_regs_wait();
+
                 pack_tile(0, tt::CBIndex::c_16);
 
                 cb0.pop_front(onetile);
-                release_dst();
+                tile_regs_release();
                 cb16.push_back(onetile);
             }
         }

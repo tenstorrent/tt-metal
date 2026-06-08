@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include <tt_stl/optional_reference.hpp>
+#include <ttnn/distributed/tensor_topology.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -21,7 +22,7 @@ class TensorSpec;
 // Allocates a tensor on host.
 // Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device shard.
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
-Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
+Tensor create_device_tensor(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device, std::optional<TensorTopology> tensor_topology = std::nullopt);
 
 tt::tt_metal::Tensor to_device(
     const tt::tt_metal::Tensor& input_tensor,
@@ -80,6 +81,17 @@ Tensor view(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
+
+/**
+ * Reinterpret the underlying memory of input_tensor with target_layout without moving or converting data.
+ *
+ * The result and input_tensor will point to the same memory (whether on host or device),
+ * this is a pure metadata change.
+ *
+ * This function is error prone, and the caller is responsible for ensuring that the reinterpretation is semantically
+ * valid.
+ */
+Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_layout);
 
 Tensor to_dtype(const Tensor& input_tensor, DataType dtype);
 

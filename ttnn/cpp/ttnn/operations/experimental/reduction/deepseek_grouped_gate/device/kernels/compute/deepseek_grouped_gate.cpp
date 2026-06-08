@@ -1,9 +1,6 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#define REDUCE_OP PoolType::SUM  // wtf why do we need to define this here?
-#define REDUCE_DIM ReduceDim::REDUCE_COL
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -18,6 +15,8 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+
 
 namespace blocks {
 void sigmoid(uint32_t cb_in_scores, uint32_t cb_sigmoid_scores, uint32_t width_tiles) {
@@ -78,7 +77,7 @@ void process_and_sort_tiles(
     cb_wait_front(cb_expert_index_template, Wt);
     cb_wait_front(cb_biased_scores, Wt);
     for (uint32_t wt = 0; wt < Wt; wt += 2) {
-        acquire_dst();
+        tile_regs_acquire();
         // transpose and unpack into dest regs
         reconfig_data_format_srca(cb_biased_scores);
         transpose_wh_init_short(cb_biased_scores);
@@ -97,6 +96,8 @@ void process_and_sort_tiles(
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores);
         cb_reserve_back(cb_sorted_group_scores, 1);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, cb_sorted_group_scores);
         cb_push_back(cb_sorted_group_scores, 1);
 
@@ -117,7 +118,7 @@ void process_and_sort_tiles(
         cb_wait_front(cb_sorted_expert_indices_temp, 2);
         cb_pop_front(cb_sorted_expert_indices_temp, 2);
 
-        release_dst();
+        tile_regs_release();
         ascending = switch_dir ? !ascending : ascending;
     }
 }
@@ -154,7 +155,7 @@ void topk_group_scores(
     cb_reserve_back(cb_sorted_group_order, 1);
 
     // Sort single input and index tile that have already ben transposed.
-    acquire_dst();
+    tile_regs_acquire();
     // local sort into k groups
     cb_wait_front(cb_group_summed_scores, 1);
     cb_wait_front(cb_group_index_template, 1);
@@ -168,12 +169,14 @@ void topk_group_scores(
     // llk_topk_sort -> inplace
     ckernel::topk_local_sort(0, (int)ascending, log_topk_groups);
 
+    tile_regs_commit();
+    tile_regs_wait();
     // pack index tile into cb_sorted_group_order
     pack_reconfig_data_format(cb_sorted_group_order);
     pack_tile(2, cb_sorted_group_order);
     cb_pop_front(cb_group_summed_scores, 1);
     // don't pop group indices as it gets reused for the next tile heights
-    release_dst();
+    tile_regs_release();
 
     cb_push_back(cb_sorted_group_order, 1);
 }
@@ -187,7 +190,6 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
         cb_wait_front(input_cb_index, 1);
         transpose_wh_tile(input_cb_index, 0, 0);
         tile_regs_commit();
-
         tile_regs_wait();
         cb_reserve_back(output_cb_index, 1);
 
@@ -249,7 +251,6 @@ void topk(
     }
     ckernel::topk_rebuild(0, (int)ascending, 0, 32, 5, true);
     tile_regs_commit();
-
     tile_regs_wait();
     cb_reserve_back(cb_final_indices_transposed, 1);
     pack_reconfig_data_format(cb_final_indices_transposed);
@@ -270,27 +271,15 @@ void normalize_scores(
     const uint32_t cb_reciprocal_sums,
     const uint32_t cb_epsilon_scalar,
     const uint32_t cb_normalized_scores) {
-    reconfig_data_format(cb_gathered_sigmoid, cb_reduce_ones_scalar);
-    pack_reconfig_data_format(cb_normalized_scores);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_gathered_sigmoid, cb_reduce_ones_scalar, cb_reduce_intermediate);
-
-    cb_wait_front(cb_gathered_sigmoid, 1);
-    cb_wait_front(cb_reduce_ones_scalar, 1);
-
     // 1. Sum row (experts) to get row vector of sums [1, 32]
-    tile_regs_acquire();
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_gathered_sigmoid, cb_reduce_ones_scalar, 0, 0, 0);
-    tile_regs_commit();
-    reduce_uninit();
+    compute_kernel_lib::
+        reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            cb_gathered_sigmoid,
+            cb_reduce_ones_scalar,
+            cb_reduce_intermediate,
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
-    // 2. Pack sums to intermediate to add epsilon
-    tile_regs_wait();
-    cb_reserve_back(cb_reduce_intermediate, 1);
-    pack_tile(0, cb_reduce_intermediate);
-    tile_regs_release();
-    cb_push_back(cb_reduce_intermediate, 1);
-    // 3. Add epsilon
+    // 2. Add epsilon to intermediate results
     tile_regs_acquire();
     cb_wait_front(cb_epsilon_scalar, 1);
     cb_wait_front(cb_reduce_intermediate, 1);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,9 @@
 #include "api/compute/common_globals.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_binop_with_scalar.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_rsub_int32.h"
+#include "ckernel_sfpu_binop_with_unary.h"
+#include "ckernel_sfpu_rsub_int32.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -30,13 +31,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
-    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, scalar)));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROX, RSUB_UNARY, 8 /* ITERATIONS */),
+        RC,
+        idst,
+        scalar));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init<APPROX>())); }
+ALWI void rsub_tile_init() { MATH(SFPU_INIT(unused)); }
 
 // clang-format off
 /**
@@ -54,12 +62,13 @@ ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar
  */
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
-    MATH((llk_math_eltwise_unary_sfpu_rsub_int32<APPROX>(idst, scalar)));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsub_scalar_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, scalar));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rsub_int32_init<APPROX>())); }
+ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_INIT(unused)); }
 
 }  // namespace ckernel

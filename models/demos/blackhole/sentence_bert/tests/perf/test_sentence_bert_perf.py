@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,9 +12,9 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "batch_size, expected_perf,test",
+    "batch_size, expected_perf, test",
     [
-        [8, 980.0, "sentence_bert"],
+        [8, 1015.0, "sentence_bert"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,14 +19,13 @@ void bind_moreh_dot_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_dot_backward">(
         mod,
         "Moreh Dot Backward Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_dot_backward,
-            nb::arg("output_grad"),
-            nb::arg("input"),
-            nb::arg("other"),
-            nb::kw_only(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::moreh_dot_backward,
+        nb::arg("output_grad"),
+        nb::arg("input"),
+        nb::arg("other"),
+        nb::kw_only(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("other_grad") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_dot_backward

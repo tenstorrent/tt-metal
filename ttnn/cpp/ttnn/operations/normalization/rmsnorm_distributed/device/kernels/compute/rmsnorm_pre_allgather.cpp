@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,13 +10,14 @@
 
 #include <cstdint>
 
-#define REDUCE_OP PoolType::SUM
-#define REDUCE_DIM ReduceDim::REDUCE_ROW
-
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
+
+namespace pre_add = norm::kernel_util::compute::pre_add;
 
 ALWI void ACQ() {
     tile_regs_acquire();
@@ -31,24 +32,27 @@ void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;                           // x**2
+    constexpr uint32_t cb_res = tt::CBIndex::c_5;                          // residual b (unused when !FUSE_PRE_ADD)
+    constexpr uint32_t cb_inp = FUSE_PRE_ADD ? tt::CBIndex::c_3 : cb_in0;  // fused a + b, or just a
 
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    if constexpr (FUSE_PRE_ADD) {
+        binary_op_init_common(cb_in0, cb_res, cb_inp);
+    } else {
+        binary_op_init_common(cb_inp, cb_reduce, cb_x2);
+    }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
+        // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
+        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
 
         /*
          * x**2
@@ -71,21 +75,10 @@ void kernel_main() {
         /*
          * sum(x**2)
          */
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
-        cb_wait_front(cb_x2, Wt);
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 0);
-        REL();
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_x2, Wt);
-
-        reduce_uninit();
+        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
+        compute_kernel_lib::
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
     }
     cb_pop_front(cb_reduce, 1);

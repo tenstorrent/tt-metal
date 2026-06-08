@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,8 +9,6 @@
 /*************************************************************************
  * LLK UNPACK UNTILIZE
  *************************************************************************/
-
-inline void llk_unpack_untilize_mop_config() { _llk_unpack_untilize_mop_config_(); }
 
 inline void llk_unpack_untilize_init(std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);

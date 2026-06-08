@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -68,7 +68,7 @@ void kernel_main() {
     auto* pkt_hdr_fwd = PacketHeaderPool::allocate_header();
 
     if (is_starting_worker) {
-        DPRINT << "Is starting worker\n";
+        DPRINT("Is starting worker\n");
         *connection_token_ptr += 1;
     }
 

@@ -292,6 +292,24 @@ global_env:                    # Environment variables for all ranks
 
 **Command-Line Invocation**
 
+`tt-run` supports two modes (mutually exclusive); full detail: [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md).
+
+**Auto allocation (primary):** pass a Mesh Graph Descriptor and hosts (or a mock-cluster mapping). Phase 1 runs `generate_rank_bindings` (or reuses `generated/ttrun/<cache_id>/`), then Phase 2 launches your program.
+
+```bash
+tt-run --mesh-graph-descriptor path/to/mesh.textproto \
+       --hosts nodeA,nodeB,nodeC \
+       [--tcp-interface <nic>] \
+       <program> [args...]
+
+# Mock cluster (no --hosts): one process per rank from the mapping file
+tt-run --mesh-graph-descriptor path/to/mesh.textproto \
+       --mock-cluster-rank-binding path/to/mock_mapping.yaml \
+       <program> [args...]
+```
+
+**Legacy:** supply rank bindings (and usually a rankfile via `--mpi-args` on multi-host):
+
 ```bash
 tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
 ```
@@ -299,6 +317,7 @@ tt-run --rank-binding config.yaml [--mpi-args "<mpi_args>"] <program> [args...]
 Common options:
 - `--dry-run`: Preview generated MPI command without execution
 - `--verbose`: Enable detailed logging
+- `--force-rediscovery`: **Auto allocation only** — always refresh Phase 1 cache (see README_ttrun)
 - `--bare`: Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups
 - `--tcp-interface`: Restrict to specific network interface. Uses btl_tcp_if_include instead of default exclusions.
 - `--mpi-args`: Pass additional MPI arguments (rankfiles, network options, etc.)
@@ -352,15 +371,18 @@ mesh_graph_desc_path: "emulated_dual_host.textproto"
 
 **Pattern 4: Multi-Host Cluster Deployment**
 
-For multi-host clusters, combine rank bindings with MPI rankfiles to specify physical host assignments:
+For multi-host clusters, prefer **auto allocation** when you have the MGD and host list (rankfile and rank bindings are generated; host order follows the sorted host multiset — see README_ttrun). Alternatively use **legacy** rank bindings with an MPI rankfile:
 
 ```bash
-# Rankfile specifies physical host assignment
+# Auto allocation (example)
+tt-run --mesh-graph-descriptor mesh.textproto --hosts host1,host2 --tcp-interface cnx1 \
+       python distributed_workload.py
+
+# Legacy: rankfile specifies physical host assignment
 # rank 0=host1 slot=0
 # rank 1=host2 slot=0
-
 tt-run --rank-binding config.yaml \
-       --mpi-args "--rankfile hosts.txt" \
+       --mpi-args "--map-by rankfile:file=hosts_rankfile.txt" \
        python distributed_workload.py
 ```
 
@@ -379,6 +401,7 @@ Test scripts demonstrating `tt-run` usage:
 
 **Related Documentation**
 
+- [`ttnn/ttnn/distributed/README_ttrun.md`](../../ttnn/ttnn/distributed/README_ttrun.md) - `tt-run` auto allocation, `generated/ttrun/` cache, legacy mode, mock clusters
 - Section 2.3: [Controlling Device Visibility](#23-controlling-device-visibility) - for `TT_VISIBLE_DEVICES` details
 - Section 2.1: [System Topology](#21-system-topology) - for understanding mesh configurations
 - [`tt_metal/fabric/MGD_README.md`](../../tt_metal/fabric/MGD_README.md) - MGD 2.0 schema and examples
@@ -529,18 +552,28 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 #### 4.2.2 Mesh Device Execution
 
 ```py
+import ttnn
+import torch
+
 # Open MeshDevice
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1,4))
 
 # Create test tensor of data; 4 chunks of 32x32
 torch_tensor = torch.rand((1,1,32,128), dtype=torch.bfloat16)
 
+# Shard the tensor across devices on dimension 3 (width)
+mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+
 # Convert to ttnn.Tensor, tilize and move onto devices across mesh DRAM
 ttnn_tensor = ttnn.from_torch(
-    torch_input_tensor,
+    torch_tensor,
     layout=ttnn.TILE_LAYOUT,
     device=mesh_device,
+    mesh_mapper=mesh_mapper,
 )
+
+# Verify it's sharded
+ttnn.visualize_tensor(ttnn_tensor)
 
 # Invoke ttnn.gelu on each of the devices in the mesh
 output_tensor = ttnn.gelu(ttnn_tensor)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,8 +28,7 @@ void kernel_main() {
     constexpr auto cb_id_dst = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_written = 0;
@@ -40,7 +39,7 @@ void kernel_main() {
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                 cb_wait_front(cb_id_dst, onetile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
+                noc_async_write_page(start_tile_id + num_tiles_written, dst, l1_read_addr);
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_dst, onetile);
             }

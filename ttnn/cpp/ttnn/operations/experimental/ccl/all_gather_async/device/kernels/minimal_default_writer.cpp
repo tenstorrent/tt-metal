@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -160,7 +160,7 @@ void kernel_main() {
     arg_idx += rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 #endif
 
 #ifdef USE_WORKER_MUX
@@ -358,7 +358,7 @@ void kernel_main() {
                 }
 
                 noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-                local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
+                local_noc_addrs[i] = output_addrgen.get_noc_addr(tile_id);
             }
 
             if (direction == 1) {

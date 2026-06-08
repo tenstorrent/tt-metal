@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
-
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
@@ -27,6 +26,10 @@ class Cluster;
 namespace tt::tt_metal::distributed::multihost {
 class DistributedContext;
 }
+
+namespace tt::tt_metal::internal {
+class ServiceCoreManager;
+}  // namespace tt::tt_metal::internal
 
 namespace tt::tt_metal {
 struct ProfilerStateManager;
@@ -91,6 +94,7 @@ public:
     get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+    internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
     const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
@@ -136,6 +140,9 @@ public:
     distributed::SystemMesh& get_system_mesh();
 
     const distributed::multihost::DistributedContext& global_distributed_context();
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/42994): Misleading name — this returns the sub-context
+    // communicator (post MPI_Comm_split), NOT the full MPI_COMM_WORLD. Rename or remove in favor of
+    // get_distributed_context_ptr() and DistributedContext::get_world_context().
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
@@ -225,6 +232,7 @@ private:
     bool env_owned_ = false;
     ContextId context_id_;
 
+    std::unique_ptr<internal::ServiceCoreManager> service_core_manager_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 import math
 
@@ -75,7 +75,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
         tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, tt_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -186,7 +186,7 @@ def test_slice_rm(device, n, c, h, w):
     activation_pyt_padded_out = ttnn.to_memory_config(activation_pyt_padded, ttnn.L1_MEMORY_CONFIG)
     activation_pyt_padded_out = ttnn.from_device(activation_pyt_padded_out)
     activation_pyt_padded_out = ttnn.to_torch(activation_pyt_padded_out)
-    assert_with_pcc(torch_output_tensor, activation_pyt_padded_out, 0.9999)
+    assert_equal(torch_output_tensor, activation_pyt_padded_out)
 
 
 def slice_test(
@@ -1255,6 +1255,64 @@ def test_slice_subcores(input_shape, dim, start, end, step, layout, args_as_tens
 
 
 @pytest.mark.parametrize(
+    "input_shape, begins, ends, num_cores_x, num_cores_y, shard_shape, shard_layout",
+    [
+        # Single core: slice height from 32 to 18 (non-tile-aligned)
+        [[1, 1, 32, 64], [0, 0, 0, 0], [1, 1, 18, 64], 1, 1, [32, 64], "HEIGHT_SHARDED"],
+        # Multi-core: slice height from 128 to 64 (4 cores -> 2 cores worth)
+        [[1, 1, 128, 64], [0, 0, 0, 0], [1, 1, 64, 64], 2, 2, [32, 64], "HEIGHT_SHARDED"],
+        # Single core: slice height from 64 to 48 (non-tile-aligned logical, tile-aligned padded)
+        [[1, 1, 64, 64], [0, 0, 0, 0], [1, 1, 48, 64], 1, 1, [64, 64], "HEIGHT_SHARDED"],
+        # Non-zero begins: slice from middle of height dimension
+        [[1, 1, 128, 64], [0, 0, 32, 0], [1, 1, 96, 64], 2, 2, [32, 64], "HEIGHT_SHARDED"],
+        # Width-sharded: slice width from 128 to 64
+        [[1, 1, 32, 128], [0, 0, 0, 0], [1, 1, 32, 64], 1, 2, [32, 64], "WIDTH_SHARDED"],
+    ],
+)
+def test_slice_sharded_auto_shard_spec_recomputation(
+    input_shape, begins, ends, num_cores_x, num_cores_y, shard_shape, shard_layout, device
+):
+    """Regression test for issue #38016: ttnn.slice on a sharded tensor
+    without specifying output memory_config should produce correct logical output shape.
+
+    Previously, the output inherited the input's shard spec, causing the output shape
+    to retain the input's padded dimensions instead of the sliced dimensions."""
+
+    torch.manual_seed(2005)
+
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    tensor_memory_layout = (
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED
+        if shard_layout == "HEIGHT_SHARDED"
+        else ttnn.types.TensorMemoryLayout.WIDTH_SHARDED
+    )
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    tt_input_sharded = ttnn.to_memory_config(tt_input, sharded_mem_config)
+
+    # Key: no memory_config argument -- this is the bug scenario from issue #38016
+    tt_output = ttnn.slice(tt_input_sharded, begins, ends)
+
+    expected_shape = [ends[i] - begins[i] for i in range(len(begins))]
+    assert (
+        list(tt_output.shape) == expected_shape
+    ), f"Expected output shape {expected_shape}, got {list(tt_output.shape)}"
+
+    tt_output_cpu = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
+    tt_output_torch = ttnn.to_torch(tt_output_cpu)
+    torch_expected = torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
+
+    assert_equal(torch_expected, tt_output_torch)
+
+
+@pytest.mark.parametrize(
     "input_shape, begins, ends, layout, use_sharding, description",
     [
         # Test 1: Slicing within a tile (should use RM path)
@@ -1313,7 +1371,7 @@ def test_slice_within_tile_vs_across_tiles(input_shape, begins, ends, layout, us
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 @pytest.mark.parametrize(
@@ -1375,7 +1433,7 @@ def test_slice_sharding_independence(input_shape, begins, ends, use_sharding, de
         tt_output = ttnn.to_memory_config(tt_output, ttnn.DRAM_MEMORY_CONFIG)
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
 
 
 def test_issue_38841_regression(device):
@@ -1409,4 +1467,70 @@ def test_issue_38841_regression(device):
     torch_expected = torch_input[0:1, 0:1, 0:128, 0:32]
     tt_output_torch = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_expected, tt_output_torch, 0.9999)
+    assert_equal(torch_expected, tt_output_torch)
+
+
+@pytest.mark.parametrize(
+    "input_shape, begins, ends, step",
+    [
+        [(1, 8190, 1, 128), [0, 0, 0, 0], [1, 8190, 1, 128], [1, 1, 1, 2]],
+    ],
+)
+def test_issue_42753_regression(device, input_shape, begins, ends, step):
+    """Regression test for issue #42753: slicing shape (1, 8190, 1, 128)."""
+
+    torch.manual_seed(2003)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.slice(tt_input, begins, ends, step)
+
+    torch_output = torch_input[
+        begins[0] : ends[0] : step[0],
+        begins[1] : ends[1] : step[1],
+        begins[2] : ends[2] : step[2],
+        begins[3] : ends[3] : step[3],
+    ]
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_output, tt_output_torch, 0.99)
+
+
+@pytest.mark.parametrize(
+    "shape, slice_start, slice_end",
+    [
+        ((8, 16, 300, 6, 2), (0, 0, 0, 0, 1), (8, 16, 300, 6, 2)),
+    ],
+)
+def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
+    """Regression test for issue #39947: RM slice deadlocks when num_read_per_barrier diverges
+    between compute_cb_size and get_slice_runtime_args_rm (triggered by 5D + non-zero last-dim
+    offset on a non-tile-aligned last dim, where the CB was sized too small for the kernel's
+    reserve_back)."""
+    torch.manual_seed(0)
+
+    dram_interleaved = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_interleaved
+    )
+    tt_output = ttnn.slice(tt_input, slice_start, slice_end, [1] * len(shape), memory_config=dram_interleaved)
+
+    torch_expected = torch_input[
+        slice_start[0] : slice_end[0],
+        slice_start[1] : slice_end[1],
+        slice_start[2] : slice_end[2],
+        slice_start[3] : slice_end[3],
+        slice_start[4] : slice_end[4],
+    ]
+    assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)

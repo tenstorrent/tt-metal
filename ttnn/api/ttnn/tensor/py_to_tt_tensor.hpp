@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,5 +27,5 @@ tt::tt_metal::Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value = std::nullopt,
     bool preserve_nan_values = false,
     bool col_tilize = false,
-    bool fast_approx = false);
+    bool enable_bfloat_opt = false);
 }  // namespace ttnn

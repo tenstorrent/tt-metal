@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,8 @@ protected:
         const void* src,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr) override;
+        std::shared_ptr<experimental::PinnedMemory> pinned_memory = nullptr,
+        const tt::tt_metal::CoreRangeSet* logical_core_filter = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
@@ -25,7 +26,10 @@ protected:
         const std::optional<BufferRegion>& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void submit_memcpy_request(
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        bool blocking,
+        std::vector<MemoryPin> memory_pins = {}) override;
     void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     MeshEvent enqueue_record_event_to_host_nolock(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},

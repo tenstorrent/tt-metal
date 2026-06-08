@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ ttnn::Tensor dit_layernorm_post_allgather(
     const std::optional<const DataType>& dtype) {
     auto arch = input_tensor.device()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     return ttnn::prim::dit_layernorm_post_all_gather(
         input_tensor,

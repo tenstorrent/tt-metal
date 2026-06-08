@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -95,13 +95,13 @@ def build_expanded_test_ids(expanded_cases):
         >>> expanded_cases = [
         ...     ("decode", 1, 32, None),
         ...     ("decode", 1, 32, 1024),
-        ...     ("prefill", 128, 1, None),
+        ...     ("prefill", 128, 32, None),
         ... ]
         >>> build_expanded_test_ids(expanded_cases)
         [
             "mode_decode_seq_1_batch_32_pos_random",
             "mode_decode_seq_1_batch_32_pos_1024",
-            "mode_prefill_seq_128_batch_1",
+            "mode_prefill_seq_128_batch_32",
         ]
     """
     expanded_ids = []
@@ -147,9 +147,11 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
             - position_id max_seq_len - 1
         - Prefill cases:
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, includes one prefill case using
-            prefill_seq_len: ("prefill", prefill_seq_len, 1, None)
+            prefill_seq_len: ("prefill", prefill_seq_len, users_per_row, None)
+          - `users_per_row` here is the configured row width for the row-batched prefill
+            kernels under test, not the number of prompts driven by the outer generator loop
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, replaces the prefill list with a single case:
-            ("prefill", max_seq_len, 1, None)
+            ("prefill", max_seq_len // users_per_row, users_per_row, None)
 
     """
     base_cases = []
@@ -159,14 +161,18 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
     max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
     if max_seq_len_env is None:
         # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, use the default prefill sequence length.
-        base_cases += [("prefill", prefill_seq_len, 1, None)]
+        base_cases += [("prefill", prefill_seq_len, users_per_row, None)]
     else:
-        # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand prefill and decode coverage.
+        # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand decode coverage.
+        # For prefill, keep the configured row width fixed at users_per_row and scale
+        # the sequence length so the total token budget stays roughly aligned with the
+        # historical single-user-row workload.
         max_seq_len = int(max_seq_len_env)
+        prefill_max_seq_len = max(1, max_seq_len // max(1, users_per_row))
         base_cases += [
             ("decode", 1, users_per_row, 0),  # decode position_id 0
             ("decode", 1, users_per_row, max_seq_len - 1),  # decode position_id max_seq_len - 1
-            ("prefill", max_seq_len, 1, None),  # prefill at max_seq_len
+            ("prefill", prefill_max_seq_len, users_per_row, None),  # prefill scaled for row-batched coverage
         ]
     return base_cases
 

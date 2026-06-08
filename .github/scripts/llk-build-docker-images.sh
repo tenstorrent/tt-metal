@@ -3,22 +3,16 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# MIGRATION NOTE: These images are staging for LLK-in-Metal; not consumed by CI yet.
-# tt_llk/.github/Dockerfile.ci still FROM ghcr.io/tenstorrent/tt-llk/... while this
-# script pushes to ghcr.io/$GITHUB_REPOSITORY/... — reconcile when CI starts using
-# these images or when LLK moves in-tree, then remove this note.
-
 set -euo pipefail
 
-# Base for Dockerfile.base (patches FROM ubuntu:22.04 in a temp file; tt_llk submodule stays vanilla).
-# Default matches upstream tt_llk. CI uses mirror.gcr.io for reliable Docker Hub access.
+# Dockerfile.base is patched to swap the FROM line; the in-tree LLK source stays unmodified.
+# CI uses mirror.gcr.io for reliable Docker Hub access:
 #   LLK_UBUNTU_BASE_IMAGE=mirror.gcr.io/ubuntu:22.04
 LLK_UBUNTU_BASE_IMAGE="${LLK_UBUNTU_BASE_IMAGE:-ubuntu:22.04}"
 
-# LLK Docker images are built from the submodule content
-LLK_PATH="tt_metal/third_party/tt_llk"
+LLK_PATH="tt_metal/tt-llk"
 if [[ ! -d "$LLK_PATH" || ! -f "$LLK_PATH/.github/Dockerfile.base" ]]; then
-  echo "::error::tt_llk submodule is missing or not checked out (expected $LLK_PATH with .github/Dockerfile.base)." >&2
+  echo "::error::LLK source missing (expected $LLK_PATH with .github/Dockerfile.base)." >&2
   exit 1
 fi
 
@@ -46,9 +40,6 @@ awk -v base_img="$BASE_IMAGE_NAME" '
 ' "$LLK_PATH/.github/Dockerfile.ci" >"$LLK_CI_DOCKERFILE_PATCHED"
 echo "LLK Dockerfile.ci base image: ${BASE_IMAGE_NAME}"
 
-# Compute the hash of the Dockerfile (uses migrated script in parent repo)
-# MIGRATION: This now uses .github/scripts/llk-get-docker-tag.sh instead of
-# the submodule's get-docker-tag.sh, so changes to this script will trigger rebuilds
 DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
 echo "Docker tag: $DOCKER_TAG"
 
@@ -66,7 +57,9 @@ build_and_push() {
     local dockerfile=$2
     local on_main=$3
 
-    if docker manifest inspect $image_name:$DOCKER_TAG > /dev/null 2>&1; then
+    local prefixed_image="${HARBOR_PREFIX:-}${image_name}"
+
+    if docker manifest inspect "${prefixed_image}:${DOCKER_TAG}" > /dev/null 2>&1; then
         echo "Image $image_name:$DOCKER_TAG already exists"
 
         # If we're on main, update the latest tag even if the image exists
@@ -93,9 +86,15 @@ build_and_push() {
         tags="-t $image_name:$DOCKER_TAG"
     fi
 
+    local cache_from_flags=""
+    if [ -n "${HARBOR_PREFIX:-}" ]; then
+        cache_from_flags="--cache-from type=registry,ref=${prefixed_image}:${DOCKER_TAG}"
+    fi
+
     docker buildx build \
         --output type=image,compression=zstd,oci-mediatypes=true,push=true \
         --build-arg FROM_TAG=$DOCKER_TAG \
+        $cache_from_flags \
         $tags \
         -f $dockerfile \
         $LLK_PATH
@@ -104,7 +103,7 @@ build_and_push() {
 # Build base image (patched Dockerfile: see LLK_UBUNTU_BASE_IMAGE above)
 build_and_push "$BASE_IMAGE_NAME" "$LLK_BASE_DOCKERFILE_PATCHED" "$ON_MAIN"
 
-# Build CI image from LLK submodule (using patched Dockerfile.ci with correct base image reference)
+# Build CI image (using patched Dockerfile.ci with correct base image reference)
 build_and_push "$CI_IMAGE_NAME" "$LLK_CI_DOCKERFILE_PATCHED" "$ON_MAIN"
 
 echo "All LLK images built and pushed successfully"

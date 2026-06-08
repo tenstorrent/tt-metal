@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,7 +37,7 @@ void kernel_main() {
     uint32_t out_col_offset = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto tensor0_args = TensorAccessorArgs<7>();
-    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
@@ -75,7 +75,7 @@ void kernel_main() {
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, packet_size_in_pages);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
+                    noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
                     l1_write_addr += tensor0_page_size;
                     tile_id++;
                 }

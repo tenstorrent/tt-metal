@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,7 +43,7 @@ std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val -
 
 // Converts a linear non-zero-padded row-major tensor to 32-swizzled tilized row-major tensor
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile_swizzled(
+std::vector<T> to_tile_major_layout_swizzled(
     tt::stl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
     ZoneScoped;
     std::vector<T> tilized_result;
@@ -253,7 +253,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
 }
 
 template <typename T>
-std::vector<T> convert_layout_row_major_to_tile_nfaces(
+std::vector<T> to_tile_major_layout_nfaces(
     tt::stl::Span<const T> in_row_major,
     const PhysicalSize& shape,
     std::optional<PhysicalSize> tile_shape,
@@ -451,9 +451,9 @@ std::vector<T> convert_layout(
             break;
         case TensorLayoutType::LIN_ROW_MAJOR:
             if (outL == TensorLayoutType::TILED_SWIZZLED) {
-                return convert_layout_row_major_to_tile_swizzled<T>(inp, shape, tile_shape);
+                return to_tile_major_layout_swizzled<T>(inp, shape, tile_shape);
             } else if (outL == TensorLayoutType::TILED_NFACES) {
-                return convert_layout_row_major_to_tile_nfaces(
+                return to_tile_major_layout_nfaces(
                     inp, shape, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else {
                 TT_ASSERT(false && "Unsupported conversion.");

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,8 @@ class WanAttention(Module):
         (False, 2, 4): (256, 256),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
+        (True, 8, 4): (288, 512),
+        (True, 32, 4): (224, 512),
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -41,6 +42,7 @@ class WanAttention(Module):
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
         is_self: bool = True,
+        sdpa_chunk_size_overrides: dict | None = None,
     ) -> None:
         super().__init__()
 
@@ -121,7 +123,8 @@ class WanAttention(Module):
         )
 
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # Reserve last column for CCL
-        ring_sdpa_chunk_size = self.sdpa_chunk_size_map.get(
+        chunk_lookup = {**self.sdpa_chunk_size_map, **(sdpa_chunk_size_overrides or {})}
+        ring_sdpa_chunk_size = chunk_lookup.get(
             (
                 is_blackhole(),
                 self.parallel_config.sequence_parallel.factor,
@@ -136,6 +139,18 @@ class WanAttention(Module):
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct
         )
+
+        self.use_exp_ring_sdpa = (
+            self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
+        )
+
+        if self.use_exp_ring_sdpa:
+            self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=full_grid,
+                q_chunk_size=ring_sdpa_chunk_size[0],
+                k_chunk_size=ring_sdpa_chunk_size[1],
+                exp_approx_mode=False,
+            )
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -216,6 +231,8 @@ class WanAttention(Module):
         addcmul_residual: ttnn.Tensor,
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
+        parallel_config=None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -230,20 +247,54 @@ class WanAttention(Module):
         else:
             weight = to_out.weight.data
 
-        M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
-        matmul_config = get_matmul_config(M, K, N_out, core_grid)
+        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+            M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
+            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid)
 
-        output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
-            x,
-            weight,
-            1.0,  # scalar
-            addcmul_residual,
-            addcmul_gate,
-            bias_tensor=to_out.bias.data if to_out.bias is not None else None,
-            config=matmul_config,
-            compute_kernel_config=compute_kernel_config or to_out.compute_config,
-        )
+            ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
+                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+            )
+            ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
+                parallel_config.tensor_parallel.mesh_axis
+            )
+            output = ttnn.experimental.all_gather_minimal_matmul_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                persistent_output_buffer=ag_persistent_buffer,
+                multi_device_global_semaphore=ag_global_semaphores,
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+                barrier_semaphore=None,
+                force_transpose=True,
+                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                num_buffers_per_channel=48 if not is_blackhole() else 24,
+                scalar=1.0,
+                addcmul_input_tensor1=addcmul_residual,
+                addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
+            )[0]
+        else:
+            M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            matmul_config = get_matmul_config(M, K, N_out, core_grid)
+
+            output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                x,
+                weight,
+                1.0,  # scalar
+                addcmul_residual,
+                addcmul_gate,
+                bias_tensor=to_out.bias.data if to_out.bias is not None else None,
+                config=matmul_config,
+                compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
+            )
         return output
 
     def forward(
@@ -251,6 +302,7 @@ class WanAttention(Module):
         spatial_1BND: ttnn.Tensor,
         N: int,
         prompt_1BLP: ttnn.Tensor | None = None,
+        cross_attn_mask: ttnn.Tensor | None = None,
         rope_cos: ttnn.Tensor | None = None,
         rope_sin: ttnn.Tensor | None = None,
         trans_mat: ttnn.Tensor | None = None,
@@ -260,6 +312,8 @@ class WanAttention(Module):
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
+            Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
         rope_cos: fractured on SP, TP
         rope_sin: fractured on SP, TP
         trans_mat: replicated
@@ -283,26 +337,53 @@ class WanAttention(Module):
             assert trans_mat is not None
             assert prompt_1BLP is None
 
-        if self.parallel_config.tensor_parallel.factor > 1:
+        use_nonfused_agmm = (self.ccl_manager.topology == ttnn.Topology.Linear) and (
+            self.parallel_config.tensor_parallel.factor > 1
+        )
+        if use_nonfused_agmm:
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
         if self.is_self:
             # Fused QKV matmul with split output for self-attention
-            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
+            )
         else:
             # Cross-attention: Q from spatial, fused KV from prompt
-            kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
-            q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            assert prompt_1BLP is not None
+            kv_input = prompt_1BLP
+            q_1BNF = self.to_q(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
+            )
             k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+
+        # Set norm output dtype to the input dtype required for ring self-attn.
+        sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
+        use_ring_sdpa = self.parallel_config.sequence_parallel.factor > 1
+        norm_output_dtype = sdpa_input_dtype if (use_ring_sdpa and prompt_1BLP is None) else None
 
         # Norm spatial before splitting heads
         q_BHNE = self.norm_q(
-            q_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            q_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_output_dtype,
         )
         k_BHNE = self.norm_k(
-            k_1BNF, num_heads_per_device=self.n_local_heads, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            k_1BNF,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+            dtype=norm_output_dtype,
         )
 
         def create_heads(inp):
@@ -316,41 +397,78 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
-        # Rope
-
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
+                # Q and K already cast by norm kernel; cast V and dummy joint inputs to match
+                dummy_joint = self.dummy_joint_input
+                if sdpa_input_dtype is not None:
+                    if v_BHNE.dtype != sdpa_input_dtype:
+                        v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
+                    if dummy_joint.dtype != sdpa_input_dtype:
+                        dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
+
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
-                spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                    q_BHNE,
-                    k_BHNE,
-                    v_BHNE,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
-                    self.dummy_joint_input,
-                    persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                        k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                        v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    joint_strategy="rear",
-                    logical_n=N,
-                    program_config=self.ring_sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
-                    dim=2,
-                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                        self.parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    num_links=self.ccl_manager.num_links,
-                    cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-                    mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
-                    subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                    ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),  # Place CCL in last column
-                    use_column_major_ccl=True,  # WAN2.2 specific: use column-major CCL allocation
-                )
+                if self.use_exp_ring_sdpa:
+                    spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+                        q_BHNE,
+                        k_BHNE,
+                        v_BHNE,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
+                        persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
+                        ),
+                        persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
+                        ),
+                        joint_strategy="rear",
+                        logical_n=N,
+                        program_config=self.exp_ring_sdpa_program_config,
+                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        dim=2,
+                        multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(
+                            self.parallel_config.sequence_parallel.mesh_axis
+                        ),
+                        num_links=self.ccl_manager.num_links,
+                        cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+                        mesh_device=self.mesh_device,
+                        topology=self.ccl_manager.topology,
+                        subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                        num_workers_per_link=5,
+                        num_buffers_per_channel=32,
+                    )
+                else:
+                    spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                        q_BHNE,
+                        k_BHNE,
+                        v_BHNE,
+                        dummy_joint,
+                        dummy_joint,
+                        dummy_joint,
+                        persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
+                        ),
+                        persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
+                        ),
+                        joint_strategy="rear",
+                        logical_n=N,
+                        program_config=self.ring_sdpa_program_config,
+                        compute_kernel_config=self.sdpa_compute_kernel_config,
+                        dim=2,
+                        multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                            self.parallel_config.sequence_parallel.mesh_axis
+                        ),
+                        num_links=self.ccl_manager.num_links,
+                        cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
+                        mesh_device=self.mesh_device,
+                        topology=self.ccl_manager.topology,
+                        subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                        ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+                        use_column_major_ccl=True,
+                    )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                     q_BHNE,
@@ -367,6 +485,7 @@ class WanAttention(Module):
                 k_BHNE,
                 v_BHNE,
                 is_causal=False,
+                attn_mask=cross_attn_mask,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
@@ -374,7 +493,7 @@ class WanAttention(Module):
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
 
-        if self.parallel_config.tensor_parallel.factor > 1:
+        if use_nonfused_agmm:
             # Gather spatial on TP axis before projection
             spatial_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -383,9 +502,17 @@ class WanAttention(Module):
         if addcmul_residual is not None and addcmul_gate is not None:
             # Fused to_out projection + addcmul (self-attention only)
             spatial_1BND = self._to_out_fused_addcmul(
-                spatial_1BND, addcmul_residual, addcmul_gate, compute_kernel_config=self.mm_compute_kernel_config
+                spatial_1BND,
+                addcmul_residual,
+                addcmul_gate,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
-            spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+            spatial_1BND = self.to_out(
+                spatial_1BND,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=None if use_nonfused_agmm else self.parallel_config,
+            )
 
         return spatial_1BND

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
-#include "cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "reshard_writer.hpp"
 #include <cstdint>
@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(16);
 
     // Data type CTs
-    constexpr uint32_t stick_size = get_compile_time_arg_val(17);
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(18) == 1;
 
     // Reshard writer
@@ -48,7 +47,12 @@ void kernel_main() {
     constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(21);
     constexpr uint32_t signaling_cb = get_compile_time_arg_val(22);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(23);
-    constexpr auto gamma_args = TensorAccessorArgs<24>();
+    // num_mcast_dests = num_x * num_y, the cell count of the multicast bounding
+    // box. For non-rectangular shard grids this differs from num_blocks (the
+    // worker count). The NoC ack counter must be credited against the
+    // rectangle size or noc_async_write_barrier() will wait forever.
+    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
+    constexpr auto gamma_args = TensorAccessorArgs<25>();
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
@@ -58,14 +62,23 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t scalar_w = get_arg_val<uint32_t>(arg_idx++);
-    wh_generate_reduce_scaler<true>(cb_in_2, scalar_w);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_in_2,
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        block_w * tt::constants::TILE_WIDTH,
+        /*compute_uses_reduce_tile=*/true>();
 
     if constexpr (is_all_to_all_worker) {
-        const uint32_t scalar_c = get_arg_val<uint32_t>(arg_idx++);
-        wh_generate_reduce_scaler<true>(cb_in_4, scalar_c);
-        const uint32_t post_scalar_c = get_arg_val<uint32_t>(base_post_rt + 0);
-        wh_generate_reduce_scaler<true>(post_cb_in_4, post_scalar_c);
+        const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
+        float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
+            scalar_c_f);
+        const uint32_t post_scalar_c_bits = get_arg_val<uint32_t>(base_post_rt + 0);
+        float post_scalar_c_f = __builtin_bit_cast(float, post_scalar_c_bits);
+        dataflow_kernel_lib::
+            prepare_reduce_scaler<post_cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
+                post_scalar_c_f);
     } else {
         arg_idx++;
     }
@@ -175,8 +188,10 @@ void kernel_main() {
         // Signal the other local cores that the semaphore has returned
 
         noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
+        // num_dests counts the multicast bounding-box cells (loopback includes
+        // self), not the worker count.
         noc_semaphore_set_multicast_loopback_src(
-            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_blocks, false);
+            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_mcast_dests, false);
         noc_async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
@@ -189,7 +204,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;
@@ -199,7 +214,7 @@ void kernel_main() {
         cb_reserve_back(cb_gamma, block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
+            uint64_t gamma_noc_addr = gamma.get_noc_addr(tile_id);
             noc_async_read(gamma_noc_addr, l1_write_addr_gamma, bytes_in_two_facelines);
             gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
             noc_async_read_barrier();  // might be faster to do two separate read instead of barrier.

@@ -1,7 +1,8 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from .assigner import CompressedTensorAssigner, CompressedTensorResult
+from .compact_io import bfp4_tile_byte_count, compact_tile_byte_count, pack_compact_tiles, unpack_compact_tiles
 from .compressed_tensor import CompressedTensor, compute_shard_page_mapping
 from .tile_utils import (
     DEFAULT_TILE_HW,
@@ -23,4 +24,8 @@ __all__ = [
     "bfp_tile_packed_size",
     "DEFAULT_TILE_HW",
     "compute_shard_page_mapping",
+    "bfp4_tile_byte_count",
+    "compact_tile_byte_count",
+    "pack_compact_tiles",
+    "unpack_compact_tiles",
 ]

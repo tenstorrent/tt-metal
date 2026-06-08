@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import json
@@ -14,6 +14,7 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
+from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -24,9 +25,15 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.utils.llm_demo_utils import create_benchmark_data
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+
+# trace_region_size per architecture
+TRACE_REGION_SIZE = 28467200
+if is_blackhole():
+    TRACE_REGION_SIZE = 36000000
 
 
 def create_tt_page_table(paged_attention_config, tt_model_args):
@@ -229,7 +236,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -762,30 +769,28 @@ def test_demo(
         f"Text model average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = []
-    supported_devices = []
-
     tt_device_name = model_args.device_name
-
-    if model_args.base_model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {}[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
+    resolved_perf_targets = resolve_perf_targets(
+        model_name=model_args.base_model_name,
+        sku=tt_device_name,
+        batch_size=batch_size,
+        seq_len=max(prefill_lens),
+    )
+    targets = {}
+    if resolved_perf_targets:
+        if resolved_perf_targets.get("prefill_t/s") is not None:
+            targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
+        if resolved_perf_targets.get("decode_t/s/u") is not None:
+            targets["decode_t/s/u"] = float(resolved_perf_targets["decode_t/s/u"])
+        if resolved_perf_targets.get("decode_t/s") is not None:
+            targets["decode_t/s"] = float(resolved_perf_targets["decode_t/s"])
+        elif "decode_t/s/u" in targets:
+            targets["decode_t/s"] = targets["decode_t/s/u"] * batch_size
     else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
-        targets = {}
+        logger.warning(
+            f"No centralized perf targets for model={model_args.base_model_name}, sku={tt_device_name}, "
+            f"batch={batch_size}, seq_len={max(prefill_lens)}"
+        )
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -821,15 +826,25 @@ def test_demo(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{tt_device_name}-demo",
+            run_type="demo",
             ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
+            device_name=tt_device_name,
             num_layers=model_args.n_layers,
             batch_size=batch_size,
             config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
+        if targets:
+            verify_perf(
+                measurements,
+                expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in targets},
+                model_name=model_args.base_model_name,
+                sku=tt_device_name,
+                batch_size=batch_size,
+                seq_len=max(prefill_lens),
+            )
 
 
 def load_inputs(input_file, batch_size):

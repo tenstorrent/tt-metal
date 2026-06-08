@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
@@ -23,6 +23,9 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_perf
+from models.demos.utils.model_targets import resolve_perf_targets
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -1053,13 +1056,14 @@ def test_demo_text(
         if pcc_check:
             torch_output_logits = torch_output[0]
             logits = tt_out_logits_all_users[0, 0, :vocab_size]
-            does_pass, pcc_message = comp_pcc(
-                logits, torch_output_logits, 0.90 if not apc_test else demo_targets["prefill_pcc"]
-            )
+            expected_prefill_pcc = 0.90 if not apc_test else demo_targets["prefill_pcc"]
+            does_pass, pcc_message = comp_pcc(logits, torch_output_logits, expected_prefill_pcc)
             logger.info(f"PCC: {pcc_message}")
             logger.info(
                 f"Teacher forced token at prefill {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
             )
+            if not apc_test:
+                assert does_pass, f"Prefill PCC check failed: {pcc_message}, while expected >= {expected_prefill_pcc}."
         if apc_test:
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
@@ -1183,8 +1187,8 @@ def test_demo_text(
 
                 if teacher_forcing:
                     out_tok = ref_tokens[max_encoded_prompt_len + iteration + 1]
-                elif pcc_check:
-                    out_tok = tt_out_tok.argmax(dim=-1)
+                elif pcc_check and tt_out_tok.shape[-1] >= vocab_size:
+                    out_tok = tt_out_tok.float().argmax(dim=-1)
                 else:
                     out_tok = tt_out_tok.reshape(-1).to(torch.long)
 
@@ -1197,14 +1201,18 @@ def test_demo_text(
                         torch_output_logits = torch_output[1]
                     else:
                         torch_output_logits = torch_output[iteration + 1]
-                    does_pass, pcc_message = comp_pcc(
-                        tt_out_logits_saved, torch_output_logits, 0.91 if not apc_test else demo_targets["decode_pcc"]
-                    )
+                    expected_decode_pcc = 0.91 if not apc_test else demo_targets["decode_pcc"]
+                    does_pass, pcc_message = comp_pcc(tt_out_logits_saved, torch_output_logits, expected_decode_pcc)
                     logger.info(f"PCC: {pcc_message}")
                     logger.info(
                         f"Teacher forced token at decode iteration {iteration} "
                         f"{'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
+                    if not apc_test:
+                        assert does_pass, (
+                            f"Decode PCC check failed at iteration {iteration}: {pcc_message}, "
+                            f"while expected >= {expected_decode_pcc}."
+                        )
 
                 if apc_test:
                     assert_message = (
@@ -1449,39 +1457,34 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = ["Llama-3.1-70B", "Llama-3.3-70B", "Deepseek-R1-Distill-70B"]
-    # model_args.base_model_name = "Llama-3.1-70B"
-    supported_devices = ["TG"]
-
-    tt_device_name = model_args.device_name
-
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "TG_Llama-3.1-70B": 1050,  # TODO Update target
-        "TG_Llama-3.3-70B": 1050,
-        "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
-
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "TG_Llama-3.1-70B": 20,  # TODO Update target
-        "TG_Llama-3.3-70B": 20,
-        "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
-
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
-    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
-    if repeat_batches == 2 and batch_size == 1:
-        target = 74.00 if galaxy_type == "6U" else 99
-        assert (
-            avg_time_to_first_token * 1000 < target
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
+    test_id = request.node.callspec.id
+    if "repeat2" in test_id:  #  test_id will be changed to eval-1 and eval-32 in the future
+        sku = get_current_device_sku_name()
+        resolved_targets = resolve_perf_targets(
+            model_name=model_args.base_model_name,
+            sku=sku,
+            batch_size=batch_size,
+            seq_len=len(input_prompts[0]),
+        )
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s/u": True,
+                },
+                model_name=model_args.base_model_name,
+                sku=sku,
+                batch_size=batch_size,
+                seq_len=len(input_prompts[0]),
+            )
+        else:
+            logger.warning(
+                f"No centralized performance targets found for model={model_args.base_model_name}, "
+                f"sku={sku}, batch_size={batch_size}, seq_len={len(input_prompts[0])}"
+            )
+    else:
+        logger.info(f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks...")
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:

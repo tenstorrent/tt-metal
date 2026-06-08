@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "paged_update_cache_device_operation_types.hpp"
 #include "paged_update_cache_program_factory.hpp"
 
@@ -51,6 +49,9 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords);
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

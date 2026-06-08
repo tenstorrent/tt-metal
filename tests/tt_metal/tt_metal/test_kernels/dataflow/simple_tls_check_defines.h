@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,5 +27,7 @@ enum TlsCheckResultIndex : uint32_t {
     TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END = 16,
 };
 
-constexpr uint32_t TLS_CHECK_RESULT_SLOT_WORDS = 17;
+constexpr uint32_t NUM_TLS_CHECK_RESULT_SLOTS = 17;
+// Rounding to nearest multiple of 4 to ensure alignment for DRAM writes.
+constexpr uint32_t TLS_CHECK_RESULT_SLOT_WORDS = ((NUM_TLS_CHECK_RESULT_SLOTS + 3) / 4) * 4;
 constexpr uint32_t TLS_CHECK_RESULT_SLOT_BYTES = TLS_CHECK_RESULT_SLOT_WORDS * sizeof(uint32_t);

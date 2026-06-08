@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,14 +19,17 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
-    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
+    TT_FATAL(
+        tensor_args.dense_token_maps_tensor.logical_shape().rank() == 2,
+        "dense_token_maps_tensor must be rank 2 ([experts, per-token-stride]); got rank {}",
+        tensor_args.dense_token_maps_tensor.logical_shape().rank());
 
-    const auto experts = operation_attributes.experts;
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
     const auto total_tokens = batch_size * seq_size;
 
-    const auto experts_per_device = experts / num_devices;
+    // physical experts per device, replicated shared experts are counted per device (matches program factory)
+    const uint32_t experts_per_device = tensor_args.dense_token_maps_tensor.logical_shape()[0];
 
     const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
 
@@ -58,8 +61,8 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
     const uint32_t seq_size = operation_attributes.seq_size;
     const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
-    const auto& axis = operation_attributes.axis;
-    const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    const auto axis = operation_attributes.axis;
+    const auto num_devices_cluster = (axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
     auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
@@ -89,8 +92,7 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t batch_size,
     uint32_t seq_size,
     uint32_t select_experts_k,
-    uint32_t experts,
-    const std::optional<uint32_t>& axis,
+    uint32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
     uint32_t num_token_parallel_cores,
@@ -108,9 +110,8 @@ ttnn::Tensor selective_reduce_combine(
             .batch_size = batch_size,
             .seq_size = seq_size,
             .select_experts_k = select_experts_k,
-            .experts = experts,
             .num_links = num_links,
-            .axis = axis,
+            .axis = cluster_axis,
             .topology = topology,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,

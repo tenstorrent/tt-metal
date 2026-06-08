@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,15 +15,15 @@ namespace ckernel {
 ALWI void sfpu_sum_int_init() { MATH(SFPU_INIT_KERNEL_CALL(unused, sfpu::sum_int_init, APPROX)); }
 
 ALWI void sfpu_sum_int_col(uint32_t idst) {
-    MATH(SFPU_ONE_PARAM_KERNEL(calculate_sum_int_col, APPROX, idst, (int)VectorMode::R));
+    MATH(SFPU_ONE_PARAM_KERNEL(calculate_sum_int_col, APPROX, idst, VectorMode::R));
 }
 
 ALWI void sfpu_sum_int_row(uint32_t idst) {
-    MATH(SFPU_ONE_PARAM_KERNEL(calculate_sum_int_row, APPROX, idst, (int)VectorMode::C));
+    MATH(SFPU_ONE_PARAM_KERNEL(calculate_sum_int_row, APPROX, idst, VectorMode::C));
 }
 
 ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iterations = 8) {
-    MATH(SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(add_int, APPROX, 8, idst, (int)VectorMode::RC, dst_offset));
+    MATH(SFPU_TWO_PARAM_KERNEL_ONE_RUNTIME(add_int, APPROX, 8 /*ITER*/, idst, VectorMode::RC, dst_offset));
 }
 
 }  // namespace ckernel

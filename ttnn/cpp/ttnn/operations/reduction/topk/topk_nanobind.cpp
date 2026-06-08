@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,18 +90,17 @@ void bind_reduction_topk_operation(nb::module_& mod) {
     ttnn::bind_function<"topk">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::topk,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("k") = 32,
-            nb::arg("dim") = -1,
-            nb::arg("largest") = true,
-            nb::arg("sorted") = true,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("indices_tensor") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::topk,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("k") = 32,
+        nb::arg("dim") = -1,
+        nb::arg("largest") = true,
+        nb::arg("sorted") = true,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("indices_tensor") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

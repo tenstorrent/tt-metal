@@ -148,3 +148,29 @@ target_link_libraries(
 
 # Make sure protobuf files are generated before compiling host_id assignment tests
 add_dependencies(test_host_id_assignment scaleout_generated_protos)
+
+add_executable(test_generate_rank_bindings test_generate_rank_bindings.cpp)
+
+set_target_properties(
+    test_generate_rank_bindings
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tools/scaleout
+)
+
+target_include_directories(
+    test_generate_rank_bindings
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tools/scaleout/src
+        "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
+)
+
+target_link_libraries(
+    test_generate_rank_bindings
+    PRIVATE
+        test_common_libs
+        tt_metal
+        yaml-cpp::yaml-cpp
+        gmock_main
+        enchantum::enchantum
+)

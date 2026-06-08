@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t tile_row_start = get_arg_val<uint32_t>(1);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(2);
 
-    const auto output_accessor = TensorAccessor(output_args, output_addr, tile_bytes);
+    const auto output_accessor = TensorAccessor(output_args, output_addr);
 
     constexpr uint32_t head_stride = num_tile_rows * head_dim_tiles;
 
@@ -37,7 +37,7 @@ void kernel_main() {
             cb_wait_front(output_cb, block_size);
             uint32_t output_read_ptr = get_read_ptr(output_cb);
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                noc_async_write_tile(tile_id, output_accessor, output_read_ptr);
+                noc_async_write_page(tile_id, output_accessor, output_read_ptr);
                 output_read_ptr += tile_bytes;
                 tile_id++;
                 tile_idx_in_head++;
