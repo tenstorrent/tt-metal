@@ -1,0 +1,83 @@
+====================================================================================================
+PRECOMPILE BENCHMARK SUMMARY   out=/tmp/lnbench   nproc(parallelism ceiling)=8
+  BENCH start Mon Jun  8 08:14:28 UTC 2026  host=bgd-lab-t3003-special-mstaletovic-for-reservation-23771  branch=mstaletovic/precompile-bh-ci-validate
+====================================================================================================
+
+################  NORTH STAR: total end-to-end wall  (COLD inline  vs  PRECOMPILE warmup+warm)  ################
+
+ccache condition                                COLD                 PRECOMPILE   speedup
+-----------------------------------------------------------------------------------------
+ccache OFF (default/CI)                        1m56s  1m28s (pr5+mk3+wu52+wm28)     1.33x
+ccache ON, deleted (cold compiler cache)       2m09s  1m38s (pr5+mk3+wu58+wm31)     1.32x
+ccache ON, warm (reused compiler cache)        48.6s  47.4s (pr5+mk3+wu22+wm17)     1.03x
+
+  (pr=probe_real  mk=probe_mock  wu=warmup[collect+compile]  wm=warm-run.  speedup = COLD/PRECOMPILE;
+   <1.00x means precompile is SLOWER for this suite size — warmup overhead not yet amortized.)
+
+################  PER-PHASE DETAIL (median across repeats)  ################
+  cores/util/CPU-s = AUTHORITATIVE (getrusage, counts every reaped compiler child).
+  peak/comp% = sampler (0.25s /proc): peak cores is real; comp% is a LOWER BOUND on the
+  compiler's CPU share (short gcc procs slip between ticks), i.e. true share is >= shown.
+
+=== ccache OFF (default/CI) ===
+  [COLD]   phase            wall   %CPU  cores   util   CPU-s  pkCor  comp%   pkRSS  notes
+           cold            1m56s   338%    3.4    42%    394s    6.3    77%   1722MB  jit:490 jitted/490 (hit 0.0%)
+  [PRECOMPILE]
+           probe_real       5.3s   158%    1.6    20%      8s    3.7    31%    460MB
+           probe_mock       3.4s   130%    1.3    16%      4s    3.5     0%    456MB
+           warmup          51.8s   686%    6.9    86%    355s    8.0    96%    592MB  collect+compile  unique=92 compiled=92 compile_wall=45.8s
+           warm            27.6s   335%    3.4    42%     92s    6.6    35%   1734MB  jit:400/490 hits (81.6%) jitted=90
+
+=== ccache ON, deleted (cold compiler cache) ===
+  [COLD]   phase            wall   %CPU  cores   util   CPU-s  pkCor  comp%   pkRSS  notes
+           cold            2m09s   342%    3.4    43%    443s    5.9    78%   1745MB  jit:490 jitted/490 (hit 0.0%)
+  [PRECOMPILE]
+           probe_real       5.2s   160%    1.6    20%      8s    3.7    35%    460MB
+           probe_mock       3.3s   132%    1.3    16%      4s    3.5     0%    456MB
+           warmup          58.1s   698%    7.0    87%    406s    7.8    96%    592MB  collect+compile  unique=92 compiled=92 compile_wall=52.1s
+           warm            31.4s   330%    3.3    41%    103s    6.4    40%   1698MB  jit:397/490 hits (81.0%) jitted=93
+
+=== ccache ON, warm (reused compiler cache) ===
+  [COLD]   phase            wall   %CPU  cores   util   CPU-s  pkCor  comp%   pkRSS  notes
+           cold            48.6s   316%    3.2    39%    154s    6.3    32%   1710MB  jit:490 jitted/490 (hit 0.0%)
+  [PRECOMPILE]
+           probe_real       5.2s   160%    1.6    20%      8s    3.3    34%    460MB
+           probe_mock       3.4s   132%    1.3    16%      4s    3.6     0%    456MB
+           warmup          22.2s   582%    5.8    73%    129s    6.3    86%    593MB  collect+compile  unique=92 compiled=92 compile_wall=15.5s
+           warm            16.7s   310%    3.1    39%     52s    6.1     5%   1664MB  jit:397/490 hits (81.0%) jitted=93
+
+################  WARMUP sub-split: collect vs compile (the two phase-1 subphases)  ################
+condition                                               collect                            compile
+                                               wall  cores util            wall  cores util  comp%
+ccache OFF (default/CI)                      6.6s  2.4  30%    45.2s  4.9  62%   98%
+ccache ON, deleted (cold compiler cache)     6.6s  2.3  29%    51.6s  4.4  55%   98%
+ccache ON, warm (reused compiler cache)      6.5s  1.6  20%    15.7s  3.2  40%   94%
+  (compile = last <compile_wall>s of the warmup window; collect = the rest — both walls authoritative.
+   cores/util here are sampler-based LOWER BOUNDS; the whole-warmup getrusage cores in the per-phase
+   table above (~6-7 cores @ ccache off/del) is exact and is dominated by this compile burst.
+   collect is single-process meta shape-prop -> low cores; compile is the nproc-parallel JIT burst.)
+
+################  JIT TELEMETRY (kernels jitted vs served from cache)  ################
+run                                              total  jitted  cached/hits   hit%
+COLD  [off]                                        490     490            0    0.0
+PRECOMPILE warm  [off]                             490      90          400   81.6
+COLD  [on/del]                                     490     490            0    0.0
+PRECOMPILE warm  [on/del]                          490      93          397   81.0
+COLD  [on/warm]                                    490     490            0    0.0
+PRECOMPILE warm  [on/warm]                         490      93          397   81.0
+
+################  WHERE THE TIME GOES IN THE COLD PASS (inline compile attribution)  ################
+  Method: same 75 tests run cold (compile inline) vs warm (cache hit, ~0 compile). The delta is the
+  inline-compile cost smeared across the cold run; warm wall ~= pure framework+execution floor.
+  Δ are exact (getrusage). NB warm still cold-compiles ~93 kernels (81% hit), so Δ is a LOWER bound
+  on the full inline-compile cost (the warmup's compile phase below shows the full parallel-compile CPU).
+ccache condition                            cold wall  warm wall  Δwall(compile)  ΔCPU-s(compile)
+ccache OFF (default/CI)                         1m56s      27.6s           1m29s            302s
+ccache ON, deleted (cold compiler cache)        2m09s      31.4s           1m38s            339s
+ccache ON, warm (reused compiler cache)         48.6s      16.7s           31.9s            102s
+
+  Full inline-compile CPU (cold pass, getrusage total CPU-s) and how the warmup re-spends it in parallel:
+ccache condition                            cold CPU-s  warmup CPU-s  cold cores  warmup cores
+ccache OFF (default/CI)                           394s          355s        3.4          6.9
+ccache ON, deleted (cold compiler cache)          443s          406s        3.4          7.0
+ccache ON, warm (reused compiler cache)           154s          129s        3.2          5.8
