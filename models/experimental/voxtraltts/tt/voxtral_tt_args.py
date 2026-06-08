@@ -219,8 +219,28 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             try:
                 kwargs.setdefault("use_hf_rope", True)
                 super().__init__(*args, **kwargs)
-                # Decode: fuse SiLU into w1 DRAM-sharded matmul (SwiGLU gate); mul becomes w1_silu * w3.
-                self.mlp_w1_fuse_silu_decode = True
+                # Decode SwiGLU gate SiLU: fusing it INTO the w1 DRAM-sharded matmul is SLOWER on
+                # Blackhole — the perf report shows fused w1 at 147us vs the identical plain
+                # 32x3072x9216 matmul (w3) at 110us. With fusion OFF the SiLU folds into the existing
+                # w1*w3 multiply (tt_transformers/mlp.py input_tensor_a_activations) — no extra op — so
+                # w1 runs the plain ~110us config. Default OFF; re-enable with VOXTRAL_W1_FUSE_SILU=1.
+                self.mlp_w1_fuse_silu_decode = os.environ.get("VOXTRAL_W1_FUSE_SILU", "0") == "1"
+                # MLP w1/w3 (3072x9216) interleaved-weight path: weights DRAM-interleaved (mlp.py gate)
+                # so the decode matmul is a 1D mcast (~88us) instead of DRAM-sharded (~110us). Verified
+                # ~1.13x e2e (615->542 ms/frame) with teacher-forced PCC 0.9994. ON by default;
+                # disable with VOXTRAL_MLP_1D=0.
+                self.mlp_interleaved_weights = os.environ.get("VOXTRAL_MLP_1D", "1") == "1"
+                # MLP w2 down-proj (9216x3072) interleaved-weight path: weights DRAM-interleaved
+                # (mlp.py gate) + L1-interleaved w2_in/w2_out so the decode matmul is a fully
+                # interleaved 1D mcast (~76us on 48 cores) instead of DRAM-sharded (~103us) — sweep
+                # winner test_matmul_32x9216x3072_sweep (1.36x on w2). ON by default; disable with
+                # VOXTRAL_MLP_FF2_1D=0.
+                self.mlp_ff2_interleaved_weights = os.environ.get("VOXTRAL_MLP_FF2_1D", "1") == "1"
+                # Attention output proj wo (4096x3072) interleaved-weight path: weights DRAM-interleaved
+                # (attention.py gate) + L1-interleaved wo_in/wo_out so the decode matmul is a fully
+                # interleaved 1D mcast (~38us on 48 cores) instead of DRAM-sharded (~51us) — sweep winner
+                # test_matmul_32x4096x3072_sweep (1.32x on wo). ON by default; disable with VOXTRAL_ATTN_WO_1D=0.
+                self.attn_wo_interleaved_weights = os.environ.get("VOXTRAL_ATTN_WO_1D", "1") == "1"
                 # Prefill: L1 interleaved activations (Matmul/LayerNorm/SDPA Tracy labels; lower DRAM BW).
                 # Disable with VOXTRAL_TEXT_PREFILL_L1=0 if prefill OOMs on very long sequences.
                 self.prefill_activations_l1 = os.environ.get("VOXTRAL_TEXT_PREFILL_L1", "1") != "0"
@@ -378,7 +398,26 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
         def get_mlp_ff2_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
             if self._prefill_l1_mem(mode):
                 return ttnn.L1_MEMORY_CONFIG
+            # Interleaved 1D w2 path: w2_out stays L1-interleaved (the MLP output reshard at the end
+            # of mlp.py forward normalizes it to get_mlp_output_mem_config, so the residual is unaffected).
+            if self._ff2_interleaved_decode(mode, prefetcher):
+                return ttnn.L1_MEMORY_CONFIG
             return super().get_mlp_ff2_mem_config(mode, prefetcher)
+
+        def _ff2_interleaved_decode(self, mode: Mode, prefetcher: Prefetcher = None) -> bool:
+            """True when the opt-in interleaved-weight 1D w2 path applies (decode, single-device)."""
+            return (
+                getattr(self, "mlp_ff2_interleaved_weights", False)
+                and mode == Mode.DECODE
+                and prefetcher is None
+                and not self.is_galaxy
+            )
+
+        def get_mlp_binary_mult_mem_config(self, mode: Mode):
+            # Feed the 1D w2 matmul an L1-INTERLEAVED in0 (mcast_in0) instead of width-sharded.
+            if self._ff2_interleaved_decode(mode, None):
+                return ttnn.L1_MEMORY_CONFIG
+            return super().get_mlp_binary_mult_mem_config(mode)
 
         def get_mlp_act_mem_config(self, mode: Mode):
             if self._prefill_l1_mem(mode):
@@ -424,8 +463,22 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 return ttnn.L1_MEMORY_CONFIG
             return super().get_attn_concat_heads_output_mem_config(mode, prefetcher)
 
+        def _wo_interleaved_decode(self, mode: Mode, prefetcher: Prefetcher = None) -> bool:
+            """True when the opt-in interleaved-weight 1D wo path applies (decode, single-device)."""
+            return (
+                getattr(self, "attn_wo_interleaved_weights", False)
+                and mode == Mode.DECODE
+                and prefetcher is None
+                and not self.is_galaxy
+                and not getattr(self, "use_fused_all_gather_matmul", False)
+            )
+
         def get_attn_wo_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
             if self._prefill_l1_mem(mode):
+                return ttnn.L1_MEMORY_CONFIG
+            # Interleaved 1D wo path: wo_out stays L1-interleaved (the attention output reshard at
+            # attention.py:862 normalizes it to get_attn_dense_output_mem_config before the residual).
+            if self._wo_interleaved_decode(mode, prefetcher):
                 return ttnn.L1_MEMORY_CONFIG
             return super().get_attn_wo_output_mem_config(mode, prefetcher)
 
@@ -439,6 +492,43 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 return ttnn.L1_MEMORY_CONFIG
             return super().get_attn_all_gather_output_mem_config(mode, prefetcher)
 
+        def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+            """Voxtral DECODE: 1D mcast w1/w3 matmul (needs DRAM-interleaved weights), opt-in.
+
+            in0/out stay width-sharded on ``mlp_core_grid`` (no reshard); only family DS->1D.
+            PREFILL falls through to the base 2D matmul_config (unchanged).
+            """
+            if not getattr(self, "mlp_interleaved_weights", False) or prefetcher is not None or self.is_galaxy:
+                return super().get_mlp_ff1_3_prg_config(mode, seq_len, prefetcher)
+            if mode == Mode.PREFILL:
+                # Base prefill config overrides per_core_N with a dram_shard_grid_width value tuned
+                # for DRAM-SHARDED weights -> inconsistent with DRAM-interleaved weights (CB error).
+                # Build a standard 2D matmul_config (per_core_N derived from the compute grid).
+                return self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),
+                    k=self.dim // self.cluster_shape[0],
+                    n=self.hidden_dim // self.cluster_shape[1],
+                    grid_size=self.mlp1_3_grid(seq_len),
+                )
+            grid = self.mlp_core_grid
+            nc = grid.num_cores
+            kt = self.dim // ttnn.TILE_SIZE
+            nt = (self.hidden_dim // self.cluster_shape[1]) // ttnn.TILE_SIZE
+            per_core_n = (nt + nc - 1) // nc
+            in0_block_w = self.find_largest_divisor(kt // nc)
+            out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_n % w == 0), 1)
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                per_core_M=1,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
         def get_mlp_ff1_w1_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
             """Voxtral decode: w1 matmul with fused SiLU (w3 uses plain ff1_3 config)."""
             if not getattr(self, "mlp_w1_fuse_silu_decode", False) or mode != Mode.DECODE:
@@ -451,6 +541,78 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 n=self.hidden_dim // self.cluster_shape[1],
                 num_cores=self.mlp_core_grid.num_cores,
                 fused_activation=ttnn.UnaryOpType.SILU,
+            )
+
+        def _voxtral_ff2_1d_grid(self, nt: int) -> tuple:
+            """(gx, gy) for the 1D w2 matmul: ~48 cores dividing Nt, fitting the device grid.
+
+            Prefers a wide row (large gx) to match the sweep winner (8x6 = 48 cores on Blackhole).
+            """
+            cap = self.max_grid_size
+            for cores in (48, 40, 32, 24, 16, 12, 8):
+                if nt % cores:
+                    continue
+                for gx in range(min(cores, cap.x), 0, -1):
+                    if cores % gx == 0 and cores // gx <= cap.y:
+                        return gx, cores // gx
+            return cap.x, cap.y
+
+        def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+            """Voxtral DECODE: fully-interleaved 1D mcast w2 down-proj (9216x3072), opt-in.
+
+            w2_in is fed L1-interleaved (get_mlp_binary_mult_mem_config) and w2_out stays
+            L1-interleaved (get_mlp_ff2_mem_config) — the natural layout for mcast_in0. Weights are
+            DRAM-interleaved (mlp.py gate). Sweep winner on Blackhole: 8x6 (48 cores), in0_block_w=4,
+            per_core_N=2 -> ~76us vs ~103us DRAM-sharded (1.36x). PREFILL falls through unchanged.
+            """
+            if not self._ff2_interleaved_decode(mode, prefetcher):
+                return super().get_mlp_ff2_prg_config(mode, seq_len, prefetcher)
+            kt = (self.hidden_dim // self.cluster_shape[1]) // ttnn.TILE_SIZE  # 288
+            nt = self.dim // ttnn.TILE_SIZE  # 96
+            gx, gy = self._voxtral_ff2_1d_grid(nt)
+            nc = gx * gy
+            per_core_n = (nt + nc - 1) // nc
+            in0_block_w = self.find_largest_divisor(kt, max_divisor=4)  # full-K per core (interleaved in0)
+            out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_n % w == 0), 1)
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                per_core_M=1,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+        def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher=None):
+            """Voxtral DECODE: fully-interleaved 1D mcast attn output proj wo (4096x3072), opt-in.
+
+            wo_in is fed L1-interleaved (get_attn_gather_users_mem_config) and wo_out stays
+            L1-interleaved (get_attn_wo_output_mem_config). Weights DRAM-interleaved (attention.py gate).
+            Sweep winner on Blackhole: 8x6 (48 cores), in0_block_w=4, per_core_N=2 -> ~38us vs ~51us
+            DRAM-sharded (1.32x). PREFILL falls through unchanged.
+            """
+            if not self._wo_interleaved_decode(mode, prefetcher):
+                return super().get_attn_wo_program_config(mode, seq_len, prefetcher)
+            kt = ((self.n_heads * self.head_dim) // self.num_devices) // ttnn.TILE_SIZE  # 128
+            nt = self.dim // ttnn.TILE_SIZE  # 96
+            gx, gy = self._voxtral_ff2_1d_grid(nt)  # reuse the w2 grid picker (8x6 = 48 cores)
+            nc = gx * gy
+            per_core_n = (nt + nc - 1) // nc
+            in0_block_w = self.find_largest_divisor(kt, max_divisor=4)  # full-K per core (interleaved in0)
+            out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_n % w == 0), 1)
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                in0_block_w=in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=out_subblock_w,
+                per_core_M=1,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
     return VoxtralTTArgs

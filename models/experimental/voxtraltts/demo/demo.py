@@ -383,7 +383,16 @@ def _run_chunked_text_mode(
             )
 
     total_s = perf_counter() - t_start
-    _log_perf("chunked_generate", ttft_s=0, n_frames=total_frames, total_s=total_s)
+    n_samples = sum(int(w.numel()) for w in all_wavs)
+    audio_s = n_samples / sample_rate if sample_rate > 0 else None
+    _log_perf(
+        "chunked_generate",
+        ttft_s=0,
+        n_frames=total_frames,
+        total_s=total_s,
+        audio_s=audio_s,
+        n_chars=len(text),
+    )
 
     if not all_wavs:
         logger.error("[chunked] No audio generated from any chunk.")
@@ -397,10 +406,37 @@ def _run_chunked_text_mode(
     )
 
 
-def _log_perf(label: str, *, ttft_s: float, n_frames: int, total_s: float) -> None:
+def _log_perf(
+    label: str,
+    *,
+    ttft_s: float,
+    n_frames: int,
+    total_s: float,
+    audio_s: float | None = None,
+    n_chars: int | None = None,
+) -> None:
+    """Log perf, incl. the HF-model-card metrics (Latency, RTF, Throughput char/s).
+
+    HF Voxtral-4B-TTS-2603 card definitions:
+      * Latency    — time-to-first-audio (ms). This demo is non-streaming, so we report
+                     end-to-end latency instead (labelled accordingly; not 1:1 comparable).
+      * RTF        — standard convention = generation_time / audio_duration (lower = better;
+                     RTF < 1 means faster than real time). Also shown as the inverted
+                     "x realtime" = audio_duration / generation_time (higher = better).
+      * Throughput — input characters / generation_time (char/s).
+    """
     thr = n_frames / total_s if total_s > 0 else 0.0
-    logger.info(f"[{label}] TTFT: {ttft_s * 1000:.2f} ms")
+    logger.info(f"[{label}] Latency (end-to-end, non-streaming): {total_s * 1000:.2f} ms")
+    logger.info(f"[{label}] TTFT (approx, no streaming): {ttft_s * 1000:.2f} ms")
     logger.info(f"[{label}] Throughput: {thr:.2f} frames/s  ({n_frames} frames in {total_s:.3f} s)")
+    if audio_s is not None and audio_s > 0 and total_s > 0:
+        rtf = total_s / audio_s
+        logger.info(
+            f"[{label}] RTF: {rtf:.4f}  (lower=better; {audio_s / total_s:.2f}x realtime)  "
+            f"[audio {audio_s:.2f}s / gen {total_s:.2f}s]"
+        )
+    if n_chars is not None and n_chars > 0 and total_s > 0:
+        logger.info(f"[{label}] Throughput: {n_chars / total_s:.2f} char/s  ({n_chars} chars in {total_s:.3f} s)")
 
 
 def run_text_mode(
@@ -444,7 +480,8 @@ def run_text_mode(
     # TTFT proxy: time for first acoustic frame out of the generate loop
     # (we approximate as total_s / n_frames since there's no streaming yet)
     ttft_s = total_s / n_frames if n_frames > 0 else total_s
-    _log_perf("tt_generate", ttft_s=ttft_s, n_frames=n_frames, total_s=total_s)
+    audio_s = n_samples / sample_rate if sample_rate > 0 else None
+    _log_perf("tt_generate", ttft_s=ttft_s, n_frames=n_frames, total_s=total_s, audio_s=audio_s, n_chars=len(text))
     if out.shifted_codes_t37.numel() > 0:
         semantic = out.shifted_codes_t37[:, 0]
         logger.info(
@@ -484,7 +521,8 @@ def run_codes_mode(
     t0 = perf_counter()
     wav = pipe.decode_waveform_from_codes_tt(codes_b37t.long())
     t1 = perf_counter()
-    _log_perf("tt_codes_decode", ttft_s=t1 - t0, n_frames=T, total_s=t1 - t0)
+    audio_s = int(wav.numel()) / sample_rate if sample_rate > 0 else None
+    _log_perf("tt_codes_decode", ttft_s=t1 - t0, n_frames=T, total_s=t1 - t0, audio_s=audio_s)
     _save_wav(out_path, wav.squeeze(0).squeeze(0), sample_rate)
     logger.info(f"Saved → {out_path}")
 
@@ -516,7 +554,8 @@ def run_latents_mode(
     ttnn.deallocate(wav_tt)
     t1 = perf_counter()
     T = int(latent.shape[2])
-    _log_perf("tt_latents_decode", ttft_s=t1 - t0, n_frames=T, total_s=t1 - t0)
+    audio_s = int(wav.numel()) / sample_rate if sample_rate > 0 else None
+    _log_perf("tt_latents_decode", ttft_s=t1 - t0, n_frames=T, total_s=t1 - t0, audio_s=audio_s)
     _save_wav(out_path, wav.squeeze(0).squeeze(0), sample_rate)
     logger.info(f"Saved → {out_path}")
 
