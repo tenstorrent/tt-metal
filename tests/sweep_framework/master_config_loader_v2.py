@@ -286,6 +286,17 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     """Parse program configs stored as string repr: 'ClassName(param=val, ...)'."""
     import re
 
+    # Canonicalize the grid repr: newer ttnn prints compute_with_storage_grid_size
+    # as `6-8` (dash) instead of `(x=6,y=8)`. The per-config regexes below expect
+    # the (x=,y=) form, so normalize first — otherwise the grid match fails and the
+    # whole program_config is dropped (e.g. a LayerNormShardedMultiCoreProgramConfig
+    # disappears -> program_config extra_key diff vs the master trace).
+    value_str = re.sub(
+        r"compute_with_storage_grid_size=(\d+)-(\d+)",
+        r"compute_with_storage_grid_size=(x=\1,y=\2)",
+        value_str,
+    )
+
     if "SDPAProgramConfig" in type_name or "SDPAProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         q_chunk_m = re.search(r"q_chunk_size=(\d+)", value_str)
