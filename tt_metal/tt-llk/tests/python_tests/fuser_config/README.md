@@ -371,7 +371,7 @@ unpack_transpose_faces: true         # Step 1: Transpose face layout
 unpack_transpose_within_face: true   # Step 2: Transpose within each face
 ```
 
-**Unpacker compatibility:** `UnpackerA` supports independent values for these two transpose options. `UnpackerAB` and `MatmulUnpacker` require both transpose options to have the same value. `UnpackerTilizeA` does not support transpose operations.
+**Unpacker compatibility:** `UnpackerA` and `UnpackerAB` support independent values for these two transpose options. `MatmulUnpacker` requires both transpose options to have the same value. `UnpackerTilizeA` does not support transpose operations.
 
 ---
 

@@ -11,12 +11,14 @@ from functools import partial
 
 # Import master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
+    reconcile_golden_to_actual,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -47,24 +49,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0)
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def run(
@@ -89,8 +78,12 @@ def run(
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
-    if dim is None:
-        dim = kwargs.get("arg1", 0)
+    pos_args = extract_positional_args(kwargs)
+    # Master traces dim as positional arg1. The run() signature defaults dim to
+    # 0, so a stale default would shadow a non-zero/negative arg1 (e.g. -1).
+    # Always prefer pos_args[1] when present.
+    if 1 in pos_args:
+        dim = pos_args[1]
     if dim is None:
         dim = 0
 
@@ -131,12 +124,24 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # unsqueeze with dim as positional argument (no memory_config support)
-    output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    # Master is inconsistent: 8/10 configs trace dim positionally ("arg1"),
+    # 2/10 use the "dim" kwarg.  Pass positional to match the majority.
+    # Reproduce master's call form: 2 cfgs used `dim=` named, 8 positional.
+    # Master used `dim=` named for some configs and positional `arg1` for others.
+    # The framework keeps absent keys in kwargs (as None), so use the
+    # __absent_keys__ set injected by execute_test to tell the two apart.
+    _absent = kwargs.get("__absent_keys__", set()) or set()
+    if "arg1" in _absent:
+        output_tensor = ttnn.unsqueeze(input_tensor_a, dim=dim, **op_kwargs)
+    else:
+        output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(torch_output_tensor, output_tensor, input_a_tensor_placement)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]

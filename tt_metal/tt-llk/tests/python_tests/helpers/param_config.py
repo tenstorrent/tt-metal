@@ -385,6 +385,69 @@ def generate_combination(formats: List[Tuple[DataFormat]]) -> List[FormatConfig]
     ]
 
 
+def is_invalid_quasar_sfpu_format_combination(
+    fmt: FormatConfig, dest_acc: DestAccumulation
+) -> bool:
+    """
+    Check if a Quasar SFPU (input_format, output_format, dest_acc) combination
+    is unsupported by the hardware and should be skipped by the parametrize sweep.
+    """
+    in_fmt = fmt.input_format
+    out_fmt = fmt.output_format
+
+    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
+    if (
+        in_fmt != DataFormat.Float32
+        and out_fmt == DataFormat.Float32
+        and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
+    if (
+        in_fmt == DataFormat.Float32
+        and out_fmt == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        return True
+
+    return False
+
+
+def generate_sfpu_format_dest_acc_combinations(
+    formats_list: List[FormatConfig],
+) -> List[Tuple[FormatConfig, DestAccumulation]]:
+    """
+    Generate (format, dest_acc) pairs for Quasar SFPU tests.
+
+    `dest_acc` modes are chosen based on the input format:
+    - 32-bit inputs: DestAccumulation.Yes only
+    - MX formats:    DestAccumulation.No only
+    - Otherwise:     both No and Yes
+
+    Invalid Quasar combinations (see `is_invalid_quasar_sfpu_format_combination`)
+    are filtered out.
+    """
+    combinations: List[Tuple[FormatConfig, DestAccumulation]] = []
+
+    for fmt in formats_list:
+        in_fmt = fmt.input_format
+
+        if in_fmt.is_32_bit():
+            dest_acc_modes = (DestAccumulation.Yes,)
+        elif in_fmt.is_mx_format():
+            dest_acc_modes = (DestAccumulation.No,)
+        else:
+            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+
+        for dest_acc in dest_acc_modes:
+            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+                continue
+            combinations.append((fmt, dest_acc))
+
+    return combinations
+
+
 def calculate_edgecase_dest_indices(
     dest_acc: bool, result_tiles: int, dest_sync_modes: List[DestSync] = [DestSync.Half]
 ):

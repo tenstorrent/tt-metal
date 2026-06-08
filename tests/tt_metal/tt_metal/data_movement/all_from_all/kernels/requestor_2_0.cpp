@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -23,8 +23,8 @@ void kernel_main() {
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     {
         DeviceZoneScopedN("RISCV1");

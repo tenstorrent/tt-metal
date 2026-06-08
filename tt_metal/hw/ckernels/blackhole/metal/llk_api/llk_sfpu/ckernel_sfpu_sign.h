@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_sign.h"
 
 using namespace sfpi;
 

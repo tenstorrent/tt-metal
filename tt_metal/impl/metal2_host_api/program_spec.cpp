@@ -2,17 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <bit>
 #include <functional>
+#include <limits>
 #include <set>
+#include <string_view>
+#include <unordered_set>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include <core_descriptor.hpp>
+#include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
@@ -33,19 +50,47 @@ static constexpr uint32_t QUASAR_TENSIX_ENGINES_PER_NODE = 4;
 
 // Data structure built up from ProgramSpec to enable fast lookups
 struct CollectedSpecData {
-    // Name -> spec lookups
+    // Name -> spec lookups.
+    // dfb_by_name covers BOTH local and remote DFBs.
+    // For remote DFBs, the pointee is the inner dfb_spec.
+    // To check if a DFB is remote, check the remote_dfb_by_name map.
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<TensorParameterName, const TensorParameter*> tensor_parameter_by_name;
 
-    // DFB endpoint info (derived from kernel bindings)
+    // Tensor parameter usage (derived from kernel tensor bindings).
+    // Tracks which kernels bind a given tensor parameter.
+    std::unordered_map<TensorParameterName, std::vector<const KernelSpec*>> tensor_parameter_users;
+
+    // DFB endpoint info (derived from kernel bindings).
+    // Populated for both local and remote DFBs.
+    //
+    // Multiple PRODUCER KernelSpecs (and multiple CONSUMER KernelSpecs) may bind the same DFB,
+    // provided they have non-overlapping node coverage and matching binding-site parameters
+    // (access_pattern, num_threads). This permits the canonical Metal 2.0 expression of the
+    // legacy "two KernelDescriptors per work split, sharing CBs" pattern. The physical
+    // invariant is local: at each node, exactly one producer kernel instance and one
+    // consumer kernel instance.
     struct DFBEndpointInfo {
-        const KernelSpec* producer = nullptr;
-        const KernelSpec* consumer = nullptr;
-        const KernelSpec::DFBBinding* producer_binding = nullptr;
-        const KernelSpec::DFBBinding* consumer_binding = nullptr;
+        struct EndpointRecord {
+            const KernelSpec* kernel = nullptr;
+            const KernelSpec::DFBBinding* binding = nullptr;
+        };
+        std::vector<EndpointRecord> producers;
+        std::vector<EndpointRecord> consumers;
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
+
+    // WorkUnit membership: a kernel may belong to multiple WorkUnitSpecs.
+    std::unordered_map<KernelSpecName, std::vector<const WorkUnitSpec*>> kernel_work_units;
+
+    // Derived node sets:
+    //  - kernel_node_set: union of containing WorkUnitSpec target_nodes
+    //  - dfb_node_set: union of binding-kernels' node sets (local DFBs only).
+    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
+    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_set;
 };
 
 // Bitmask for tracking processor allocation on a node
@@ -82,12 +127,18 @@ struct ProcessorMask {
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
 using ComputeEngineMask = ProcessorMask<QUASAR_TENSIX_ENGINES_PER_NODE>;
 
-// Kernel -> ProcessorMask maps
+// Kernel -> ProcessorMask maps (Gen2/Quasar only)
 using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
 using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngineMask>;
 
-// DFB name -> ID map (for unpack_to_dest_mode indexing)
+// Kernel -> DFB risc mask (passed to MakeDataflowBufferConfig)
+//   Gen1: bit 0 = RISCV_0 (BRISC), bit 1 = RISCV_1 (NCRISC), bit 2 = Tensix compute
+//   Gen2: bits 0-7 = DM processors, bits 8-15 = Tensix compute engines
+using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
+
+// DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -126,38 +177,55 @@ bool nodes_intersect(
     return a_set.intersects(b_set);
 }
 
-bool nodes_contains(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset) {
-    NodeRangeSet superset_node_range_set = to_node_range_set(superset);
-    NodeRangeSet subset_node_range_set = to_node_range_set(subset);
-    return superset_node_range_set.contains(subset_node_range_set);
-}
-
-// Compare two node specifications for semantic equality (same set of nodes).
-// This normalizes both sides before comparison because CoreRangeSet structural
-// equality can fail even when both sets cover identical nodes (e.g., two adjacent
-// single-node ranges vs. one merged range).
-bool nodes_equal(
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
-    NodeRangeSet a_normalized = to_node_range_set(a).merge_ranges();
-    NodeRangeSet b_normalized = to_node_range_set(b).merge_ranges();
-    return a_normalized == b_normalized;
-}
-
-// Accumulate nodes into a map, merging with any existing entry.
-// Used to collect the union of all worker nodes for a given kernel/DFB.
-void accumulate_nodes(
-    std::unordered_map<std::string, NodeRangeSet>& node_map,
-    const std::string& key,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes_to_add) {
-    NodeRangeSet nodes = to_node_range_set(nodes_to_add);
-    if (node_map.contains(key)) {
-        node_map[key] = node_map[key].merge(nodes);
-    } else {
-        node_map[key] = nodes;
+// Local accessor names for kernel resource bindings must be valid C++ identifiers
+// They are used verbatim in the generated kernel source code.
+// TODO: Move this to ttsl in a follow up PR
+bool IsValidCppIdentifier(std::string_view s) {
+    if (s.empty()) {
+        return false;
     }
+    // Reject names with non-identifier characters or an empty/leading-digit form.
+    const unsigned char c0 = static_cast<unsigned char>(s[0]);
+    if (!((c0 >= 'a' && c0 <= 'z') || (c0 >= 'A' && c0 <= 'Z') || c0 == '_')) {
+        return false;
+    }
+    for (size_t i = 1; i < s.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+            return false;
+        }
+    }
+
+    // Reject reserved identifier patterns per [lex.name]/3.
+    // Names containing "__", or starting with "_" followed by an uppercase letter.
+    if (s.size() >= 2 && s[0] == '_' && s[1] >= 'A' && s[1] <= 'Z') {
+        return false;
+    }
+    if (s.find("__") != std::string_view::npos) {
+        return false;
+    }
+
+    // Reject C++ keywords. Anything in this set would produce uncompilable code
+    // when emitted as a variable identifier in kernel_bindings_generated.h.
+    static const std::unordered_set<std::string_view> kCppKeywords = {
+        "alignas",     "alignof",   "and",        "and_eq",    "asm",      "auto",         "bitand",
+        "bitor",       "bool",      "break",      "case",      "catch",    "char",         "char8_t",
+        "char16_t",    "char32_t",  "class",      "compl",     "concept",  "const",        "consteval",
+        "constexpr",   "constinit", "const_cast", "continue",  "co_await", "co_return",    "co_yield",
+        "decltype",    "default",   "delete",     "do",        "double",   "dynamic_cast", "else",
+        "enum",        "explicit",  "export",     "extern",    "false",    "float",        "for",
+        "friend",      "goto",      "if",         "inline",    "int",      "long",         "mutable",
+        "namespace",   "new",       "noexcept",   "not",       "not_eq",   "nullptr",      "operator",
+        "or",          "or_eq",     "private",    "protected", "public",   "register",     "reinterpret_cast",
+        "requires",    "return",    "short",      "signed",    "sizeof",   "static",       "static_assert",
+        "static_cast", "struct",    "switch",     "template",  "this",     "thread_local", "throw",
+        "true",        "try",       "typedef",    "typeid",    "typename", "union",        "unsigned",
+        "using",       "virtual",   "void",       "volatile",  "wchar_t",  "while",        "xor",
+        "xor_eq",
+    };
+
+    // If we got this far, and the name doesn't match any keywords, it's valid.
+    return !kCppKeywords.contains(s);
 }
 
 // ============================================================================
@@ -187,23 +255,65 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate KernelSpec name '{}'", kernel.unique_id);
     }
 
-    // Collect DataflowBufferSpecs
+    // Collect DataflowBufferSpecs (local DFBs)
     for (const auto& dfb : spec.dataflow_buffers) {
         auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
     }
 
+    // Collect RemoteDataflowBufferSpecs (remote DFBs).
+    // Remote DFBs share the DFB name space with local DFBs, since kernel bindings
+    // refer to either kind by the same DFBSpecName.
+    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
+        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+        auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &remote_dfb.dfb_spec);
+        TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and remote DFBs)", name);
+        auto [it2, inserted2] = collected.remote_dfb_by_name.try_emplace(name, &remote_dfb);
+        TT_FATAL(inserted2, "Duplicate RemoteDataflowBufferSpec name '{}'", name);
+    }
+
     // Build DFB endpoint info from kernel bindings
     for (const auto& kernel : spec.kernels) {
-        // Check for duplicate local_accessor_names within this kernel
-        std::unordered_set<std::string> accessor_names;
+        // Track per-accessor-name signatures within this kernel. Reusing a single
+        // local_accessor_name across two DFBBindings is permitted as a "self-loop pair":
+        // both bindings target the same DFB with opposite endpoint types (one PRODUCER,
+        // one CONSUMER). This lets a kernel that both produces and consumes the same DFB
+        // use a single device-side accessor name instead of two aliasing wrappers.
+        struct AccessorBindingInfo {
+            DFBSpecName dfb_spec_name;
+            bool has_producer = false;
+            bool has_consumer = false;
+        };
+        std::unordered_map<std::string, AccessorBindingInfo> accessor_bindings;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
-            auto [it, inserted] = accessor_names.insert(dfb_binding.local_accessor_name);
+            auto [it, inserted] = accessor_bindings.try_emplace(
+                dfb_binding.local_accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
+            AccessorBindingInfo& info = it->second;
+            if (inserted) {
+                TT_FATAL(
+                    IsValidCppIdentifier(dfb_binding.local_accessor_name),
+                    "Kernel '{}' DFB local_accessor_name '{}' must be a valid C++ identifier",
+                    kernel.unique_id,
+                    dfb_binding.local_accessor_name);
+            } else {
+                TT_FATAL(
+                    info.dfb_spec_name == dfb_binding.dfb_spec_name,
+                    "Kernel '{}' uses local_accessor_name '{}' for two different DFBs ('{}' and '{}'). "
+                    "Reusing a name is only permitted when both bindings target the same DFB (self-loop pair).",
+                    kernel.unique_id,
+                    dfb_binding.local_accessor_name,
+                    info.dfb_spec_name,
+                    dfb_binding.dfb_spec_name);
+            }
+            const bool is_producer = (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER);
+            bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
-                inserted,
-                "Kernel '{}' has duplicate local_accessor_name '{}'",
+                !seen_this_type,
+                "Kernel '{}' has duplicate {} binding for local_accessor_name '{}'",
                 kernel.unique_id,
+                is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.local_accessor_name);
+            seen_this_type = true;
 
             // Referential integrity: the DFB must exist
             TT_FATAL(
@@ -215,39 +325,36 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
             if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
-                TT_FATAL(
-                    endpoint_info.producer == nullptr,
-                    "DFB '{}' has multiple producers (second: '{}')",
-                    dfb_binding.dfb_spec_name,
-                    kernel.unique_id);
-                endpoint_info.producer = &kernel;
-                endpoint_info.producer_binding = &dfb_binding;
+                endpoint_info.producers.push_back({&kernel, &dfb_binding});
             } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                TT_FATAL(
-                    endpoint_info.consumer == nullptr,
-                    "DFB '{}' has multiple consumers (second: '{}')",
-                    dfb_binding.dfb_spec_name,
-                    kernel.unique_id);
-                endpoint_info.consumer = &kernel;
-                endpoint_info.consumer_binding = &dfb_binding;
+                endpoint_info.consumers.push_back({&kernel, &dfb_binding});
             } else {
                 TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
             }
         }
     }
 
-    // Completeness: every DFB must have exactly one producer and one consumer
+    // Completeness: every DFB must have at least one producer and one consumer.
+    // (Cross-role coverage matching and within-role binding-site uniformity are checked
+    // later, after kernel node coverage is computed.)
     for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
-        TT_FATAL(endpoint_info.producer != nullptr, "DFB '{}' has no producer", dfb_name);
-        TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
+        TT_FATAL(!endpoint_info.producers.empty(), "DFB '{}' has no producer", dfb_name);
+        TT_FATAL(!endpoint_info.consumers.empty(), "DFB '{}' has no consumer", dfb_name);
     }
 
-    // Referential integrity: every declared DFB must be bound by some kernel
+    // Referential integrity: every declared DFB (local or remote) must be bound by some kernel
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
             collected.dfb_endpoints.contains(dfb.unique_id),
             "DFB '{}' is defined but not bound by any kernel",
             dfb.unique_id);
+    }
+    for (const auto& remote_dfb : spec.remote_dataflow_buffers) {
+        const DFBSpecName& name = remote_dfb.dfb_spec.unique_id;
+        TT_FATAL(
+            collected.dfb_endpoints.contains(name),
+            "RemoteDataflowBufferSpec '{}' is defined but not bound by any kernel",
+            name);
     }
 
     // Collect SemaphoreSpecs
@@ -256,19 +363,196 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate SemaphoreSpec name '{}'", semaphore.unique_id);
     }
 
-    // Check for duplicate WorkerSpec unique_ids (not collected)
-    if (spec.workers.has_value()) {
-        std::unordered_set<WorkerSpecName> worker_names;
-        for (const auto& worker : *spec.workers) {
-            auto [it, inserted] = worker_names.insert(worker.unique_id);
-            TT_FATAL(inserted, "Duplicate WorkerSpec name '{}'", worker.unique_id);
+    // Validate semaphore bindings
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.semaphore_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate semaphore accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.semaphore_by_name.contains(binding.semaphore_spec_name),
+                "Kernel '{}' references unknown semaphore '{}'",
+                kernel.unique_id,
+                binding.semaphore_spec_name);
         }
+    }
+
+    // Collect TensorParameters
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        auto [it, inserted] =
+            collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
+        TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
+    }
+
+    // Validate kernel tensor bindings
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        for (const auto& binding : kernel.tensor_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate tensor accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
+                "Kernel '{}' references unknown TensorParameter '{}'",
+                kernel.unique_id,
+                binding.tensor_parameter_name);
+
+            collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
+        }
+    }
+
+    // Referential integrity: every declared TensorParameter must be referenced by some kernel.
+    // (Same usage requirement as DFBs; an unused tensor parameter is a user error.)
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        TT_FATAL(
+            collected.tensor_parameter_users.contains(tensor_parameter.unique_id),
+            "TensorParameter '{}' is defined but not bound by any kernel",
+            tensor_parameter.unique_id);
+    }
+
+    // Check for duplicate WorkUnitSpec unique_ids
+    {
+        std::unordered_set<WorkUnitSpecName> work_unit_names;
+        for (const auto& work_unit : spec.work_units) {
+            auto [it, inserted] = work_unit_names.insert(work_unit.unique_id);
+            TT_FATAL(inserted, "Duplicate WorkUnitSpec name '{}'", work_unit.unique_id);
+        }
+    }
+
+    // Build WorkUnitSpec membership for each kernel, validating references along the way.
+    // A kernel may belong to multiple WorkUnitSpecs; its effective target node set is the union.
+    for (const auto& work_unit : spec.work_units) {
+        for (const auto& kernel_name : work_unit.kernels) {
+            TT_FATAL(
+                collected.kernel_by_name.contains(kernel_name),
+                "WorkUnitSpec '{}' references unknown kernel '{}'",
+                work_unit.unique_id,
+                kernel_name);
+            collected.kernel_work_units[kernel_name].push_back(&work_unit);
+        }
+    }
+
+    // Every declared kernel must be referenced by at least one WorkUnitSpec
+    // (otherwise, it has no node placement and would never run).
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            collected.kernel_work_units.contains(kernel.unique_id),
+            "Kernel '{}' is not referenced by any WorkUnitSpec",
+            kernel.unique_id);
+    }
+
+    // Derive each kernel's effective target node set: union of containing WorkUnitSpec target_nodes.
+    for (const auto& [kernel_name, work_units] : collected.kernel_work_units) {
+        NodeRangeSet node_set;
+        for (const WorkUnitSpec* work_unit : work_units) {
+            node_set = node_set.merge(to_node_range_set(work_unit->target_nodes));
+        }
+        collected.kernel_node_set[kernel_name] = node_set;
+    }
+
+    // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
+    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
+    //  Once those pass, producer and consumer coverages are guaranteed equal; here we union both
+    //  sides for safety before that guarantee holds.)
+    for (const auto& dfb : spec.dataflow_buffers) {
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        NodeRangeSet node_set;
+        for (const auto& rec : endpoints.producers) {
+            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
+        }
+        for (const auto& rec : endpoints.consumers) {
+            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
+        }
+        collected.dfb_node_set[dfb.unique_id] = node_set;
     }
 
     return collected;
 }
 
 // ----------------------------------------------------------------------------
+// ValidateNodeBounds: Node coordinate bounds checking
+// ----------------------------------------------------------------------------
+//
+// Validates that every NodeCoord referenced by a WorkUnitSpec or SemaphoreSpec
+// is within the compute worker grid on this device.
+// (Kernel and DFB placement is derived from WorkUnitSpec membership, so
+// bounds-checking the WorkUnitSpecs covers them too.)
+//
+// NOTE: We're dealing in logical coordinates. (Harvesting is handled by UMD.)
+//
+// ASSUMPTION: All chips in a MeshDevice are identical, so chip 0 is
+// representative of every device in the mesh.
+
+void ValidateNodeBounds(const ProgramSpec& spec) {
+
+    MetalEnvImpl& env_impl = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+
+    // Handle the mock device case (for cheap unit testing)
+    const bool is_mock = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+
+    // A default DispatchCoreConfig and 1 CQ is sufficient to look up the compute grid size
+    // from the YAML descriptor, and both are available in mock mode.
+    DispatchCoreConfig dispatch_core_config{};
+    uint8_t num_hw_cqs = 1;
+    constexpr ChipId chip_id = 0;
+
+    // But, best get the real dispatch_core_config and num_hw_cqs
+    // (Makes no difference now, but hardbaking that assumption could be brittle)
+    if (!is_mock) {
+        auto& dispatch_mgr = MetalContext::instance().get_dispatch_core_manager();
+        dispatch_core_config = dispatch_mgr.get_dispatch_core_config();
+        num_hw_cqs = dispatch_mgr.get_num_hw_cqs();
+    }
+
+    // The compute_grid already accounts for the dispatch row/col
+    // No need for dispatch-specific checks (and dispatch-specific error messages confuse users)
+    const CoreCoord compute_grid = tt::get_compute_grid_size(env_impl, chip_id, num_hw_cqs, dispatch_core_config);
+
+    auto check_target_nodes = [&](const std::variant<NodeCoord, NodeRange, NodeRangeSet>& target_nodes,
+                                  std::string_view entity_type,
+                                  std::string_view entity_name) {
+        const NodeRangeSet range_set = to_node_range_set(target_nodes);
+        for (const NodeRange& range : range_set.ranges()) {
+            for (const NodeCoord& node : range) {
+                TT_FATAL(
+                    node.x < compute_grid.x && node.y < compute_grid.y,
+                    "{} '{}' targets node ({},{}), which is out of bounds. "
+                    "The compute worker grid on this device is {}x{}.",
+                    entity_type,
+                    entity_name,
+                    node.x,
+                    node.y,
+                    compute_grid.x,
+                    compute_grid.y);
+            }
+        }
+    };
+
+    for (const auto& work_unit : spec.work_units) {
+        check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.unique_id);
+    }
+    for (const auto& sem : spec.semaphores) {
+        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
+    }
+}
+
 // ValidateProgramSpec: Semantic validation
 // ----------------------------------------------------------------------------
 //
@@ -276,18 +560,19 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 //   - Architecture requirements
 //   - Resource limits
 //   - Feature support
-//   - Target node constraints (worker overlap, node coverage, node validity)
+//   - Target node constraints (work_unit overlap, node coverage, node validity)
 //
 // Assumes CollectedSpecData is already built.
 
 void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+    // Sanity check for supported architecture.
+    TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
+
     //////////////////////////////
-    // Architecture checks
+    // Node bounds checks
     //////////////////////////////
 
-    TT_FATAL(
-        tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR,
-        "Metal 2.0 API is currently only implemented for Quasar. WH/BH support coming soon.");
+    ValidateNodeBounds(spec);
 
     //////////////////////////////
     // Validate KernelSpecs
@@ -296,47 +581,87 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 
-    // Validate no unimplemented compiler options are used
-    for (const auto& kernel : spec.kernels) {
-        TT_FATAL(
-            kernel.compiler_options.include_paths.empty(),
-            "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
-            kernel.unique_id);
-        TT_FATAL(
-            kernel.compiler_options.macros.empty(),
-            "KernelSpec '{}' specifies macros -- this feature is not yet implemented.",
-            kernel.unique_id);
-    }
-
     // Validate no per-node thread maps are used (not yet implemented)
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.thread_node_map.has_value(),
-            "KernelSpec '{}' specifies thread_node_map, but per-node thread counts are not implemented.",
+            !kernel.node_specific_thread_counts.has_value(),
+            "KernelSpec '{}' specifies node_specific_thread_counts, but per-node thread counts are not implemented.",
             kernel.unique_id);
+    }
+
+    // Validate named RTA/CRTA schema and named CTAs
+    for (const auto& kernel : spec.kernels) {
+        // All three kinds share the args:: namespace — their names must be mutually unique.
+        std::unordered_map<std::string, const char*> seen;  // name -> kind
+        auto check_name = [&](const std::string& name, const char* kind) {
+            TT_FATAL(
+                IsValidCppIdentifier(name),
+                "KernelSpec '{}' {} name '{}' is not a valid C++ identifier.",
+                kernel.unique_id,
+                kind,
+                name);
+            auto [it, inserted] = seen.try_emplace(name, kind);
+            TT_FATAL(
+                inserted,
+                "KernelSpec '{}' has a naming collision: '{}' is declared as both a {} and a {}.",
+                kernel.unique_id,
+                name,
+                it->second,
+                kind);
+        };
+        for (const auto& name : kernel.runtime_arguments_schema.named_runtime_args) {
+            check_name(name, "named RTA");
+        }
+        for (const auto& name : kernel.runtime_arguments_schema.named_common_runtime_args) {
+            check_name(name, "named CRTA");
+        }
+        for (const auto& [name, value] : kernel.compile_time_arg_bindings) {
+            (void)value;
+            check_name(name, "named CTA");
+        }
     }
 
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
-            TT_FATAL(
-                kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
-                "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
-                kernel.unique_id,
-                QUASAR_TENSIX_ENGINES_PER_NODE);
-            // Looks odd here, but threads is not allowed; the remapper doesn't support it.
-            TT_FATAL(
-                kernel.num_threads != 3,
-                "KernelSpec '{}' has 3 threads, which is not supported. Legal values are 1, 2, and 4.",
-                kernel.unique_id);
+            if (is_gen2_arch()) {
+                TT_FATAL(
+                    kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
+                    "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
+                    kernel.unique_id,
+                    QUASAR_TENSIX_ENGINES_PER_NODE);
+                // On Quasar, we're not allowing 3-thread compute kernels.
+                TT_FATAL(
+                    kernel.num_threads != 3,
+                    "KernelSpec '{}' has 3 threads, which is not supported for compute kernels. Legal values are 1, 2, "
+                    "and 4.",
+                    kernel.unique_id);
+            } else {
+                TT_FATAL(
+                    kernel.num_threads == 1,
+                    "KernelSpec '{}' specifies {} compute threads, but the target architecture does not support "
+                    "multi-threaded kernels.",
+                    kernel.unique_id,
+                    kernel.num_threads);
+            }
         }
         if (kernel.is_dm_kernel()) {
-            TT_FATAL(
-                kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
-                "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
-                kernel.unique_id,
-                QUASAR_USER_DM_CORES_PER_NODE);
+            if (is_gen2_arch()) {
+                TT_FATAL(
+                    kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
+                    "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
+                    kernel.unique_id,
+                    QUASAR_USER_DM_CORES_PER_NODE);
+            } else {
+                TT_FATAL(
+                    kernel.num_threads == 1,
+                    "KernelSpec '{}' specifies {} DM threads, but the target architecture does not support "
+                    "multi-threaded kernels. "
+                    "num_threads must be 1.",
+                    kernel.unique_id,
+                    kernel.num_threads);
+            }
         }
     }
 
@@ -352,34 +677,237 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
 
-            // The config for the current target architecture must be specified.
-            if (is_gen2_arch()) {
-                TT_FATAL(
-                    data_movement_config.gen2_data_movement_config.has_value(),
-                    "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
-                    kernel.unique_id);
-            } else if (is_gen1_arch()) {
+            // Gen1 builds still require an explicit Gen1 config (its fields — processor, NOC,
+            // NOC mode — have no universally-safe defaults). Gen2 is fully optional even on
+            // Gen2 builds: absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.gen1_data_movement_config.has_value(),
                     "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
                     kernel.unique_id);
-            } else {
-                TT_FATAL(false, "Unknown architecture");
             }
         }
     }
 
-    // Validate compute kernel unpack_to_dest_mode references
+    // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
+    // (The kernel's effective node set is derived from WorkUnitSpec membership.)
+    if (is_gen1_arch()) {
+        // Maps (node, processor) -> the kernel that already claimed it
+        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_dm_kernel()) {
+                continue;
+            }
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
+            for (const auto& range : nodes.ranges()) {
+                for (const auto& node : range) {
+                    auto key = std::make_pair(node, gen1.processor);
+                    auto [it, inserted] = claimed.try_emplace(key, kernel.unique_id);
+                    TT_FATAL(
+                        inserted,
+                        "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both claim the same DM processor. ",
+                        kernel.unique_id,
+                        it->second,
+                        node.x,
+                        node.y);
+                }
+            }
+        }
+    }
+
+    // Validate compute kernel unpack_to_dest_mode entries.
+    //
+    // UnpackToDestMode only has a meaningful effect when the kernel CONSUMES the
+    // DFB (endpoint_type == CONSUMER), the DFB data format is Float32, and
+    // fp32_dest_acc_en is true. Only in that configuration is there a real choice:
+    //   - Default          → unpack via SrcA/B (~19-bit, full FPU access)
+    //   - UnpackToDestFp32 → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
+    // Anywhere else, the value is dead config (non-consumer / non-FP32) or
+    // incoherent (UnpackToDestFp32 with fp32_dest_acc_en=false — Dest is 16-bit).
+    //
+    // Rules enforced:
+    //   - Every entry references a DFB the kernel binds.
+    //   - No duplicate entries for the same DFB.
+    //   - UnpackToDestFp32 is allowed only when the (CONSUMER + FP32 + fp32_dest_acc_en)
+    //     triple holds for that DFB binding.
+    //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
+    //     values have very different runtime semantics, so we surface the choice in source.
+    //   - Default is silently assumed everywhere else (no entry required, no busywork).
     for (const auto& kernel : spec.kernels) {
-        if (kernel.is_compute_kernel()) {
-            const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
-            for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+        if (!kernel.is_compute_kernel()) {
+            continue;
+        }
+        const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
+
+        // Index the kernel's DFB bindings: which are bound, which are consumed.
+        std::unordered_set<DFBSpecName> bound_dfbs;
+        std::unordered_set<DFBSpecName> consumed_dfbs;
+        for (const auto& binding : kernel.dfb_bindings) {
+            bound_dfbs.insert(binding.dfb_spec_name);
+            if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                consumed_dfbs.insert(binding.dfb_spec_name);
+            }
+        }
+
+        // Validate each user-supplied entry.
+        std::unordered_set<DFBSpecName> entries_seen;
+        for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+            TT_FATAL(
+                bound_dfbs.contains(dfb_name),
+                "Kernel '{}' unpack_to_dest_mode entry references DFB '{}', which the kernel does not bind",
+                kernel.unique_id,
+                dfb_name);
+            TT_FATAL(
+                entries_seen.insert(dfb_name).second,
+                "Kernel '{}' has duplicate unpack_to_dest_mode entries for DFB '{}'",
+                kernel.unique_id,
+                dfb_name);
+
+            if (mode == UnpackToDestMode::Default) {
+                continue;  // Default is always allowed.
+            }
+            // mode == UnpackToDestFp32 — require the meaningfulness triple.
+            TT_FATAL(
+                consumed_dfbs.contains(dfb_name),
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the kernel does not have a CONSUMER endpoint on this DFB. UnpackToDestFp32 "
+                "configures the unpack path, which is only exercised by consumer bindings. "
+                "Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
+            // If data_format_metadata isn't set, the separate "compute endpoint requires
+            // data_format_metadata" check (below) will fail. Defer to that check.
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+            if (!dfb_spec->data_format_metadata.has_value()) {
+                continue;
+            }
+            TT_FATAL(
+                dfb_spec->data_format_metadata.value() == tt::DataFormat::Float32,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but the DFB data format is not Float32. UnpackToDestFp32 is only meaningful for "
+                "FP32 data. Use Default or omit the entry.",
+                kernel.unique_id,
+                dfb_name);
+            TT_FATAL(
+                compute_config.fp32_dest_acc_en,
+                "Kernel '{}' unpack_to_dest_mode entry for DFB '{}' specifies UnpackToDestFp32, "
+                "but fp32_dest_acc_en is false. Full-precision FP32 in the Dest register requires "
+                "fp32_dest_acc_en=true (otherwise Dest is 16-bit and the mode is incoherent).",
+                kernel.unique_id,
+                dfb_name);
+        }
+
+        // Require an explicit entry where the choice is real:
+        // CONSUMER binding + FP32 data format + fp32_dest_acc_en=true.
+        if (!compute_config.fp32_dest_acc_en) {
+            continue;
+        }
+        for (const auto& binding : kernel.dfb_bindings) {
+            if (binding.endpoint_type != KernelSpec::DFBEndpointType::CONSUMER) {
+                continue;
+            }
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+            if (!dfb_spec->data_format_metadata.has_value()) {
+                continue;  // Deferred to the data_format-required check.
+            }
+            if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
+                continue;
+            }
+            TT_FATAL(
+                entries_seen.contains(binding.dfb_spec_name),
+                "Kernel '{}' consumes FP32 DFB '{}' with fp32_dest_acc_en=true, but has no "
+                "unpack_to_dest_mode entry for it. This configuration requires an explicit choice "
+                "between UnpackToDestMode::Default (unpack via SrcA/B — enables binary FPU ops, "
+                "precision reduced to ~19 bits) and UnpackToDestMode::UnpackToDestFp32 (unpack "
+                "direct to Dest — full FP32 precision, SrcA/B access disabled for this DFB).",
+                kernel.unique_id,
+                binding.dfb_spec_name);
+        }
+    }
+
+    // Compute kernels cannot have any semaphore bindings.
+    // (There's no use case for ever wanting this, so best just forbid it.)
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            "KernelSpec '{}' has semaphore bindings. "
+            "Semaphore bindings are not supported for compute kernels.",
+            kernel.unique_id);
+    }
+
+    // Validate DM kernel disable_implicit_sync_for entries.
+    //
+    // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
+    // transaction completion). Each DM kernel can opt out per-DFB by listing the DFB's name
+    // in its Gen2DataMovementConfig::disable_implicit_sync_for vector. The opt-out applies to
+    // the side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
+    //
+    // Per-kernel rule: every listed name references a DFB the kernel binds (typo guard).
+    //
+    // Cross-kernel rule (per DFB): on each side independently, all DM kernels must agree —
+    // either all list the DFB, or none do. (Producer-side and consumer-side are checked
+    // separately; the underlying hardware mechanism is per-side, with one mask per side.)
+    {
+        // Per-kernel pass: typo guard.
+        for (const auto& kernel : spec.kernels) {
+            if (!kernel.is_dm_kernel()) {
+                continue;
+            }
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            std::unordered_set<DFBSpecName> bound_dfbs;
+            for (const auto& binding : kernel.dfb_bindings) {
+                bound_dfbs.insert(binding.dfb_spec_name);
+            }
+            for (const auto& dfb_name : dm_config.gen2_data_movement_config->disable_implicit_sync_for) {
                 TT_FATAL(
-                    collected.dfb_by_name.contains(dfb_name),
-                    "Kernel '{}' unpack_to_dest_mode references unknown DFB '{}'",
+                    bound_dfbs.contains(dfb_name),
+                    "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
                     kernel.unique_id,
                     dfb_name);
             }
+        }
+
+        // Cross-kernel pass: per-DFB producer-side and consumer-side agreement.
+        // Note: a single DFB can be bound by multiple producer KernelSpecs and multiple
+        // consumer KernelSpecs — ops sometimes specialize the same kernel source by CTAs,
+        // producing several KernelSpecs that share a DFB.
+        auto check_side_agreement =
+            [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints,
+                const DFBSpecName& dfb_name,
+                std::string_view side_label) {
+                const KernelSpec* canonical = nullptr;
+                bool canonical_lists_dfb = false;
+                for (const auto& ep : endpoints) {
+                    if (!ep.kernel->is_dm_kernel()) {
+                        continue;
+                    }
+                    const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+                    if (!dm_config.gen2_data_movement_config.has_value()) {
+                        // Gen1-only DM kernel — can't physically participate in Gen2 implicit sync; abstains.
+                        continue;
+                    }
+                    const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+                    const bool lists_dfb = std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
+                    if (canonical == nullptr) {
+                        canonical = ep.kernel;
+                        canonical_lists_dfb = lists_dfb;
+                        continue;
+                    }
+                    TT_FATAL(
+                        lists_dfb == canonical_lists_dfb,
+                        "DFB '{}' has disagreeing disable_implicit_sync_for state on the {} side",
+                        dfb_name,
+                        side_label);
+                }
+            };
+        for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
+            check_side_agreement(endpoint_info.producers, dfb_name, "producer");
+            check_side_agreement(endpoint_info.consumers, dfb_name, "consumer");
         }
     }
 
@@ -387,31 +915,368 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // Validate DataflowBufferSpecs
     //////////////////////////////////
 
-    // Remote DFBs are not supported yet
-    for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(!dfb.remote_dfb_info.has_value(), "Remote DFBs are not supported yet");
+    // Validate the total number of DFBs in the ProgramSpec:
+    //  - For Gen1, there's a hard limit (hal::get_arch_num_circular_buffers())
+    //  - For Gen2, the true DFB limit is configuration-dependent, based on the availability
+    //    of tile counters. This won't actually get checked until the Program is enqueued :(
+    //  - However, the Gen1 check actually DOES apply to Gen2 as a strict upper limit.
+    //    In practice, we'll run out of tile counters long before we hit the HAL CB limit,
+    //    but then runtime software sizes some buffers based on this.
+    //
+    // For Quasar, this is a partial validation only!
+    // The true number of available DFBs depends on the tile counters, which are consumed in
+    // a DFB configuration-dependent way.
+    // Unfortunately, those checks won't trigger until the DFB code runs... not until the
+    // Program is actually enqueued :(
+    {
+        const uint32_t max_dfbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+        if (spec.dataflow_buffers.size() > max_dfbs) {
+            if (is_gen1_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The target "
+                    "architecture supports up to {}.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else if (is_gen2_arch()) {
+                TT_THROW(
+                    "ProgramSpec '{}' has too many DataflowBufferSpecs ({}). The permitted "
+                    "number of DFBs for the target architecture is configuration-dependent, "
+                    "but {} is a hard upper limit.",
+                    spec.program_id,
+                    spec.dataflow_buffers.size(),
+                    max_dfbs);
+            } else {
+                TT_FATAL(false, "Unknown architecture");
+            }
+        }
     }
 
-    // Borrowed memory is not supported yet
+    // Validate per-DFB sizing: entry_size and num_entries must be set to non-zero values.
+    // (Sizes may still be overridden at runtime via ProgramRunParams, but a ProgramSpec value is required.)
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
-            !dfb.uses_borrowed_memory,
-            "DFB '{}' uses borrowed memory, but this feature is not yet implemented",
+            dfb.entry_size > 0,
+            "DataflowBufferSpec '{}' has entry_size = 0. entry_size must be set to a non-zero value.",
+            dfb.unique_id);
+        TT_FATAL(
+            dfb.num_entries > 0,
+            "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
             dfb.unique_id);
     }
 
-    // DFB aliasing is not supported yet
+    // Validate local DFB endpoint placement and multi-binding consistency.
+    //
+    // The hardware invariant is local: at each node where the DFB is instantiated, exactly one
+    // producer kernel instance and one consumer kernel instance run on that node. This is
+    // sufficient — but not strictly necessary — to enforce at the spec level via "one producer
+    // KernelSpec, one consumer KernelSpec". Metal 2.0 also permits multiple PRODUCER KernelSpecs
+    // (and multiple CONSUMER KernelSpecs) per DFB, provided:
+    //   1. Within each role (producer / consumer): KernelSpecs' WorkUnitSpec memberships are
+    //      pairwise disjoint (so no node has two same-role instances).
+    //   2. Across roles: union of producer KernelSpecs' WU memberships ==
+    //      union of consumer KernelSpecs' WU memberships (so every node where the DFB lives
+    //      has both a producer instance and a consumer instance).
+    //   3. All bindings on the same role have matching `access_pattern` (the DFB scheduler
+    //      config is shared per role).
+    //   4. All KernelSpecs on the same role have matching `num_threads` (the per-side
+    //      credit-tracking config is shared per role).
+    // Self-loop (a kernel that appears in both producers and consumers of a DFB) is currently
+    // restricted to the simple single-producer-single-consumer case.
+    auto kernel_work_unit_set = [&](const KernelSpecName& name) {
+        std::set<const WorkUnitSpec*> work_units;
+        for (const WorkUnitSpec* w : collected.kernel_work_units.at(name)) {
+            work_units.insert(w);
+        }
+        return work_units;
+    };
     for (const auto& dfb : spec.dataflow_buffers) {
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+
+        // (3) and (4): per-role uniformity of binding-site parameters.
+        auto check_role_uniformity = [&](const auto& records, std::string_view role) {
+            if (records.size() < 2) {
+                return;
+            }
+            const auto first_pattern = records[0].binding->access_pattern;
+            const auto first_threads = records[0].kernel->num_threads;
+            const auto& first_kernel = records[0].kernel->unique_id;
+            for (size_t i = 1; i < records.size(); ++i) {
+                TT_FATAL(
+                    records[i].binding->access_pattern == first_pattern,
+                    "DFB '{}' has multiple {} bindings with mismatched access_pattern (kernel '{}' vs kernel '{}')",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    records[i].kernel->unique_id);
+                TT_FATAL(
+                    records[i].kernel->num_threads == first_threads,
+                    "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
+                    "= {})",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    first_threads,
+                    records[i].kernel->unique_id,
+                    records[i].kernel->num_threads);
+            }
+        };
+        check_role_uniformity(endpoints.producers, "PRODUCER");
+        check_role_uniformity(endpoints.consumers, "CONSUMER");
+
+        // (1) and (2): WU membership disjointness within each role + cross-role equality.
+        // Compute per-role unions while also checking within-role pairwise disjointness.
+        auto compute_role_union = [&](const auto& records, std::string_view role) {
+            std::set<const WorkUnitSpec*> role_union;
+            for (const auto& rec : records) {
+                const auto wu_set = kernel_work_unit_set(rec.kernel->unique_id);
+                for (const WorkUnitSpec* wu : wu_set) {
+                    auto [it, inserted] = role_union.insert(wu);
+                    TT_FATAL(
+                        inserted,
+                        "DFB '{}' has multiple {} KernelSpecs sharing WorkUnitSpec '{}' (kernel '{}' collides with a "
+                        "prior {} binding). Same-role bindings must have pairwise-disjoint WorkUnitSpec membership.",
+                        dfb.unique_id,
+                        role,
+                        wu->unique_id,
+                        rec.kernel->unique_id,
+                        role);
+                }
+            }
+            return role_union;
+        };
+        const auto producer_wu_union = compute_role_union(endpoints.producers, "PRODUCER");
+        const auto consumer_wu_union = compute_role_union(endpoints.consumers, "CONSUMER");
         TT_FATAL(
-            dfb.alias_with.empty(),
-            "DFB '{}' has a non-empty alias_with, but DFB aliasing is not yet implemented",
+            producer_wu_union == consumer_wu_union,
+            "Local DFB '{}' producer and consumer KernelSpecs do not cover the same WorkUnitSpec(s). "
+            "Local DFBs require every node where the DFB is instantiated to host both a producer "
+            "and a consumer kernel instance; either refactor the placement, or model this as "
+            "a RemoteDataflowBufferSpec.",
             dfb.unique_id);
+
+        // Self-loop interplay with multi-binding: when ANY kernel self-loops a DFB (appears in
+        // both producers and consumers), the producer set must equal the consumer set as sets
+        // of KernelSpec*. This permits the natural pattern of multiple same-source KernelSpecs
+        // each self-looping the DFB on their disjoint node ranges, while rejecting the case
+        // where a self-looping kernel shares the DFB with an unrelated kernel (which would
+        // make per-instance tensix-scope semantics ambiguous).
+        const bool has_self_loop = [&] {
+            for (const auto& p : endpoints.producers) {
+                for (const auto& c : endpoints.consumers) {
+                    if (p.kernel == c.kernel) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }();
+        if (has_self_loop) {
+            std::unordered_set<const KernelSpec*> producer_kernels;
+            std::unordered_set<const KernelSpec*> consumer_kernels;
+            for (const auto& p : endpoints.producers) {
+                producer_kernels.insert(p.kernel);
+            }
+            for (const auto& c : endpoints.consumers) {
+                consumer_kernels.insert(c.kernel);
+            }
+            TT_FATAL(
+                producer_kernels == consumer_kernels,
+                "DFB '{}' is self-looped (some kernel appears as both producer and consumer), but "
+                "the set of producer KernelSpecs differs from the set of consumer KernelSpecs. "
+                "When a DFB is self-looped, every same-side binding must come from a self-loop "
+                "participant (i.e. a kernel that appears on both sides).",
+                dfb.unique_id);
+
+            // All self-loop participants must agree on the tensix-scope for this DFB —
+            // MakeDataflowBufferConfig writes a single tensix_scope into the DFB config, and the
+            // self-loop participants alternate per node, so a disagreement is unresolvable.
+            // Iterate endpoints.producers (a vector) rather than producer_kernels (an
+            // unordered_set), so iteration order — and any resulting error message — is
+            // deterministic across runs.
+            auto scope_for_kernel = [&](const KernelSpec* k) {
+                for (const auto& entry : k->dfb_compute_self_loop_scopes) {
+                    if (entry.dfb_spec_name == dfb.unique_id) {
+                        return entry.scope;
+                    }
+                }
+                return KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+            };
+            const KernelSpec* first_kernel = endpoints.producers.front().kernel;
+            const auto first_scope = scope_for_kernel(first_kernel);
+            std::unordered_set<const KernelSpec*> seen;
+            for (const auto& rec : endpoints.producers) {
+                if (!seen.insert(rec.kernel).second) {
+                    continue;
+                }
+                TT_FATAL(
+                    scope_for_kernel(rec.kernel) == first_scope,
+                    "DFB '{}' is self-looped; all self-loop participants must agree on "
+                    "DFBComputeSelfLoopScope::Scope, but kernel '{}' specifies a different scope "
+                    "than kernel '{}'.",
+                    dfb.unique_id,
+                    rec.kernel->unique_id,
+                    first_kernel->unique_id);
+            }
+        }
+    }
+
+    // Remote DFBs are not yet supported.
+    //
+    // TODO: When remote DFB is supported, add a validation checks. Enforce that
+    //       each (producer_node, consumer_node) entry in producer_consumer_map has
+    //       p_node != c_node.
+
+    TT_FATAL(
+        spec.remote_dataflow_buffers.empty(),
+        "RemoteDataflowBufferSpec is part of the Metal 2.0 API surface but is not yet supported "
+        "by the runtime. (ProgramSpec '{}' has {} remote DFB(s).)",
+        spec.program_id,
+        spec.remote_dataflow_buffers.size());
+
+    // Validate borrowed-memory DFBs.
+    //
+    // A borrowed-memory DFB names a TensorParameter via DataflowBufferSpec::borrowed_from. The
+    // backing MeshTensor flows through ProgramRunParams::tensor_args at execution time.
+    // We enforce only the safety-relevant checks:
+    //  - the named parameter exists
+    //  - the TensorSpec places storage in L1,
+    //  - the spec is large enough
+    // We don't validate any layout considerations (interleaved vs sharded, page / tile sizes, etc.)
+    // That's on the user; this is an advanced feature.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (!dfb.borrowed_from.has_value()) {
+            continue;
+        }
+        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        auto it = collected.tensor_parameter_by_name.find(tp_name);
+        TT_FATAL(
+            it != collected.tensor_parameter_by_name.end(),
+            "DFB '{}' borrows memory from TensorParameter '{}', but no such TensorParameter is declared in the "
+            "ProgramSpec.",
+            dfb.unique_id,
+            tp_name);
+        const TensorSpec& tensor_spec = it->second->spec;
+        TT_FATAL(
+            tensor_spec.memory_config().buffer_type() == tt::tt_metal::BufferType::L1,
+            "DFB '{}' borrows memory from TensorParameter '{}', but its TensorSpec is not L1-resident (L1 is "
+            "required).",
+            dfb.unique_id,
+            tp_name);
+        // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
+        // available at spec time, so we can't query the per-bank allocation; the precise per-bank
+        // check fires at attach time in AttachBorrowedDFBBuffers (program_run_params.cpp), where
+        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
+        // here against the full-tensor size and still fail per-bank later. By design.
+        const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+        const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+        TT_FATAL(
+            dfb_bytes <= tensor_bytes,
+            "DFB '{}' (entry_size {} * num_entries {} = {} bytes) is larger than its borrowed TensorParameter '{}' "
+            "({} bytes).",
+            dfb.unique_id,
+            dfb.entry_size,
+            dfb.num_entries,
+            dfb_bytes,
+            tp_name,
+            tensor_bytes);
+    }
+
+    // Validate DFB alias groups.
+    // Rules:
+    //  1. Transitivity: every DFB in an alias group must list every other member in its
+    //     alias_with field. This strict requirement is redundant by design. This is a
+    //     "dangerous" feature that a kernel author should use deliberately.
+    //  2. Same total size: entry_size * num_entries must match within a group.
+    //  3. Same node coverage: each DFB in the group must cover the same set of nodes
+    //  4. Consistent borrowed_from: either no member borrows, or all members borrow from
+    //     the same TensorParameter. (Aliased borrows from the same memory object is a
+    //     weird-but-valid scenario.)
+    {
+        // The "extended group" of a DFB is its alias_with plus the DFB itself. Two DFBs
+        // are in the same alias group iff their extended groups are equal.
+        auto extended_group = [](const DataflowBufferSpec& d) {
+            std::set<DFBSpecName> s(d.alias_with.begin(), d.alias_with.end());
+            s.insert(d.unique_id);
+            return s;
+        };
+
+        // Pre-pass: every name in every alias_with must refer to a real DFB and must not
+        // be self-referential.
+        for (const auto& dfb : spec.dataflow_buffers) {
+            for (const auto& alias_name : dfb.alias_with) {
+                TT_FATAL(
+                    collected.dfb_by_name.contains(alias_name),
+                    "DFB '{}' lists unknown alias '{}' in alias_with",
+                    dfb.unique_id,
+                    alias_name);
+                TT_FATAL(alias_name != dfb.unique_id, "DFB '{}' lists itself in alias_with", dfb.unique_id);
+            }
+        }
+
+        for (const auto& dfb : spec.dataflow_buffers) {
+            if (dfb.alias_with.empty()) {
+                continue;
+            }
+            const size_t total_size_a = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
+            const auto group_a = extended_group(dfb);
+            const auto& nodes_a = collected.dfb_node_set.at(dfb.unique_id);
+
+            for (const auto& alias_name : dfb.alias_with) {
+                const DataflowBufferSpec* alias_spec = collected.dfb_by_name.at(alias_name);
+
+                // Rule 1: full clique declaration.
+                const auto group_b = extended_group(*alias_spec);
+                if (group_a != group_b) {
+                    TT_THROW(
+                        "DFBs '{}' and '{}' do not declare the same alias group. Every DFB in an "
+                        "alias group must list every other member in its alias_with field.",
+                        dfb.unique_id,
+                        alias_name);
+                }
+
+                // Rule 2: same total size.
+                const size_t total_size_b =
+                    static_cast<size_t>(alias_spec->entry_size) * static_cast<size_t>(alias_spec->num_entries);
+                TT_FATAL(
+                    total_size_a == total_size_b,
+                    "Aliased DFBs '{}' and '{}' have different total sizes ({} vs {} bytes). "
+                    "Aliased DFBs must have the same total size (entry_size * num_entries).",
+                    dfb.unique_id, alias_name, total_size_a, total_size_b);
+
+                // Rule 3: same node coverage.
+                const auto& nodes_b = collected.dfb_node_set.at(alias_name);
+                TT_FATAL(
+                    nodes_a == nodes_b,
+                    "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
+                    "cover the same node coverage (their bound kernels' WorkUnitSpec membership "
+                    "must yield identical target_nodes unions) — the shared L1 region must be "
+                    "reserved at the same cores for all members.",
+                    dfb.unique_id,
+                    alias_name);
+
+                // Rule 4: consistent borrowed_from.
+                TT_FATAL(
+                    dfb.borrowed_from == alias_spec->borrowed_from,
+                    "Aliased DFBs '{}' and '{}' have inconsistent borrowed_from. Either no member "
+                    "of an alias group borrows, or all members borrow from the same TensorParameter.",
+                    dfb.unique_id,
+                    alias_name);
+            }
+        }
     }
 
     // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
+    auto any_compute_endpoint = [](const auto& records) {
+        for (const auto& rec : records) {
+            if (rec.kernel->is_compute_kernel()) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
-        if ((endpoint_info.producer && endpoint_info.producer->is_compute_kernel()) ||
-            (endpoint_info.consumer && endpoint_info.consumer->is_compute_kernel())) {
+        if (any_compute_endpoint(endpoint_info.producers) || any_compute_endpoint(endpoint_info.consumers)) {
             const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
             TT_FATAL(
                 dfb_spec->data_format_metadata.has_value(),
@@ -420,189 +1285,181 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
+    // Validate KernelSpec::dfb_compute_self_loop_scopes entries.
+    // This is a niche advanced option that only applies to compute kernels that self-loop a DFB
+    // (bind it as both producer and consumer).
+    // All misapplications fail loudly here for the benefit of users (especially AI users).
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.dfb_compute_self_loop_scopes.empty()) {
+            continue;
+        }
+        TT_FATAL(
+            kernel.is_compute_kernel(),
+            "KernelSpec '{}' specifies dfb_compute_self_loop_scopes, but is not a compute kernel. "
+            "This option applies only to compute kernels.",
+            kernel.unique_id);
+
+        std::unordered_set<DFBSpecName> seen_dfb_names;
+        for (const auto& entry : kernel.dfb_compute_self_loop_scopes) {
+            TT_FATAL(
+                seen_dfb_names.insert(entry.dfb_spec_name).second,
+                "KernelSpec '{}' has duplicate dfb_compute_self_loop_scopes entries for DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                collected.dfb_by_name.contains(entry.dfb_spec_name),
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry referencing unknown DFB '{}'.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            bool has_producer_binding = false;
+            bool has_consumer_binding = false;
+            for (const auto& binding : kernel.dfb_bindings) {
+                if (binding.dfb_spec_name != entry.dfb_spec_name) {
+                    continue;
+                }
+                if (binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                    has_producer_binding = true;
+                } else if (binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                    has_consumer_binding = true;
+                }
+            }
+            TT_FATAL(
+                has_producer_binding && has_consumer_binding,
+                "KernelSpec '{}' has a dfb_compute_self_loop_scopes entry for DFB '{}', but the "
+                "kernel does not self-loop this DFB (does not bind it as BOTH producer and "
+                "consumer). This option applies only to self-looped DFBs.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+
+            TT_FATAL(
+                entry.scope != KernelSpec::DFBComputeSelfLoopScope::Scope::INTER,
+                "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
+                "not yet supported by the runtime.",
+                kernel.unique_id,
+                entry.dfb_spec_name);
+        }
+    }
+
+    // Data format must be valid for the architecture
+    const tt::ARCH arch = get_arch();
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.data_format_metadata.has_value()) {
+            TT_FATAL(
+                tt::is_data_format_supported(dfb.data_format_metadata.value(), arch),
+                "DFB '{}' has data format '{}' which is not supported on architecture {}",
+                dfb.unique_id,
+                dfb.data_format_metadata.value(),
+                arch);
+        }
+    }
+
     //////////////////////////////////
     // Validate SemaphoreSpecs
     //////////////////////////////////
 
-    // Semaphores aren't supported yet for Quasar
-    TT_FATAL(spec.semaphores.empty(), "Semaphores are not supported yet");
-
-    // Validate no semaphore bindings are used (semaphores not yet implemented)
-    for (const auto& kernel : spec.kernels) {
+    for (const auto& sem : spec.semaphores) {
         TT_FATAL(
-            kernel.semaphore_bindings.empty(),
-            "KernelSpec '{}' has semaphore bindings, but semaphores are not yet implemented",
-            kernel.unique_id);
+            sem.memory_type == SemaphoreSpec::SemaphoreMemoryType::L1,
+            "SemaphoreSpec '{}' uses non-L1 memory type, which is not yet supported",
+            sem.unique_id);
+        if (is_gen2_arch()) {
+            TT_FATAL(
+                sem.initial_value == 0,
+                "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
+                sem.unique_id,
+                sem.initial_value);
+        }
     }
 
     //////////////////////////////
-    // Validate WorkerSpecs
+    // Validate WorkUnitSpecs
     //////////////////////////////
 
-    // WorkerSpecs are required on Gen2+
-    // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
-    //       If it's hated, we can make it optional on Gen2 and derive the WorkerSpec if absent.
-    TT_FATAL(spec.workers.has_value(), "Workers are required on Gen2+");
-    const auto& workers = spec.workers.value();
-    TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
+    // WorkUnitSpec is required: a valid ProgramSpec has at least one WorkUnitSpec.
+    const auto& work_units = spec.work_units;
+    TT_FATAL(!work_units.empty(), "At least one WorkUnitSpec is required");
 
-    // WorkerSpecs may not overlap in their target nodes
-    for (const auto& worker : workers) {
-        for (const auto& other_worker : workers) {
-            if (worker.unique_id == other_worker.unique_id) {
+    // WorkUnitSpecs may not overlap in their target nodes
+    for (const auto& work_unit : work_units) {
+        for (const auto& other_work_unit : work_units) {
+            if (work_unit.unique_id == other_work_unit.unique_id) {
                 continue;
             }
-            if (nodes_intersect(worker.target_nodes, other_worker.target_nodes)) {
+            if (nodes_intersect(work_unit.target_nodes, other_work_unit.target_nodes)) {
                 TT_FATAL(
                     false,
-                    "WorkerSpecs '{}' and '{}' overlap in target nodes",
-                    worker.unique_id,
-                    other_worker.unique_id);
+                    "WorkUnitSpecs '{}' and '{}' overlap in target nodes",
+                    work_unit.unique_id,
+                    other_work_unit.unique_id);
             }
         }
     }
 
-    // A WorkerSpec must have at least one kernel
-    for (const auto& worker : workers) {
-        TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
+    // A WorkUnitSpec must have at least one kernel
+    for (const auto& work_unit : work_units) {
+        TT_FATAL(!work_unit.kernels.empty(), "WorkUnitSpec '{}' has no kernels", work_unit.unique_id);
     }
 
-    // Referential integrity: WorkerSpec kernel/DFB/semaphore references must exist
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            TT_FATAL(
-                collected.kernel_by_name.contains(kernel_name),
-                "WorkerSpec '{}' references unknown kernel '{}'",
-                worker.unique_id,
-                kernel_name);
-        }
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_name),
-                "WorkerSpec '{}' references unknown DFB '{}'",
-                worker.unique_id,
-                dfb_name);
-        }
-        for (const auto& semaphore_name : worker.semaphores) {
-            TT_FATAL(
-                collected.semaphore_by_name.contains(semaphore_name),
-                "WorkerSpec '{}' references unknown semaphore '{}'",
-                worker.unique_id,
-                semaphore_name);
-        }
-    }
-
-    // Does the Worker have enough cores to run all its kernels?
-    for (const auto& worker : workers) {
+    // Does the WorkUnit have enough cores to run all of its kernels?
+    for (const auto& work_unit : work_units) {
         uint32_t dm_cores_needed = 0;
-        uint32_t compute_cores_needed = 0;
-        for (const auto& kernel_name : worker.kernels) {
+        uint32_t compute_engines_needed = 0;
+        for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
-                compute_cores_needed += kernel_spec->num_threads;
+                compute_engines_needed += kernel_spec->num_threads;
             }
             if (kernel_spec->is_dm_kernel()) {
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
-        TT_FATAL(
-            compute_cores_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
-            "WorkerSpec '{}' needs {} compute cores, but only {} are available",
-            worker.unique_id,
-            compute_cores_needed,
-            QUASAR_TENSIX_ENGINES_PER_NODE);
-        TT_FATAL(
-            dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
-            "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
-            worker.unique_id,
-            dm_cores_needed,
-            QUASAR_USER_DM_CORES_PER_NODE);
+        if (is_gen2_arch()) {
+            TT_FATAL(
+                compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
+                "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
+                work_unit.unique_id,
+                compute_engines_needed,
+                QUASAR_TENSIX_ENGINES_PER_NODE);
+            TT_FATAL(
+                dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
+                "WorkUnitSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
+                work_unit.unique_id,
+                dm_cores_needed,
+                QUASAR_USER_DM_CORES_PER_NODE);
+        }
+        if (is_gen1_arch()) {
+            TT_FATAL(
+                compute_engines_needed <= 1,
+                "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
+                work_unit.unique_id,
+                compute_engines_needed);
+            TT_FATAL(
+                dm_cores_needed <= 2,
+                "WorkUnitSpec '{}' has {} data movement kernels. The target architecture supports at most two.",
+                work_unit.unique_id,
+                dm_cores_needed);
+        }
     }
 
-    // A worker can have at most one compute kernel
-    for (const auto& worker : workers) {
+    // A work_unit can have at most one compute kernel
+    for (const auto& work_unit : work_units) {
         uint32_t num_compute_kernels = 0;
-        for (const auto& kernel_name : worker.kernels) {
+        for (const auto& kernel_name : work_unit.kernels) {
             const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
                 num_compute_kernels++;
             }
         }
-        TT_FATAL(num_compute_kernels <= 1, "WorkerSpec '{}' has more than one compute kernel", worker.unique_id);
+        TT_FATAL(num_compute_kernels <= 1, "WorkUnitSpec '{}' has more than one compute kernel", work_unit.unique_id);
     }
 
-    // Check that WorkerSpec target nodes are valid nodes
-    // (TODO once legality rules on Quasar are defined)
-    // (For WH/BH, this check should catch attempts to assign kernels to dispatch nodes.)
-
-    // Kernels in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
-            TT_FATAL(
-                nodes_contains(kernel_spec->target_nodes, worker.target_nodes),
-                "Kernel '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                kernel_name,
-                worker.unique_id);
-        }
-    }
-
-    // DFBs in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            const auto& dfb_spec = collected.dfb_by_name.at(dfb_name);
-            TT_FATAL(
-                nodes_contains(dfb_spec->target_nodes, worker.target_nodes),
-                "DFB '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                dfb_name,
-                worker.unique_id);
-        }
-    }
-
-    // Semaphores in a WorkerSpec must contain the WorkerSpec's target nodes
-    for (const auto& worker : workers) {
-        for (const auto& semaphore_name : worker.semaphores) {
-            const auto& semaphore_spec = collected.semaphore_by_name.at(semaphore_name);
-            TT_FATAL(
-                nodes_contains(semaphore_spec->target_nodes, worker.target_nodes),
-                "Semaphore '{}' target nodes must contain WorkerSpec '{}' target nodes",
-                semaphore_name,
-                worker.unique_id);
-        }
-    }
-
-    // Check that all kernel target nodes are "accounted for" by a WorkerSpec
-    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_ranges;
-    for (const auto& worker : workers) {
-        for (const auto& kernel_name : worker.kernels) {
-            accumulate_nodes(kernel_node_ranges, kernel_name, worker.target_nodes);
-        }
-    }
-    for (const auto& kernel : spec.kernels) {
-        KernelSpecName kernel_name = kernel.unique_id;
-        TT_FATAL(kernel_node_ranges.contains(kernel_name), "Kernel '{}' is not part of any WorkerSpec", kernel_name);
-        TT_FATAL(
-            nodes_equal(kernel_node_ranges.at(kernel_name), kernel.target_nodes),
-            "Kernel '{}' has target nodes that are not accounted for by any WorkerSpec",
-            kernel_name);
-    }
-
-    // Check that all DFB target nodes are "accounted for" by a WorkerSpec
-    // (May revisit this, depending on how remote DFBs are implemented)
-    std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_ranges;
-    for (const auto& worker : workers) {
-        for (const auto& dfb_name : worker.dataflow_buffers) {
-            accumulate_nodes(dfb_node_ranges, dfb_name, worker.target_nodes);
-        }
-    }
-    for (const auto& dfb : spec.dataflow_buffers) {
-        DFBSpecName dfb_name = dfb.unique_id;
-        TT_FATAL(dfb_node_ranges.contains(dfb_name), "DFB '{}' is not part of any WorkerSpec", dfb_name);
-        TT_FATAL(
-            nodes_equal(dfb_node_ranges.at(dfb_name), dfb.target_nodes),
-            "DFB '{}' has target nodes that are not accounted for by any WorkerSpec",
-            dfb_name);
-    }
+    // NOTE:
+    // Placement consistency between kernels, DFBs, and WorkUnitSpecs is now structural,
+    // not validated:
+    //  - Kernels' effective node sets ARE the union of their containing WorkUnitSpecs' target_nodes
+    //  - DFBs' allocation node sets are the union of their binding kernels' node sets
 }
 
 // ============================================================================
@@ -636,28 +1493,28 @@ std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const Proce
     return newly_reserved;
 }
 
-// Reserve DM processors for a kernel on a WorkerSpec.
+// Reserve DM processors for a kernel on a WorkUnitSpec.
 // Returns {this_kernel_mask, updated_cumulative_mask}
 // Throws TT_FATAL on conflict or allocation failure (see simplifying assumption notes)
 std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkerSpecName& worker_id) {
-    // Was this kernel already assigned a mask from a previous WorkerSpec?
+    const WorkUnitSpecName& work_unit_id) {
+    // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
 
-        // Check for conflict with what's already allocated on the current WorkerSpec
+        // Check for conflict with what's already allocated on the current WorkUnitSpec
         TT_FATAL(
             !existing.conflicts_with(cumulative_mask),
-            "Kernel '{}' requires processors already in use on WorkerSpec '{}'. "
+            "Kernel '{}' requires processors already in use on WorkUnitSpec '{}'. "
             "One of the following must be true: \n"
             " - The ProgramSpec is invalid, and the legality checks were bypassed. \n"
             " - A solution exists, but the greedy algorithm failed to find it. \n"
             " - The runtime's \"common DM cores\" assumption has been violated!",
             kernel_spec->unique_id,
-            worker_id);
+            work_unit_id);
 
         // Return existing mask and updated cumulative
         return {existing, cumulative_mask | existing};
@@ -667,10 +1524,10 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     std::optional<DMProcessorMask> reserved = ReserveProcessors(kernel_spec->num_threads, cumulative_mask);
     TT_FATAL(
         reserved.has_value(),
-        "Failed to reserve processors for DM kernel '{}' on WorkerSpec '{}'. "
+        "Failed to reserve processors for DM kernel '{}' on WorkUnitSpec '{}'. "
         "The \"common DM cores\" assumption has been violated!",
         kernel_spec->unique_id,
-        worker_id);
+        work_unit_id);
 
     DMProcessorMask mask = reserved.value();
     return {mask, cumulative_mask | mask};
@@ -704,6 +1561,10 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
 // ----------------------------------------------------------------------------
 
 namespace dm_solver {
+
+// Map from kernel name to its derived effective node set (union of containing
+// WorkUnitSpec target_nodes). Used by the solver to read each kernel's placement.
+using KernelNodeSetMap = std::unordered_map<KernelSpecName, NodeRangeSet>;
 
 // State for tracking per-node processor usage
 class NodeUsageTracker {
@@ -750,18 +1611,17 @@ private:
     std::map<NodeCoord, DMProcessorMask> node_used_masks_;
 };
 
-// Constraint score for sorting: higher = more constrained (should be assigned earlier)
-int ConstraintScore(const KernelSpec* k) {
-    NodeRangeSet nodes = to_node_range_set(k->target_nodes);
-    int node_count = static_cast<int>(nodes.num_cores());
+// Constraint score for sorting: higher = more constrained (RISC cores should be assigned earlier)
+int ConstraintScore(const KernelSpec* k, const NodeRangeSet& kernel_nodes) {
+    int node_count = static_cast<int>(kernel_nodes.num_cores());
     int thread_count = k->num_threads;
     return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
 }
 
-void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
-    std::sort(kernels.begin(), kernels.end(), [](const KernelSpec* a, const KernelSpec* b) {
-        int score_a = ConstraintScore(a);
-        int score_b = ConstraintScore(b);
+void SortByConstraint(std::vector<const KernelSpec*>& kernels, const KernelNodeSetMap& kernel_node_set) {
+    std::sort(kernels.begin(), kernels.end(), [&kernel_node_set](const KernelSpec* a, const KernelSpec* b) {
+        int score_a = ConstraintScore(a, kernel_node_set.at(a->unique_id));
+        int score_b = ConstraintScore(b, kernel_node_set.at(b->unique_id));
         if (score_a != score_b) {
             return score_a > score_b;  // Higher score first
         }
@@ -773,9 +1633,12 @@ void SortByConstraint(std::vector<const KernelSpec*>& kernels) {
 // Try to assign all kernels in the given order using greedy selection
 // Returns true if successful, populates result map
 bool TryGreedyAssignment(
-    const std::vector<const KernelSpec*>& kernel_order, NodeUsageTracker& tracker, DMProcessorMaskMap& result) {
+    const std::vector<const KernelSpec*>& kernel_order,
+    const KernelNodeSetMap& kernel_node_set,
+    NodeUsageTracker& tracker,
+    DMProcessorMaskMap& result) {
     for (const KernelSpec* kernel : kernel_order) {
-        NodeRangeSet target_nodes = to_node_range_set(kernel->target_nodes);
+        const NodeRangeSet& target_nodes = kernel_node_set.at(kernel->unique_id);
         DMProcessorMask combined_used = tracker.get_combined_used_mask(target_nodes);
 
         auto selected = ReserveProcessors(kernel->num_threads, combined_used);
@@ -798,10 +1661,11 @@ bool TryGreedyAssignment(
 //       We can revisit if this ever becomes a problem.
 bool SolveWithOrderingBacktrack(
     std::vector<const KernelSpec*> kernels,  // by value - we'll permute it
+    const KernelNodeSetMap& kernel_node_set,
     NodeUsageTracker& tracker,
     DMProcessorMaskMap& result) {
     // Try current ordering
-    if (TryGreedyAssignment(kernels, tracker, result)) {
+    if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
         return true;
     }
 
@@ -813,7 +1677,7 @@ bool SolveWithOrderingBacktrack(
     do {
         tracker.reset();
         result.clear();
-        if (TryGreedyAssignment(kernels, tracker, result)) {
+        if (TryGreedyAssignment(kernels, kernel_node_set, tracker, result)) {
             return true;
         }
     } while (std::next_permutation(kernels.begin(), kernels.end(), by_name));
@@ -823,8 +1687,9 @@ bool SolveWithOrderingBacktrack(
 
 }  // namespace dm_solver
 
-// Main entry point for processor assignment
-std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(const ProgramSpec& spec) {
+// Gen2 (Quasar) processor assignment: runs the backtracking DM solver and returns
+// a KernelRiscMaskMap using the Gen2 bit encoding (DM: bits 0-7, compute: bits 8-15).
+KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected) {
     DMProcessorMaskMap dm_assignments;
     ComputeEngineMaskMap compute_assignments;
 
@@ -842,12 +1707,13 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
     // Sort by constraint score (most constrained first)
     constexpr bool kSortByConstraint = true;  // Toggle to disable upfront sorting
     if constexpr (kSortByConstraint) {
-        dm_solver::SortByConstraint(dm_kernels);
+        dm_solver::SortByConstraint(dm_kernels, collected.kernel_node_set);
     }
 
     // Solve DM assignments
     dm_solver::NodeUsageTracker tracker;
-    bool success = dm_solver::SolveWithOrderingBacktrack(dm_kernels, tracker, dm_assignments);
+    bool success =
+        dm_solver::SolveWithOrderingBacktrack(dm_kernels, collected.kernel_node_set, tracker, dm_assignments);
 
     TT_FATAL(
         success,
@@ -855,58 +1721,379 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
         "Either the ProgramSpec is invalid, or that the \"same DM cores on every node\" "
         "simplifying assumption has been violated.");
 
-    return {dm_assignments, compute_assignments};
+    // Convert to KernelRiscMaskMap using Gen2 bit encoding
+    KernelRiscMaskMap result;
+    for (const auto& [kernel, mask] : dm_assignments) {
+        result[kernel] = mask.bits;  // DM processors in bits 0-7
+    }
+    for (const auto& [kernel, mask] : compute_assignments) {
+        result[kernel] = static_cast<uint16_t>(mask.bits) << 8;  // Compute engines in bits 8-15
+    }
+    return result;
+}
+
+// Gen1 (WH/BH) processor assignment: just read the explicit processor from Gen1DataMovementConfig
+// and returns a KernelRiscMaskMap using the Gen1 bit encoding (RISCV_0: bit 0, RISCV_1: bit 1, compute: bit 2).
+KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
+    static constexpr uint8_t GEN1_COMPUTE_RISC_BIT = 2;
+
+    KernelRiscMaskMap result;
+    for (const KernelSpec& kernel : spec.kernels) {
+        if (kernel.is_dm_kernel()) {
+            const auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+            const auto& gen1 = dm_config.gen1_data_movement_config.value();
+            result[&kernel] = static_cast<uint16_t>(1u << static_cast<uint8_t>(gen1.processor));
+        } else {
+            result[&kernel] = static_cast<uint16_t>(1u << GEN1_COMPUTE_RISC_BIT);
+        }
+    }
+    return result;
 }
 
 // ============================================================================
 // Step 3: Program Building Helpers
 // ============================================================================
 
+// Per-TensorParameter resolved layout.
+//
+// cta_payload: positional CTA words appended to the kernel's compile-time args for
+// each binding of this TensorParameter. Mirrors what TensorAccessorArgs::append_to
+// would produce on the legacy path, but is built from the TensorSpec + MeshDevice
+// since no Buffer exists at spec-build time.
+//
+// extra_crta_words: additional CRTA words (beyond the always-present base address
+// slot) that this binding occupies, used by the device-side accessor to read
+// runtime-resolved fields. Non-zero only when the TensorParameter opts into a
+// dynamic field that lives in CRTAs (currently: sharded + dynamic_tensor_shape,
+// which puts `rank` shape words in CRTAs).
+struct ResolvedTensorParameter {
+    std::vector<uint32_t> cta_payload;
+    uint32_t extra_crta_words = 0;
+};
+
+// Resolve a TensorParameter's static layout into a CTA payload + an extra CRTA word
+// count for any runtime-resolved fields.
+//
+// CTA layout produced:
+//  - word 0 is the args_config raw byte
+//  - word 1 is aligned_page_size
+// For sharded tensors only:
+//  - word 2 is rank
+//  - word 3 is num_banks
+//  - remaining words: per-dim tensor_shape_in_pages (omitted if dynamic_tensor_shape),
+//    per-dim shard_shape_in_pages, and packed bank coordinates (two per uint32)
+//
+// The tensor base address always lives in CRTAs (filled in per-enqueue from the
+// corresponding TensorArg). When dynamic_tensor_shape is set on a sharded tensor,
+// the runtime tensor's shape is also written into CRTAs at enqueue time, in
+// `extra_crta_words` slots immediately after the address slot.
+// (See also ResolveTensorBindingsForKernel below.)
+ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
+    const TensorParameter& tensor_parameter, const distributed::MeshDevice& mesh_device) {
+    const TensorSpec& spec = tensor_parameter.spec;
+    const MemoryConfig& memory_config = spec.memory_config();
+    const BufferType buffer_type = memory_config.buffer_type();
+    const bool is_dram = (buffer_type == BufferType::DRAM);
+    const bool is_sharded = memory_config.is_sharded();
+    // dynamic_tensor_shape is only meaningful on sharded tensors: for interleaved
+    // tensors the CTA payload never carried tensor_shape in the first place (and
+    // the device-side accessor doesn't read it), so the flag is a pure host-side
+    // validation loosening and has no effect on the CTA/CRTA layout.
+    const bool dyn_shape = tensor_parameter.dynamic_tensor_shape && is_sharded;
+
+    tensor_accessor::ArgsConfig args_config;
+    if (is_sharded) {
+        args_config.set(tensor_accessor::ArgConfig::Sharded);
+    }
+    if (is_dram) {
+        args_config.set(tensor_accessor::ArgConfig::IsDram);
+    }
+    if (dyn_shape) {
+        args_config.set(tensor_accessor::ArgConfig::RuntimeTensorShape);
+    }
+
+    // aligned_page_size: align the unaligned page size up to the buffer-type alignment.
+    const size_t unaligned_page_size = spec.compute_page_size_bytes();
+    const uint32_t alignment = mesh_device.allocator()->get_alignment(buffer_type);
+    const size_t aligned_page_size = align(unaligned_page_size, static_cast<size_t>(alignment));
+    TT_FATAL(
+        aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+        "TensorParameter '{}' aligned page size {} exceeds uint32_t max {}",
+        tensor_parameter.unique_id,
+        aligned_page_size,
+        std::numeric_limits<uint32_t>::max());
+
+    ResolvedTensorParameter result;
+    std::vector<uint32_t>& cta_payload = result.cta_payload;
+
+    // Common header (always emitted, sharded or not):
+    cta_payload.push_back(args_config.raw());
+    cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
+
+    if (!is_sharded) {
+        // Interleaved tensors don't carry shape / bank-coord data: the device-side accessor
+        // computes addresses from page id + num_banks alone.
+        return result;
+    }
+
+    // Sharded: emit rank, num_banks, tensor_shape_in_pages (CTA only when static),
+    // shard_shape_in_pages, bank_coords.
+    const BufferShardingArgs sharding_args = spec.compute_buffer_sharding_args();
+    const std::optional<BufferDistributionSpec>& bds_opt = sharding_args.buffer_distribution_spec();
+    TT_FATAL(
+        bds_opt.has_value(),
+        "TensorParameter '{}' is sharded but TensorSpec produced no BufferDistributionSpec",
+        tensor_parameter.unique_id);
+    const BufferDistributionSpec& bds = *bds_opt;
+
+    const Shape& tensor_shape = bds.tensor_shape_in_pages();
+    const Shape& shard_shape = bds.shard_shape_in_pages();
+    const std::vector<CoreCoord>& bank_coords = bds.cores();
+    const size_t rank = tensor_shape.rank();
+    const size_t n_banks = bank_coords.size();
+
+    cta_payload.push_back(static_cast<uint32_t>(rank));
+    cta_payload.push_back(static_cast<uint32_t>(n_banks));
+
+    if (!dyn_shape) {
+        for (size_t i = 0; i < rank; ++i) {
+            cta_payload.push_back(static_cast<uint32_t>(tensor_shape[i]));
+        }
+    } else {
+        // Shape lives in CRTAs (one word per dim, written at enqueue time from the bound MeshTensor).
+        result.extra_crta_words = static_cast<uint32_t>(rank);
+    }
+    for (size_t i = 0; i < rank; ++i) {
+        cta_payload.push_back(static_cast<uint32_t>(shard_shape[i]));
+    }
+
+    // Bank coords packed two-per-uint32.
+    // Non-DRAM coords are virtualized; DRAM coords are kept logical (DRAM bank id == logical x).
+    const CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
+    auto resolve_coord = [&](const CoreCoord& logical) -> CoreCoord {
+        if (is_dram) {
+            return logical;
+        }
+        return mesh_device.virtual_core_from_logical_core(logical, core_type);
+    };
+    for (size_t i = 0; i < n_banks; i += 2) {
+        const CoreCoord c1 = resolve_coord(bank_coords[i]);
+        if (i + 1 < n_banks) {
+            const CoreCoord c2 = resolve_coord(bank_coords[i + 1]);
+            cta_payload.push_back(((c2.x & 0xFF) << 24) | ((c2.y & 0xFF) << 16) | ((c1.x & 0xFF) << 8) | (c1.y & 0xFF));
+        } else {
+            cta_payload.push_back(((c1.x & 0xFF) << 8) | (c1.y & 0xFF));
+        }
+    }
+
+    return result;
+}
+
+// Per-kernel resolved tensor binding data:
+//  - All the kernel's TensorBindingHandle (type is defined in kernel.hpp)
+//  - The positional CTAs to append to the kernel's (unnamed) CTAs
+//  - The full CRTA buffer layout (named CRTAs + binding section + vararg-section start),
+//    precomputed here so consumers (headergen, runtime) don't have to re-derive section
+//    boundaries by walking handles. See KernelCrtaLayout in jit_build_settings.hpp.
+struct TensorBindingsForKernel {
+    std::vector<TensorBindingHandle> handles;
+    std::vector<uint32_t> cta_words;  // appended after any pre-existing positional CTAs
+                                      // (currently, this is the only Metal 2.0 use of positional CTAs)
+    KernelCrtaLayout crta_layout;
+};
+
+// Resolve the tensor bindings for a single kernel:
+//  1. Walk the kernel's tensor_bindings in declaration order
+//  2. Pack each binding's CTA payload into a contiguous positional buffer
+//  3. Assign each binding a slot in the kernel's TensorBinding section of the CRTA buffer.
+//     The section is structurally separate, immediately following the user-named CRTAs.
+//     Each binding occupies (1 + extra_crta_words) words: the always-present base address
+//     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
+//     is set on a sharded TensorParameter).
+//  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
+//     the headergen and runtime can consult it directly instead of re-summing the bindings.
+//
+// (SetProgramRunParameters will fill the address slots and runtime field slots at enqueue
+// time, extracting info from the TensorArgs.)
+TensorBindingsForKernel ResolveTensorBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<TensorParameterName, ResolvedTensorParameter>& resolved_tensor_parameters,
+    size_t base_named_crta_count) {
+    TensorBindingsForKernel out;
+    out.handles.reserve(kernel.tensor_bindings.size());
+
+    uint32_t cta_word_offset = 0;
+    size_t crta_word_index = base_named_crta_count;
+    uint32_t binding_section_words = 0;
+    for (const auto& binding : kernel.tensor_bindings) {
+        const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
+        const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
+
+        TensorBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+        handle.tensor_parameter_name = binding.tensor_parameter_name;
+        handle.cta_offset = cta_word_offset;
+        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+        handle.num_runtime_field_crta_words = resolved.extra_crta_words;
+
+        out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
+        cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
+        const uint32_t binding_words = 1u + resolved.extra_crta_words;
+        crta_word_index += binding_words;
+        binding_section_words += binding_words;
+
+        out.handles.push_back(std::move(handle));
+    }
+
+    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.binding_section_words = binding_section_words;
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
+
+    return out;
+}
+
+// Create map of local accessor name -> logical DFB id
+tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    tt::tt_metal::DataflowBufferLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.dfb_bindings.size());
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        const uint32_t id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' DFB '{}' logical id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            dfb_binding.dfb_spec_name,
+            id);
+        out.emplace(dfb_binding.local_accessor_name, static_cast<uint16_t>(id));
+    }
+    return out;
+}
+
+// Create map of local accessor name -> logical Semaphore id
+tt::tt_metal::SemaphoreLocalAccessorHandleMap MakeSemaphoreLocalAccessorHandles(
+    const KernelSpec& kernel_spec, const SemaphoreNameToIdMap& semaphore_name_to_id) {
+    tt::tt_metal::SemaphoreLocalAccessorHandleMap out;
+    out.reserve(kernel_spec.semaphore_bindings.size());
+    for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
+        const uint32_t id = semaphore_name_to_id.at(semaphore_binding.semaphore_spec_name);
+        TT_FATAL(
+            id <= std::numeric_limits<uint16_t>::max(),
+            "Kernel '{}' semaphore '{}' id {} does not fit uint16_t",
+            kernel_spec.unique_id,
+            semaphore_binding.semaphore_spec_name,
+            id);
+        out.emplace(semaphore_binding.accessor_name, static_cast<uint16_t>(id));
+    }
+    return out;
+}
+
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
-    const ComputeEngineMaskMap& kernel_to_compute_processor_mask_map) {
-    const KernelSpec* producer = dfb_endpoint_info.producer;
-    const KernelSpec* consumer = dfb_endpoint_info.consumer;
+    const KernelRiscMaskMap& kernel_to_risc_mask) {
+    // With multi-binding, all producer KernelSpecs share the same access_pattern, num_threads,
+    // AND risc_mask: the first two are enforced in ValidateProgramSpec; the third is checked
+    // in MakeProgramFromSpec right after the risc-mask solver runs (see the
+    // "check_uniform_mask" loop). So any representative producer/consumer gives the correct
+    // DFB config — we take the first.
+    const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
+    const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
+    const KernelSpec::DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
+    const KernelSpec::DFBBinding* consumer_binding = dfb_endpoint_info.consumers.front().binding;
 
-    // Create the combined processor mask for producer and consumer
-    // (uint16_t, where bits 0-7 = DM riscs, bits 8-15 = Tensix riscs)
-    auto get_dfb_risc_mask = [&](const KernelSpec* kernel) -> uint16_t {
-        if (kernel->is_dm_kernel()) {
-            return kernel_to_dm_processor_mask_map.at(kernel).bits;
-        }
-        return kernel_to_compute_processor_mask_map.at(kernel).bits << 8;
-    };
-    uint16_t producer_risc_mask = get_dfb_risc_mask(producer);
-    uint16_t consumer_risc_mask = get_dfb_risc_mask(consumer);
+    uint16_t producer_risc_mask = kernel_to_risc_mask.at(producer);
+    uint16_t consumer_risc_mask = kernel_to_risc_mask.at(consumer);
 
     // Convert user-facing access pattern enum to hardware interface access pattern enum
     // (TODO: We should merge these enums; it's silly to have separate ones.)
     auto to_hw_access_pattern = [](DFBAccessPattern pattern) -> experimental::dfb::AccessPattern {
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
-            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
-            case DFBAccessPattern::CONTIGUOUS: TT_FATAL(false, "CONTIGUOUS access pattern is not yet supported");
+            case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
+            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
-    auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
-    auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
+    auto producer_access_pattern = to_hw_access_pattern(producer_binding->access_pattern);
+    auto consumer_access_pattern = to_hw_access_pattern(consumer_binding->access_pattern);
 
+    // For a compute kernel that self-loops a DFB (binds it as both producer and consumer), the
+    // lower-layer DFB API requires an explicit scope. Self-loop is detected as any overlap
+    // between the producer and consumer kernel sets — under the multi-binding regime, the
+    // first-record pointers may differ even when the kernel sets are identical (the overlap is
+    // what matters, not vector ordering). Upstream validation guarantees producer set ==
+    // consumer set whenever any overlap exists, and that all self-loop participants agree on
+    // the tensix scope; reading from the first producer is therefore safe and representative.
+    // The user can declare scope via KernelSpec::dfb_compute_self_loop_scopes:
+    //  - absence of an entry means we infer INTRA (the common case)
+    //  - user-specified INTRA is also fine
+    //  - user-specified INTER is not currently supported. This will have already failed validation.
+    const bool is_self_loop = [&] {
+        for (const auto& p : dfb_endpoint_info.producers) {
+            for (const auto& c : dfb_endpoint_info.consumers) {
+                if (p.kernel == c.kernel) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
+    std::optional<experimental::dfb::TensixScope> tensix_scope;
+    if (is_self_loop && producer->is_compute_kernel()) {
+        auto user_scope = KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA;
+        for (const auto& entry : producer->dfb_compute_self_loop_scopes) {
+            if (entry.dfb_spec_name == dfb_spec->unique_id) {
+                user_scope = entry.scope;
+                break;
+            }
+        }
+        tensix_scope = (user_scope == KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA)
+                           ? experimental::dfb::TensixScope::INTRA
+                           : experimental::dfb::TensixScope::INTER;  // currently blocked in validation
+    }
+
+    // Compute the per-side implicit-sync value by polling the bound DM kernels' Gen2 votes.
+    // Sides with no DM endpoints get implicit_sync=false (no DM endpoint to enable it for).
+    // Validator guarantees per-side agreement among DM kernels, so any DM kernel's vote works.
+    auto side_implicit_sync_enabled =
+        [&](const std::vector<CollectedSpecData::DFBEndpointInfo::EndpointRecord>& endpoints) -> bool {
+        bool any_dm = false;
+        bool disabled = false;
+        for (const auto& ep : endpoints) {
+            if (!ep.kernel->is_dm_kernel()) {
+                continue;
+            }
+            any_dm = true;
+            const auto& dm_config = std::get<DataMovementConfiguration>(ep.kernel->config_spec);
+            if (!dm_config.gen2_data_movement_config.has_value()) {
+                continue;
+            }
+            const auto& vec = dm_config.gen2_data_movement_config->disable_implicit_sync_for;
+            if (std::find(vec.begin(), vec.end(), dfb_spec->unique_id) != vec.end()) {
+                disabled = true;
+            }
+        }
+        return any_dm && !disabled;
+    };
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
-        .num_producers = dfb_endpoint_info.producer->num_threads,
+        .num_producers = producer->num_threads,
         .pap = producer_access_pattern,
         .consumer_risc_mask = consumer_risc_mask,
-        .num_consumers = dfb_endpoint_info.consumer->num_threads,
+        .num_consumers = consumer->num_threads,
         .cap = consumer_access_pattern,
-        .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
+        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
-        .tile = dfb_spec->tile_format_metadata};
+        .tile = dfb_spec->tile_format_metadata,
+        .tensix_scope = tensix_scope,
+        // DFB borrowed memory mode is declared at program creation time.
+        // The actual backing memory L1 address is attached at runtime.
+        .borrows_memory = dfb_spec->borrowed_from.has_value()};
 }
 
 // ----------------------------------------------------------------------------
@@ -914,53 +2101,137 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
 // ----------------------------------------------------------------------------
 
 KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
-    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
-                                               ? KernelSource::SourceType::FILE_PATH
-                                               : KernelSource::SourceType::SOURCE_CODE;
-    return KernelSource(kernel_spec.source, source_type);
+    return std::visit(
+        [&](const auto& src) -> KernelSource {
+            using T = std::decay_t<decltype(src)>;
+            if constexpr (std::is_same_v<T, KernelSpec::SourceFilePath>) {
+                TT_FATAL(!src.path.empty(), "KernelSpec '{}' has empty source file path", kernel_spec.unique_id);
+                return KernelSource(src.path.string(), KernelSource::SourceType::FILE_PATH);
+            } else if constexpr (std::is_same_v<T, KernelSpec::SourceCode>) {
+                TT_FATAL(!src.code.empty(), "KernelSpec '{}' has empty inline source code", kernel_spec.unique_id);
+                return KernelSource(src.code, KernelSource::SourceType::SOURCE_CODE);
+            } else {
+                static_assert(!sizeof(T*), "Unhandled KernelSpec::source alternative");
+            }
+        },
+        kernel_spec.source);
+}
+
+// ----------------------------------------------------------------------------
+// MakeGen1DataMovementConfig: Create a DataMovementConfig (WH/BH) from a KernelSpec
+// ----------------------------------------------------------------------------
+
+// (Temporary) Shims
+// ProgramSpec APIs use vector<pair> for conceptually map-like data structures.
+// This is deliberate, done so ProgramSpec stays hashable for TTNN's program caching.
+// For now, just convert to the map types that the core runtime expects.
+// TODO: Fix this inefficiency eventually.
+std::unordered_map<std::string, uint32_t> to_named_compile_args_map(
+    const KernelSpec::CompileTimeArgBindings& bindings) {
+    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+}
+std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
+    return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
+DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
+    TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
+    const auto& dm_config = std::get<DataMovementConfiguration>(kernel_spec.config_spec);
+    const auto& gen1 = dm_config.gen1_data_movement_config.value();
+
+    return DataMovementConfig{
+        .processor = gen1.processor,
+        .noc = gen1.noc,
+        .noc_mode = gen1.noc_mode,
+        .compile_args = {},  // only named_compile_args is used
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
+    };
+}
+
+// ----------------------------------------------------------------------------
+// BuildUnpackToDestModeVector:
+// Translate the Metal 2.0 user-facing DFB-name->mode map into the (gross)
+// CB-indexed vector that the JIT data-format machinery expects.
+//
+// This DFB/CB translation layer is confusing. The gory details:
+//   - The JIT consumer (get_unpack_dst_formats) will read unpack_to_dest_mode at
+//     index cb_id, where cb_id is the slot used by set_dfb_data_fmt_and_tile
+//     in buf_dataformat_arr (aka, dfb->id).
+//   - The unpack_mode for a DFB "d" needs to be at unpack_modes[d->id]
+//   - The vector must be at least max_cbs long, or the consumer gets angry
+//     (it iterates buf_formats up to max_cbs).
+//   - This is true on WH, BH, and Quasar. (Yes, Quasar too.)
+//
+// What is the max CBs / DFBs?
+//   - WH/BH: Hardcoded as max_cbs. Different number on WH vs. BH.
+//   - Quasar has a variable cap, based on tile-counter registers.
+//     In actual practice, we'll run out LONG before we get the HAL-reported
+//     limit of 64.
+// ----------------------------------------------------------------------------
+
+std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
+    const std::vector<ComputeConfiguration::UnpackToDestModeEntry>& user_modes, const DFBNameToIdMap& dfb_name_to_id) {
+    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
+    for (const auto& [dfb_name, mode] : user_modes) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        // This TT_FATAL is unreachable, provided that validation wasn't skipped.
+        TT_FATAL(
+            dfb_id < max_cbs,
+            "Internal Error: DFB '{}' has id {} which exceeds the JIT data-format "
+            "slot count ({}); compute kernels cannot reference DFBs past this limit",
+            dfb_name,
+            dfb_id,
+            max_cbs);
+        unpack_modes[dfb_id] = mode;
+    }
+    return unpack_modes;
+}
+
+// ----------------------------------------------------------------------------
+// MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
+// ----------------------------------------------------------------------------
+
+ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
+    const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
+
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
+
+    return ComputeConfig{
+        .math_fidelity = compute_config.math_fidelity,
+        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
+        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_modes,
+        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
+        .math_approx_mode = compute_config.math_approx_mode,
+        .compile_args = {},  // only named_compile_args is used
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
+        .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
+    };
 }
 
 // ----------------------------------------------------------------------------
 // MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
-experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
-    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
-
-    // Convert defines from vector<pair> to map
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    // Start with user-provided compile-time args, then add DFB accessor mappings
-    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
-    //    for creating DFBs from local accessor names.
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        if (named_compile_args.contains(local_dfb_name)) {
-            TT_FATAL(
-                false,
-                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
-                "DFB local_access_name is (temporarily) being appended to the CTAs. "
-                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
-                "For now, please rename either the CTA or the DFB local_accessor_name.",
-                local_dfb_name);
-        }
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
 
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
-        .compile_args = {},  // Compile args are passed via named_compile_args
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .compile_args = {},  // only named_compile_args is used
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
@@ -973,48 +2244,8 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
 
-    // Handle unpack_to_dest_mode:
-    //  - The user-facing KernelSpec provides the modes keyed by DFB name.
-    //  - The unpack_to_dest_mode vector in the QuasarComputeConfig is indexed by DFB ID.
-    //  - DFB IDs are always issued sequentially from zero, so this works.
-
-    // Size the vector to the number of DFBs.
-    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
-
-    // Populate unpack_modes using DFB ID as the index
-    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
-        unpack_modes[dfb_id] = mode;
-    }
-
-    // Handle defines:
-    // Must convert from vector<pair> to map.)
-    // (TODO: Consider changing this in the KernelSpec API to avoid unnecessary conversion?)
-    // (The design motivation was consistency with the existing ProgramDescriptor API.)
-    std::map<std::string, std::string> defines_map;
-    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
-        defines_map[key] = value;
-    }
-
-    // Start with user-provided compile-time args, then add DFB accessor mappings
-    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
-    //    for creating DFBs from local accessor names.
-    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
-    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        if (named_compile_args.contains(local_dfb_name)) {
-            TT_FATAL(
-                false,
-                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
-                "DFB local_access_name is (temporarily) being appended to the CTAs. "
-                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
-                "For now, please rename either the CTA or the DFB local_accessor_name.",
-                local_dfb_name);
-        }
-        named_compile_args[local_dfb_name] = dfb_id;
-    }
+    std::vector<UnpackToDestMode> unpack_modes =
+        BuildUnpackToDestModeVector(compute_config.unpack_to_dest_mode, dfb_name_to_id);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -1025,9 +2256,10 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .bfp8_pack_precise = compute_config.bfp8_pack_precise,
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
-        .defines = defines_map,
-        .named_compile_args = named_compile_args,
+        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_arg_bindings),
         .opt_level = kernel_spec.compiler_options.opt_level,
+        .compiler_include_paths = kernel_spec.compiler_options.include_paths,
     };
 }
 
@@ -1078,7 +2310,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 // Public Entry Point
 // ============================================================================
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
@@ -1089,60 +2321,335 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
 
-    // Step 2: Solve kernel-to-core assignments
-    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
-        SolveKernelToProcessorAssignments(spec);
+    // Step 2a: Build kernel risc masks (arch-specific)
+    //  - Gen2: backtracking solver assigns DM cores automatically
+    //  - Gen1: processor is user-specified in Gen1DataMovementConfig
+    KernelRiscMaskMap kernel_to_risc_mask =
+        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+
+    // Step 2a-bis: For multi-binding DFBs, all KernelSpecs on the same role must end up with
+    // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
+    // its hardware config; per-node mask variation would require splitting the DFB at lowering
+    // time (deliberately not done here).
+    //
+    // Gen1: the mask is a deterministic function of the user's KernelSpec config_spec (compute
+    //   placement is fixed; DM processor is user-specified via Gen1DataMovementConfig). A
+    //   mismatch is therefore a user error — the user supplied multi-binding KernelSpecs with
+    //   incompatible processor placement.
+    // Gen2 (Quasar): the mask is solver-assigned. The solver currently doesn't know about
+    //   multi-binding equivalence classes, so even when the user's intent is compatible the
+    //   solver may produce a mismatch. The proper fix is to extend the DM/compute solver to
+    //   constrain same-role multi-binding kernels to identical placements; this is intentionally
+    //   deferred. For now, on Gen2 we surface the mismatch as an internal error so a real
+    //   workload exercising the case can find us; the user can't act on it directly.
+    //
+    // TODO(quasar-multi-binding-solver): extend SolveGen2KernelRiscMasks to take the
+    // multi-binding equivalence classes (derived from collected.dfb_endpoints) and constrain
+    // same-class kernels to the same risc_mask. Then this check downgrades to a defensive
+    // assertion on both arches.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        auto check_uniform_mask = [&](const auto& records, std::string_view role) {
+            if (records.size() < 2) {
+                return;
+            }
+            const uint16_t first_mask = kernel_to_risc_mask.at(records[0].kernel);
+            const auto* first_kernel = records[0].kernel;
+            for (size_t i = 1; i < records.size(); ++i) {
+                const uint16_t mask = kernel_to_risc_mask.at(records[i].kernel);
+                if (mask == first_mask) {
+                    continue;
+                }
+                if (is_gen2_arch()) {
+                    TT_FATAL(
+                        false,
+                        "Internal error: Inconsistent RISC mask solution failure. DFB '{}' has "
+                        "multiple {} KernelSpecs ('{}', '{}') that the Gen2 (Quasar) solver "
+                        "placed on different processor lanes (mask 0x{:x} vs 0x{:x}). The DFB's "
+                        "hardware config carries a single mask per role; multi-binding requires "
+                        "all same-role kernels to share a mask. The Quasar solver does not yet "
+                        "enforce this constraint; this is a known framework limitation. "
+                        "TODO(quasar-multi-binding-solver): extend the solver to constrain "
+                        "multi-binding equivalence classes.",
+                        dfb.unique_id,
+                        role,
+                        first_kernel->unique_id,
+                        records[i].kernel->unique_id,
+                        first_mask,
+                        mask);
+                } else {
+                    TT_FATAL(
+                        false,
+                        "DFB '{}' has multiple {} KernelSpecs ('{}', '{}') with mismatched "
+                        "processor placement (risc_mask 0x{:x} vs 0x{:x}). Multi-binding "
+                        "requires all same-role kernels to share processor placement (for DM "
+                        "kernels, check Gen1DataMovementConfig::processor; for compute, the "
+                        "placement is determined by the KernelSpec's config_spec type).",
+                        dfb.unique_id,
+                        role,
+                        first_kernel->unique_id,
+                        records[i].kernel->unique_id,
+                        first_mask,
+                        mask);
+                }
+            }
+        };
+        check_uniform_mask(endpoints.producers, "PRODUCER");
+        check_uniform_mask(endpoints.consumers, "CONSUMER");
+    }
+
+    // Step 2b: Resolve TensorParameters against the MeshDevice into static CTA payloads.
+    //
+    // TensorBindings ride two existing kernel-arg channels:
+    //   - Static layout (rank, shape, bank coords, ...) flows through the kernel's positional
+    //     CTA buffer. (Empty in Metal 2.0 today; the binding payload is its first user.)
+    //   - Per-enqueue base address flows through a reserved-prefix named CRTA, appended to
+    //     the kernel's user-named CRTAs and filled by SetProgramRunParameters from the
+    //     corresponding TensorArg entry. TensorParameters that opt into a dynamic accessor
+    //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
+    //     immediately after the address slot, also filled at enqueue time.
+    std::unordered_map<TensorParameterName, ResolvedTensorParameter> resolved_tensor_parameters;
+    resolved_tensor_parameters.reserve(spec.tensor_parameters.size());
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        resolved_tensor_parameters.emplace(
+            tensor_parameter.unique_id, ResolveTensorParameterStaticCTAs(tensor_parameter, mesh_device));
+    }
 
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
-    // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
+    // Register TensorParameters with the program for ValidateProgramRunParams to consult at enqueue.
+    for (const auto& tensor_parameter : spec.tensor_parameters) {
+        program_impl->register_tensor_parameter(
+            tensor_parameter.unique_id,
+            tensor_parameter.spec,
+            tensor_parameter.dynamic_tensor_shape,
+            tensor_parameter.match_padded_shape_only);
+    }
+
+    // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
     //       deterministic DFB ID assignment based on user-specified order.
     DFBNameToIdMap dfb_name_to_id;
     for (const auto& dfb_spec : spec.dataflow_buffers) {
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
-        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
-            &dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+        const experimental::dfb::DataflowBufferConfig config =
+            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
 
-        // Add the DFB to the ProgramImpl, and register the name -> handle mapping
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec.target_nodes), config);
+        // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
+        // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
+        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // the device-side runtime uses that to skip regular L1 allocation.)
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
+
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // SetProgramRunParameters / UpdateTensorArgs can resolve and attach the actual L1 Buffer
+        // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
+        if (dfb_spec.borrowed_from.has_value()) {
+            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+        }
     }
 
-    // Create Kernels
+    // Wire alias groups: for each DFB that has alias_with entries, make the first
+    // encountered DFB in the group the primary and call set_dfb_alias for each secondary.
+    // handled_as_secondary prevents a DFB from being treated as a primary when it was
+    // already registered as a secondary by an earlier DFB in the group. Soundness relies
+    // on the strict-clique invariant enforced by ValidateProgramSpec: every group member
+    // lists every other member, so the primary's alias_with covers the whole group.
+    {
+        std::unordered_set<DFBSpecName> handled_as_secondary;
+        for (const auto& dfb_spec : spec.dataflow_buffers) {
+            if (handled_as_secondary.contains(dfb_spec.unique_id)) {
+                continue;
+            }
+            if (dfb_spec.alias_with.empty()) {
+                continue;
+            }
+            const uint32_t primary_id = dfb_name_to_id.at(dfb_spec.unique_id);
+            for (const auto& alias_name : dfb_spec.alias_with) {
+                if (handled_as_secondary.contains(alias_name)) {
+                    continue;
+                }
+                const uint32_t secondary_id = dfb_name_to_id.at(alias_name);
+                program_impl->set_dfb_alias(primary_id, secondary_id);
+                handled_as_secondary.insert(alias_name);
+            }
+        }
+    }
+
+    // Create Semaphores and build name -> ID map.
+    // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
+    SemaphoreNameToIdMap semaphore_name_to_id;
+    for (const auto& semaphore_spec : spec.semaphores) {
+        const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
+        uint32_t sem_id = program_impl->create_semaphore(
+            to_node_range_set(semaphore_spec.target_nodes), semaphore_spec.initial_value, CoreType::WORKER);
+        program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
+        semaphore_name_to_id[semaphore_name] = sem_id;
+    }
+
+    // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec);
-        NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
+        const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
+        // Make the local accessor name -> DFB ID map for this kernel
+        const tt::tt_metal::DataflowBufferLocalAccessorHandleMap dfb_handles =
+            MakeDataflowBufferLocalAccessorHandles(kernel_spec, dfb_name_to_id);
+        const tt::tt_metal::SemaphoreLocalAccessorHandleMap semaphore_handles =
+            MakeSemaphoreLocalAccessorHandles(kernel_spec, semaphore_name_to_id);
+
+        // Resolve TensorBindings for this kernel:
+        //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
+        //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
+        const auto& user_named_crtas = kernel_spec.runtime_arguments_schema.named_common_runtime_args;
+        TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
+            kernel_spec, resolved_tensor_parameters, /*base_named_crta_count=*/user_named_crtas.size());
+
+        // Create TensorBindingHandles for this kernel
+        const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
+
+        // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
+        // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
+        // address section is tracked separately (via tensor_binding_handles), so we pass the user
+        // CRTA list through unchanged.
+        const auto& named_rtas = kernel_spec.runtime_arguments_schema.named_runtime_args;
+
+        // Create the kernel object
         std::shared_ptr<Kernel> kernel;
 
-        if (kernel_spec.is_dm_kernel()) {
-            auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
-                kernel_src, node_ranges, config, processors);
-        } else {
-            auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
-            auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
-            kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
-                kernel_src, node_ranges, config, processors);
+        // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
+        constexpr bool is_metal2_kernel = true;
+
+        if (is_gen2_arch()) {
+            uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
+            if (kernel_spec.is_dm_kernel()) {
+                auto config = MakeQuasarDataMovementConfig(kernel_spec);
+                config.compile_args = ta_bindings.cta_words;  // populate positional CTAs from tensor bindings
+                auto processors = GetDMProcessorSet(DMProcessorMask{(uint8_t)(risc_mask & 0xFF)});
+                kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    user_named_crtas,
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
+            } else {
+                auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+                config.compile_args = ta_bindings.cta_words;
+                auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
+                kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    processors,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    user_named_crtas,
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
+            }
+        } else {  // gen1
+            if (kernel_spec.is_dm_kernel()) {
+                auto config = MakeGen1DataMovementConfig(kernel_spec);
+                config.compile_args = ta_bindings.cta_words;
+                kernel = std::make_shared<DataMovementKernel>(
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    user_named_crtas,
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
+            } else {
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_id);
+                config.compile_args = ta_bindings.cta_words;
+                kernel = std::make_shared<ComputeKernel>(
+                    kernel_src,
+                    node_ranges,
+                    config,
+                    is_metal2_kernel,
+                    dfb_handles,
+                    semaphore_handles,
+                    named_rtas,
+                    user_named_crtas,
+                    tensor_binding_handles,
+                    ta_bindings.crta_layout);
+            }
         }
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
         program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
 
-        // Register the RTA+CRTA schema
-        const auto& schema = kernel_spec.runtime_arguments_schema;
-        std::unordered_map<CoreCoord, size_t> num_rtas_per_node;
-        for (const auto& [node_coord, num_args] : schema.num_runtime_args_per_node) {
-            num_rtas_per_node[node_coord] = num_args;
+        // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
+        // Used by ValidateProgramRunParams and SetProgramRunParameters to validate and serialize
+        // the user-provided values at dispatch time.
+        //
+        // User-facing vararg RTA specification (see kernel_spec.hpp):
+        //   - num_runtime_varargs (scalar): default count applied to every node the kernel
+        //     runs on.
+        //   - num_runtime_varargs_per_node (optional): sparse per-node overrides on top of
+        //     the scalar default. Unlisted nodes fall back to the scalar.
+        // We apply the scalar first across target_nodes, then overlay each override entry.
+        // An explicit override of 0 erases the scalar-default entry so run-params treats
+        // that node as having no varargs (rather than requiring an "empty" value list).
+        // Overlapping override entries (two entries covering the same node) are an error.
+        const auto& user_schema = kernel_spec.runtime_arguments_schema;
+        detail::ProgramImpl::KernelRTASchema runtime_schema;
+        runtime_schema.named_runtime_args = user_schema.named_runtime_args;
+
+        // Pass the user CRTA list through.
+        // NOTE: The TensorBinding address section is tracked separately on the Kernel
+        // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
+        // addr_crta_offset; SetProgramRunParameters uses BOTH to assemble the per-enqueue CRTA buffer.
+        runtime_schema.named_common_runtime_args = user_named_crtas;
+        if (user_schema.num_runtime_varargs > 0) {
+            for (const NodeRange& range : node_ranges.ranges()) {
+                for (const NodeCoord& node : range) {
+                    runtime_schema.num_runtime_varargs_per_node[node] = user_schema.num_runtime_varargs;
+                }
+            }
         }
-        program_impl->register_kernel_rta_schema(
-            kernel_spec.unique_id, num_rtas_per_node, schema.num_common_runtime_args);
+        if (user_schema.num_runtime_varargs_per_node.has_value()) {
+            std::unordered_set<NodeCoord> seen_overrides;
+            for (const auto& [nodes_spec, num_varargs] : *user_schema.num_runtime_varargs_per_node) {
+                const NodeRangeSet expanded = to_node_range_set(nodes_spec);
+                for (const NodeRange& range : expanded.ranges()) {
+                    for (const NodeCoord& node : range) {
+                        const bool inserted = seen_overrides.insert(node).second;
+                        TT_FATAL(
+                            inserted,
+                            "KernelSpec '{}' num_runtime_varargs_per_node has overlapping entries "
+                            "for node {}",
+                            kernel_spec.unique_id,
+                            node.str());
+                        if (num_varargs > 0) {
+                            runtime_schema.num_runtime_varargs_per_node[node] = num_varargs;
+                        } else {
+                            // Explicit zero override: drop any scalar-default entry so
+                            // run-params treats this node as missing (→ 0 expected).
+                            runtime_schema.num_runtime_varargs_per_node.erase(node);
+                        }
+                    }
+                }
+            }
+        }
+        runtime_schema.num_common_runtime_varargs = user_schema.num_common_runtime_varargs;
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
     }
 
     return Program(std::move(program_impl));

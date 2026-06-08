@@ -229,6 +229,11 @@ private:
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const;
 
+    // Fast feasibility check for (tray_id, asic_location) slot counts vs. the PSD. Used by
+    // build_flattened_adjacency_mesh to prune impossible flattened meshes before graph isomorphism.
+    static bool can_map_to_psd(
+        const GroupingInfo& grouping_info, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
+
     // Helper for reading files
     static std::string read_file_to_string(const std::filesystem::path& file_path);
 

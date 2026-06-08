@@ -37,7 +37,8 @@ jobs:
           python-version: 3.11
 
       - name: Run Pre-commit
-        uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        id: pre-commit
+        uses: pre-commit/action@v3.0.1
         env:
           PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
           PRE_COMMIT_TO_REF: HEAD
@@ -45,7 +46,26 @@ jobs:
           extra_args: |
             --from-ref ${{ env.PRE_COMMIT_FROM_REF }} \
             --to-ref ${{ env.PRE_COMMIT_TO_REF }}
-        continue-on-error: false
+        continue-on-error: true
+
+      - name: Suggest pre-commit fixes as inline PR comments
+        if: |
+          steps.pre-commit.outcome == 'failure' &&
+          github.event_name == 'pull_request' &&
+          !github.event.pull_request.head.repo.fork
+        uses: reviewdog/action-suggester@aa38384ceb608d00f84b4690cacc83a5aba307ff  # v1.24.0
+        with:
+          tool_name: pre-commit
+          github_token: ${{ github.token }}
+          filter_mode: diff_context
+          cleanup: false
+
+      - name: Fail if pre-commit hooks require changes
+        if: steps.pre-commit.outcome == 'failure'
+        run: |
+          echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
+          echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
+          exit 1
   check-black:
     runs-on: ubuntu-latest
     steps:
@@ -179,7 +199,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@v5.0.0
         with:
           python-version: "3.10"
       - name: Check sweeps workflow option count against sweep file count

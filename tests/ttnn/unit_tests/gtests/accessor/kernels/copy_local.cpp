@@ -8,12 +8,11 @@ This kernel copies local shards from one to another tensor. Output is required t
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
-    uint32_t page_size = get_compile_time_arg_val(0);
     uint32_t input_base_address = get_arg_val<uint32_t>(0);
     uint32_t output_base_address = get_arg_val<uint32_t>(1);
     uint32_t first_shard_id = get_arg_val<uint32_t>(2);
@@ -24,10 +23,10 @@ void kernel_main() {
     auto args_dst =
         TensorAccessorArgs<args_src.next_compile_time_args_offset(), args_src.next_common_runtime_args_offset()>();
 
-    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
-    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, page_size);
+    auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
+    auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
 
-    experimental::Noc noc(noc_index);
+    Noc noc(noc_index);
 
     const auto shard_size_bytes =
         tensor_accessor_src.get_aligned_page_size() * tensor_accessor_src.dspec().shard_volume();

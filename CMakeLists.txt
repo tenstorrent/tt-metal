@@ -40,7 +40,7 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
 # discarding toolchain-file settings and CMake defaults.  add_compile_options() with
-# config generators appends cleanly and composes correctly with toolchain files.
+# config generators appends cleanly and composes correctly with toolchain files
 #
 # Flags already provided by CMake defaults and therefore omitted here:
 #   Debug:          -O0 -g
@@ -290,10 +290,10 @@ endif()
 
 include(helper_functions)
 add_subdirectory(tt_stl)
+
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
-
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()

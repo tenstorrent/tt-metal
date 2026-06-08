@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -70,7 +70,7 @@ ttnn::operations::randn::RandnDeviceOperation::tensor_return_value_t randn(
             layout,
             memory_config,
             std::addressof(device),
-            init_device_compute_kernel_config(device.arch(), compute_kernel_config, MathFidelity::HiFi4),
+            init_device_compute_kernel_config(device.arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
             seed},
         OperationType::tensor_args_t{});
 }

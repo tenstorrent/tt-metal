@@ -379,20 +379,21 @@ class MochiPipeline(DiffusionPipeline):
             sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
         )
 
-        if vae_mesh_shape[vae_sp_axis] == 1:
-            w_parallel_factor = 1
+        if vae_mesh_shape[0] > 1 and vae_mesh_shape[1] > 1:
+            # 2D mesh (e.g. Galaxy): separate H/W on different axes
+            vae_parallel_config = MochiVAEParallelConfig(
+                time_parallel=ParallelFactor(factor=1, mesh_axis=vae_tp_axis),
+                h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis], mesh_axis=vae_sp_axis),
+                w_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
+            )
         else:
-            w_parallel_factor = 2
-
-        vae_parallel_config = MochiVAEParallelConfig(
-            time_parallel=ParallelFactor(factor=vae_mesh_shape[vae_tp_axis], mesh_axis=vae_tp_axis),
-            w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=vae_sp_axis),
-            h_parallel=ParallelFactor(factor=vae_mesh_shape[vae_sp_axis] // w_parallel_factor, mesh_axis=vae_sp_axis),
-        )
-        assert (
-            vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == vae_mesh_shape[vae_sp_axis]
-        )
-        assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+            # 1D mesh (e.g. T3K, N300): use time parallelism, no spatial
+            t_axis = 1 if vae_mesh_shape[1] > 1 else 0
+            vae_parallel_config = MochiVAEParallelConfig(
+                time_parallel=ParallelFactor(factor=vae_mesh_shape[t_axis], mesh_axis=t_axis),
+                h_parallel=ParallelFactor(factor=1, mesh_axis=0),
+                w_parallel=ParallelFactor(factor=1, mesh_axis=1),
+            )
 
         # Create the TT Mochi pipeline
         pipeline = MochiPipeline(

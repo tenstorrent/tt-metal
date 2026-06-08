@@ -13,7 +13,6 @@
 #include <cstdint>
 #include "api/compute/tile_move_copy.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -145,17 +144,13 @@ struct DRAMStreamingMatmulCompressed {
             uint64_t next_noc_addr = get_noc_addr(CTArgs::next_core_noc_x, CTArgs::next_core_noc_y, 0);
             uint64_t next_sem_noc_addr = next_noc_addr | (uint64_t)next_sem_l1;
 
-            // --- Wait for previous core before first batch ---
-            if constexpr (CTArgs::core_in_bank_idx > 0) {
-                noc_semaphore_wait(sem_ptr, 1);
-                noc_semaphore_set(sem_ptr, 0);
-            }
-
             reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
-            uint32_t l1_write_addr_in1;
             uint32_t dram_read_offset = CTArgs::dram_start_offset;
+
+            noc_async_read_one_packet_set_state<true>(in1_base_addr, max_page_size, vc);
+            uint32_t programmed_size = max_page_size;
 
             // Triple-buffering with transaction IDs
             constexpr uint32_t num_buffers = 3;
@@ -165,12 +160,18 @@ struct DRAMStreamingMatmulCompressed {
             uint32_t block_trid_to_wait = 1;
             // Reserve initial space
             cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
-            l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
+            uint32_t l1_write_addr_in1 = get_write_ptr(CTArgs::cb_in1);
 
             uint32_t cb_in1_base = l1_write_addr_in1;
             uint32_t cb_in1_end = cb_in1_base + CTArgs::cb_in1_size_bytes;
 
             constexpr uint32_t max_subblock_bytes = CTArgs::cb_in1_size_bytes / num_buffers;
+
+            // --- Wait for previous core before first batch ---
+            if constexpr (CTArgs::core_in_bank_idx > 0) {
+                noc_semaphore_wait(sem_ptr, 1);
+                noc_semaphore_set(sem_ptr, 0);
+            }
 
             uint32_t iter = 0;
             while (iter < num_iterations) {
@@ -185,7 +186,13 @@ struct DRAMStreamingMatmulCompressed {
                     uint32_t remaining = block_size;
                     while (remaining > 0) {
                         uint32_t chunk = (remaining > max_page_size) ? max_page_size : remaining;
-                        noc_async_read_one_packet_set_state<true>(in1_base_addr, chunk, vc);
+                        // Re-program size only when it differs from what's currently
+                        // in the cmd-buf (i.e. trailing partial packet, or first
+                        // packet of the next block after a partial trailer).
+                        if (chunk != programmed_size) {
+                            noc_async_read_one_packet_set_state<true>(in1_base_addr, chunk, vc);
+                            programmed_size = chunk;
+                        }
                         noc_async_read_one_packet_with_state_with_trid(
                             in1_base_addr, dram_read_offset, l1_write_addr_in1, curr_block_trid);
                         dram_read_offset += chunk;

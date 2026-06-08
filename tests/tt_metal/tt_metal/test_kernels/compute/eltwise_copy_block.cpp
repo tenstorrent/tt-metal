@@ -4,14 +4,14 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t block_num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         acquire_dst();

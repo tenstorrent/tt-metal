@@ -41,7 +41,7 @@ Without a master JSON at the expected path (and without `--master-trace`), the l
 
 ### Lead Models
 
-Lead models are prioritized models whose traced configurations get dedicated CI treatment, including automatic routing to multi-chip runners. They are defined in `model_tracer/sweep_manifest.yaml` (with a fallback in `framework/constants.py`).
+Lead models are prioritized models whose traced configurations get dedicated CI treatment, including automatic routing to multi-chip runners. They are defined in `model_tracer/trace_selection_registry.yaml` (with a fallback in `framework/constants.py`).
 
 Generate vectors for lead models only:
 
@@ -51,17 +51,18 @@ python tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead -
 
 ### Multi-Chip Runner Assignment
 
-For lead model runs, vectors are grouped by `mesh_device_shape` and routed to appropriate hardware in CI:
+CI routing policy lives in `framework/matrix_runner_config.py`. In CI, both lead model and model-traced runs use `--group-by hw`, so vector files carry a hardware suffix (e.g., `module.hw_wormhole_n300_1c.json`) and routing is by hardware group.
 
+For **lead model** runs, the hardware group collapses to two CI lanes:
 
-| Mesh Shape          | Runner                       |
-| ------------------- | ---------------------------- |
-| `1x1`               | N150 (single-chip)           |
-| `1x2`, `1x4`, `2x4` | Galaxy (multi-chip)          |
-| `4x8`, `8x4`        | Galaxy topology-6u (32-chip) |
+| Hardware group           | CI Lane                          |
+| ------------------------ | -------------------------------- |
+| Single-chip              | `lead-models-single-chip` (N150) |
+| Multi-chip / Galaxy      | `lead-models-galaxy` (Galaxy)    |
 
+For **model-traced** runs, hardware groups route across the standard lanes (`wormhole-n150-sweeps`, `wormhole-n300-sweeps`, `wormhole-t3k-sweeps`, `wormhole-galaxy-sweeps`, etc.) via `get_test_group_name_for_hardware_group()` in `matrix_runner_config.py`.
 
-The mapping is defined in `framework/compute_sweep_matrix.py`.
+If you generate locally with `--group-by mesh` (the generator default), routing instead uses `LEAD_MODELS_MESH_TEST_GROUPS` / `MODEL_TRACED_MESH_TEST_GROUPS` from `matrix_runner_config.py`.
 
 ## Writing a Sweep Test
 
@@ -261,9 +262,12 @@ python tests/sweep_framework/sweeps_parameter_generator.py --module-name matmul.
 | `--model-traced [all|lead]` | Generate only model-traced ops                    |
 | `--suite-name <name>`       | Generate a specific suite only                    |
 | `--mesh-shape <RxC>`        | Filter to a specific mesh shape (e.g., `2x4`)     |
+| `--group-by {mesh,hw}`      | Grouping strategy for output files (default: `mesh`) |
 
 
-Output goes to `tests/sweep_framework/vectors_export/`. For multi-chip ops, vectors are grouped by mesh shape into separate files (e.g., `module__mesh_2x4.json`) for CI runner routing.
+Output goes to `tests/sweep_framework/vectors_export/`. For multi-chip ops, vectors are split into separate files per grouping key (e.g., `module__mesh_2x4.json` for mesh grouping, or `module__hw_wormhole_n300_1c.json` for hardware grouping).
+
+After generation, `generation_manifest.json` is written alongside the vector files. This manifest lists all produced files and the grouping mode used. `VectorExportSource` (used by `sweeps_runner.py` with `--vector-source vectors_export`) requires this manifest — do not delete it.
 
 ## Test Runner
 
@@ -375,22 +379,23 @@ Captured metrics:
 | `peak_l1_memory_device_bytes`    | Actual observed peak across device                                 |
 
 
-1. **Vector Generation:** The parameter generator reads `mesh_device_shape` from `traced_machine_info.tensor_placements` in the master JSON
-2. **File Routing:** By default, vectors are grouped by mesh shape and written to separate files (e.g., `op.mesh_4x8.json`). You can also generate hardware-grouped files with `--group-by hw`.
-3. **Matrix Computation:** `framework/compute_sweep_matrix.py` creates a GitHub Actions matrix that maps mesh shapes to runners
-4. **Execution:** CI spawns parallel jobs on appropriate hardware based on the matrix
-
 ## CI Execution
 
 Sweeps run automatically via the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow.
 
+The CI pipeline has three stages:
+1. **Generate** — `sweeps_parameter_generator.py` writes grouped vector files and `generation_manifest.json` to `vectors_export/`.
+2. **Route** — `compute_sweep_matrix.py` reads the manifest and uses `matrix_runner_config.py` to assign modules to hardware lanes, producing a GitHub Actions matrix.
+3. **Execute** — Runner jobs receive `TEST_GROUP_NAME` (and `LEAD_MODELS_RUN` for lead runs); `vector_source.py` uses these along with the manifest's grouping mode to load and filter vectors for the assigned lane.
+
+See [`framework/compute_sweep_matrix_README.md`](framework/compute_sweep_matrix_README.md) for the routing and policy details.
 
 | Run Type          | Schedule                         | Suite          | Description                         |
 | ----------------- | -------------------------------- | -------------- | ----------------------------------- |
-| **Nightly**       | Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly`      | Standard parameter sweeps           |
+| **Nightly**       | Sun, Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly`      | Standard parameter sweeps           |
 | **Comprehensive** | Wed, Sat @ 4:00 AM UTC           | All suites     | Exhaustive testing                  |
-| **Model Traced**  | Daily @ 4:00 AM UTC              | `model_traced` | Configs from real model traces      |
-| **Lead Models**   | Daily @ 3:00 AM UTC              | `model_traced` | Lead models with multi-chip routing |
+| **Model Traced**  | Daily @ 3:00 AM UTC              | `model_traced` | Configs from real model traces      |
+| **Lead Models**   | Daily @ 2:00 AM UTC              | `model_traced` | Lead models with multi-chip routing |
 
 
 Before merging new or modified sweep tests, verify locally and also run the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow against your branch.

@@ -9,8 +9,8 @@
 #include "api/alignment.h"
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/lock.h"
+#include "api/dataflow/noc.h"
+#include "api/lock.h"
 #endif
 
 namespace experimental {
@@ -415,9 +415,6 @@ FORCE_INLINE void update_remote_cb_config_in_l1(uint32_t remote_cb_index) {
 
 #if !defined(COMPILE_FOR_TRISC) && defined(KERNEL_BUILD)
 
-class Noc;
-class CircularBuffer;
-
 /** @brief Remote circular buffer API
  * Provides an interface for the Producer and Consumer cores of a Circular Buffer to be on different cores on the same
  * chip.
@@ -464,15 +461,15 @@ public:
      */
     template <typename Src, RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void push_back(
-        experimental::Noc& noc,
+        Noc& noc,
         const Src& src,
         uint32_t num_pages,
         uint32_t num_rows,
         uint32_t coalesced_num_pages_per_row,
         uint32_t coalesced_page_size,
-        const typename experimental::noc_traits_t<Src>::src_args_type& src_args =
-            typename experimental::noc_traits_t<Src>::src_args_type{}) {
-        auto src_addr = experimental::noc_traits_t<Src>::template src_addr<experimental::Noc::AddressType::LOCAL_L1>(
+        const typename noc_traits_t<Src>::src_args_type& src_args =
+            typename noc_traits_t<Src>::src_args_type{}) {
+        auto src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(
             src, noc, src_args);
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
             remote_cb_index_,
@@ -501,7 +498,7 @@ public:
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_sender_page_size(
-        experimental::Noc& noc,
+        Noc& noc,
         uint32_t page_size,
         uint8_t noc_mode = detail::default_noc_mode,
         bool posted = true,
@@ -529,7 +526,7 @@ public:
      * @param noc The NoC to use for the remote pointer update
      * @param num_pages The number of pages to pop
      */
-    void pop_front(experimental::Noc& noc, uint32_t num_pages) {
+    void pop_front(Noc& noc, uint32_t num_pages) {
         remote_cb_pop_front(remote_cb_index_, num_pages, noc.get_noc_id());
     }
 
@@ -550,7 +547,7 @@ public:
      */
     template <RemotePointerUpdate update_remote_pointer = RemotePointerUpdate::UPDATE_OVER_NOC>
     void set_receiver_page_size(
-        experimental::Noc& noc,
+        Noc& noc,
         uint32_t page_size,
         uint8_t noc_mode = detail::default_noc_mode,
         Noc::ResponseMode response_mode = Noc::ResponseMode::POSTED,

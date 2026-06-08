@@ -55,7 +55,7 @@ PhysicalSystemDescriptor run_psd_discovery() {
     const auto& rtoptions = context.rtoptions();
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    return tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
 /**
@@ -238,25 +238,16 @@ TopologyMappingResult run_topology_mapping(
     config.strict_mode = true;
     config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
 
-    // Provide hostname_to_asics from PSD so same-host constraint is applied (all ASICs on a host map to one rank)
+    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
         config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
     }
 
     // Extract pinnings from MGD and add to config (same as control plane)
     const auto& pinnings = mgd.get_pinnings();
     for (const auto& [pos, fabric_node] : pinnings) {
         config.pinnings.emplace_back(pos, fabric_node);
-    }
-
-    // Build ASIC positions map (required if pinnings are used)
-    if (!config.pinnings.empty()) {
-        const auto& asic_descriptors = psd.get_asic_descriptors();
-        for (const auto& [asic_id, _] : asic_descriptors) {
-            auto tray_id = psd.get_tray_id(asic_id);
-            auto asic_location = psd.get_asic_location(asic_id);
-            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
-        }
     }
 
     // Set per-mesh validation modes based on mesh graph policy
@@ -308,21 +299,30 @@ TopologyMappingResult run_topology_mapping(
 /**
  * @brief Extract rank bindings from topology mapping result with topology-aware splitting.
  *
- * Splitting rules:
- * - If meshes span multiple hosts: one process per (mesh_id, hostname) pair, each host gets
- *   at most one process per mesh. Total processes = sum over meshes of (hosts per mesh).
- * - If meshes fit on single host (num_meshes > num_hosts): each mesh gets one process with
- *   mesh_host_rank 0. Hosts are split into multiple slots. Total processes = num_meshes.
+ * Bindings are one row per (mesh_id, PSD hostname, mesh_host_rank), sorted by mesh_id ascending,
+ * then mesh_host_rank, hostname, PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; inter-mesh
+ * mapping in topology_mapper_utils biases logical mesh 0 toward this process's hostname and toward the physical
+ * partition that contains tray id 1 / ASIC location 1 when uniquely resolvable from discovery.
  *
- * Assigns contiguous MPI ranks 0..N-1 and (hostname, slot) for rankfile generation.
+ * - **Multi-process Phase 1** (several MPI ranks / PSD hostnames): each distinct hostname usually owns
+ *   ASICs for a single mesh_host_rank, so the per-hostname map has one entry — behavior matches the
+ *   historical `(mesh_id, hostname)` grouping.
+ * - **Single-process Phase 1** (`mpirun -np 1`, e.g. bare mock cluster YAML): every ASIC shares one
+ *   PSD hostname; mesh_host_rank in the key splits logical mesh hosts so MGD `host_topology` still
+ *   yields the correct number of Phase 2 MPI ranks.
+ *
+ * Assigns contiguous ranks 0..N-1 and per-hostname slot indices for the rankfile.
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
     const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
-    // Structure: mesh_id -> hostname -> {ASIC IDs, ChipIds, MeshHostRankId}
-    std::map<
-        int,
-        std::map<std::string, std::tuple<std::vector<AsicID>, std::vector<tt::ChipId>, std::optional<MeshHostRankId>>>>
-        mesh_host_asics;
+    struct AsicGrouping {
+        std::vector<AsicID> asic_ids;
+        std::vector<tt::ChipId> chip_ids;
+        std::optional<MeshHostRankId> mesh_host_rank;
+    };
+
+    // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
+    std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
     // Iterate through fabric_node_to_asic mapping
     for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
@@ -345,46 +345,51 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
         int mesh_id_int = static_cast<int>(*mesh_id);
-        std::get<0>(mesh_host_asics[mesh_id_int][hostname]).push_back(asic_id);
-        std::get<1>(mesh_host_asics[mesh_id_int][hostname]).push_back(chip_id);
-        std::get<2>(mesh_host_asics[mesh_id_int][hostname]) = mesh_host_rank;
+        const int mesh_host_rank_int = static_cast<int>(*mesh_host_rank.value());
+        auto& bucket = mesh_host_asics[mesh_id_int][hostname][mesh_host_rank_int];
+        bucket.asic_ids.push_back(asic_id);
+        bucket.chip_ids.push_back(chip_id);
+        bucket.mesh_host_rank = mesh_host_rank;
     }
 
     // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering
-    // Order: PSD rank first (so output rank i matches topology mapper's mpi_rank_to_host[i]),
-    // then mesh_id, mesh_host_rank, hostname - ensures alignment with physical discovery
+    // Order after sort: mesh_id ascending (rank 0 is first/lowest mesh), then mesh_host_rank, hostname,
+    // PSD rank tiebreaker — so sequential MPI rank tracks mesh topology; psd_mpi_rank field keeps PSD identity
     using Entry = std::tuple<int, std::string, std::vector<tt::ChipId>, int, int>;
     std::vector<Entry> entries;
     for (const auto& [mesh_id, hostname_map] : mesh_host_asics) {
-        for (const auto& [hostname, asic_data] : hostname_map) {
-            const auto& [asic_ids, chip_ids, mesh_host_rank] = asic_data;
-            if (!mesh_host_rank.has_value()) {
-                continue;
+        for (const auto& [hostname, rank_map] : hostname_map) {
+            for (const auto& [_, asic_data] : rank_map) {
+                const auto& chip_ids = asic_data.chip_ids;
+                const auto& mesh_host_rank = asic_data.mesh_host_rank;
+                if (!mesh_host_rank.has_value()) {
+                    continue;
+                }
+                uint32_t psd_rank = 0;
+                if (psd.get_host_to_rank_map().contains(hostname)) {
+                    psd_rank = psd.get_rank_for_hostname(hostname);
+                } else {
+                    log_warning(
+                        tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
+                }
+                entries.emplace_back(
+                    mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
             }
-            uint32_t psd_rank = 0;
-            if (psd.get_host_to_rank_map().contains(hostname)) {
-                psd_rank = psd.get_rank_for_hostname(hostname);
-            } else {
-                log_warning(
-                    tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
-            }
-            entries.emplace_back(
-                mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
         }
     }
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
-        // Primary: PSD rank - output rank must match topology mapper's mpi_rank_to_host expectation
-        if (std::get<4>(a) != std::get<4>(b)) {
-            return std::get<4>(a) < std::get<4>(b);
-        }
-        // Secondary: mesh_id, mesh_host_rank, hostname for deterministic ordering
+        // Primary: mesh_id ascending so binding.rank aligns with mesh order (rank 0 from mesh id 0 first)
         if (std::get<0>(a) != std::get<0>(b)) {
             return std::get<0>(a) < std::get<0>(b);
         }
         if (std::get<3>(a) != std::get<3>(b)) {
             return std::get<3>(a) < std::get<3>(b);
         }
-        return std::get<1>(a) < std::get<1>(b);
+        if (std::get<1>(a) != std::get<1>(b)) {
+            return std::get<1>(a) < std::get<1>(b);
+        }
+        // PSD rank last for deterministic ties only
+        return std::get<4>(a) < std::get<4>(b);
     });
 
     // Assign contiguous ranks 0..N-1 and track slot per host for rankfile
@@ -395,7 +400,8 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         const auto& [mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank] = entries[i];
 
         RankBindingConfig binding;
-        // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous.
+        // binding.rank is a sequential MPI rank (0, 1, 2, ...) that must be unique and contiguous,
+        // assigned in mesh_id-major sorted order so low ranks correspond to low mesh ids.
         // It must match: (1) the rank in rank_bindings.yaml, and (2) the rank in rankfile.
         // binding.psd_mpi_rank stores the PSD MPI rank from discovery, used for phase2_mock_mapping.yaml lookup.
         binding.rank = static_cast<int>(i);  // Sequential rank for rankfile and rank_bindings.yaml

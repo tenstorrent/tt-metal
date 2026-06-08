@@ -11,7 +11,6 @@
 #endif
 
 namespace ckernel {
-
 /**
  * Please refer to documentation for any_init.
  */

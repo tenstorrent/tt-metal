@@ -104,9 +104,16 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
-        // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
+        // in_tile_offset_by_batch is the byte offset of head row i within the input shard. Within
+        // a single 32x32 tile (= 2*face_h rows), the first face_h rows live in face 0 and the rest
+        // live in face 2 (the existing formula uses (i + face_h) * sub_tile_line_bytes to land at
+        // the start of face 2 directly). When padded_heads > 32 we additionally skip past
+        // (i / (2*face_h)) head-tiles' worth of bytes.
+        uint32_t head_tile_idx = i / (2 * face_h);
+        uint32_t head_in_tile = i % (2 * face_h);
+        uint32_t in_tile_offset_by_batch = (head_in_tile < face_h ? head_in_tile * sub_tile_line_bytes
+                                                                  : (head_in_tile + face_h) * sub_tile_line_bytes) +
+                                           head_tile_idx * head_size;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -132,7 +139,8 @@ NLPConcatHeadsDecodeSubcoregridsProgramFactory::cached_program_t NLPConcatHeadsD
          /* num_cores            = */ num_cores,
          /* cb_q_output          = */ cb_q_output,
          /* face_h               = */ face_h,
-         /* tile_w               = */ tile_w}};
+         /* tile_w               = */ tile_w,
+         /* head_size            = */ head_size}};
 }
 
 void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
@@ -153,9 +161,13 @@ void NLPConcatHeadsDecodeSubcoregridsProgramFactory::override_runtime_arguments(
     auto& writer_args_by_core = GetRuntimeArgs(program, shared_variables.writer_kernel_id);
 
     for (uint32_t i = 0; i < shared_variables.num_cores; ++i) {
-        uint32_t in_tile_offset_by_batch = i < shared_variables.face_h
-                                               ? i * shared_variables.sub_tile_line_bytes
-                                               : (i + shared_variables.face_h) * shared_variables.sub_tile_line_bytes;
+        uint32_t head_tile_idx = i / (2 * shared_variables.face_h);
+        uint32_t head_in_tile = i % (2 * shared_variables.face_h);
+        uint32_t in_tile_offset_by_batch =
+            (head_in_tile < shared_variables.face_h
+                 ? head_in_tile * shared_variables.sub_tile_line_bytes
+                 : (head_in_tile + shared_variables.face_h) * shared_variables.sub_tile_line_bytes) +
+            head_tile_idx * shared_variables.head_size;
         const auto& core = shared_variables.cores[i];
         auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
         runtime_args_reader[0] = in_tile_offset_by_batch;

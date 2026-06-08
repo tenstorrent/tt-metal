@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ""
   namespace:
-    description: 'Kubernetes namespace for the allocation'
+    description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
 
@@ -85,4 +85,4 @@ runs:
         source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
         validate_allocation_name "$ALLOCATION_NAME" || exit 1
         echo "Waiting for allocation to be ready..."
-        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m -n ${{ inputs.namespace }}
+        kubectl -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m

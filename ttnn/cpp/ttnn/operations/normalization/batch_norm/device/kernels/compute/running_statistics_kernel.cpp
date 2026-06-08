@@ -6,7 +6,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -26,9 +26,9 @@ void kernel_main() {
     constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
     constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
 
-    experimental::CircularBuffer cb_out0_obj(cb_out0);
-    experimental::CircularBuffer cb_momentum_obj(cb_momentum);
-    experimental::CircularBuffer cb_one_obj(cb_one);
+    CircularBuffer cb_out0_obj(cb_out0);
+    CircularBuffer cb_momentum_obj(cb_momentum);
+    CircularBuffer cb_one_obj(cb_one);
 
     binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;

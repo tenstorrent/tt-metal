@@ -6,13 +6,30 @@
 
 #include <functional>
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "layernorm_post_all_gather_program_factory.hpp"
 
 #include "layernorm_post_all_gather_device_operation_types.hpp"
 
 namespace ttnn::prim {
+
+// Program factory for normal (non-Welford) operation
+struct LayerNormPostAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPostAllGatherParams& operation_attributes,
+        const LayerNormPostAllGatherInputs& tensor_args,
+        Tensor& output);
+};
+
+// Program factory for Welford algorithm (layernorm only)
+struct LayerNormPostAllGatherWelfordProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const LayerNormPostAllGatherParams& operation_attributes,
+        const LayerNormPostAllGatherInputs& tensor_args,
+        Tensor& output);
+};
 
 struct LayerNormPostAllGatherDeviceOperation {
     using operation_attributes_t = LayerNormPostAllGatherParams;
@@ -45,9 +62,9 @@ Tensor layer_norm_post_all_gather(
     float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
-    const MemoryConfig& memory_config,
+    const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<DataType>& dtype,
+    const std::optional<tt::tt_metal::DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
     const LayerNormProgramConfig& program_config);
 

@@ -188,8 +188,16 @@
 #include "api/compute/eltwise_unary/lgamma.h"
 #endif
 
+#if SFPU_OP_DIGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/digamma.h"
+#endif
+
 #if SFPU_OP_POLYGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/polygamma.h"
+#endif
+
+#if SFPU_OP_MISH_INCLUDE
+#include "api/compute/eltwise_unary/mish.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

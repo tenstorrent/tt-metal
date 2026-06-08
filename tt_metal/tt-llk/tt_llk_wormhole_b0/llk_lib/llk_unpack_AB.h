@@ -14,6 +14,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
 
@@ -139,18 +140,32 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
- * @param transpose: Whether to transpose within each face (0 = no transpose, >0 = transpose)
+ * @param transpose: Transpose mode for SrcA face order and/or within-face transpose.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose = 0)
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const ckernel::Transpose transpose)
 {
     // TODO: Remove this assert after testing >4 num_faces because there is no reason to limit this for non-broadcast versions
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(transpose); // transpose within the face
+    const bool within_face_16x16_transpose = transpose == ckernel::Transpose::IntraFace || transpose == ckernel::Transpose::Both;
+    const bool transpose_of_faces          = transpose == ckernel::Transpose::InterFace || transpose == ckernel::Transpose::Both;
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose); // transpose within the face
 
     config_unpacker_x_end<p_setadc::UNP_AB>(tensor_shape.face_r_dim);
 
-    _llk_unpack_AB_mop_config_<BType>(transpose > 0, tensor_shape); // transpose of faces 0,2,1,3
+    _llk_unpack_AB_mop_config_<BType>(transpose_of_faces, tensor_shape); // transpose of faces 0,2,1,3
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, ckernel::Transpose::None);
+}
+
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const std::uint32_t transpose)
+{
+    _llk_unpack_AB_init_<BType>(tensor_shape, transpose > 0 ? ckernel::Transpose::Both : ckernel::Transpose::None);
 }
 
 /**
@@ -178,11 +193,45 @@ inline void _llk_unpack_AB_uninit_(const ckernel::TensorShape unpA_tensor_shape,
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param address_a: L1 memory address of source A tile
  * @param address_b: L1 memory address of source B tile
+ * @param bcast_row_idx: Row index within source B tile for ROW broadcast
+ * @param srcb_format: Source B data format used to calculate ROW broadcast address offset
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t address_b)
+inline void _llk_unpack_AB_(
+    const std::uint32_t address_a,
+    std::uint32_t address_b,
+    [[maybe_unused]] const std::uint32_t bcast_row_idx = 0,
+    [[maybe_unused]] const std::uint32_t srcb_format   = 0)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
+
+    if constexpr (BType == BroadcastType::ROW)
+    {
+        if (bcast_row_idx > 0)
+        {
+            // Row broadcast reads a full 32-element row, which spans two faces:
+            //   Row 0: Face0 row 0 (cols 0-15) + Face1 row 0 (cols 16-31)
+            //   Row 31: Face2 row 15 (cols 0-15) + Face3 row 15 (cols 16-31)
+            //
+            // Within each face, rows are stored contiguously.
+            const std::uint32_t bytes_per_row_in_face = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH);
+            const std::uint32_t bytes_per_face        = SCALE_DATUM_SIZE(srcb_format, FACE_WIDTH * FACE_HEIGHT);
+
+            std::uint32_t row_offset_bytes;
+            if (bcast_row_idx < FACE_HEIGHT)
+            {
+                // Rows 0-15 are in Face 0/1. Offset to the row within Face 0.
+                row_offset_bytes = bcast_row_idx * bytes_per_row_in_face;
+            }
+            else
+            {
+                // Rows 16-31 are in Face 2/3. Skip first two faces, then offset to the row within Face 2.
+                row_offset_bytes = 2 * bytes_per_face + (bcast_row_idx - FACE_HEIGHT) * bytes_per_row_in_face;
+            }
+
+            address_b += row_offset_bytes >> 4;
+        }
+    }
 
     // Program srcA and srcB base addresses
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID

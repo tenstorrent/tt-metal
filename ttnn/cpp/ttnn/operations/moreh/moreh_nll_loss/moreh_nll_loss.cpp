@@ -25,7 +25,7 @@ Tensor moreh_nll_loss(
     using namespace operations::moreh;
 
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+        init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
     if (reduction == MEAN) {
         TT_FATAL(divisor_tensor.has_value(), "Divisor tensor must not be empty");
 

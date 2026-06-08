@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src_addr  = get_arg_val<uint32_t>(0);
@@ -23,9 +23,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
 
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src;
-    experimental::CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_src;
+    CircularBuffer cb(cb_id_in0);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

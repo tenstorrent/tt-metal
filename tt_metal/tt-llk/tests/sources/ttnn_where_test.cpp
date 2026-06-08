@@ -57,13 +57,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "ckernel_sfpu.h"
 #include "ckernel_sfpu_where.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_ternary_sfpu.h"
-#include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_lib_math_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
+
+// llk_math_eltwise_ternary_sfpu_params.h instantiates asserts with these; must match params.h / JIT.
+static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncHalf;
+static constexpr bool DST_ACCUM_MODE            = is_fp32_dest_acc_en;
+
+#include "llk_math_eltwise_ternary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 
 // using namespace sfpu;
 
@@ -91,11 +95,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     }
 
     // copy srca to dest
-#ifdef ARCH_BLACKHOLE
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, false>(4, MATH_FMT);
-#else
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false>(4, MATH_FMT);
-#endif
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
+        4 /* num_faces */, MATH_FMT);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -110,13 +111,9 @@ void run_kernel(RUNTIME_PARAMETERS)
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
     ckernel::sfpu::_init_where_<false>();
 
-    _llk_math_eltwise_ternary_sfpu_start_<DstSync::SyncHalf>(0);
-
-    constexpr int iterations = 32;
-
-    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), iterations>(0, 1, 2, 0);
-
-    _llk_math_eltwise_ternary_sfpu_done_();
+    // One SFPU replay advances one row of 32 lanes; 8 rows per face (matches llk_math_eltwise_ternary_sfpu_where).
+    constexpr int k_where_iterations = 8;
+    _llk_math_eltwise_ternary_sfpu_params_(ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), k_where_iterations>, 0, 1, 2, 0);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
@@ -125,7 +122,7 @@ void run_kernel(RUNTIME_PARAMETERS)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_pack.h"
+#include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
 
@@ -152,22 +149,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
-#else
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false>(PACK_FMT, PACK_FMT, 16 * 16 * 4);
-#endif
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(PACK_FMT, PACK_FMT, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_<false, false>(PACK_FMT);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(PACK_FMT);
 
-#ifdef ARCH_BLACKHOLE
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-#else
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-#endif
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, false, is_fp32_dest_acc_en>(0, L1_ADDRESS(params.buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

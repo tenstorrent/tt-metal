@@ -14,6 +14,11 @@ enum NOC : uint8_t;
 class IDevice;
 }  // namespace tt::tt_metal
 
+namespace tt::tt_metal::distributed {
+class MeshDevice;
+class MeshCoordinate;
+}
+
 namespace tt::tt_metal::experimental::Device {
 
 // Returns the hop distance between two logical worker coordinates on a given NOC
@@ -21,4 +26,13 @@ namespace tt::tt_metal::experimental::Device {
 uint32_t get_worker_noc_hop_distance(
     IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 
+// Returns the hop distance between two logical worker coordinates on a given NOC
+// NOC distances may vary depending on the target device due to harvesting
+// This API is experimental and may evolve into a stable Device API in the future
+uint32_t get_worker_noc_hop_distance(
+    distributed::MeshDevice* mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_src,
+    const CoreCoord& logical_dst,
+    NOC noc);
 }  // namespace tt::tt_metal::experimental::Device

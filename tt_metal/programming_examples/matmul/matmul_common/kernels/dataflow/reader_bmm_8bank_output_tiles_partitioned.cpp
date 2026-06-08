@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -22,16 +22,14 @@ void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
-    // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
-    // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
-    // DPRINT << "batch=" << batch << ENDL();
+    // DEVICE_PRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DEVICE_PRINT("src0={:#x} src1={:#x}\n", src0_addr, src1_addr);
+    // DEVICE_PRINT("batch={}\n", batch);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -44,9 +42,9 @@ void kernel_main() {
     }
 
     constexpr auto s0_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(s0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(s0_args, src0_addr);
     constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(s1_args, src1_addr, in1_tile_bytes);
+    const auto s1 = TensorAccessor(s1_args, src1_addr);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -65,7 +63,7 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
             }
-            // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
+            // DEVICE_PRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

@@ -8,19 +8,34 @@ inputs:
   allocationName:
     description: "Allocation name"
     required: true
-  workerImage:
-    description: "Worker image"
+  allocationNamespace:
+    description: 'Allocation namespace'
+    required: false
+    default: 'ttop-ci'
+  workerRepository:
+    description: 'Worker repository'
     required: true
+  workerTag:
+    description: 'Worker tag'
+    required: true
+  ranks:
+    description: 'Node-to-rank JSON mapping'
+    required: false
+    default: ''
   sharedVolumeEnabled:
     description: "Whether to mount volume shared with the runner (multihost-with-nfs runner required)"
     required: false
-    default: "false"
+    default: 'false'
+  useDevHostMount:
+    description: 'Whether to use /dev host mount instead of /dev/tenstorrent'
+    required: false
+    default: 'false'
   timeout:
     description: "Timeout duration"
     required: false
     default: "5m"
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the environment'
     required: false
     default: 'ttop-ci'
 
@@ -32,14 +47,6 @@ runs:
       run: |
         ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
         echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
-    - name: Parse image
-      shell: bash
-      env:
-        WORKER_IMAGE: ${{ inputs.workerImage }}
-      run: |
-        IFS=':' read -r REPOSITORY TAG <<< "$WORKER_IMAGE"
-        echo "WORKER_REPOSITORY=$REPOSITORY" >> $GITHUB_ENV
-        echo "WORKER_TAG=$TAG" >> $GITHUB_ENV
     - name: Construct Environment manifest
       shell: bash
       id: explicit
@@ -53,8 +60,7 @@ runs:
         apiVersion: helm.toolkit.fluxcd.io/v2
         kind: HelmRelease
         metadata:
-          name: ${ENVIRONMENT_NAME}
-          namespace: ${{ inputs.namespace }}
+          name: ${{ inputs.environmentName }}
         spec:
           interval: 5m
           chart:
@@ -64,15 +70,16 @@ runs:
               sourceRef:
                 kind: GitRepository
                 name: tt-orchestration
+                namespace: ttop
           values:
             nodeSelector:
-              allocation.tenstorrent.com/allocated-by: ${ALLOCATION_NAME}
+              allocation.tenstorrent.com/allocated-by: ${{inputs.allocationNamespace}}--${{ inputs.allocationName }}
             image:
-              repository: ${WORKER_REPOSITORY}
-              tag: ${WORKER_TAG}
+              repository: ${{ inputs.workerRepository }}
+              tag: ${{ inputs.workerTag }}
             deviceMountTypes:
-              hostPath: true
-              devicePlugin: false
+              hostPath: ${{ inputs.useDevHostMount == 'false' }}
+              hostPathInsecureDev: ${{ inputs.useDevHostMount == 'false' }}
             cardsPerHost: $TT_CARDS_PER_HOST
             clientAuthorizedKeys: $SSH_PUBLIC_KEY
             volume:
@@ -86,7 +93,7 @@ runs:
       shell: bash
       run: |
         echo "Creating environment..."
-        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
+        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n${{ inputs.namespace }} apply -f -
 
     - name: Wait for environment
       shell: bash
@@ -95,7 +102,7 @@ runs:
         TIMEOUT: ${{ inputs.timeout }}
       run: |
         echo "Waiting for environment to be ready..."
-        kubectl wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }} -n ${{ inputs.namespace }}
+        kubectl -n${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
 
     - name: Connect to the environment
       shell: bash

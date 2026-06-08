@@ -30,5 +30,11 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     noc_api_latency/test_noc_api_latency.cpp
     noc_estimator_tests/test_noc_estimator.cpp
     dram_neighbour/test_dram_neighbour.cpp
+    matmul/test_matmul_1d.cpp
+    matmul/test_matmul_1d_v2.cpp
+    matmul/test_matmul_2d.cpp
     quasar_cache/test_quasar_cache.cpp
+    quasar_examples/quasar_addrgen/test_addrgen_example.cpp
+    quasar_examples/quasar_im2col/test_im2col_example.cpp
+    quasar_examples/quasar_idma/test_idma_example.cpp
 )

@@ -118,9 +118,9 @@ void kernel_main() {
     // in our measurements
     erisc::datamover::eth_setup_handshake(local_eth_l1_src_addr, true);
 
-    // const auto s = TensorAccessor(src_args, src_addr, page_size);
+    // const auto s = TensorAccessor(src_args, src_addr);
 
-    const auto source_address_generator = TensorAccessor(src_args, src_addr, page_size);
+    const auto source_address_generator = TensorAccessor(src_args, src_addr);
 
     // SETUP DATASTRUCTURES
     std::array<uint32_t, MAX_NUM_CHANNELS> transaction_channel_sender_buffer_addresses;

@@ -50,7 +50,12 @@ uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_PACK)
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
+#else
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+#endif
 #endif
 
 namespace ckernel {
@@ -125,7 +130,7 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
-
+    setup_isr_csrs();
     DeviceProfilerInit();
     DPRINT << "TRISC-FW: initialized" << ENDL();
     DEVICE_PRINT("TRISC-FW: initialized\n");
@@ -144,8 +149,7 @@ extern "C" uint32_t _start1() {
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
-
+        uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
@@ -192,10 +196,9 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
-        uint32_t kernel_lma =
+        uintptr_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        asm("FENCE.i");
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");

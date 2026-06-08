@@ -32,6 +32,7 @@ class TorchDispatchModule(torch.nn.Module):
         num_experts_per_tok: int,
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
+        max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         emb_dim: int = 7 * 1024,
         num_dispatch_groups: int = 1,
@@ -45,7 +46,10 @@ class TorchDispatchModule(torch.nn.Module):
             experts_per_chip: Number of experts per chip
             num_routed_experts: Total number of routed experts across all chips
             metadata_len: Length of metadata per token (stores: chip, token, topk_idx, routed_expert, weight)
-            max_dispatched_tokens_per_expert: Maximum number of tokens that can be dispatched to each expert
+            max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the number of tokens any
+                single expert may receive (full sequence length of the dispatch group).
+            max_dispatch_buffer_token_size: Total token capacity of the flat dispatch buffer per chip
+                (shared across all local experts via dynamic offsets).
             expert_dispatch_table: Optional dispatch table of shape (num_dispatch_groups, num_routed_experts)
                 Maps expert ID to logical chip ID in dispatch axis, -1 if not present
         """
@@ -56,23 +60,23 @@ class TorchDispatchModule(torch.nn.Module):
         self.num_experts_per_tok = num_experts_per_tok
         self.metadata_len = metadata_len
         self.max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert
+        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
         self.seq_len_per_chip = seq_len_per_chip
         self.num_dispatch_groups = num_dispatch_groups
         self.expert_dispatch_table = expert_dispatch_table
 
-        # Oversized buffer (max_dispatched_tokens_per_expert) to simplify dispatch logic
+        # Flat per-chip dispatch buffer of total capacity max_dispatch_buffer_token_size
+        # (shared across all local experts via dynamic TILE_SIZE-aligned offsets).
         self.dispatched_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.max_dispatch_buffer_token_size,
             emb_dim,
         )
         self.dispatched_metadata_shape = (
             num_dispatch_groups,
             dispatch_group_size,
-            self.experts_per_chip,
-            self.max_dispatched_tokens_per_expert,
+            self.max_dispatch_buffer_token_size,
             self.metadata_len,
         )
 
@@ -154,15 +158,14 @@ class TorchDispatchModule(torch.nn.Module):
                                 False
                             ), "Dispatch table must be provided in multi-group configuration to determine expert chip mapping"
 
-                        expert_index_within_chip = routed_expert % self.experts_per_chip
                         dst_index = offset_copy[chip, routed_expert]
 
-                        dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        dispatched_buffer[group, expert_chip, dst_index] = x[chip, token]
                         # Compute linearized mesh coord for combine module
                         linearized_coord = ExpertMapping.compute_linearized_mesh_coord(
                             chip, group, self.num_dispatch_groups
                         )
-                        dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
+                        dispatched_metadata[group, expert_chip, dst_index] = torch.tensor(
                             [
                                 linearized_coord,
                                 token,

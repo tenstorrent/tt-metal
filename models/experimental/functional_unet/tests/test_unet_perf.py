@@ -13,13 +13,25 @@ import torch
 
 from loguru import logger
 
+import ttnn
 from ttnn.device import is_wormhole_b0
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
-from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
-from models.experimental.functional_unet.tests.test_unet_model import run_unet_model
+from models.experimental.functional_unet.tt.model_preprocessing import (
+    create_unet_input_tensors,
+    create_unet_model_parameters,
+)
+from models.experimental.functional_unet.tt import unet_shallow_torch
+from models.experimental.functional_unet.tt import unet_shallow_ttnn
+from models.experimental.functional_unet.tests.common import (
+    verify_with_pcc,
+    UNET_FULL_MODEL_PCC,
+    UNET_FULL_MODEL_PCC_BH,
+    UNET_TRACE_REGION_SIZE,
+    UNET_L1_SMALL_REGION_SIZE,
+)
 
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 4
 
@@ -27,16 +39,72 @@ UNET_DEVICE_TEST_TOTAL_ITERATIONS = 4
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_model(batch, groups, device, iterations, reset_seeds):
+def test_unet_model(batch, groups, mesh_device, iterations, reset_seeds):
+    num_devices = mesh_device.get_num_devices()
     if (
-        not is_wormhole_b0(device)
-        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
-        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
+        num_devices == 1
+        and not is_wormhole_b0(mesh_device)
+        and (
+            mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 110
+            and mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y != 130
+        )
     ):
-        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
-    device.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
-    run_unet_model(batch, groups, device, iterations)
+        pytest.skip(
+            f"Shallow UNet only supports 110 or 130 cores on BH (was {mesh_device.compute_with_storage_grid_size()})"
+        )
+
+    for d in mesh_device.get_devices():
+        d.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+    total_batch = num_devices * batch
+
+    param_input, _ = create_unet_input_tensors(batch, groups)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
+    parameters = create_unet_model_parameters(model, param_input, groups=groups, device=mesh_device)
+    ttnn_model = unet_shallow_ttnn.UNet(parameters, device=mesh_device, mesh_mapper=weights_mesh_mapper)
+
+    torch_input, ttnn_input = create_unet_input_tensors(
+        total_batch,
+        groups,
+        channel_order="first",
+        pad=False,
+        fold=True,
+        device=mesh_device,
+        memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
+        mesh_mapper=inputs_mesh_mapper,
+    )
+
+    torch_output_tensor = model(torch_input)
+    output_tensor = ttnn_model(ttnn_input, move_input_tensor_to_device=False)
+
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W)
+    verify_with_pcc(
+        torch_output_tensor,
+        ttnn_output_tensor,
+        UNET_FULL_MODEL_PCC if is_wormhole_b0(mesh_device) else UNET_FULL_MODEL_PCC_BH,
+    )
+
+    for _ in range(iterations - 1):
+        _, ttnn_input = create_unet_input_tensors(
+            total_batch,
+            groups,
+            channel_order="first",
+            pad=False,
+            fold=True,
+            device=mesh_device,
+            memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
+            mesh_mapper=inputs_mesh_mapper,
+        )
+        ttnn_model(ttnn_input, move_input_tensor_to_device=False)
+        for d in mesh_device.get_devices():
+            ttnn.ReadDeviceProfiler(d)
 
 
 @dataclass
@@ -129,7 +197,7 @@ def run_multi_iteration_perf_test(test_func, num_runs, *args, **kwargs) -> Perfo
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1632.0) if is_wormhole_b0() else (1, 4, 3125.0),),
+    ((1, 4, 1669.0) if is_wormhole_b0() else (1, 4, 3150.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"

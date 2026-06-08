@@ -86,6 +86,6 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binop_with_scalar_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init<APPROX>())); }
+ALWI void binop_with_scalar_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init())); }
 
 }  // namespace ckernel

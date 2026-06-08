@@ -28,6 +28,7 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_workers_per_direction;
     uint32_t num_mux_cores_per_direction_per_link;
     uint32_t num_cores_per_link;
+    uint32_t normalized_dim;
 };
 
 struct ReduceScatterMinimalAsyncParams {

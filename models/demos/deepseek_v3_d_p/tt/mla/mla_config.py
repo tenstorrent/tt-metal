@@ -237,8 +237,8 @@ MLA_SDPA_CONFIG = {
     },
     # 100k total seq_len → 3200 per device
     3200: {
-        "q_chunk_size": 320,
-        "k_chunk_size": 64,
+        "q_chunk_size": 160,
+        "k_chunk_size": 160,
     },
 }
 

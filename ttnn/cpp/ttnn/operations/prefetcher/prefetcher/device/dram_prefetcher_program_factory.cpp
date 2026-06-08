@@ -4,13 +4,14 @@
 
 #include <cstdint>
 
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/global_circular_buffer.hpp>
-#include "dram_prefetcher_program_factory.hpp"
+
+#include "dram_prefetcher_device_operation.hpp"
 
 namespace ttnn::prim {
 
@@ -31,10 +32,10 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
     return {page_size, num_pages};
 }
 
-DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::create(
-    const DramPrefetcherParams& operation_attributes,
-    const DramPrefetcherInputs& tensor_args,
-    Tensor& /*output_tensor*/) {
+ProgramDescriptor DramPrefetcherOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "Must have at least one input tensor");
     TT_FATAL(operation_attributes.global_cb.has_value(), "Global circular buffer must be provided");
@@ -71,8 +72,6 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         return tt::tt_metal::datatype_to_dataformat_converter(t.dtype());
     });
 
-    Program program{};
-
     // In validate we make sure that all tensors are on the same device
     uint32_t num_tensors = tensors.size();
     auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
@@ -81,9 +80,11 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
     uint32_t num_blocks = num_readers * num_receivers_per_reader;
 
-    std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
+    std::vector<uint32_t> tensor_block_num_tiles;
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
-    std::vector<uint32_t> tensor_tile_sizes(num_tensors);
+    std::vector<uint32_t> tensor_tile_sizes;
+    tensor_block_num_tiles.reserve(num_tensors);
+    tensor_tile_sizes.reserve(num_tensors);
     for (uint32_t t = 0; t < num_tensors; t++) {
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
@@ -91,8 +92,8 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
         tensor_shapes[t][0] = height_in_tiles;
         tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks;
-        tensor_tile_sizes[t] = tensor_tiles[t].get_tile_size(tensor_data_formats[t]);
+        tensor_block_num_tiles.push_back(height_in_tiles * width_in_tiles / num_blocks);
+        tensor_tile_sizes.push_back(tensor_tiles[t].get_tile_size(tensor_data_formats[t]));
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
     auto max_tile_size_iterator = std::max_element(tensor_tile_sizes.begin(), tensor_tile_sizes.end());
@@ -127,43 +128,65 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
     uint32_t reader_cb_index = tt::CBIndex::c_0;
-    CircularBufferConfig reader_cb_config = CircularBufferConfig(reader_cb_size, {{reader_cb_index, max_tile_size_df}})
-                                                .set_page_size(reader_cb_index, reader_cb_single_tile_size)
-                                                .set_globally_allocated_address(global_cb_buffer);
-
-    CreateCircularBuffer(program, reader_core_range, reader_cb_config);
-
     uint32_t sync_cb_index = tt::CBIndex::c_3;
     uint32_t sync_cb_page_size = hal::get_l1_alignment();
-    CircularBufferConfig sync_cb_confg =
-        CircularBufferConfig(sync_cb_page_size, {{sync_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(sync_cb_index, sync_cb_page_size);
-
-    CreateCircularBuffer(program, reader_core_range, sync_cb_confg);
 
     /* tensor addresses cb setup */
     uint32_t tensor_addrs_single_tile_size = sizeof(uint32_t);
     uint32_t tensor_addrs_cb_size = num_layers * num_tensors * tensor_addrs_single_tile_size;
 
     uint32_t tensor_addrs_cb_index = tt::CBIndex::c_1;
-    CircularBufferConfig tensor_addrs_cb_config =
-        CircularBufferConfig(tensor_addrs_cb_size, {{tensor_addrs_cb_index, tensor_addrs_data_format}})
-            .set_page_size(tensor_addrs_cb_index, tensor_addrs_single_tile_size)
-            .set_globally_allocated_address(*tensor_addrs_buffer);
-    auto tensor_addrs_cb = CreateCircularBuffer(program, reader_core_range, tensor_addrs_cb_config);
 
     /* remote cb setup */
     uint32_t remote_cb_size = global_cb.size();
 
     auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
     uint32_t remote_cb_index = tt::CBIndex::c_31;
-    CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
-    remote_cb_config.remote_index(remote_cb_index)
-        .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location
-        .set_data_format(max_tile_size_df);
-    tt::tt_metal::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
 
-    /* Compile time args */
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = reader_cb_size,
+        .core_ranges = reader_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(reader_cb_index),
+            .data_format = max_tile_size_df,
+            .page_size = reader_cb_single_tile_size,
+        }}},
+        .buffer = const_cast<Buffer*>(std::addressof(global_cb_buffer)),
+    });
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = sync_cb_page_size,
+        .core_ranges = reader_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(sync_cb_index),
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = sync_cb_page_size,
+        }}},
+    });
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = tensor_addrs_cb_size,
+        .core_ranges = reader_core_range,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tensor_addrs_cb_index),
+            .data_format = tensor_addrs_data_format,
+            .page_size = tensor_addrs_single_tile_size,
+        }}},
+        .buffer = tensor_addrs_buffer,
+    });
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = remote_cb_size,
+        .core_ranges = reader_core_range,
+        .remote_format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(remote_cb_index),
+            .data_format = max_tile_size_df,
+            .page_size = L1_ALIGNMENT,  // set to 16B so that the infra won't update write pointers to wrong location
+        }}},
+        .global_circular_buffer = std::addressof(global_cb),
+    });
 
     // Reader kernel
     std::vector<uint32_t> reader_ct_args = {
@@ -177,19 +200,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         tensor_addrs_cb_index,
         sync_cb_index,
     };
-
-    // Configs to enable for performance mode
-    reader_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
-
-    auto reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp",
-        reader_core_range,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = reader_ct_args});
+    reader_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
 
     // Writer kernel
     std::vector<uint32_t> writer_ct_args = {
@@ -202,19 +213,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         remote_cb_index,
         sync_cb_index,
     };
-
-    // Configs to enable for performance mode
-    writer_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
-
-    auto writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/writer_l1.cpp",
-        reader_core_range,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = writer_ct_args});
+    writer_ct_args.push_back(static_cast<uint32_t>(enable_performance_mode));
 
     /* Runtime args */
     std::vector<uint32_t> page_sizes;
@@ -239,10 +238,32 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     }
 
     std::vector<uint32_t> bank_ids;
-    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);  // TODO: fix order??
+    const auto& reader_cores = corerange_to_cores(reader_core_range, std::nullopt, true);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = reader_core_range;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::RISCV_0_default,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+    };
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/writer_l1.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = reader_core_range;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+    };
 
     // Runtime args for the reader cores
-    for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); core_index++) {
+    for (uint32_t core_index = 0; core_index < reader_core_range.num_cores(); ++core_index) {
         const auto& core = reader_cores[core_index];
 
         /* reader kernel */
@@ -265,7 +286,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
 
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
+        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
 
         /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
@@ -277,23 +298,13 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
             writer_rt_args.push_back(tensor_shape[0] / num_blocks);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
+        writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
     }
 
-    return cached_program_t{std::move(program), {tensor_addrs_cb}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void DramPrefetcherProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const DramPrefetcherParams& /*operation_attributes*/,
-    const DramPrefetcherInputs& tensor_args,
-    Tensor& /*output_tensor*/) {
-    auto& program = cached_program.program;
-    const auto& tensor_addrs_cb = cached_program.shared_variables.tensor_addrs_cb;
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
-    auto* tensor_addrs_buffer = tensor_addrs.buffer();
-    UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

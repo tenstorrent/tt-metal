@@ -34,6 +34,6 @@ ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void reshuffle_rows_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reshuffle_rows_init<APPROX>())); }
+ALWI void reshuffle_rows_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reshuffle_rows_init())); }
 
 }  // namespace ckernel

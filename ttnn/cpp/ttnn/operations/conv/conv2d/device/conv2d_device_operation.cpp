@@ -128,11 +128,16 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
             } else {
                 out_width_ntiles = tt::div_up(out_width_ntiles, args.parallelization_config.grid_size.x);
             }
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == out_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
+        } else {
+            TT_FATAL(
+                args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
+                    args.block_config.out_subblock_h_ntiles == 1,
+                "Error");
         }
-        TT_FATAL(
-            args.block_config.out_subblock_w_ntiles == per_core_out_matrix_width_ntiles ||
-                args.block_config.out_subblock_h_ntiles == 1,
-            "Error");
     }
 }
 

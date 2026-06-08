@@ -14,14 +14,16 @@ on:
       enabled-skus:
         required: true
         type: string
-    secrets:
-      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+      test-selection:
         required: false
+        type: string
+        default: "all"
+
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.apply-test-selection.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
     steps:
@@ -52,6 +54,25 @@ jobs:
             "${TESTS_YAML_PATH}" \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
+      - name: Apply test selection
+        id: apply-test-selection
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          if [ "${{ inputs.test-selection }}" = "all" ]; then
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            FILTERED=$(echo "$MATRIX" | jq -c --arg id "${{ inputs.test-selection }}" '[.[] | select(.id == $id)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for test-selection '${{ inputs.test-selection }}'. Ensure id matches tests/pipeline_reorg/galaxy_e2e_tests.yaml and enabled-skus includes the needed SKU."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
   galaxy-e2e-tests:
     needs: load-test-matrix
     strategy:
@@ -97,15 +118,7 @@ jobs:
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          echo "$TEST_CMD"
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

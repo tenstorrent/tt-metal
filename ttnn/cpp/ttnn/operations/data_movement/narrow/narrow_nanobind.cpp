@@ -34,7 +34,7 @@ void bind_narrow(nb::module_& mod) {
         Example:
 
             >>> tensor = ttnn.rand((32, 16, 16, 4), dtype=ttnn.bfloat16, device=device)
-            >>> output = ttnn.narrow(tensor, 0, 12, 8)
+            >>> output = ttnn.narrow(tensor, 0, 0, 12)
 
         )doc";
 

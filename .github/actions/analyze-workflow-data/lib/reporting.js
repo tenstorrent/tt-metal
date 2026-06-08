@@ -699,7 +699,7 @@ async function enrichFailingDetails(details, filteredGrouped, errorSnippetsCache
             const jobUrl = (sn && sn.job_url) ? String(sn.job_url) : '';
             if (jobName) {
               if (!failingJobsMap.has(jobName)) {
-                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [] });
+                failingJobsMap.set(jobName, { name: jobName, url: jobUrl, owners: [], is_default_owner: false });
               }
               // Merge owners from all snippets for this job (dedupe by id)
               const job = failingJobsMap.get(jobName);
@@ -708,6 +708,11 @@ async function enrichFailingDetails(details, filteredGrouped, errorSnippetsCache
                 if (owner && owner.id && !job.owners.some(o => o.id === owner.id)) {
                   job.owners.push(owner);
                 }
+              }
+              // Propagate is_default_owner from snippet — if ANY snippet for this job
+              // has is_default_owner=true, mark the job as default owner
+              if (sn.is_default_owner === true) {
+                job.is_default_owner = true;
               }
             }
           }
@@ -718,13 +723,21 @@ async function enrichFailingDetails(details, filteredGrouped, errorSnippetsCache
             if (nonInfraOwners.length > 0) {
               // Has specific owners - use only those (no infra)
               job.owners = nonInfraOwners;
+              job.is_default_owner = false; // explicit owners found — not a default
             } else if (job.owners.length === 0) {
               // No owners from snippets - try findOwnerForLabel as fallback
               const labelOwners = findOwnerForLabel(job.name) || findOwnerForLabel(`${item.name} / ${job.name}`) || [];
               const nonInfraLabelOwners = labelOwners.filter(o => o.id !== infraId);
-              job.owners = nonInfraLabelOwners.length > 0 ? nonInfraLabelOwners : [DEFAULT_INFRA_OWNER];
+              if (nonInfraLabelOwners.length > 0) {
+                job.owners = nonInfraLabelOwners;
+                job.is_default_owner = false; // found explicit owner via label lookup
+              } else {
+                job.owners = [DEFAULT_INFRA_OWNER];
+                job.is_default_owner = true; // infra is the default fallback — no explicit owner
+              }
             }
             // else: job.owners only has infra, which is fine as the default
+            // is_default_owner already set from snippet propagation above
           }
           item.failing_jobs = Array.from(failingJobsMap.values());
         } catch (_) { /* ignore */ }

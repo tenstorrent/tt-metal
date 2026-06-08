@@ -7,16 +7,16 @@
 #include <string>
 #include <vector>
 #include <map>
-#include "../common/types.hpp"
+#include <tt-metalium/experimental/noc_estimator/types.hpp>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
 // Represents a single row of performance data from CSV
 struct DataPoint {
-    common::NocMechanism mechanism = common::NocMechanism::UNICAST;
-    common::NocPattern pattern = common::NocPattern::ONE_TO_ONE;
-    common::MemoryType memory = common::MemoryType::L1;
-    common::Architecture arch = common::Architecture::WORMHOLE_B0;
+    NocMechanism mechanism = NocMechanism::UNICAST;
+    NocPattern pattern = NocPattern::ONE_TO_ONE;
+    MemoryType memory = MemoryType::L1;
+    Architecture arch = Architecture::WORMHOLE_B0;
     uint32_t num_transactions = 0;
     uint32_t transaction_size_bytes = 0;
     uint32_t num_subordinates = 1;
@@ -59,4 +59,4 @@ private:
     std::vector<std::string> split_csv_line(const std::string& line);
 };
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

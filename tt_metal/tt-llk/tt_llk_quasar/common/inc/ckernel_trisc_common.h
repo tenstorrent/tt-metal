@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_proj_params.h"
 #include "ckernel_template.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "tensix_types.h"
 
@@ -19,13 +20,10 @@ namespace ckernel::trisc
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
-// Default face dimensions
-constexpr static std::uint32_t FACE_R_DIM = 16;
-constexpr static std::uint32_t FACE_C_DIM = 16;
-
-// Default tile dimensions
-constexpr static std::uint32_t TILE_R_DIM = 32;
-constexpr static std::uint32_t TILE_C_DIM = 32;
+using ckernel::FACE_C_DIM;
+using ckernel::FACE_R_DIM;
+using ckernel::TILE_C_DIM;
+using ckernel::TILE_R_DIM;
 
 // Default number of faces
 constexpr static std::uint32_t NUM_FACES = 4;
@@ -81,8 +79,8 @@ typedef union
 // Points to the tile counters
 tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
 
-// Destination register bank id, id = 0 -> dest rows 0 to 511, id = 1 -> dest rows 512 - 1023
-static std::uint32_t dest_bank_id = 0;
+// Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
+static std::uint32_t dest_register_offset = 0;
 
 /**
 * @brief Check divisibility by power of 2
@@ -96,12 +94,37 @@ inline bool _divisible_by_pow_two_(const std::uint32_t value, const std::uint32_
 }
 
 /**
+ * @brief Helper function to ensure valid tile sizes are programmed into the buffer descriptor.
+ * valid tile sizes:
+    1x16: x=16, y=1, z=1
+    2x16: x=16, y=2, z=1
+    4x16: x=16, y=4, z=1
+    8x16: x=16, y=8, z=1
+    16x16: x=16, y=16, z=1
+    32x32: x=16, y=16, z=4
+ * @param buf_desc: Contains L1 buffer descriptor information
+ */
+inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
+{
+    LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
+    LLK_ASSERT(
+        buf_desc.f.y_dim == 16 || buf_desc.f.y_dim == 8 || buf_desc.f.y_dim == 4 || buf_desc.f.y_dim == 2 || buf_desc.f.y_dim == 1,
+        "y_dim must be powers of 2 <= 16");
+    LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
+    if (buf_desc.f.z_dim == 4)
+    {
+        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
+    }
+}
+
+/**
  * @brief Populates buffer table entry for TDMA engines
  * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
  * @param buf_desc: Contains L1 buffer descriptor information
  */
 inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
 {
+    validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {
         bd_table[buf_desc_id].words[i] = buf_desc.words[i];
@@ -148,13 +171,17 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
 }
 
 /**
- * @brief Returns dest buffer base addr according to dest_bank_id
- * Bank 0 -> addr = 0
- * Bank 1 -> addr = 512
+ * @brief Returns dest buffer base addr
+ * If dest register is set to 16bit mode:
+ *     Bank 0 -> addr = 0
+ *     Bank 1 -> addr = 512
+ * If dest register is set to 32bit mode:
+ *     Bank 0 -> addr = 0
+ *     Bank 1 -> addr = 256
  */
 inline std::uint32_t _get_dest_buffer_base_()
 {
-    return (dest_bank_id) ? DEST_REGISTER_HALF_SIZE : 0x0;
+    return dest_register_offset;
 }
 
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
@@ -188,19 +215,21 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
  */
 
 /**
- * @brief Set destination register bank id variable to 0
+ * @brief Set destination register offset variable to 0
  */
-inline void _reset_dest_bank_id_()
+inline void _reset_dest_register_offset_()
 {
-    dest_bank_id = 0;
+    dest_register_offset = 0;
 }
 
 /**
- * @brief Update destination register bank id, bank id can only toggle between 0 & 1;
+ * @brief Update destination register offset, offset can only toggle between 0 & 512 for 16bit dest, 0 & 256 for 32bit dest
  */
-inline void _update_dest_bank_id_()
+template <bool EN_32BIT_DEST>
+inline void _update_dest_register_offset_()
 {
-    dest_bank_id = 1 - dest_bank_id;
+    constexpr std::uint32_t dest_bank1_offset = EN_32BIT_DEST ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE;
+    dest_register_offset                      = (dest_register_offset == 0) ? dest_bank1_offset : 0;
 }
 
 // Semaphores mapping and trisc space -> tensix space conversion
@@ -241,7 +270,11 @@ inline void t6_semaphore_get(const std::uint8_t index)
 }
 
 /**
- * @brief Flip packer dest register offset to 0 or DEST_REGISTER_HALF_SIZE, flip-flopping between two halves
+ * @brief Set packer's dest register offset to the current dest bank base.
+ *
+ * In SyncHalf mode, alternates between bank 0 (offset 0) and bank 1
+ * (DEST_REGISTER_HALF_SIZE for 16-bit dest, DEST_REGISTER_HALF_SIZE/2 for 32-bit dest).
+ * In SyncFull mode, always reads from offset 0.
  */
 template <std::uint32_t PACK_SEL, ckernel::DstSync DST>
 inline void _set_packer_dest_registers_()
@@ -257,6 +290,33 @@ inline void _set_packer_dest_registers_()
     {
         cfg[THCON_PACKER1_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
     }
+}
+
+// SrcS register tile geometry (HW-defined for Quasar SrcS).
+// A 32x32 tile is produced/consumed across SLICE_COUNT SrcS slices, where one slice
+// holds XDIM * YDIM * ZDIM datums. YDIM halves in 32-bit element mode because the
+// SrcS columns are 16-bit wide in HW.
+struct srcs_dims
+{
+    static constexpr std::uint32_t XDIM      = 16; // datums per row of SrcS slice
+    static constexpr std::uint32_t ZDIM      = 1;
+    static constexpr std::uint32_t YDIM_BASE = 8; // rows per slice when SrcS is in 16-bit mode
+
+    static constexpr std::uint32_t ydim(bool srcs_32bit_mode)
+    { // TODO for metal bringup: make programmable based on tensor_shape for tiny tile support
+        return srcs_32bit_mode ? (YDIM_BASE / 2) : YDIM_BASE;
+    }
+
+    static constexpr std::uint32_t slice_count(bool srcs_32bit_mode)
+    {
+        return (TILE_R_DIM * TILE_C_DIM) / (XDIM * ydim(srcs_32bit_mode) * ZDIM);
+    }
+};
+
+// SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
+inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
+{
+    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
 }
 
 } // namespace ckernel::trisc

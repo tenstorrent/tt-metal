@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // compile-time args
@@ -22,12 +22,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = 16;
     constexpr uint32_t onetile = 1;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out_obj(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_out_obj(cb_id_out);
 
     uint32_t output_tile_bytes = get_tile_size(cb_id_out);
 
-    auto tensor_accessor = TensorAccessor(tensor_args, output_addr, output_tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, output_addr);
 
     // For each shard, start at the index of the first shard to be reduced (same
     // index as output), then increment by the appropriate increment (based on

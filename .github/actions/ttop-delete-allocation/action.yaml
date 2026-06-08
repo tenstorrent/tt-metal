@@ -6,7 +6,7 @@ inputs:
     description: "Allocation name"
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the allocation'
     required: false
     default: 'ttop-ci'
 
@@ -18,6 +18,4 @@ runs:
       env:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-        validate_allocation_name "$ALLOCATION_NAME" || exit 1
-        kubectl -n ${{ inputs.namespace }} delete allocation/$ALLOCATION_NAME --ignore-not-found
+        kubectl -n ${{ inputs.namespace }} delete allocation/${{ inputs.allocationName }}

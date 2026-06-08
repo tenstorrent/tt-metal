@@ -136,7 +136,7 @@ Program create_program(IDevice* /*device*/, const ProgramAttributes& program_att
         core,
         DataMovementConfig{.processor = program_attributes.writer_processor, .noc = program_attributes.writer_noc});
 
-    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles)};
+    vector<uint32_t> compute_kernel_args = {uint(program_attributes.num_tiles), /*use_dfbs=*/false};
 
     CreateKernel(
         program,

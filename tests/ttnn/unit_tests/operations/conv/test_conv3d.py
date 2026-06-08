@@ -398,8 +398,9 @@ def test_conv3d_qwen_shapes(
         [(1, 64, 8, 10, 9), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 64, 8, 10, 9), 64, (1, 1, 1), (1, 1, 1), 1, (0, 1, 1), "zeros"],
         [(1, 32, 4, 8, 8), 32, (3, 3, 3), (2, 2, 2), 1, (0, 1, 1), "zeros"],
+        [(2, 3, 2, 14, 14), 1280, (2, 14, 14), (2, 14, 14), 1, (0, 0, 0), "zeros"],
     ],
-    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222"],
+    ids=["auto_block_k333", "auto_block_k111", "auto_block_stride222", "auto_block_large_kernel"],
 )
 def test_conv3d_no_config(device, input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode):
     """Test Conv3d with no config (auto-blocking with conservative defaults)."""

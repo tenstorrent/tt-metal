@@ -106,9 +106,9 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                 if (pages_per_shard > rem_pages) {
                     ret_shard_shape[i] = {rem_pages / ret_shard_shape[i][1], ret_shard_shape[i][1]};
                 }
-                ret_vec[i] = std::vector<uint32_t>(num_cols);
+                ret_vec[i].reserve(num_cols);
                 for (uint32_t j = 0; j < num_cols; j++) {
-                    ret_vec[i][j] = page_id++;
+                    ret_vec[i].push_back(page_id++);
                 }
                 rem_pages -= num_cols;
             }

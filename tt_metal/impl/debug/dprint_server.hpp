@@ -9,17 +9,20 @@
 #pragma once
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <llrt/rtoptions.hpp>
+#include <umd/device/soc_descriptor.hpp>
 #include <memory>
-#include "impl/context/context_types.hpp"
-#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
+
+class MetalContext;
+class MetalEnv;
+class DispatchCoreConfig;
 
 class DPrintServer {
 public:
     // Constructor/destructor, reads dprint options from RTOptions.
-    DPrintServer(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
+    DPrintServer(MetalContext* context, MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     ~DPrintServer();
 
     // Sets whether the print server is muted. Calling this function while a kernel is running may
@@ -39,6 +42,9 @@ public:
     void clear_log_file();
 
     bool reads_dispatch_cores(ChipId device_id);
+
+    // Returns the list of cores the print server polls for the given device.
+    std::vector<umd::CoreDescriptor> get_print_cores(ChipId device_id) const;
 
     // Check whether a print hand has been detected by the server.
     // The print server tries to determine if a core is stalled due to the combination of (1) a WAIT

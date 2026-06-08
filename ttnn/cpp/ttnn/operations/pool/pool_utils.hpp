@@ -111,7 +111,9 @@ PoolCBSizes calculate_pool_cb_sizes(
     const Layout& output_layout,
     const DataType& output_dtype,
     const std::array<uint32_t, 2>& output_shard_shape,
-    bool config_tensor_in_dram);
+    bool config_tensor_in_dram,
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
+    std::optional<uint32_t> scalar_config_actual_page_size = std::nullopt);
 
 // Separate L1 usage for local CBs vs globally-allocated tensor buffers.
 // Tracking these separately prevents two errors from cancelling out in validation

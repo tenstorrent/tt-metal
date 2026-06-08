@@ -140,21 +140,7 @@ class TtTemporalSelfAttention:
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
 
-            sampling_offsets_shape = sampling_offsets.shape
-            sampling_offsets = ttnn.reshape(
-                sampling_offsets, (sampling_offsets.shape[0], -1, sampling_offsets.shape[4], sampling_offsets.shape[5])
-            )  # [2, 10000*8*1, 4, 2]
-            offset_normalizer_xy = ttnn.reshape(
-                offset_normalizer_xy,
-                (
-                    offset_normalizer_xy.shape[0],
-                    offset_normalizer_xy.shape[1],
-                    offset_normalizer_xy.shape[2],
-                    offset_normalizer_xy.shape[-1],
-                ),
-            )
             sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
-            sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
             sampling_locations = reference_points + sampling_locations
             ttnn.deallocate(offset_normalizer_xy)
             ttnn.deallocate(offset_normalizer)
@@ -177,9 +163,9 @@ class TtTemporalSelfAttention:
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
         output = ttnn.permute(output, (1, 2, 0))
-        output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
+        output = ttnn.reshape(output, (num_query, embed_dims, bs * self.num_bev_queue))
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
-        output = ttnn.mean(output, dim=-1)
+        output = ttnn.mean(output, dim=-1, keepdim=True)
         output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         ttnn.deallocate(params.output_proj.weight)

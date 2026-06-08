@@ -106,6 +106,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs for all K tiles + finalization
 //   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
+template <std::uint32_t output_granularity>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     uint src_index,
     uint dst_index,
@@ -113,6 +114,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
+    static_assert(output_granularity >= 1, "output_granularity must be >= 1");
     constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
     uint32_t dest_buffer_base = get_dest_buffer_base();
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
@@ -126,11 +128,11 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12);
         t6_semaphore_get<p_stall::MATH>(SFPU_FPU);
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
-        // TODO: Evaluate if we need to manually unroll the last iter
         if (signal_output && i == kt_dim - 1) {
-            for (uint32_t j = 0; j < nt_dim / 2; j++) {
-                lltt::replay(ckernel::math::replay_buf_offset, 4);
-                lltt::replay(ckernel::math::replay_buf_offset, 4);
+            for (uint32_t j = 0; j < nt_dim / output_granularity; j++) {
+                for (std::uint32_t g = 0; g < output_granularity; g++) {
+                    lltt::replay(ckernel::math::replay_buf_offset, 4);
+                }
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }
         } else {

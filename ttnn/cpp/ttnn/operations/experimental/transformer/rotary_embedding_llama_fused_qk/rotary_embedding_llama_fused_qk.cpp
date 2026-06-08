@@ -19,7 +19,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> rotary_embedding_llama_fused_qk(
     auto arch = q_input_tensor.storage_type() == StorageType::DEVICE ? q_input_tensor.device()->arch()
                                                                      : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
+        init_device_compute_kernel_config(arch, compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4, true, false, false);
 
     const tt::tt_metal::MemoryConfig& q_output_memory_config = q_input_tensor.memory_config();
     const tt::tt_metal::MemoryConfig& k_output_memory_config = k_input_tensor.memory_config();

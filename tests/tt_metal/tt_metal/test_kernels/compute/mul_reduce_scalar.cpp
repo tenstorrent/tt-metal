@@ -5,14 +5,14 @@
 #include <cstdint>
 
 #include "api/compute/experimental/mul_reduce_scalar.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);    // Input A
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);    // Input B
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);  // Output (reduced)
+    CircularBuffer cb0(tt::CBIndex::c_0);    // Input A
+    CircularBuffer cb1(tt::CBIndex::c_1);    // Input B
+    CircularBuffer cb16(tt::CBIndex::c_16);  // Output (reduced)
 
     // Initialize hardware before any operations
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);

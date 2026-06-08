@@ -41,13 +41,13 @@ on:
         required: false
         type: number
         default: 0
-        description: If > 0, skip time budget verification and use this as job timeout
-          (e.g. 240 for APC watcher, 120 for BHPC watcher).
-    secrets:
-      REDIS_CCACHE_PASSWORD:
+        description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
+      collect-coverage:
         required: false
-      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
-        required: false
+        type: boolean
+        default: false
+        description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
+
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -134,6 +134,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
+          filter: blob:none
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job
@@ -159,20 +160,55 @@ jobs:
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
 
+      - name: Set up coverage profiling
+        if: ${{ inputs.collect-coverage }}
+        run: |
+          mkdir -p /work/coverage
+          echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override
           || matrix.test-group.timeout }}
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
+          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+            --backend sysfs \
+            --out /work/power_report.json \
+            -- bash -c '${{ matrix.test-group.cmd }}'
+
+      - name: Upload power report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: power-report-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
+          # The sidecar writes --out /work/power_report.json inside the container;
+          # this host path is what the upload-artifact action reads.
+          path: ${{ github.workspace }}/docker-job/power_report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload profdata artifact
+        if: ${{ inputs.collect-coverage && always() }}
+        run: |
+          if ! ls /work/coverage/*.profraw 1>/dev/null 2>&1; then
+            echo "No profraw files found, skipping upload"
+            exit 0
+          fi
+          llvm-profdata-20 merge -sparse /work/coverage/*.profraw \
+            -o /work/coverage/job.profdata
+          echo "Merged $(ls /work/coverage/*.profraw | wc -l) profraw files into job.profdata ($(du -h /work/coverage/job.profdata | cut -f1))"
+        shell: bash
+      - name: Upload profdata
+        if: ${{ inputs.collect-coverage && always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: profdata-${{ matrix.test-group.name }}
+          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          if-no-files-found: ignore
+          retention-days: 1
+
       - name: 📊 CCache Report
         if: "!cancelled()"
         run: |

@@ -5,13 +5,14 @@
 import torch
 import ttnn
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
+    get_model_traced_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    get_mesh_composer,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
@@ -41,25 +42,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_mesh_shape()
-    if mesh_shape:
-        try:
-            device = create_mesh_device(mesh_shape)
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_mesh_device(device)
-        except Exception as e:
-            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-            device_name = ttnn.get_arch_name()
-            yield (device, device_name)
-            ttnn.close_device(device)
-    else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
-        device_name = ttnn.get_arch_name()
-        yield (device, device_name)
-        ttnn.close_device(device)
-        del device
+    mesh_shape = get_model_traced_mesh_shape()
+    device = create_mesh_device(mesh_shape)
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
+    ttnn.close_mesh_device(device)
 
 
 def scale_mask_softmax_golden(x, y, scale):
@@ -130,6 +117,10 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs)
 
+    # V2 loader stores the mask tensor shape as input_b_shape (positional arg1 → input_b_*)
+    if mask_shape is None:
+        mask_shape = kwargs.get("input_b_shape", None)
+
     # Skip tests with tiled masks due to C++ implementation limitation
     if mask_shape is not None:
         shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -150,8 +141,12 @@ def run(
     # Parse input_a_shape
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Parse scale value (default to 1.0 if not provided)
-    scale = float(scalar) if scalar is not None else 1.0
+    # Parse scale value — V2 loader stores non-tensor positional args as arg0, arg1, …
+    # scale_mask_softmax_in_place(input, scale, mask, **kw)
+    # → arg1 = scale (float)
+    pos_args = extract_positional_args(kwargs)
+    raw_scale = scalar if scalar is not None else pos_args.get(1, None)
+    scale = float(raw_scale) if raw_scale is not None else 1.0
 
     # Generate input tensor
     torch_input_a = gen_func_with_cast_tt(
@@ -254,8 +249,13 @@ def run(
             numeric_stable=True,
             **op_kwargs,
         )
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    mesh_composer = get_mesh_composer(device, input_a_tensor_placement) if is_mesh_device else None
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Slice output back to original shape in case tile padding expanded it
+    if output_tensor.shape != torch_output.shape:
+        output_tensor = output_tensor[tuple(slice(0, s) for s in torch_output.shape)]
 
     # Check PCC
     pcc_result = check_with_pcc(torch_output, output_tensor, 0.999)

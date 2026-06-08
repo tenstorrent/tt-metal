@@ -1050,12 +1050,11 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
             rebuild_items_from_flattened_mesh(info, meshe);
             info.adjacency_graph = std::move(meshe.graph);
 
-            // If PSD is provided, validate that the graph can be mapped to it
+            // If PSD is provided, fast feasibility check: verify the PSD has matching
+            // (tray_id, asic_location) slots without doing full graph isomorphism.
             if (physical_system_descriptor != nullptr) {
-                // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
-                auto mapping_result = find_any_in_psd(info, *physical_system_descriptor);
-                if (mapping_result.empty()) {
-                    continue;  // Skip this combination if it can't be mapped
+                if (!PhysicalGroupingDescriptor::can_map_to_psd(info, *physical_system_descriptor)) {
+                    continue;
                 }
             }
 
@@ -1128,12 +1127,11 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
         rebuild_items_from_flattened_mesh(info, joined_mesh);
         info.adjacency_graph = std::move(joined_mesh.graph);
 
-        // If PSD is provided, validate that the top-level joined graph can be mapped to it
+        // If PSD is provided, fast feasibility check: verify the PSD has matching
+        // (tray_id, asic_location) slots without doing full graph isomorphism.
         if (physical_system_descriptor != nullptr) {
-            // solve_for_one_grouping_to_psd uses items[node_id] for trait constraints
-            auto mapping_result = find_any_in_psd(info, *physical_system_descriptor);
-            if (mapping_result.empty()) {
-                return;  // Skip this combination if it can't be mapped
+            if (!PhysicalGroupingDescriptor::can_map_to_psd(info, *physical_system_descriptor)) {
+                return;
             }
         }
 

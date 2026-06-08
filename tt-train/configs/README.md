@@ -83,8 +83,8 @@ Device mesh and distributed training configuration.
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 
 ### Constraints
-- DDP and TP cannot both be enabled simultaneously
-- For DDP: batch_size must be divisible by number of devices
+- DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)
+- For DDP: batch_size must be divisible by number of DDP devices
 - For TP: vocab_size is automatically rounded up to be divisible by (num_devices * 32)
 
 ### Device Mesh Shapes

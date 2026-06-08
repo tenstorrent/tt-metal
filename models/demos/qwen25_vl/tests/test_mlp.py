@@ -55,6 +55,9 @@ def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
         layer_num=0,
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    # Cast input to reference model dtype (e.g. bfloat16 for 32B) to avoid mat1/mat2 dtype mismatch
+    ref_dtype = next(reference_model.parameters()).dtype
+    torch_input = torch_input.to(ref_dtype)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,

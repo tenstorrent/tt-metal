@@ -15,7 +15,7 @@ namespace ttnn {
 DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch) {
     bool approx_mode = false;
     bool fp32_acc = true;
-    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
 Tensor layer_norm(

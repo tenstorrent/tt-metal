@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -24,9 +24,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // single-tile ublocks
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+    Noc noc;
     uint32_t tile_bytes = cb_in0.get_tile_size();
 
     uint32_t l1_write_addr_in0;
@@ -37,7 +37,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < NCHtWt; i += onetile) {
         cb_in0.reserve_back(onetile);
         noc.async_read(
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             cb_in0,
             tile_bytes,
             {.bank_id = src0_bank_id, .addr = src0_addr},
@@ -50,7 +50,7 @@ void kernel_main() {
         // but we loop the second list around
         cb_in1.reserve_back(onetile);
         noc.async_read(
-            experimental::AllocatorBank<experimental::AllocatorBankType::DRAM>{},
+            AllocatorBank<AllocatorBankType::DRAM>{},
             cb_in1,
             tile_bytes,
             {.bank_id = src1_bank_id, .addr = src1_addr},

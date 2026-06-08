@@ -166,8 +166,10 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             ternary_a_logical[-2],
             ternary_a_logical[-1]);
         TT_FATAL(
-            ternary_b_logical[-2] == 1 && ternary_b_logical[-1] == N,
-            "fused_ternary_input_b shape must be [1, N={}] (broadcast like bias), got [{}, {}]",
+            (ternary_b_logical[-2] == 1 || ternary_b_logical[-2] == M) && ternary_b_logical[-1] == N,
+            "fused_ternary_input_b shape must be [1, N={}] (broadcast) or [M={}, N={}] (full), got [{}, {}]",
+            N,
+            M,
             N,
             ternary_b_logical[-2],
             ternary_b_logical[-1]);
@@ -271,7 +273,7 @@ std::vector<Tensor> minimal_matmul(
     auto kernel_config_val = init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);

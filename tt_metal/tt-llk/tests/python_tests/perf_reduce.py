@@ -49,7 +49,6 @@ def test_perf_reduce(
     dest_acc,
     reduce_dim,
     pool_type,
-    workers_tensix_coordinates,
 ):
 
     tile_count = 16
@@ -82,4 +81,4 @@ def test_perf_reduce(
         dest_acc=dest_acc,
     )
 
-    configuration.run(perf_report, location=workers_tensix_coordinates)
+    configuration.run(perf_report)

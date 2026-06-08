@@ -6,6 +6,7 @@ import ast
 import json
 import os
 import pathlib
+import re
 from abc import ABC, abstractmethod
 
 from .constants import parse_hardware_suffix, parse_mesh_suffix, strip_grouping_suffix
@@ -111,8 +112,19 @@ class VectorExportSource(VectorSource):
 
     def __init__(self, export_dir: pathlib.Path | None = None):
         if export_dir is None:
-            # Default to vectors_export directory relative to this file
-            self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
+            # Honor TTNN_VECTORS_EXPORT_DIR env var so the two-pass workflow
+            # can point at vectors_export_col / vectors_export_row without
+            # needing a new --vector-source arg-parser choice.
+            import os as _os
+
+            _env_dir = _os.environ.get("TTNN_VECTORS_EXPORT_DIR", "").strip()
+            if _env_dir:
+                self.export_dir = pathlib.Path(_env_dir)
+                if not self.export_dir.is_absolute():
+                    self.export_dir = pathlib.Path(__file__).parent.parent / self.export_dir.name
+            else:
+                # Default to vectors_export directory relative to this file
+                self.export_dir = pathlib.Path(__file__).parent.parent / "vectors_export"
         else:
             self.export_dir = export_dir
         self._cached_generation_manifest = None
@@ -271,7 +283,11 @@ class VectorExportSource(VectorSource):
         if not board_type or not device_series or not isinstance(card_count, int):
             return None
 
-        return (str(board_type).lower(), str(device_series).lower(), card_count)
+        return (
+            re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_"),
+            re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_"),
+            card_count,
+        )
 
     @staticmethod
     def _normalize_traced_machine_entries(vector_data: dict) -> list[dict]:
@@ -326,8 +342,8 @@ class VectorExportSource(VectorSource):
         if not board_type and not device_series and card_count is None:
             return None
 
-        normalized_board = str(board_type).lower() if board_type else None
-        normalized_series = str(device_series).lower() if device_series else None
+        normalized_board = re.sub(r"[^a-z0-9]+", "_", str(board_type).lower()).strip("_") if board_type else None
+        normalized_series = re.sub(r"[^a-z0-9]+", "_", str(device_series).lower()).strip("_") if device_series else None
         normalized_cards = card_count if isinstance(card_count, int) else None
         return (normalized_board, normalized_series, normalized_cards)
 

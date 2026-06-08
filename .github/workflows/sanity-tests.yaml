@@ -38,7 +38,7 @@ on:
         type: boolean
         default: true
         description: "Run TT-Train C++ unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         type: boolean
         default: true
@@ -143,7 +143,7 @@ on:
         default: true
         type: boolean
         description: "Run TT-Train C++ unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         default: true
         type: boolean
@@ -269,13 +269,13 @@ jobs:
 
   tests-to-run:
     needs: [resolve-artifacts]
-    if: always() && !cancelled()
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
       models-unit-tests: ${{ steps.set-models-unit-tests.outputs.should-run }}
       tt-train-cpp-unit-tests: ${{ steps.set-tt-train-cpp-unit-tests.outputs.should-run }}
-      run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
+      run-profiler-tests: ${{ steps.set-run-profiler-tests.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
       ttsim-integration-tests: ${{ steps.set-ttsim-integration-tests.outputs.should-run }}
@@ -294,12 +294,10 @@ jobs:
         env:
           SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}
         run: |
-          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
-      - id: set-run-profiler-regression
-        env:
-          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-profiler-regression }}
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-run-profiler-tests
         run: |
-          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-t3000-apc-fast-tests
         env:
           SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}
@@ -318,7 +316,7 @@ jobs:
   ttnn-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
@@ -342,7 +340,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -365,7 +363,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -378,32 +376,24 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  run-profiler-regression:
+  profiler-tests:
     needs: [resolve-artifacts, tests-to-run]
-
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets:
-      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.run-profiler-tests == 'true'}}
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
+    secrets: inherit
     with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
-      post_commit_only: true
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      # Sanity historically ran (wormhole_b0, N300) → wh_n300_civ2, post-commit only.
+      enabled-skus: wh_n300_civ2
+      test-selection: post-commit
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [resolve-artifacts, tests-to-run]
     secrets:
       SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -419,6 +409,7 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      timeout: ${{ inputs.enable-watcher && 80 || 20 }}
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
@@ -435,7 +426,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -450,7 +441,7 @@ jobs:
 
   ttsim-integration-tests:
     needs: [resolve-artifacts, tests-to-run]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml

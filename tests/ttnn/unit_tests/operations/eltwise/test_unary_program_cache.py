@@ -30,7 +30,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 
 def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -63,11 +63,11 @@ def test_unary_cache_reuse_same_config(device):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
@@ -75,31 +75,31 @@ def test_unary_cache_reuse_same_config(device):
 
 def test_unary_cache_reuse_same_volume_different_shapes(device):
     """TILE layout: same volume, different shapes -> 1 cache entry.
-    unary_ng doesn't hash volume or shape; tile counts are runtime args,
+    unary doesn't hash volume or shape; tile counts are runtime args,
     so any shape with the same op/dtype/memory_config shares one entry."""
     device.cache_entries_counter.reset()
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 64], dtype=ttnn.float32)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 32], dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 1
 
 
 def test_unary_cache_reuse_different_volumes(device):
     """TILE layout: different volumes -> still 1 cache entry.
-    unary_ng uses runtime tile counts (not compile-time), so different volumes
+    unary uses runtime tile counts (not compile-time), so different volumes
     share the same compiled program. override_runtime_arguments handles the
     different per-core tile distributions on cache hit."""
     device.cache_entries_counter.reset()
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, [1, 1, 32, 32], dtype=ttnn.float32)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, [1, 1, 64, 64], dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 1
 
@@ -115,10 +115,10 @@ def test_unary_cache_miss_different_op_types(device):
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_with_ulp(torch_ref2, tt_out2, 1)
 
     assert device.cache_entries_counter.total == 2
 
@@ -129,10 +129,10 @@ def test_unary_cache_miss_different_input_dtypes(device):
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 2
 
@@ -145,12 +145,12 @@ def test_unary_cache_miss_different_memory_configs(device):
     torch_ref1, tt_out1 = run_unary_op(
         device, ttnn.relu, shape, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_ref2, tt_out2 = run_unary_op(
         device, ttnn.relu, shape, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+    assert_equal(torch_ref2, tt_out2)
 
     assert device.cache_entries_counter.total == 2
 
@@ -168,7 +168,7 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.floor(tt_a1, sub_core_grids=grid_a)
-    assert_with_pcc(torch_ref1, ttnn.to_torch(tt_out1), 0.9999)
+    assert_equal(torch_ref1, ttnn.to_torch(tt_out1))
 
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
     torch_ref2 = torch.floor(torch_a2)
@@ -176,7 +176,7 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid_b)
-    assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
+    assert_equal(torch_ref2, ttnn.to_torch(tt_out2))
 
     assert device.cache_entries_counter.total == 2
 
@@ -189,7 +189,7 @@ def test_unary_cache_miss_different_factories(device):
     shape = [1, 1, 32, 64]
 
     torch_ref1, tt_out1 = run_unary_op(device, ttnn.floor, shape, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref1, tt_out1, 0.9999)
+    assert_equal(torch_ref1, tt_out1)
 
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
     with device.cache_entries_counter.measure():
@@ -199,7 +199,7 @@ def test_unary_cache_miss_different_factories(device):
     tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid)
-    assert_with_pcc(torch_ref2, ttnn.to_torch(tt_out2), 0.9999)
+    assert_equal(torch_ref2, ttnn.to_torch(tt_out2))
 
     assert device.cache_entries_counter.total == 2
 
@@ -215,7 +215,7 @@ def test_unary_cache_correctness_repeated_runs(device):
     shape = [1, 1, 32, 64]
     for _ in range(5):
         torch_ref, tt_out = run_unary_op(device, ttnn.relu, shape, dtype=ttnn.float32)
-        assert_with_pcc(torch_ref, tt_out, 0.9999)
+        assert_equal(torch_ref, tt_out)
 
     assert device.cache_entries_counter.total == 1
 
@@ -225,7 +225,7 @@ def test_unary_cache_correctness_same_volume_different_shapes(device):
     device.cache_entries_counter.reset()
     for shape in [[1, 1, 32, 64], [1, 1, 64, 32]]:
         torch_ref, tt_out = run_unary_op(device, ttnn.sqrt, shape, dtype=ttnn.float32)
-        assert_with_pcc(torch_ref, tt_out, 0.9999)
+        assert_with_ulp(torch_ref, tt_out, 1)
 
     assert device.cache_entries_counter.total == 1
 
@@ -292,4 +292,4 @@ def test_unary_sharded_cache_correctness_different_grids(device):
             output = ttnn.abs(input_tensor)
         tt_out = ttnn.to_torch(output)
         torch_ref = torch.abs(torch_tensor)
-        assert_with_pcc(torch_ref, tt_out, 0.9999)
+        assert_equal(torch_ref, tt_out)

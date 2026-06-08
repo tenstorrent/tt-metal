@@ -4,12 +4,6 @@
 
 #pragma once
 
-#include <optional>
-#include <string>
-#include <umd/device/types/arch.hpp>
-
-namespace tt::tt_metal::experimental {
-
-std::optional<std::string> get_mock_cluster_desc_name(tt::ARCH arch, uint32_t num_chips);
-
-}  // namespace tt::tt_metal::experimental
+// get_mock_cluster_desc_name() is now part of the public API.
+// This internal header is kept as a forwarder for existing internal call sites.
+#include <tt-metalium/experimental/mock_device.hpp>

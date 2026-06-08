@@ -268,7 +268,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     env_impl_.initialize_fabric_config();
 
     // Mock devices don't support fabric operations
-    bool is_mock = env_impl_.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+    bool is_mock = env_impl_.get_cluster().is_mock_or_emulated();
     if (any_remote_devices && !is_mock) {
         auto fabric_config = ctx_.get_fabric_config();
         if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
@@ -639,6 +639,21 @@ bool DeviceManager::is_dispatch_firmware_active() const {
     return it != initializers_.end() && it->second->is_initialized();
 }
 
+bool DeviceManager::is_rt_profiler_device_init_complete(ChipId chip_id) const {
+    std::lock_guard<std::mutex> lock(lock_);
+    return rt_profiler_device_init_complete_.contains(chip_id);
+}
+
+void DeviceManager::mark_rt_profiler_device_init_complete(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(lock_);
+    rt_profiler_device_init_complete_.insert(chip_id);
+}
+
+void DeviceManager::clear_rt_profiler_device_init_complete(ChipId chip_id) {
+    std::lock_guard<std::mutex> lock(lock_);
+    rt_profiler_device_init_complete_.erase(chip_id);
+}
+
 bool DeviceManager::close_device(ChipId device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
@@ -722,6 +737,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
 
     bool pass = true;
     for (const auto& dev_id : devices_to_close) {
+        clear_rt_profiler_device_init_complete(dev_id);
         auto* dev = this->get_active_device(dev_id);
         pass &= dev->close();
     }
@@ -732,6 +748,7 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
 DeviceManager::~DeviceManager() {
     for (const auto& dev : this->devices_) {
         if (dev != nullptr and dev->is_initialized()) {
+            clear_rt_profiler_device_init_complete(dev->id());
             // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DeviceManager
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
             // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.

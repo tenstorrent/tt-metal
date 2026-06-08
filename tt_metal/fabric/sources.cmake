@@ -64,6 +64,9 @@ set(FABRIC_SOURCES
     topology_mapper.cpp
     topology_mapper_utils.cpp
     topology_solver.cpp
+    topology_solver_sat.cpp
+    topology_solver_sat_solver.cpp
+    pipeline_builder.cpp
     physical_grouping_descriptor_core.cpp
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp

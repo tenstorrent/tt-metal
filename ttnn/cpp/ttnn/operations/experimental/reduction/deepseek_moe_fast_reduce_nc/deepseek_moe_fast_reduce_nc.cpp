@@ -24,7 +24,7 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /* default_approx_mode */ false,
         /* default_fp32_acc */ true));
 

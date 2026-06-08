@@ -57,9 +57,14 @@ jobs:
           echo "FORK_OWNER: $FORK_OWNER"
           echo "Source branch: $SRC_BRANCH"
           echo "Fork repository: $FORK_REPO"
-          set_github_output "fork_owner" "$FORK_OWNER"
-          set_github_output "src_branch" "$SRC_BRANCH"
-          set_github_output "fork_repo" "$FORK_REPO"
+          echo "fork_owner=$FORK_OWNER" >> $GITHUB_OUTPUT
+          echo "src_branch=$SRC_BRANCH" >> $GITHUB_OUTPUT
+          echo "fork_repo=$FORK_REPO" >> $GITHUB_OUTPUT
+
+      - name: Checkout base repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
 
       - name: Configure Git
         run: |

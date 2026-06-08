@@ -1,0 +1,60 @@
+# This file defines the test matrix for the Runtime sanity tests.
+# These are a small curated subset of the most critical runtime tests,
+# designed to run quickly (<15 min) as a health check.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# --- Dispatch: RandomizeProgram (core dispatch health check) ---
+- name: runtime_sanity_dispatch
+  cmd: |
+    [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='*RandomProgram*:-*NIGHTLY*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
+- name: runtime_sanity_device
+  cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
+  skus:
+    wh_n150_civ2:
+      timeout: 3
+    bh_p150b_civ2:
+      timeout: 3
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- API: DRAM R/W + L1 R/W + kernel compile (core API health check) ---
+- name: runtime_sanity_api
+  cmd: ./build/test/tt_metal/unit_tests_api --gtest_filter='*DRAMLoopbackSingleCore*:*TestSimpleL1*:*CompileProgram*'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
+# --- BH Multi-Card: System Health ---
+- name: bh_multicard_system_health
+  cmd: ./build/test/tt_metal/tt_fabric/test_system_health
+  skus:
+    bh_quietbox:
+      timeout: 5
+    bh_loudbox:
+      timeout: 5
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

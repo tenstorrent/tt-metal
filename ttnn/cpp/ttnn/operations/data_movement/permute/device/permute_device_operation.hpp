@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 #include <tt_stl/span.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -33,20 +34,7 @@ struct PermuteDeviceOperation {
 
     // Implementation for a row major tensor where the row dimension is not moved in the permutation
     struct MultiCoreRowInvariant {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::CoreRangeSet core_range;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -54,21 +42,7 @@ struct PermuteDeviceOperation {
 
     // Implementation for a row major tensor where the row dimension is moved in the permutation
     struct MultiCoreBlockedGeneric {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreRangeSet core_range;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -77,22 +51,7 @@ struct PermuteDeviceOperation {
     // Implementation for when the tile is not broken apart (either dims = {..., rank - 2, rank - 1} or {..., rank - 1,
     // rank - 2})
     struct MultiCoreTileInvariant {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreRangeSet core_range;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -102,22 +61,7 @@ struct PermuteDeviceOperation {
     // another dimension (dims = {..., rank - 2,
     // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreRangeSet core_range;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -125,22 +69,7 @@ struct PermuteDeviceOperation {
 
     // Implementation for when both the height and width dimension is swapped around in the permutation
     struct MultiCoreTiledGeneric {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            CoreRangeSet core_range;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

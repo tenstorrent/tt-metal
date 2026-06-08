@@ -36,14 +36,17 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
     // 3 semaphores used for within op synchronizations
+    auto sem_buffer_type = operation_attributes.use_l1_small_for_semaphores ? tt::tt_metal::BufferType::L1_SMALL
+                                                                            : tt::tt_metal::BufferType::L1;
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type),
     };
     // 1 barrier semaphore used to ensure that all the buffers are allocated
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevice_ids = {sd_id};
-    auto barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0);
+    auto barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(
         mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
@@ -168,6 +171,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             shared_variables.program_artifacts.num_workers_per_direction,
             shared_variables.program_artifacts.num_mux_cores_per_direction_per_link,
             shared_variables.program_artifacts.num_cores_per_link,
+            shared_variables.program_artifacts.normalized_dim,
             shared_variables.barrier_semaphore,
             shared_variables.multidevice_semaphores,
             tensor_args.input_tensor,

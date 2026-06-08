@@ -221,8 +221,10 @@ Each example includes a `runner.sh` script that accepts configuration parameters
 
 The runner script:
 1. Syncs code to all machines listed in `hosts.txt`
-2. Launches the training script using `ttrun.py` with MPI
+2. Launches the training script using the **`tt-run`** CLI (`ttnn/ttnn/distributed/ttrun.py`, module/import name `ttrun`) under MPI
 3. Uses `rank_bindings.yaml` to assign ranks to specific hardware meshes
+
+For **`tt-run`**: [ttnn/ttnn/distributed/README_ttrun.md](../../../../../ttnn/ttnn/distributed/README_ttrun.md) documents **auto allocation** (`--mesh-graph-descriptor` + `--hosts` or `--mock-cluster-rank-binding`) and **legacy** mode (`--rank-binding`).
 
 ## Examples Overview
 

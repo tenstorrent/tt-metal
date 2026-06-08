@@ -5,6 +5,10 @@
 #include <cstdlib>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #define TILE_WIDTH 32
 
@@ -20,7 +24,7 @@ void kernel_main() {
     uint32_t num_bytes_per_tile = get_tile_size(cb_out);
 
     constexpr auto dst_args = TensorAccessorArgs<0>();
-    const auto s0 = TensorAccessor(dst_args, dst_addr, num_bytes_per_tile);
+    const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     union value {
         float f;
@@ -31,15 +35,18 @@ void kernel_main() {
     start_u.u = start;
     step_u.u = step;
 
+    Noc noc;
+    CircularBuffer cb_out_obj(cb_out);
+
     for (uint32_t t = 0; t < num_tiles; t++) {
-        cb_reserve_back(cb_out, 1);
+        cb_out_obj.reserve_back(1);
 
         uint32_t tile_idx = tile_offset + t;
 
-        uint32_t w_addr = get_write_ptr(cb_out);
+        uint32_t w_addr = cb_out_obj.get_write_ptr();
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
-        auto ptr = reinterpret_cast<uint16_t*>(w_addr);
+        CoreLocalMem<uint16_t> ptr(w_addr);
         for (uint32_t w = 0; w < 16; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
@@ -54,7 +61,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
-        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
         for (uint32_t w = 0; w < 16; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             int32_t val;
@@ -69,7 +76,7 @@ void kernel_main() {
         }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
-        auto ptr = reinterpret_cast<uint32_t*>(w_addr);
+        CoreLocalMem<uint32_t> ptr(w_addr);
         for (uint32_t w = 0; w < 16; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
@@ -84,8 +91,12 @@ void kernel_main() {
         }
 #endif
 
-        uint64_t dst_noc_addr = get_noc_addr(tile_idx, s0);
-        noc_async_write(w_addr, dst_noc_addr, num_bytes_per_tile);
-        noc_async_write_barrier();
+        noc.async_write(
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
+            s0,
+            num_bytes_per_tile,
+            {.offset_bytes = 0},
+            {.page_id = tile_idx});
+        noc.async_write_barrier();
     }
 }

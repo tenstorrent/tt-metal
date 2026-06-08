@@ -79,3 +79,4 @@ jobs:
                 )
             )
         }}
+      test-selection: all

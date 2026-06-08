@@ -24,9 +24,9 @@ Workflows checked (by category):
     - core: sanity-tests
     - single-card: demo-tests, perf-models, perf-device-models
     - t3000: demo, e2e, fast, integration, perf, perplexity, profiler, unit tests
-    - galaxy: apc-fast, deepseek, demo, e2e, frequent, model-perf, multi-user, profiler,
-              quick, stress, unit, tg-op-perf tests
-    - blackhole: demo, multi-card-demo, multi-card-unit, nightly, post-commit tests
+    - galaxy: deepseek, deepseek-prefill, demo, e2e, health, integration, model-perf,
+              multi-user, profiler, sanity, stress, unit tests
+    - blackhole: demo, e2e, post-commit tests
 
 Usage examples:
     # Compare all workflows (default)
@@ -454,22 +454,21 @@ def main():
         "t3000-fast-tests.yaml",
         "t3000-integration-tests.yaml",
         "t3000-perf-tests.yaml",
-        "t3000-perplexity-tests.yaml",
         "t3000-profiler-tests.yaml",
         "t3000-unit-tests.yaml",
-        # Galaxy (TG)
-        "galaxy-apc-fast-tests.yaml",
+        # Galaxy
         "galaxy-deepseek-tests.yaml",
+        "galaxy-deepseek-prefill-tests.yaml",
         "galaxy-demo-tests.yaml",
         "galaxy-e2e-tests.yaml",
-        "galaxy-frequent-tests.yaml",
+        "galaxy-health.yaml",
+        "galaxy-integration-tests.yaml",
         "galaxy-perf-tests.yaml",
         "galaxy-multi-user-isolation-tests.yaml",
         "galaxy-profiler-tests.yaml",
-        "galaxy-quick.yaml",
+        "galaxy-sanity.yaml",
         "galaxy-stress-tests.yaml",
         "galaxy-unit-tests.yaml",
-        "tg-op-perf-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
@@ -482,7 +481,7 @@ def main():
             "core": ["sanity-tests"],
             "single-card": ["single-card", "perf-models", "perf-device-models"],
             "t3000": ["t3000-"],
-            "galaxy": ["galaxy-", "tg-"],
+            "galaxy": ["galaxy-"],
             "blackhole": ["blackhole-"],
         }
         prefixes = category_filters.get(args.category, [])

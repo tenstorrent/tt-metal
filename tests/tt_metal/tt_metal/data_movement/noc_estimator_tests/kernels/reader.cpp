@@ -8,7 +8,7 @@
 // All modes use the experimental Noc API.
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "log_helpers.hpp"
 
 void kernel_main() {
@@ -29,8 +29,8 @@ void kernel_main() {
     constexpr uint32_t same_axis = get_compile_time_arg_val(11);
     constexpr uint32_t loopback_meta = get_compile_time_arg_val(12);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_ep;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_ep;
 
     // ============ MODE 0: READ SINGLE (one_from_one) ============
     if constexpr (mode == READER_MODE_SINGLE) {

@@ -11,6 +11,10 @@ on:
         options:
           - all
           - module
+          - moe_gate
+          - mla
+          - prefill_block
+          - prefill_transformer
         default: 'all'
       platform:
         required: false

@@ -6,7 +6,7 @@ inputs:
     description: "Environment name"
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the environment'
     required: false
     default: 'ttop-ci'
 
@@ -18,6 +18,4 @@ runs:
       env:
         ENVIRONMENT_NAME: ${{ inputs.environmentName }}
       run: |
-        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
-        validate_allocation_name "$ENVIRONMENT_NAME" || exit 1
-        kubectl -n ${{ inputs.namespace }} delete helmrelease/$ENVIRONMENT_NAME --ignore-not-found
+        kubectl -n ${{ inputs.namespace }} delete helmrelease/${{ inputs.environmentName }} || true

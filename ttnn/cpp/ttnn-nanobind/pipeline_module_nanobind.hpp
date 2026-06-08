@@ -10,5 +10,6 @@ namespace ttnn::pipeline_module {
 
 namespace nb = nanobind;
 void bind_blitz_decode_pipeline(nb::module_& mod);
+void bind_pipeline_builder(nb::module_& mod);
 
 }  // namespace ttnn::pipeline_module

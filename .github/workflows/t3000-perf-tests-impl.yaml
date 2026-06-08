@@ -126,16 +126,7 @@ jobs:
           TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           source tests/scripts/t3000/run_t3000_perf_tests.sh
-          echo "$TEST_CMD"
-          # Write command to script file to safely handle quotes and special characters
-          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
-          #!/bin/bash
-          set -euo pipefail
-          source tests/scripts/t3000/run_t3000_perf_tests.sh
-          SCRIPT_EOF
-          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
-          chmod +x /tmp/test_cmd.sh
-          bash /tmp/test_cmd.sh
+          ${{ matrix.test-group.cmd }}
           env python3 models/perf/merge_perf_results.py
       - name: Save environment data
         id: save-environment-data

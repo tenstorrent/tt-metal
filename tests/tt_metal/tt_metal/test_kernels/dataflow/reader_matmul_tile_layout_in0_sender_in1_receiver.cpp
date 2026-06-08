@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 
 void kernel_main() {
@@ -65,28 +65,28 @@ void kernel_main() {
     constexpr uint32_t num_used_dram_ch_pow2_exponent = 3;
     constexpr uint32_t tile_size_pow2_exponent = 11;
 
-    experimental::Noc noc;
+    Noc noc;
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
 
     uint32_t single_tile_size_bytes = cb_in0.get_tile_size();
 
     uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
 
-    experimental::Semaphore in0_mcast_sender_semaphore(in0_mcast_sender_semaphore_id);
-    experimental::Semaphore in0_mcast_receiver_semaphore(in0_mcast_receiver_semaphore_id);
-    experimental::Semaphore in1_mcast_sender_semaphore(in1_mcast_sender_semaphore_id);
-    experimental::Semaphore in1_mcast_receiver_semaphore(in1_mcast_receiver_semaphore_id);
+    Semaphore in0_mcast_sender_semaphore(in0_mcast_sender_semaphore_id);
+    Semaphore in0_mcast_receiver_semaphore(in0_mcast_receiver_semaphore_id);
+    Semaphore in1_mcast_sender_semaphore(in1_mcast_sender_semaphore_id);
+    Semaphore in1_mcast_receiver_semaphore(in1_mcast_receiver_semaphore_id);
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     in0_mcast_receiver_semaphore.set(VALID);
 
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
+    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         cb_in0.reserve_back(in0_block_num_tiles);
@@ -123,8 +123,8 @@ void kernel_main() {
         // Now we have the block in the CB address, we can mcast to dests!
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc.async_write_multicast(
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
-            experimental::use<experimental::CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
+            use<CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
+            use<CircularBuffer::AddrSel::WRITE_PTR>(cb_in0),
             in0_block_size_bytes,
             in0_mcast_num_dests,
             {},

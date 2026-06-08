@@ -97,7 +97,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 while (packed_tiles < BLOCK_CT_DIM)
                 {
-                    std::uint32_t tile_index = read_offset + packed_tiles;
+                    const std::uint32_t tile_index = read_offset + packed_tiles;
                     if (remaining_tiles > 2 * dest_size)
                     {
                         _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
@@ -106,8 +106,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                    = even_remainder / unit_dim;
+                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                          = even_remainder / unit_dim;
                         _llk_unpack_fast_tilize_block_(L1_ADDRESS(buffer_A[0]), tile_index, formats.unpack_A_src, unit_dim, num_units, BLOCK_CT_DIM, num_faces);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;
@@ -151,6 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_fast_tilize.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -193,8 +194,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                    = even_remainder / unit_dim;
+                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                          = even_remainder / unit_dim;
                         _llk_math_fast_tilize_block_(0, formats.math, unit_dim, num_units, num_faces);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;
@@ -239,6 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_fast_tilize.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -253,8 +255,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t use_32bit_dest = formats.unpack_A_dst == ckernel::to_underlying(DataFormat::Tf32);
     {
         ZONE_SCOPED("INIT")
-        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>();
-        _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
+        _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>();
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+            formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
         _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2, num_faces);
         PROFILER_SYNC();
     }
@@ -277,7 +280,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     _llk_packer_wait_for_math_done_();
 
-                    std::uint32_t tile_index = write_offset + packed_tiles / bank_density;
+                    const std::uint32_t tile_index = write_offset + packed_tiles / bank_density;
                     if (remaining_tiles > 2 * dest_size)
                     {
                         _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
@@ -286,8 +289,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else if (remaining_tiles > dest_size)
                     {
-                        std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
-                        num_units                    = even_remainder / unit_dim;
+                        const std::uint32_t even_remainder = remaining_tiles / 2 + ((remaining_tiles / 2) % 2);
+                        num_units                          = even_remainder / unit_dim;
                         _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
                         packed_tiles += even_remainder;
                         remaining_tiles -= even_remainder;

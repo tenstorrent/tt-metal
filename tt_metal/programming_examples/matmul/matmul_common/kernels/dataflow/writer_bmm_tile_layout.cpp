@@ -30,7 +30,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     constexpr auto s_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(s_args, out_tensor_addr, single_tile_size_bytes);
+    const auto s = TensorAccessor(s_args, out_tensor_addr);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {

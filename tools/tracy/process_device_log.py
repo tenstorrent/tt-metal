@@ -321,6 +321,8 @@ def get_dispatch_core_ops(timeseries):
     }
     for ts in timeseries:
         timerID, tsValue, attachedData, risc = ts
+        if risc not in riscData:
+            continue
         riscData[risc]["zone"].append(ts)
 
         if "meta_data" in timerID and "workers_runtime_id" in timerID["meta_data"]:

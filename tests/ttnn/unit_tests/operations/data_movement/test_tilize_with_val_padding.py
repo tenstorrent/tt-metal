@@ -5,14 +5,10 @@
 import math
 import pytest
 import torch
-from functools import partial
-
-from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import (
+from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
 
@@ -77,18 +73,26 @@ params += [
 
 @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
-    datagen_func = [
-        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-    ]
-    comparison_func = comparison_funcs.comp_equal
-    run_single_pytorch_test(
-        "tilize_with_val_padding",
-        input_shapes,
-        datagen_func,
-        comparison_func,
-        device,
-        tilize_with_val_padding_args,
+    shape = input_shapes[0]
+    torch_input = (torch.rand(shape) * 200 - 100).to(torch.bfloat16)
+
+    output_tensor_shape = tilize_with_val_padding_args["output_tensor_shape"]
+    pad_value = tilize_with_val_padding_args["pad_value"]
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=tilize_with_val_padding_args["dtype"][0],
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=tilize_with_val_padding_args["input_mem_config"][0],
     )
+    tt_output = ttnn.tilize_with_val_padding(
+        tt_input, output_tensor_shape, pad_value, memory_config=tilize_with_val_padding_args["output_mem_config"]
+    )
+    torch_output = tt_output.cpu().to_torch_with_padded_shape()
+
+    torch_golden = pytorch_tilize_with_val_padding(torch_input, output_tensor_shape, pad_value)
+    assert_equal(torch_golden, torch_output)
 
 
 @pytest.mark.parametrize("input_shape", [(32, 15916), (16, 5210112), (48, 5210112), (180, 5210116)])
@@ -131,14 +135,14 @@ def test_run_tilize_large_row_input(device, input_shape):
         (
             [3, 100, 158],
             [2, 64, 96],
-            [4, 128, 160],
+            [3, 128, 160],
             [3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
         (
             [5, 3, 100, 158],
             [4, 2, 64, 96],
-            [8, 4, 128, 160],
+            [5, 3, 128, 160],
             [5, 3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
         ),
@@ -284,7 +288,7 @@ def test_tilize_with_val_padding_interleaved_to_nd_sharded(
     [
         (
             [3, 100, 128],
-            [4, 128, 160],
+            [3, 128, 128],
             [3, 96, 96],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
         ),
@@ -450,7 +454,7 @@ def test_tilize_with_val_padding_nd_sharded_to_legacy_sharded(
     "tensor_shape, output_padded_shape",
     [
         # Input smaller than output (padding in both dims). Shard row size must be multiple of 8 (16-byte alignment).
-        ([3, 100, 128], [3, 128, 160]),
+        ([3, 100, 128], [3, 128, 128]),
     ],
 )
 @pytest.mark.parametrize("pad_value", [10.2])

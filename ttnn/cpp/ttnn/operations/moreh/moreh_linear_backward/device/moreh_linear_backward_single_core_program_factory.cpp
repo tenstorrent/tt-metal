@@ -12,8 +12,7 @@
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::cached_program_t
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
+tt::tt_metal::ProgramDescriptor MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& bias_grad) {
@@ -24,7 +23,6 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
 
     const auto& output_grad_shape_wo_padding = output_grad.logical_shape();
 
-    auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const bool do_mask_h = (output_grad_shape_wo_padding[-2] % constants::TILE_HEIGHT) != 0;
@@ -51,9 +49,8 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
     CoreCoord core = {0, 0};
-    const uint32_t core_num = 1;
+    const CoreRangeSet core_set{CoreRange(core, core)};
 
     IDevice* device = output_grad.device();
     auto arch = device->arch();
@@ -64,93 +61,140 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
     auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
+    auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
 
-    CreateCircularBuffer(
-        program,
-        std::set<CoreRange>{CoreRange(core, core)},
-        cb_data_format,
-        {{CBIndex::c_0, in0_t},    // output_grad
-         {CBIndex::c_1, in1_t},    // scaler
-         {CBIndex::c_2, in2_t},    // mask_h_w
-         {CBIndex::c_16, out0_t},  // bias_grad
-         {CBIndex::c_24, im0_t},
-         {CBIndex::c_25, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * tile_size(cb_data_format),
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });  // output_grad
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * tile_size(cb_data_format),
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });  // scaler
+    if (in2_t > 0) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in2_t * tile_size(cb_data_format),
+            .core_ranges = core_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
+                .data_format = cb_data_format,
+                .page_size = tile_size(cb_data_format),
+            }}},
+        });  // mask_h_w
+    }
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * tile_size(cb_data_format),
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });  // bias_grad
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im0_t * tile_size(cb_data_format),
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = cb_data_format,
+            .page_size = tile_size(cb_data_format),
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = im1_t * tile_size(fp32_dest_acc_en_data_format),
+        .core_ranges = core_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_25),
+            .data_format = fp32_dest_acc_en_data_format,
+            .page_size = tile_size(fp32_dest_acc_en_data_format),
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args =
+        TensorAccessorArgs(*output_grad.buffer()).get_compile_time_args();
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args =
+        TensorAccessorArgs(*bias_grad.buffer()).get_compile_time_args();
 
-    std::vector<uint32_t> reader_compile_time_args{};
-    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args{};
-    TensorAccessorArgs(bias_grad.buffer()).append_to(writer_compile_time_args);
-
-    const auto* const reader_kernel_file =
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_set;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    const auto* const writer_kernel_file =
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
-
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_set;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> compute_kernel_args = {};
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["REDUCE_OP"] = "PoolType::SUM";
-    compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
+    std::map<std::string, std::string> compute_defines_map;
+    compute_defines_map["REDUCE_OP"] = "PoolType::SUM";
+    compute_defines_map["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
 
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto* const compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
+    KernelDescriptor::Defines compute_defines(compute_defines_map.begin(), compute_defines_map.end());
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
-    const auto compute_kernel_id = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core, core_num, compute_kernel_args},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_set;
+    compute_desc.compile_time_args = {};
+    compute_desc.defines = compute_defines;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
+    reader_desc.emplace_runtime_args(
         core,
-        {output_grad.buffer()->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
-    SetRuntimeArgs(program, writer_kernel_id, core, {bias_grad.buffer()->address(), 1, 0});
-    SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
+        {output_grad.buffer(),
+         num_tiles,
+         0u,
+         mask_h,
+         mask_w,
+         static_cast<uint32_t>(do_mask_h),
+         static_cast<uint32_t>(do_mask_w)});
+    writer_desc.emplace_runtime_args(core, {bias_grad.buffer(), 1u, 0u});
+    compute_desc.emplace_runtime_args(
+        core, {batch_num, Ht, Wt, static_cast<uint32_t>(do_mask_h), static_cast<uint32_t>(do_mask_w)});
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id}};
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+
+    return desc;
 }
 
-void MorehBiasAddBackwardOperation::SingleCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-
-    auto* output_grad_buffer = tensor_args.output_grad.buffer();
-    auto* bias_grad_buffer = tensor_return_value.buffer();
-    CoreCoord core = {0, 0};
-    {
-        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = output_grad_buffer->address();
-    }
-
-    {
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-        runtime_args[0] = bias_grad_buffer->address();
-    }
-}
 }  // namespace ttnn::operations::moreh::moreh_linear_backward

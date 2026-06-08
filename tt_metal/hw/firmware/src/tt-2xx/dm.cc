@@ -54,8 +54,8 @@ thread_local uint32_t crta_count __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
-uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
-uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
@@ -102,14 +102,14 @@ void deassert_trisc() {
 }
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
-RemapperAPI g_remapper_configurator __attribute__((used));
+overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+volatile KernelBarrier g_kernel_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
-    // NOC setup
     set_deassert_addresses();
     setup_isr_csrs();
     // wzeromem
@@ -136,6 +136,7 @@ inline void run_triscs(uint32_t enables) {
     }
     DPRINT << "DM-FW: running TRISCs " << enables << ENDL();
     DEVICE_PRINT("DM-FW: running TRISCs {}\n", enables);
+    invalidate_trisc_instruction_cache();
     if (enables &
         (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E0_MATH0))) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
@@ -209,9 +210,9 @@ extern "C" uint32_t _start1() {
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
-        DEVICE_PRINT_INITIALIZE_LOCK();
         risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+        thread_sync_init();
 
         deassert_trisc();
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
@@ -219,6 +220,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -292,7 +294,7 @@ extern "C" uint32_t _start1() {
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
                 my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
                 my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-                noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 // re-initialize the NoCs
                 // uint8_t cmd_buf;
                 // if (noc_mode == DM_DEDICATED_NOC) {
@@ -317,13 +319,15 @@ extern "C" uint32_t _start1() {
                 }
                 start_subordinate_kernel_run_early(enables);
 
+                // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
+                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+
                 // Run the kernel
-                WAYPOINT("R");
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
+                WAYPOINT("R");
                 if (enables & (1u << index)) {
-                    uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
-                    setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
-                    uint32_t kernel_lma =
+                    uintptr_t kernel_lma =
                         (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                     asm("FENCE.i");
                     uint32_t* kernel_ptr = reinterpret_cast<uint32_t*>(kernel_lma);
@@ -400,7 +404,7 @@ extern "C" uint32_t _start1() {
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
-        uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+        uintptr_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
@@ -409,6 +413,7 @@ extern "C" uint32_t _start1() {
         setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
         while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {

@@ -13,7 +13,9 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/device.hpp"
@@ -49,11 +51,11 @@ std::vector<Tensor> fold_with_transpose_(
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
 
-    log_info(tt::LogOp, "padded_c: {}", padded_c);
-    log_info(tt::LogOp, "padded_h: {}", padded_h);
-    log_info(tt::LogOp, "padded_w: {}", padded_w);
-    log_info(tt::LogOp, "padded_h32: {}", padded_h32);
-    log_info(tt::LogOp, "padded_w32: {}", padded_w32);
+    log_debug(tt::LogOp, "padded_c: {}", padded_c);
+    log_debug(tt::LogOp, "padded_h: {}", padded_h);
+    log_debug(tt::LogOp, "padded_w: {}", padded_w);
+    log_debug(tt::LogOp, "padded_h32: {}", padded_h32);
+    log_debug(tt::LogOp, "padded_w32: {}", padded_w32);
 
     auto L1_mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
@@ -325,7 +327,15 @@ static Tensor apply_halo_padding(
     ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);
+    const auto compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        std::nullopt,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
+    auto halo_output =
+        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(

@@ -356,7 +356,7 @@ __attribute__((optimize("jump-tables"))) void execute_chip_unicast_to_relay(
     uint32_t transaction_id,
     uint8_t rx_channel_id) {
     // Assert that relay has space (best effort check)
-    ASSERT(local_relay_interface.edm_has_space_for_packet());
+    ASSERT(local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>());
 
     // Send the full packet (header + payload) to relay
     // The relay will handle the local chip forwarding
@@ -407,7 +407,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         new_value = cached_routing_fields.route_buffer[0];
 
 // Shift buffer left
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT - 1; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i + 1];
@@ -415,7 +415,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
         const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[EXT - 1] = 0;
     } else {
 // No refill needed - just copy buffer as-is
-#pragma unroll
+#pragma GCC unroll 16
         for (uint32_t i = 0; i < EXT; i++) {
             const_cast<uint32_t*>(packet_header->routing_fields.route_buffer)[i] =
                 cached_routing_fields.route_buffer[i];

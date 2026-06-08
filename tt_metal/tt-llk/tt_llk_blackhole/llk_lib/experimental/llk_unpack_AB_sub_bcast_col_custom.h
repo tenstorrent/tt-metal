@@ -10,20 +10,15 @@
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
 #include "ckernel_ops.h"
-#include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "llk_assert.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
-template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
-    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, [[maybe_unused]] const bool narrow_tile = false)
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_()
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
     // Force both unpackers to unpack entire tile
@@ -32,7 +27,6 @@ inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
 }
 
 // SDPA-specific custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.
-template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_sub_bcast_col_custom_(const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t ct_dim = 1)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters

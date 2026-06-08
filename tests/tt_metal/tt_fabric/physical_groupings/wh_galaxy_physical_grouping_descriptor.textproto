@@ -217,7 +217,7 @@ groupings {
 
 # MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
 groupings {
-  name: "8x16_Mesh"
+  name: "8x16_Mesh_2x2"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: HOSTS } },
@@ -227,6 +227,21 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 2]
+  }
+}
+
+# MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
+groupings {
+  name: "8x16_Mesh_4x1"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [4, 1]
   }
 }
 

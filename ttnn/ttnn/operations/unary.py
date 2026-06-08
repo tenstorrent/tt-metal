@@ -23,7 +23,7 @@ def register_ttnn_cpp_unary_function(unary_function):
 
         def torch_hardmish(x):
             x_f32 = x.to(torch.float32)
-            result_f32 = x_f32 * torch.clamp(x_f32 + 2.8, min=0.0, max=5.0) / 5
+            result_f32 = x_f32 * torch.clamp(x_f32 * 0.5 + 1.0, min=0.0, max=1.0)
 
             if x.dtype == torch.bfloat16:
                 # Simulate SFPSTORE truncating
@@ -585,6 +585,13 @@ ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_so
 def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
+    if eps is not None and eps > 0.5:
+        # Manual implementation to avoid platform-dependent UB in torch.special.logit
+        # when eps > 0.5 (std::clamp with lo > hi is undefined behavior).
+        lo = 1.0 - eps
+        hi = eps
+        x = torch.clamp(input_tensor_a, lo, hi)
+        return torch.log(x / (1.0 - x))
     return torch.special.logit(input_tensor_a, eps=eps)
 
 

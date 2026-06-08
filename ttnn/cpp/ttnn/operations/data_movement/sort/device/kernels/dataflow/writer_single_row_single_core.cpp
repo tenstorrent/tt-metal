@@ -36,9 +36,7 @@ void kernel_main() {
 
     // Output tensor config
     constexpr uint32_t one_tile = 1;
-    const uint32_t value_tensor_tile_size_bytes = get_tile_size(value_tensor_cb_index);
-    const auto interleaved_accessor0 =
-        TensorAccessor(value_tensor_args, value_tensor_buffer_addr, value_tensor_tile_size_bytes);
+    const auto interleaved_accessor0 = TensorAccessor(value_tensor_args, value_tensor_buffer_addr);
 
     // Move data from L1 to DRAMs
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {

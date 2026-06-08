@@ -78,8 +78,10 @@ def test_unet_2d_condition_model_512x512(
     if not load_from_disk:
         model = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
         config = model.config
-        torch.save(model, "unet.pt")
-        torch.save(config, "unet_config.pt")
+        # Uncomment the lines below to cache the model to disk for faster local iteration,
+        # then set load_from_disk = True on subsequent runs to skip the HF download/preprocessing.
+        # torch.save(model, "unet.pt")
+        # torch.save(config, "unet_config.pt")
     else:
         model = torch.load("unet.pt")
         config = torch.load("unet_config.pt")

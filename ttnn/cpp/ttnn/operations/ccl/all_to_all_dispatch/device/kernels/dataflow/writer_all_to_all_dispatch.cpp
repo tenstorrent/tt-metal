@@ -148,8 +148,8 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address, output_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    const auto output_addr_gen = TensorAccessor(output_args, output_tensor_address);
+    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
@@ -185,7 +185,7 @@ void kernel_main() {
         // we need the global token index to write to the output buffer – each global token that could potentially be
         // sent has a unique output buffer address to ensure that it is not overwritten by another token
         uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-        uint64_t output_token_write_addr = get_noc_addr(global_token, output_addr_gen);
+        uint64_t output_token_write_addr = output_addr_gen.get_noc_addr(global_token);
         cb_wait_front(indices_tensor_cb_id, 1);
         cb_wait_front(input_tensor_cb_id, 1);
         uint32_t input_token_read_addr = get_read_ptr(input_tensor_cb_id);
@@ -262,7 +262,7 @@ void kernel_main() {
     if constexpr (write_page_by_page) {
         for (uint32_t local_token = token_start_idx; local_token < token_end_idx; local_token++) {
             uint32_t global_token = (local_token + (tokens_per_device * dispatch_index));
-            uint64_t metadata_write_addr = get_noc_addr(global_token, metadata_addr_gen);
+            uint64_t metadata_write_addr = metadata_addr_gen.get_noc_addr(global_token);
             uint32_t token_indices_address =
                 base_indices_addr + ((local_token - token_start_idx) * aligned_indices_page_size);
 

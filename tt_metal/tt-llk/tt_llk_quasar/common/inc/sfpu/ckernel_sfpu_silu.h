@@ -25,7 +25,7 @@ inline void _calculate_silu_sfp_rows_()
     TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0); // store from lreg[1] into dest register
 }
 
-inline void _calculate_silu_(const int iterations)
+inline void _calculate_silu_(const int iterations = SFPU_ITERATIONS)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)

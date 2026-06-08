@@ -10,8 +10,6 @@ on:
         default: all
         options:
           - all
-          - falcon7b
-          - falcon40b
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large

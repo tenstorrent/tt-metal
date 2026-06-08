@@ -782,5 +782,15 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
+// Estimate fabric transfer time (nanoseconds).
+//   arch:          Wormhole or Blackhole
+//   data_bytes:    total bytes that must traverse the bottleneck link
+//   num_links:     number of parallel ethernet links
+//   num_hops:      number of fabric hops (for latency)
+double estimate_fabric_transfer_ns(
+    tt::ARCH arch,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops);
 
 }  // namespace ttnn::ccl

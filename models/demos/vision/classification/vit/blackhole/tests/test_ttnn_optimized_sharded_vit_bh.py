@@ -87,7 +87,9 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = load_torch_model(model_location_generator, embedding=True)
 
-    dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
+    dataset = load_dataset(
+        "huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149", trust_remote_code=True
+    )
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
@@ -378,7 +380,9 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     model = load_torch_model(model_location_generator, embedding=True)
     config = model.config
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
-    dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
+    dataset = load_dataset(
+        "huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149", trust_remote_code=True
+    )
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values

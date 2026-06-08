@@ -7,20 +7,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "../../../unified_kernels/termination.hpp"
 #include "api/socket_api.h"
 #include "pcie_noc_utils.h"
-
-FORCE_INLINE bool socket_wait_for_pages_with_termination(
-    const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
-    constexpr uint32_t termination_value = 1;
-    while (!socket_wait_for_pages(socket, num_pages, 1000)) {
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == termination_value) {
-            return false;
-        }
-    }
-    return true;
-}
 
 void kernel_main() {
     constexpr uint32_t send_socket_config_addr = get_compile_time_arg_val(0);
@@ -72,7 +61,8 @@ void kernel_main() {
     // Collect data from all upstream sockets into a single 14KB page
     while (true) {
         // Wait for pages in current upstream socket with termination checks
-        if (!socket_wait_for_pages_with_termination(receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
+        if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(
+                receiver_sockets[current_socket_idx], 1, termination_semaphore)) {
             break;
         }
 

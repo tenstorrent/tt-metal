@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -48,11 +48,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_intermed0 = tt::CBIndex::c_3;
     constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_4;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0_obj(cb_id_in0);
-    experimental::CircularBuffer cb_intermed0_obj(cb_id_intermed0);
-    experimental::CircularBuffer cb_intermed1_obj(cb_id_intermed1);
-    experimental::CircularBuffer cb_out_obj(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_in0_obj(cb_id_in0);
+    CircularBuffer cb_intermed0_obj(cb_id_intermed0);
+    CircularBuffer cb_intermed1_obj(cb_id_intermed1);
+    CircularBuffer cb_out_obj(cb_id_out);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;
@@ -62,13 +62,13 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<3>();
 
 #ifndef IN0_SHARDED
-    const auto s0 = TensorAccessor(in0_args, src0_addr, in0_tile_bytes);
+    const auto s0 = TensorAccessor(in0_args, src0_addr);
 #endif
 
     const uint32_t out_tile_bytes = get_tile_size(cb_id_out);
     constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 #ifndef OUT_SHARDED
-    const auto s = TensorAccessor(out_args, dst_addr, out_tile_bytes);
+    const auto s = TensorAccessor(out_args, dst_addr);
 #endif
 
 #ifndef IN0_SHARDED
@@ -86,7 +86,7 @@ void kernel_main() {
 
     uint32_t local_noc_x = my_x[noc.get_noc_id()];
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
-    experimental::UnicastEndpoint local_src;
+    UnicastEndpoint local_src;
 
     for (uint32_t b = 0; b < blocks; b++) {  // TODO: Must be 1
 #ifndef IN0_SHARDED
@@ -130,7 +130,7 @@ void kernel_main() {
                         // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
                         cb_intermed0_obj.wait_front(intermediate_num_tiles);
                         uint32_t src_addr = cb_intermed0_obj.get_read_ptr() + row_offset_bytes;
-                        experimental::CoreLocalMem<uint32_t> local_dst(cb_intermed1_addr_curr_block);
+                        CoreLocalMem<uint32_t> local_dst(cb_intermed1_addr_curr_block);
                         noc.async_read(
                             local_src,
                             local_dst,

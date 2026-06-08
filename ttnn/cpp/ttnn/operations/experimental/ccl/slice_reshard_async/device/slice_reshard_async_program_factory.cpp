@@ -65,19 +65,25 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
     // and the cluster-axis.
     devices_to_use = (args.cluster_axis == 0) ? mesh_view.get_devices_on_column(mesh_coord[1])
                                               : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const auto fabric_node_ids = (args.cluster_axis == 0) ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
+                                                          : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
     uint32_t ring_size = devices_to_use.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_fabric_node_id = std::nullopt;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t ring_index = 0;  // Initialize ring (device) index
     for (uint32_t i = 0; i < ring_size; ++i) {
         if (devices_to_use.at(i) == sender_device) {
             ring_index = i;
             if (i != 0) {
                 backward_device = devices_to_use.at(i - 1);
+                backward_fabric_node_id = fabric_node_ids.at(i - 1);
             }
             if (i != ring_size - 1) {
                 forward_device = devices_to_use.at(i + 1);
+                forward_fabric_node_id = fabric_node_ids.at(i + 1);
             }
         }
     }
@@ -232,26 +238,20 @@ SliceReshardAsyncProgramFactory::cached_program_t SliceReshardAsyncProgramFactor
                 args.barrier_semaphore.address(),
             };
             if (direction) {
-                writer_rt_args.push_back(forward_device.has_value());
-                if (forward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                writer_rt_args.push_back(forward_fabric_node_id.has_value());
+                if (forward_fabric_node_id.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        src_fabric_node_id, forward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
                 }
                 writer_rt_args.push_back(false);
             } else {
                 writer_rt_args.push_back(false);
-                writer_rt_args.push_back(backward_device.has_value());
-                if (backward_device.has_value()) {
-                    const auto src_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-                    const auto dst_fabric_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                writer_rt_args.push_back(backward_fabric_node_id.has_value());
+                if (backward_fabric_node_id.has_value()) {
+                    const auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coord);
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+                        src_fabric_node_id, backward_fabric_node_id.value(), link, program, {core}, writer_rt_args);
                 }
             }
             tt::tt_metal::SetRuntimeArgs(program, worker_writer_kernel_id, {core}, writer_rt_args);

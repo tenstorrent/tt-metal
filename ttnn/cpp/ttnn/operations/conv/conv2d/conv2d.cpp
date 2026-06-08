@@ -158,8 +158,15 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
-    const bool conv_is_1d_depthwise = is_1d_depthwise_conv(
-        groups, in_channels, out_channels, kernel_size[0], kernel_size[1], input_height, bias_tensor.has_value());
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, bias_tensor.has_value());
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        conv_is_1d_depthwise,
+        parallel_config.shard_scheme,
+        in_channels_padded,
+        kernel_size[1],
+        dilation[1],
+        input_tensor_post_tm.dtype());
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
@@ -173,7 +180,8 @@ Result conv2d_L1(
         output_width,
         kernel_size,
         compute_grid_size,
-        conv_is_1d_depthwise);
+        conv_is_1d_depthwise,
+        coalesce_1d_depthwise_kw_reads);
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -196,6 +204,7 @@ Result conv2d_L1(
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
+        coalesce_1d_depthwise_kw_reads,
         orig_stride);
 
     // Prepare weights and move to device if necessary
@@ -261,6 +270,7 @@ Result conv2d_L1(
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
+            .padding_mode = conv_config.padding_mode,
         };
 
         if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED ||
@@ -269,6 +279,7 @@ Result conv2d_L1(
             ttnn::Tensor halo_output = ttnn::halo(
                 input_tensor_post_tm,
                 sliding_window_config,
+                compute_config,
                 0,
                 false,
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
@@ -589,11 +600,16 @@ public:
         auto compute_grid_size = device->compute_with_storage_grid_size();
         auto conv_config = this->conv_config;
 
-        auto [input_start, input_end] = get_input_slice(output_slice_start, output_slice_end);
+        auto [input_slicing, slice_padding] = get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_start, input_end] = input_slicing;
         uint32_t input_slice_height = std::get<0>(input_end) - std::get<0>(input_start);
         uint32_t input_slice_width = std::get<1>(input_end) - std::get<1>(input_start);
-        uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
-        uint32_t output_slice_width = std::get<1>(output_slice_end) - std::get<1>(output_slice_start);
+        // Use padded output dimensions to match what the halo op actually produces.
+        // The halo output is tile-aligned, so edge slices get additional padding
+        // (e.g., output width 4 pads to 32). Without this, the shard spec is computed
+        // for the unpadded dimensions, leading to L1 underestimation.
+        auto [output_slice_height, output_slice_width] = calculate_output_image_size(
+            {input_slice_height, input_slice_width}, kernel_size, stride, slice_padding, dilation);
 
         bool single_slice =
             (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));

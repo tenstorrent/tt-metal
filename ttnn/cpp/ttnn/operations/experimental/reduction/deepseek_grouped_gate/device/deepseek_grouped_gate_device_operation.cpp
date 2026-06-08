@@ -101,5 +101,3 @@ deepseek_grouped_gate(
 }
 
 }  // namespace ttnn::prim
-
-namespace ttnn::operations::experimental::reduction {}  // namespace ttnn::operations::experimental::reduction

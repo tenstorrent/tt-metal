@@ -4,6 +4,7 @@
 
 #include "matmul.hpp"
 
+#include <numeric>
 #include <variant>
 
 #include "device/config/matmul_program_config_types.hpp"
@@ -106,9 +107,17 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // Fused matmul+bias does not support batched weights; apply bias via add().
+        if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
+            return true;
+        }
+        const auto& bias_tensor = bias.value();
+        // Fused matmul+bias does not support batched bias; apply bias via add().
+        if (detail::is_input_batched(bias_tensor.logical_shape())) {
+            return true;
+        }
         // Check if bias shape is compatible with kernel fusion
         // Bias fusion requires bias_shape_aligned[-2] == tile_height
-        const auto& bias_tensor = bias.value();
         const auto& bias_padded_shape = bias_tensor.padded_shape();
         const auto& tile_shape = input_tensor_a_adjusted.tensor_spec().tile().get_tile_shape();
         uint32_t tile_height = transpose_a ? tile_shape[1] : tile_shape[0];
@@ -262,6 +271,26 @@ static ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
+    const auto& matmul_shape = utilities::compute_matmul_output_shape(
+        input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+
+    ttnn::Shape result_shape = (bias.has_value()) ? utilities::compute_matmul_with_bias_output_shape(
+                                                        matmul_shape, bias.value().logical_shape())
+                                                  : matmul_shape;
+
+    if (optional_output_tensor.has_value()) {
+        const auto& desired_shape = optional_output_tensor->logical_shape();
+        uint64_t desired_vol = optional_output_tensor->logical_shape().volume();
+        uint64_t current_vol = std::accumulate(result_shape.begin(), result_shape.end(), 1ULL, std::multiplies<>());
+
+        TT_FATAL(desired_vol == current_vol, "Invalid optional output tensor");
+
+        output_tensor = ttnn::reshape(output_tensor, desired_shape);
+
+    } else if (bias.has_value()) {
+        output_tensor = ttnn::reshape(output_tensor, result_shape);
+    }
+
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
@@ -341,8 +370,7 @@ Tensor linear(
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
-    bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
-    TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+    bool user_run_batched = detail::is_input_batched(input_tensor_b.logical_shape());
 
     auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
@@ -353,7 +381,7 @@ Tensor linear(
         /*untilize_out=*/false,
         user_core_coord,
         get_fused_activation(activation),
-        /*user_run_batched=*/false,
+        user_run_batched,
         transpose_a,
         transpose_b,
         output_tile,

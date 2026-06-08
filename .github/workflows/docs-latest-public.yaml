@@ -13,6 +13,11 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      build-type:
+        description: 'Build type (Release or ASan). ASan builds require LD_PRELOAD of the ASan runtime.'
+        required: false
+        type: string
+        default: 'Release'
       dry-run:
         required: false
         type: boolean
@@ -59,6 +64,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if [ "${{ inputs.build-type }}" = "ASan" ]; then
+            # Preload the ASan runtime so Python can load ASan-instrumented native extensions
+            # without hitting missing-symbol errors at import time (Python itself is not ASan-built).
+            export LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so"
+            # Disable LeakSanitizer — it runs at process exit by default and produces spurious
+            # reports from Python internals/docs tooling that don't clean up deliberately.
+            export ASAN_OPTIONS="detect_leaks=0"
+          fi
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
         env:
@@ -67,7 +80,7 @@ jobs:
           mkdir gh_pages
           mv docs/build/html gh_pages/${VERSION}
       - name: Upload docs artifact (skipped for dry run)
-        if: "!inputs.dry-run"
+        if: ${{ !inputs.dry-run }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: gh_pages_${{ inputs.version }}

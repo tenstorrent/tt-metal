@@ -29,13 +29,16 @@ public:
     std::vector<std::vector<CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;            // starting address offset
 
+    // Per bank, ordered endpoint translated coordinates.
+    // Index 0 = preferred worker endpoint (NOC 0), indices 1..N = remaining endpoints on the same bank.
+    std::vector<std::vector<CoreCoord>> dram_bank_endpoint_coords;
+
     uint64_t dram_core_size{};
     uint64_t dram_view_size{};
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
     metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& board_type);
-    metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
@@ -53,6 +56,7 @@ public:
     CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const tt::CoreType& core_type) const;
 
     CoreCoord get_dram_grid_size() const;
+    CoreCoord get_dram_compute_grid_size() const;
 
     // Number of cores per DRAM bank ceiled to nearest integer
     int profiler_ceiled_core_count_perf_dram_bank = 0;

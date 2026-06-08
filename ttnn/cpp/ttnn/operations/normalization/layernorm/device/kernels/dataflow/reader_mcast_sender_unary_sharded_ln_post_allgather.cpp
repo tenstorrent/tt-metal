@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -27,17 +27,17 @@ void kernel_main() {
     constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // [E[x], E[x^2]] local to sender
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // [E[x], E[X^2]] global to all cores
 
-    experimental::Noc noc;
-    experimental::Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    experimental::CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    experimental::CircularBuffer cb_ex_global_obj(cb_ex_global);
-    experimental::MulticastEndpoint mcast_ep;
+    Noc noc;
+    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
+    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    MulticastEndpoint mcast_ep;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 
     const auto& global_semaphore_set = [&]() __attribute__((always_inline)) {
         reduce_sender_sem.set(VALID);
-        reduce_sender_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+        reduce_sender_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
             noc,
             mcast_dest_noc_start_x,
             mcast_dest_noc_start_y,
@@ -49,10 +49,10 @@ void kernel_main() {
     };
 
     const auto& global_reduce_sender =
-        [&](experimental::CircularBuffer& cb_ex_obj, experimental::CircularBuffer& cb_ex_global_obj_inner)
+        [&](CircularBuffer& cb_ex_obj, CircularBuffer& cb_ex_global_obj_inner)
             __attribute__((always_inline)) {
                 uint32_t l1_read_addr_ex_global = cb_ex_global_obj_inner.get_read_ptr();
-                noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
                     cb_ex_obj,
                     mcast_ep,
                     stats_tiles * num_tiles_per_worker_bytes,

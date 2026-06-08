@@ -1418,6 +1418,7 @@ def test_transpose_hc_mem_config(device, n, c, h, w):
     ids=["bfloat16", "float32", "int32", "bfloat8_b"],
 )
 def test_transpose_sharded(device, dim0, dim1, layout, input_sharding, output_sharding, dtype):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/issues/41662")
     if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is only supported for TILE layout")
 

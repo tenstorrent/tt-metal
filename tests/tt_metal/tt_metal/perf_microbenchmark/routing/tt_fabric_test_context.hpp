@@ -58,9 +58,14 @@ using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
 using CommonMemoryMap = tt::tt_fabric::fabric_tests::CommonMemoryMap;
 using ProgressMonitorConfig = tt::tt_fabric::fabric_tests::ProgressMonitorConfig;
 using TestProgressMonitor = tt::tt_fabric::fabric_tests::TestProgressMonitor;
+using MonitorResult = tt::tt_fabric::fabric_tests::MonitorResult;
+using HungEndpointRecord = tt::tt_fabric::fabric_tests::HungEndpointRecord;
+using HungEndpointWireRecord = tt::tt_fabric::fabric_tests::HungEndpointWireRecord;
 using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
 using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
 using TrafficPatternConfig = tt::tt_fabric::fabric_tests::TrafficPatternConfig;
+using FlowDescriptor = tt::tt_fabric::fabric_tests::FlowDescriptor;
+using FlowUid = tt::tt_fabric::fabric_tests::FlowUid;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -139,12 +144,22 @@ public:
 
     void wait_for_programs_with_progress();
 
+    bool did_last_test_hang() const { return last_test_hung_; }
+
+    void record_hung_test(const std::string& test_name) { hung_tests_.push_back(test_name); }
+
     // Accessors for progress monitor
     const std::unordered_map<MeshCoordinate, TestDevice>& get_test_devices() const { return test_devices_; }
 
     const SenderMemoryMap& get_sender_memory_map() const { return sender_memory_map_; }
 
     IDeviceInfoProvider* get_device_info_provider() const { return fixture_.get(); }
+
+    const TestFixture* get_fixture() const { return fixture_.get(); }
+
+    // Flow registry accessors
+    const FlowDescriptor& get_flow_descriptor(FlowUid uid) const { return flow_descriptors_.at(uid); }
+    const std::vector<FlowDescriptor>& get_flow_descriptors() const { return flow_descriptors_; }
 
     void process_telemetry_data(TestConfig& built_test_config);
 
@@ -268,12 +283,17 @@ private:
 
     bool show_workers_ = false;
 
+    // Flow registry: deterministic per-test, cleared on reset_devices()
+    std::vector<FlowDescriptor> flow_descriptors_;
+
     // Progress monitoring
     ProgressMonitorConfig progress_config_;
     std::filesystem::path raw_telemetry_csv_path_;
 
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
-    bool has_test_failures_ = false;  // Track if any tests failed validation
+    std::vector<std::string> hung_tests_;
+    bool has_test_failures_ = false;
+    bool last_test_hung_ = false;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;

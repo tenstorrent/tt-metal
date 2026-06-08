@@ -16,10 +16,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, Me
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
 WeightConfig = (
-    dict[str, "WeightConfig | SavedWeight | None"]
-    | list["WeightConfig | SavedWeight | None"]
+    dict[str, "WeightConfig | ttnn.Tensor | SavedWeight | None"]
+    | list["WeightConfig | ttnn.Tensor | SavedWeight | None"]
     | tuple[
-        "WeightConfig | SavedWeight | None", ...
+        "WeightConfig | ttnn.Tensor | SavedWeight | None", ...
     ]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
 )
 
@@ -89,6 +89,11 @@ def create_run_config(  # type: ignore
 
 
 def create_run_config(model_config, weight_config, *model_states, cached_ttnn_weights=None):
+    # Multihost: align ranks before any lazy ``load_weight`` / ``ttnn.load_tensor`` I/O so no rank reads
+    # weight files while another is still finishing cache publication in ``get_weight_config``.
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+
     # The states are merged to create a single unified model state.
     unified_model_state = functools.reduce(
         lambda cfg1, cfg2: _merge_config_containers(
@@ -155,6 +160,8 @@ def _merge_run_config(
     if isinstance(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        if isinstance(weight_config_item, ttnn.Tensor):
+            return weight_config_item
         if isinstance(weight_config_item, SavedWeight):
             # Check if we have cached weights first
             if cached_ttnn_weights is not None and weight_config_item.path in cached_ttnn_weights:
@@ -178,6 +185,10 @@ def _merge_run_config(
     # If model config doesn't need this weight (is None), but cached weight exists, ignore it
     if model_state_config_item is None and isinstance(weight_config_item, SavedWeight):
         logger.warning(f"Cached weight {weight_config_item.path} is not needed by the model config, ignoring it.")
+        return None
+
+    if model_state_config_item is None and isinstance(weight_config_item, ttnn.Tensor):
+        logger.warning("Resolved TTNN weight is not needed by the model config, ignoring it.")
         return None
 
     raise ValueError(
@@ -389,6 +400,11 @@ def is_op_config(obj: Any) -> bool:
 def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
     """
     Load a weight tensor from a SavedWeight object to a given mesh device.
+
+    On multihost meshes, ``ttnn.load_tensor`` opens the path on every MPI rank; cache directories must
+    therefore live on storage visible to all ranks. Callers should finish writing the weight cache
+    (including ``config.json``) and synchronize ranks (see ``get_weight_config`` / ``create_run_config``)
+    before the first ``load_weight`` for that cache.
     """
     # Load tensor directly to device to properly handle sharded layouts
     tensor = ttnn.load_tensor(
@@ -405,3 +421,31 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
             tensor = ttnn.to_memory_config(tensor, saved_weight.memory_config)
 
     return tensor
+
+
+def iter_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | SavedWeight | None):
+    if isinstance(weight_config_item, ttnn.Tensor):
+        yield weight_config_item
+        return
+
+    if isinstance(weight_config_item, dict):
+        for value in weight_config_item.values():
+            yield from iter_weight_config_tensors(value)
+        return
+
+    if isinstance(weight_config_item, (list, tuple)):
+        for value in weight_config_item:
+            yield from iter_weight_config_tensors(value)
+
+
+def deallocate_weight_config_tensors(weight_config_item: WeightConfig | ttnn.Tensor | SavedWeight | None) -> None:
+    seen_tensor_ids: set[int] = set()
+    for tensor in iter_weight_config_tensors(weight_config_item):
+        tensor_id = id(tensor)
+        if tensor_id in seen_tensor_ids:
+            continue
+        seen_tensor_ids.add(tensor_id)
+        try:
+            ttnn.deallocate(tensor)
+        except Exception as exc:
+            logger.warning(f"Failed to deallocate converted TTNN weight tensor: {exc}")

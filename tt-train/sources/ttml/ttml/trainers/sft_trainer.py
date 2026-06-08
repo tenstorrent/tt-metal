@@ -22,34 +22,10 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 import ttml
+from ttml.common.profiler_utils import profiler_marker
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
-
-
-class TrainerCallback:
-    """Base class for SFTTrainer callbacks.
-
-    Override any subset of hooks to customise training behaviour.
-    All methods are no-ops by default.
-    """
-
-    def on_train_begin(self, trainer: "SFTTrainer") -> None:
-        pass
-
-    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
-        pass
-
-    def on_eval_end(self, trainer: "SFTTrainer", step: int, eval_loss: float) -> None:
-        pass
-
-    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
-        pass
-
-    def on_save(self, trainer: "SFTTrainer", step: int, path: str) -> None:
-        pass
-
-    def on_train_end(self, trainer: "SFTTrainer") -> None:
-        pass
+from ttml.trainers.callback import TrainerCallback
 
 
 @dataclass
@@ -201,7 +177,7 @@ class SFTTrainer:
         self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         self._attention_mask = attention_mask
-        self._loss_fn = ttml.ops.loss.cross_entropy_loss
+        self._loss_fn = self._build_loss_fn()
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
         self._loss_composer = self._build_loss_composer(loss_composer)
@@ -242,13 +218,17 @@ class SFTTrainer:
             micro_losses = []
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
+                profiler_marker(None, "dataloader_step_done")
+
                 loss = self._compute_loss(batch)
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
+                profiler_marker(None, "forward_pass_done")
 
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
                 loss.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
+                profiler_marker(None, "backward_pass_done")
 
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
@@ -256,8 +236,12 @@ class SFTTrainer:
             if cfg.max_grad_norm > 0:
                 ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
+            profiler_marker(None, "gradient_sync_done")
+
             self._optimizer.step()
             self.step += 1
+
+            profiler_marker(None, "optimizer_step_done")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
@@ -287,6 +271,10 @@ class SFTTrainer:
                         self.step,
                         os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
                     )
+
+            profiler_marker(None, f"iteration_{self.step}", dump_results=True)
+            if self.step == 1:
+                profiler_marker(None, "compilation_finished")
 
         for cb in self._callbacks:
             cb.on_train_end(self)
@@ -399,6 +387,42 @@ class SFTTrainer:
             return loss_composer
         device = ttml.autograd.AutoContext.get_instance().get_device()
         return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
+    def _build_loss_fn(self):
+        """Pick the cross-entropy variant matching the LM head's logit sharding.
+
+        When the active mesh has a TP axis with size > 1 the conventional
+        SFTTrainer model shape (Llama with ``use_tp=True`` or
+        ``models.distributed.{llama,gpt2}``) emits vocab-sharded logits via
+        ``ColumnParallelLinear(gather_output=False)``.  Plain
+        ``cross_entropy_loss`` would compute its softmax denominator over each
+        TP shard instead of the full vocab — wrong by construction — so we
+        route through ``vocab_parallel_cross_entropy_loss`` with
+        ``cluster_axis`` bound to the TP axis.
+
+        The wrapper preserves the ``(logits, labels, reduce)`` signature of
+        ``cross_entropy_loss`` so the masked-CE flow in ``_compute_loss``
+        (``ReduceType.NONE`` per-token loss → ``* loss_mask`` → ``mean``) is
+        unchanged: the per-token shape ``[B, 1, T, 1]`` matches between the
+        two ops, and the upstream-grad broadcast in vocab-parallel CE handles
+        the ``loss_mask`` weighting in backward.
+
+        Pipeline-parallel models whose last stage gathers logits to the full
+        vocab fall outside this auto-detect rule (mesh has TP axis but the
+        loss should stay full-vocab CE); for those, pass ``compute_loss_func``
+        when constructing the trainer.
+        """
+        mesh = ttml.mesh()
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            tp_cluster_axis = mesh.axis_index("tp")
+
+            def vocab_parallel_loss(logits, labels, reduce):
+                return ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                    logits, labels, cluster_axis=tp_cluster_axis, reduce=reduce
+                )
+
+            return vocab_parallel_loss
+        return ttml.ops.loss.cross_entropy_loss
 
     @staticmethod
     def _enable_gradient_checkpointing(model: Any) -> None:

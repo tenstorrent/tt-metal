@@ -14,7 +14,7 @@ COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
 COPY docs/requirements-docs.txt docs/
 COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
-RUN uv pip install --system --no-cache setuptools
+RUN uv pip install --system --no-cache setuptools==80.10.2
 RUN uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
 RUN uv pip install --system --no-cache -r tools/triage/requirements.txt
 

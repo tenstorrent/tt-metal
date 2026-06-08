@@ -8,6 +8,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"  // Full definition needed for Cluster::is_mock_or_emulated()
 
 #include <string>
 
@@ -15,6 +16,7 @@ inline std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0";
         case tt::ARCH::BLACKHOLE: return "blackhole";
+        case tt::ARCH::QUASAR: return "quasar";
         case tt::ARCH::Invalid:
         default: return "invalid";
     }
@@ -37,6 +39,12 @@ inline std::string get_umd_arch_name() {
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
         return tt::arch_to_str(tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc));
+    }
+
+    // In mock/emulated mode, get arch from the already-initialized cluster
+    // rather than trying to probe real hardware.
+    if (tt_metal::MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+        return get_string_lowercase(tt_metal::MetalContext::instance().get_cluster().arch());
     }
 
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();

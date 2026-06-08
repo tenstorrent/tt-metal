@@ -11,8 +11,8 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
-from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
+from models.demos.stable_diffusion_xl_base.conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,

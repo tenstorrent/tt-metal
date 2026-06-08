@@ -14,6 +14,7 @@ sfpi_inline void load_value_param_float(uint value) { sfpi::vConstIntPrgm0 = val
 
 template <bool IS_MAX_OP>
 sfpi_inline void calculate_unary_max_min_float_body() {
+    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
 
     if constexpr (IS_MAX_OP) {
@@ -49,6 +50,8 @@ inline void calculate_unary_max_min(uint value) {
 #else
     constexpr int offset = 0;
 
+    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+    sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
@@ -68,6 +71,7 @@ sfpi_inline void load_value_param_int(uint value) {
 
 template <bool IS_MAX_OP, bool IS_UNSIGNED = false>
 sfpi_inline void calculate_unary_max_min_int32_body(uint value) {
+    sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
 
     if (IS_UNSIGNED ^ ((int)value >= 0)) {
@@ -117,6 +121,7 @@ inline void calculate_unary_max_min_int32(uint value) {
         // 0 | ...  | [a] L16 = not(a)      |     |       |         |
         // 1 | ...  |                       |     |       | [a] L16 |
 
+        sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             constexpr int a = p_sfpu::LREG0;
@@ -141,6 +146,8 @@ inline void calculate_unary_max_min_int32(uint value) {
         // 0 | ...  |                     |     |       |       |
         // 1 | ...  |                     |     |       | [a]   |
 
+        sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+        sfpi::l_reg[sfpi::LRegs::LReg1].in_use();
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
