@@ -55,6 +55,9 @@ MESH = (4, 8)
 MOE_IO = THIS_DIR / "moe_io"
 CE_DIR = MOE_IO / "ce_cache"
 PCC_FLOOR = 0.99
+# MOE_TRACE=1: capture run_moe_block into a metal-trace and time execute_trace (steady-state
+# DEVICE time). Keeps the block's external inputs alive so trace replay reads valid buffers.
+_TRACE = os.environ.get("MOE_TRACE") == "1"
 
 # Const-eval tensors the MoE block depends on (the only weight-derived inputs).
 # Caching these to disk lets us skip BOTH the 27 GB weight load AND the full
@@ -179,7 +182,8 @@ def run_moe_block(
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(ttnn_reshape_119, False)
-    ttnn.deallocate(ttnn_reshape_117, False)
+    if not _TRACE:  # keep block inputs alive across trace replay
+        ttnn.deallocate(ttnn_reshape_117, False)
     ttnn_typecast_78 = ttnn.multiply(
         ce_cache__main["main_const_eval_24"],
         ttnn_multiply_55,
@@ -317,8 +321,8 @@ def run_moe_block(
     )
     ttnn.deallocate(_dgg_indices_i32, False)
     # === END E_router_fuse ===
-    # OPT-IN: moe_compute routed-expert path when moe_state is provided (MOE_USE_COMPUTE=1).
-    # Default (moe_state is None) = the working sparse_matmul path below (PCC=1.0). The
+    # DEFAULT: moe_compute routed-expert path when moe_state is provided. Opt OUT to the
+    # original sparse_matmul path (moe_state is None) with MOE_USE_SPARSE=1. The
     # moe_compute path currently HANGS on this 4x8 BH mesh at the combine — see MOE_COMPUTE_JOURNAL.md.
     if moe_state is not None:
         ttnn_typecast_101 = moe_compute_block.run_routed_experts(
@@ -927,7 +931,8 @@ def run_moe_block(
         [1, 32, 896],
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
-    ttnn.deallocate(ttnn_add_22, False)
+    if not _TRACE:  # keep block inputs alive across trace replay
+        ttnn.deallocate(ttnn_add_22, False)
     ttnn_add_27 = ttnn.add(
         ttnn_typecast_105,
         ttnn_reshape_158,
@@ -1030,11 +1035,11 @@ def main() -> int:
     var_76 = ce["main_const_eval_37"]
     timings["ce_cache_load"] = time.perf_counter() - t
 
-    # 1b) OPT-IN moe_compute state (MOE_USE_COMPUTE=1): bf4 weight prep [disk-cached],
-    #     canonical expert_mapping, semaphores, buffers. Built outside the moe_block timing.
-    #     moe_state stays None for the default sparse_matmul path.
+    # 1b) DEFAULT moe_compute state: bf4 weight prep [disk-cached], canonical expert_mapping,
+    #     semaphores, buffers. Built outside the moe_block timing. Opt OUT to the original
+    #     sparse_matmul path with MOE_USE_SPARSE=1 (then moe_state stays None).
     moe_state = None
-    if os.environ.get("MOE_USE_COMPUTE") == "1":
+    if os.environ.get("MOE_USE_SPARSE") != "1":
         t = time.perf_counter()
         moe_state = moe_compute_block.MoEComputeState(
             M.ce_cache__main, var_76, device, rebuild_weights="--rebuild-moe-weights" in sys.argv
@@ -1100,6 +1105,37 @@ def main() -> int:
         f"  {'TOTAL_measured':14s}: {sum(timings.values()):8.3f}  "
         f"(TT_METAL_CCACHE_KERNEL_SUPPORT={'set' if os.environ.get('TT_METAL_CCACHE_KERNEL_SUPPORT') else 'unset'})"
     )
+
+    # MOE_TRACE=1: capture the block into a metal-trace and time execute_trace to get steady-state
+    # DEVICE time (host dispatch removed). The eager run above already compiled the kernels.
+    if _TRACE:
+        dev = utils.DeviceGetter._instance
+        print("\n=== metal-trace device time (execute_trace; dispatch removed) ===")
+        try:
+            print("  [trace] begin_trace_capture...", flush=True)
+            tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            print("  [trace] capturing run_moe_block...", flush=True)
+            run_moe_block(
+                ttnn_add_22, ttnn_reshape_117, ttnn_rms_in_4d_3, var_67, var_70, var_76, M.ce_cache__main, moe_state
+            )
+            print("  [trace] end_trace_capture...", flush=True)
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            ttnn.synchronize_device(dev)
+            print("  [trace] warm execute_trace...", flush=True)
+            ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)  # warm
+            ttnn.synchronize_device(dev)
+            print("  [trace] warm OK; timing...", flush=True)
+            n_iter = 20
+            t0 = time.perf_counter()
+            for _ in range(n_iter):
+                ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            dt_ms = (time.perf_counter() - t0) / n_iter * 1000.0
+            path = "sparse" if moe_state is None else "moe_compute"
+            print(f"  moe_block ({path}) DEVICE time = {dt_ms:.4f} ms/iter  (amortized over {n_iter} execute_trace)")
+            ttnn.release_trace(dev, tid)
+        except Exception as e:
+            print(f"  [trace] FAILED: {type(e).__name__}: {e}")
 
     if utils.DeviceGetter._instance is not None:
         ttnn.close_mesh_device(utils.DeviceGetter._instance)
