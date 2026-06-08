@@ -5,6 +5,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Rsqrt
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -257,18 +259,28 @@ void kernel_main() {
          */
         cb_xmm_obj.wait_front(num_inner);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx++) {
-            tile_regs_acquire();
-            cb_xmm2_obj.reserve_back(onetile);
-
-            mul_tiles_init_with_dt(cb_xmm, cb_xmm);
-            mul_tiles(cb_xmm, cb_xmm, inner_idx, inner_idx, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xmm2);
-
-            cb_xmm2_obj.push_back(onetile);
-            tile_regs_release();
+            // (x-E[x])^2 — same-buffer square of cb_xmm[inner_idx]. cb_xmm InputLifecycle::CallerManaged + Block +
+            // TileOffset::Set{inner_idx} (held: waited at num_inner, popped at row end); cb_xmm2 Streaming.
+            // mul_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_xmm,
+                    cb_xmm,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Set>{inner_idx, inner_idx},
+                compute_kernel_lib::PackTile<
+                    cb_xmm2,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
             if (inner_idx == 0) {
                 tile_regs_acquire();
                 cb_xmm2_obj.wait_front(onetile);
@@ -316,23 +328,29 @@ void kernel_main() {
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))
          * cb_recip_std
          */
-        cb_var_obj.wait_front(onetile);
-        cb_recip_std_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        add_tiles_init_with_dt(cb_var, cb_eps);
-        add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
-
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_std);
-
-        cb_var_obj.pop_front(onetile);
-        cb_recip_std_obj.push_back(onetile);
-        tile_regs_release();
+        // BinaryFpu(Add, cb_var, cb_eps) + Rsqrt + PackTile(cb_recip_std).
+        // cb_var InputLifecycle::Streaming (wait+pop); cb_eps InputLifecycle::CallerManaged (waited once at
+        // top, popped once at end — held); cb_recip_std OutputLifecycle::Streaming. add_tiles_init_with_dt ->
+        // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output. Rsqrt<Exact,Off> matches the
+        // original rsqrt_tile() defaults (legacy_compat=false, FAST_APPROX=false).
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_var,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_recip_std,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         cb_recip_std_obj.wait_front(onetile);
         if (rstd_has_value) {
@@ -359,23 +377,31 @@ void kernel_main() {
         constexpr auto cb_gamma_beta_or_out = (gamma_has_value || beta_has_value) ? cb_gamma_beta : cb_out;
         CircularBuffer cb_gamma_beta_or_out_obj(cb_gamma_beta_or_out);
         for (uint32_t inner_idx = 0; inner_idx < num_inner; inner_idx += block_size) {
-            cb_gamma_beta_or_out_obj.reserve_back(block_size);
-            for (uint32_t j = 0; j < block_size; j++) {
-                tile_regs_acquire();
-                if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_cols(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
-                } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_recip_std);
-                    mul_tiles_bcast_scalar(cb_xmm, cb_recip_std, inner_idx + j, first_tile, j);
-                }
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(j, cb_gamma_beta_or_out);
-                tile_regs_release();
-            }  // block_size loop
-            cb_gamma_beta_or_out_obj.push_back(block_size);
+            // (x - E[x]) * 1/sqrt(Var + eps) over the block. cb_xmm InputLifecycle::CallerManaged + Block +
+            // TileOffset::Set{inner_idx} (held: waited once at num_inner, popped at end); cb_recip_std
+            // CallerManaged + Scalar (index 0, held). is_lastdim -> mul_bcast_cols (BroadcastDim::Col), else
+            // mul_tiles_bcast_scalar (BroadcastDim::Scalar). *_init_short_with_dt -> Reconfig::Input,
+            // pack_tile_with_dt -> PackTileReconfig::Output. Output Bulk (reserve+push block_size).
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, block_size),
+                compute_kernel_lib::BinaryFpu<
+                    cb_xmm,
+                    cb_recip_std,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col
+                                         : compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Unset>{inner_idx, 0u},
+                compute_kernel_lib::PackTile<
+                    cb_gamma_beta_or_out,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             // * gamma
             if (gamma_has_value) {

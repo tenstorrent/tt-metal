@@ -20,6 +20,9 @@
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -225,38 +228,29 @@ void kernel_main() {
         //                     1
         //  cb_ex2pe =   -------------
         //               √(Var(X) + ε)
-        cb_ex2_obj.wait_front(onetile);
-        reconfig_data_format(cb_ex2, cb_eps);
-        tile_regs_acquire();
+        // 1/sqrt(Var(X) + eps): BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init -> Input;
+        // pack_reconfig_data_format(cb_ex2pe) -> Output. Original lacks cb_ex2pe.reserve_back
+        // (relies on CB capacity) -> OutputLifecycle::DeferredReserve (no reserve, push at end).
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<cb_ex2pe, compute_kernel_lib::OutputLifecycle::DeferredReserve>{});
 
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_ex2pe);
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-        cb_ex2_obj.pop_front(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // Broadcast the column vector across cols. UnaryBcast<COL> reconfigs both srca/srcb to
+        // cb_ex2pe (Input); downstream PackTile owns pack reconfig (Output). Per-tile
+        // Streaming in/out, then re-wait the pushed tile for downstream use.
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of
@@ -282,48 +276,49 @@ void kernel_main() {
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
 #endif
 #endif
-            tile_regs_acquire();
-            cb_in_obj.wait_front(block.full_block_size());
-#ifdef RMSNORM
-            reconfig_data_format_srca(cb_in);
-            copy_tile_init(cb_in);
-            for (auto i : block.local()) {
-                copy_tile(cb_in, i, i);
-            }
-#else
+#ifndef RMSNORM
             cb_ex_obj.wait_front(1);
-            reconfig_data_format(cb_in, cb_ex);
-            sub_bcast_cols_init_short(cb_in, cb_ex);
-            // x-E[x]
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_in, cb_ex, i, 0, i);
-            }
 #endif
-            cb_in_obj.pop_front(block.full_block_size());
+            // x - E[x] (RMSNORM: copy x) [+ b when FUSE_PRE_ADD] -> cb_xmm, fused in DEST over one
+            // padded block. cb_in Bulk; cb_ex held col-bcast (1 tile) -> CallerManaged + Scalar;
+            // cb_inb Bulk; cb_xmm Bulk. inits/reconfigs -> Input; pack_reconfig(cb_xmm) -> Output.
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+#ifdef RMSNORM
+                compute_kernel_lib::CopyTile<
+                    cb_in,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block>{},
+#else
+                compute_kernel_lib::BinaryFpu<
+                    cb_in,
+                    cb_ex,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+#endif
 #ifdef FUSE_PRE_ADD
-            cb_inb_obj.wait_front(block.full_block_size());
-            reconfig_data_format_srca(cb_inb);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-            for (auto i : block.local()) {
-                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_inb, i, i);
-            }
-            cb_inb_obj.pop_front(block.full_block_size());
+                compute_kernel_lib::DestReuseBinary<
+                    cb_inb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::DestReuseReconfig::Input,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block>{},
 #endif
-            tile_regs_commit();
-            tile_regs_wait();
-            // Note: We shouldn't have to pack to
-            // intermediate CB. We should be able to
-            // do a binary dest with reuse (as we used
-            // to). However, tt-llk #868 is preventing
-            // that from working at the moment.
-            cb_xmm_obj.reserve_back(block.full_block_size());
-            pack_reconfig_data_format(cb_xmm);
-            for (auto i : block.local()) {
-                pack_tile(i, cb_xmm);
-            }
-            cb_xmm_obj.push_back(block.full_block_size());
-            tile_regs_release();
+                compute_kernel_lib::PackTile<
+                    cb_xmm,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             cb_xmm_obj.wait_front(block.full_block_size());
             reconfig_data_format(cb_xmm, cb_ex2pe);

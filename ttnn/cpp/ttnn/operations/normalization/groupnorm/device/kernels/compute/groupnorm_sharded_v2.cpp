@@ -18,6 +18,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -295,59 +298,55 @@ void kernel_main() {
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
             }
-            // x - E[x]
-            sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
-
+            // x - E[x] — same-CB sub_bcast_scalar over block_hw tiles.
+            //
+            // Original used per-subblock acquire/release with index = w
+            // (index_subblock_w_offset stays at 0 — never incremented in this block,
+            // so cb_x reads from front 0..subblock_w-1, pops subblock_w, slides).
+            // Chain emits per-tile wait+pop+pack+push with InputLifecycle::Streaming + OutputLifecycle::Streaming
+            // on cb_x; net effect over block_hw iters is identical (cb_x slid by
+            // block_hw on both ends).
+            //
+            // Reconfig: sub_tiles_bcast_scalar_init_short reconfigs srca/srcb ->
+            // BinaryDataFormatReconfig::Input. Original used plain pack_tile (no
+            // pack_reconfig) -> PackTileReconfig::None.
+            // cb_ex_global is held outside chain via wait_front(1) -> InputLifecycle::CallerManaged.
             cb_ex_global.wait_front(1);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        sub_tiles_bcast_scalar(cb_x_id, cb_ex_global_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    cb_x.pop_front(subblock_w);
-                    cb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t k = 0; k < subblock_w; k++) {
-                        pack_tile(k, cb_x_id);
-                    }
-                    cb_x.push_back(subblock_w);
-                    tile_regs_release();
-                    cb_x.wait_front(block_hw);
-                }
-            }
+            compute_kernel_lib::sub<
+                cb_x_id,
+                cb_ex_global_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex_global.pop_front(1);
 
-            reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
-            mul_tiles_init(cb_x_id, cb_input_mask_id);
-            cb_x.wait_front(block_hw);
-
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; ++w) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index;
-                        mul_tiles(cb_x_id, cb_input_mask_id, index, index_mask, w);
-                    }
-                    tile_regs_commit();
-
-                    cb_x.pop_front(subblock_w);
-                    cb_x.reserve_back(subblock_w);
-
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, cb_x_id);
-                    }
-                    cb_x.push_back(subblock_w);
-                    tile_regs_release();
-                }
-            }
-            cb_input_mask.pop_front(block_w);
+            // (x - E[x]) * input_mask — re-zero out-of-group columns, same-CB cb_x rotation.
+            // cb_x: Scalar (front) + Streaming (per-tile wait+pop) rotation; PackTile writes
+            //   back Streaming — identical to the x-E[x] / *1/sqrt chains above.
+            // input_mask: OperandKind::Row over the (block_h, block_w) grid -> idx = wt = col,
+            //   i.e. the full per-column mask[col] (mathematically correct; the original's
+            //   index_subblock_w_offset stayed 0 so it only matched this for num_subblocks_w==1,
+            //   which holds for narrow groups). BroadcastDim::None -> full-tile mul_tiles.
+            //   Lifecycle DeferredPop: no wait (the mask was already waited in the mask-input
+            //   block above) and the chain pops the full block_w window at the end -> folds the
+            //   former manual cb_input_mask.pop_front(block_w).
+            // mul_tiles_init reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
+            compute_kernel_lib::mul<
+                cb_x_id,
+                cb_input_mask_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(block_h, block_w));
             reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
@@ -400,48 +399,52 @@ void kernel_main() {
             }
 
             // global reduce results
-
+            // PARTIAL migration: (Var + eps) -> 1/sqrt(...) = BinaryFpu(Add) + Rsqrt + PackTile.
+            // Reconfig audit: add_tiles_init reconfigs srca/srcb (no explicit
+            // reconfig_data_format) -> BinaryDataFormatReconfig::Input. No pack_reconfig in
+            // original -> PackTileReconfig::None. rsqrt_tile_init<true> -> Legacy::On.
+            // cb_ex2pe.reserve_back(1) + push_back(1) present -> OutputLifecycle::Streaming.
+            // Lifecycles: cb_ex_global InputLifecycle::Streaming (wait+pop per call); cb_eps held by
+            // unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
-            cb_ex_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex_global_id, cb_eps_id);
-            add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex_global.pop_front(1);
-            //  (x - Ex) * 1/[sqrt(Var + eps)]
-            index_h_offset = 0;
-            mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
-
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_ex_global_id,
+                    cb_eps_id,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_ex2pe_id,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+            //  (x - Ex) * 1/[sqrt(Var + eps)] — same-CB mul_bcast_scalar over block_hw tiles.
+            // Identical in-place rotation to the migrated `x - E[x]` chain above: cb_x reads
+            // the front (OperandKind::Scalar idx 0) with InputLifecycle::Streaming (per-tile
+            // wait+pop) and PackTile writes back OutputLifecycle::Streaming. The original's
+            // index = w + index_subblock_w_offset stays front-relative (index_subblock_w_offset
+            // is reset to 0 each row and never incremented), and it pops/pushes subblock_w
+            // chunks — net identical to per-tile streaming over block_hw.
+            // cb_ex2pe is the held 1/sqrt scalar: wait_front(1)/pop_front(1) kept outside the
+            // chain -> InputLifecycle::CallerManaged. mul_tiles_bcast_scalar_init_short reconfigs
+            // srca/srcb -> BinaryDataFormatReconfig::Input; no pack reconfig -> None.
             cb_ex2pe.wait_front(1);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        mul_tiles_bcast_scalar(cb_x_id, cb_ex2pe_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    cb_x.pop_front(subblock_w);
-                    cb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < subblock_w; i++) {
-                        pack_tile(i, cb_x_id);
-                    }
-                    cb_x.push_back(subblock_w);
-                    tile_regs_release();
-                }
-            }
+            compute_kernel_lib::mul<
+                cb_x_id,
+                cb_ex2pe_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results
@@ -596,87 +599,115 @@ void kernel_main() {
     }
 
     if constexpr (do_gamma) {
-        index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init_short(cb_out_id, cb_gamma_id);
-            cb_outgamma.reserve_back(per_core_MN);
-            cb_gamma.wait_front(per_core_N);
-            for (uint32_t i = 0; i < per_core_M; ++i) {
-                for (uint32_t j = 0; j < per_core_N; ++j) {
-                    tile_regs_acquire();
-                    uint32_t index = j + index_h_offset;
-                    mul_tiles_bcast_rows(cb_out_id, cb_gamma_id, index, j, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_outgamma_id);
-                    tile_regs_release();
-                }
-                index_h_offset += per_core_N;
-            }
-
-            cb_outgamma.push_back(per_core_MN);
-            cb_out.pop_front(per_core_MN);
+            // Non-in-place gamma: cb_out * cb_gamma (bcast-rows) -> separate cb_outgamma.
+            // cb_out: DeferredPop (NO upfront wait + pop-at-end). The original never
+            //   wait_front's cb_out here — the earlier cb_out.push_back(per_core_MN) is the
+            //   barrier — so DeferredPop matches it exactly. (Using Bulk adds an upfront
+            //   wait_front(cb_out) the original lacks; harmless here since cb_out is settled
+            //   by the main loop, but the matching beta input MUST be DeferredPop — see below
+            //   — so keep both consistent.) OperandKind::Block walks ht*per_core_N+wt; no
+            //   per-tile pop, so the absolute index stays valid.
+            // cb_gamma: HeldBulk (waits per_core_N upfront, never pops — gamma persists).
+            //   OperandKind::Row -> idx = wt = j.
+            // mul_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
+            //   No pack_reconfig -> PackTileReconfig::None. cb_outgamma: reserve(per_core_MN)
+            //   upfront + push at end -> OutputLifecycle::Bulk.
+            compute_kernel_lib::mul<
+                cb_out_id,
+                cb_gamma_id,
+                cb_outgamma_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outgamma.wait_front(per_core_MN);
         } else {
-            // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init_short(cb_in_id, cb_gamma_id);
-            cb_gamma.wait_front(per_core_N);
-            cb_in.wait_front(per_core_MN);
-            for (uint32_t i = 0; i < per_core_M; i++) {
-                for (uint32_t j = 0; j < per_core_N; j++) {
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(cb_in_id, cb_gamma_id, 0, j, dst0);
-                    tile_regs_commit();
-                    cb_in.pop_front(1);
-                    cb_in.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_in_id);
-                    cb_in.push_back(1);
-                    tile_regs_release();
-                }
-            }
+            // cb_in holds the data required for gamma — in-place bcast-rows rotation.
+            // cb_in: BulkDrain (Upfront ownership wait of the full block — producer is
+            //   done before the rotation reuses the FIFO tail for write-back — + per-tile
+            //   pop to advance the front-read rotation and free a slot for the in-place
+            //   PackTile). OperandKind::Scalar = read front (idx 0); Block is illegal under
+            //   per-tile pop (absolute-index footgun, chain.hpp §kind×lifecycle).
+            // cb_gamma: HeldBulk (chain waits per_core_N upfront, never pops — gamma
+            //   persists across the whole kernel). OperandKind::Row → idx = wt = j.
+            // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
+            //   No pack_reconfig in original -> PackTileReconfig::None. Output back into
+            //   cb_in: OutputLifecycle::Streaming (per-tile reserve+push).
+            compute_kernel_lib::mul<
+                cb_in_id,
+                cb_gamma_id,
+                cb_in_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::InputLifecycle::BulkDrain,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
-            index_h_offset = 0;
-            add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
-            cb_outbeta.reserve_back(per_core_MN);
-            cb_beta.wait_front(per_core_N);
-            for (uint32_t i = 0; i < per_core_M; ++i) {
-                for (uint32_t j = 0; j < per_core_N; ++j) {
-                    tile_regs_acquire();
-                    uint32_t index = j + index_h_offset;
-                    add_tiles_bcast_rows(cb_inbeta_id, cb_beta_id, index, j, dst0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_outbeta_id);
-                    tile_regs_release();
-                }
-                index_h_offset += per_core_N;
-            }
-            cb_outbeta.push_back(per_core_MN);
-            cb_inbeta.pop_front(per_core_MN);
+            // NOT migrated to eltwise_chain. This is the last compute stage before the
+            // UNTILIZE_OUT untilize. Replacing it with a chain (tried: Input/None binary
+            // reconfig, untilize NoReconfigure/UnpackAndPackReconfigure — all identical)
+            // deadlocks the compute pipeline on the tile_layout path
+            // (test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout, legacy variant):
+            // trisc0 blocks in the chain's wait_upfront cb_wait_front, trisc1 stalls mid
+            // add_tiles_bcast, trisc2 spins in are_packers_configured_correctly, and the
+            // mcast reader/writer block downstream. The raw-LLK init_short + pack_tile
+            // sequence leaves the engine in the exact state the rest of the pipeline
+            // expects; the chain does not. Specific, evidence-backed gap — keep raw LLK.
+            // Non-in-place beta: cb_inbeta + cb_beta (bcast-rows) -> separate cb_outbeta.
+            // cb_inbeta (c_1): DeferredPop (NO upfront wait + pop-at-end). CRITICAL: the
+            //   original never wait_front's cb_inbeta — gamma's trailing
+            //   cb_outgamma.wait_front(c_1, per_core_MN) is the barrier, and beta just drains
+            //   c_1. Using InputLifecycle::Bulk injects an upfront wait_front(c_1) the
+            //   original lacks; with the gamma<->beta CB ping-pong (gamma c_out->c_1,
+            //   beta c_1->c_out) and Bulk's pack-thread reserve of c_out, that extra wait
+            //   deadlocks the compute pipeline (trisc0 stuck in wait_upfront) on the
+            //   tile_layout path. DeferredPop matches the original and breaks the cycle.
+            // cb_beta (c_6): HeldBulk (waits per_core_N upfront, never pops). Row idx = wt.
+            //   cb_outbeta: OutputLifecycle::Bulk. No reconfig in original besides init_short
+            //   (srca/srcb) -> BinaryDataFormatReconfig::Input; no pack reconfig -> None.
+            compute_kernel_lib::add<
+                cb_inbeta_id,
+                cb_beta_id,
+                cb_outbeta_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outbeta.wait_front(per_core_MN);
         } else {
-            // cb_in_id has data required for beta, so we do it inplace
-            add_bcast_rows_init_short(cb_in_id, cb_beta_id);
-            cb_beta.wait_front(per_core_N);
-            cb_in.wait_front(per_core_MN);
-            for (uint32_t i = 0; i < per_core_M; i++) {
-                for (uint32_t j = 0; j < per_core_N; j++) {
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(cb_in_id, cb_beta_id, 0, j, dst0);
-                    tile_regs_commit();
-                    cb_in.pop_front(1);
-                    cb_in.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_in_id);
-                    cb_in.push_back(1);
-                    tile_regs_release();
-                }
-            }
+            // cb_in holds the data required for beta — in-place bcast-rows rotation.
+            // Lifecycle reasoning identical to the gamma in-place branch above:
+            // cb_in BulkDrain + OperandKind::Scalar (front-read rotation), cb_beta HeldBulk
+            // + OperandKind::Row (held, idx = wt), output back into cb_in Streaming.
+            // add_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
+            compute_kernel_lib::add<
+                cb_in_id,
+                cb_beta_id,
+                cb_in_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::InputLifecycle::BulkDrain,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::None,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Row>(compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

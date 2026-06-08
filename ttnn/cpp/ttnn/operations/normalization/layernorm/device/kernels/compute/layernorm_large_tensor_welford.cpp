@@ -19,6 +19,9 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -87,29 +90,22 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add
-        reconfig_data_format(cb_in, cb_inb);
-        add_tiles_init(cb_in, cb_inb);
-        cb_in_obj.wait_front(block.full_block_size());
-        cb_inb_obj.wait_front(block.full_block_size());
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(cb_in, cb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        cb_in_obj.pop_front(block.full_block_size());
-        cb_inb_obj.pop_front(block.full_block_size());
-
-        // Pack to intermediate CB (needed
-        // to workaround transpose_wh_dest bug)
-        pack_reconfig_data_format(cb_interm_pre_add);
-        cb_interm_pre_add_obj.reserve_back(block.full_block_size());
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, cb_interm_pre_add);
-        }
-        tile_regs_release();
-        cb_interm_pre_add_obj.push_back(block.full_block_size());
+        // Fused pre-add: cb_in + cb_inb -> cb_interm_pre_add over one padded block (Bulk in/out,
+        // block_size = full_block_size so all tiles run in one DEST window — matches the original
+        // for(i:block.local()) inside one ACQ; padding tiles are processed harmlessly).
+        // add_tiles_init + reconfig -> Input; pack_reconfig(cb_interm_pre_add) -> Output.
+        compute_kernel_lib::add<
+            cb_in,
+            cb_inb,
+            cb_interm_pre_add,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OutputLifecycle::Bulk,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::Output,
+            compute_kernel_lib::OperandKind::Block>(
+            compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -471,37 +467,31 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        reconfig_data_format(cb_ex2, cb_eps);
-        add_tiles_init(cb_ex2, cb_eps);
+        // 1/sqrt(Var(X) + eps): BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig: reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init -> Input; no pack_reconfig
+        // in original (cb_ex2/cb_ex2pe compatible) -> PackTileReconfig::None.
+        // cb_ex2pe.reserve_back IS called -> OutputLifecycle::Streaming. Non-LEGACY rsqrt -> Legacy::Off.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
-        cb_ex2_obj.wait_front(onetile);
-        tile_regs_acquire();
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // Broadcast the column vector across cols (UnaryBcast<COL>): reconfigs both srca/srcb to
+        // cb_ex2pe (Input), downstream PackTile owns pack reconfig. Streaming in/out.
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
 
         // =====================================
         // Second pass over the input.

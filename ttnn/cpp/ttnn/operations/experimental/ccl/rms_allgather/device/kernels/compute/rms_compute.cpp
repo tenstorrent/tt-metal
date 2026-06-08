@@ -11,6 +11,9 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -75,28 +78,24 @@ void kernel_main() {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
-    reconfig_data_format(cb_in0, cb_in1);
-    pack_reconfig_data_format(cb_in);
-    reconfig_data_format(cb_in0, cb_in1);
-    add_tiles_init(cb_in0, cb_in1);
-    cb_reserve_back(cb_in, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            add_tiles(cb_in0, cb_in1, index, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_in);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-    }
+    // X + Y pre-add over the block as a single chain (block_w == num_subblocks_w*subblock_w,
+    // so tiles() needs no padding). cb_in0/cb_in1 are resident sharded inputs — the original
+    // neither wait_front's nor pop_front's them -> CallerManaged (chain emits neither, exact
+    // match). cb_in output: reserve+push num_tiles_per_block -> Bulk. add_tiles_init + reconfig
+    // -> BinaryDataFormatReconfig::Input; pack_reconfig(cb_in) -> PackTileReconfig::Output.
+    compute_kernel_lib::add<
+        cb_in0,
+        cb_in1,
+        cb_in,
+        compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::OutputLifecycle::Bulk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
-    cb_push_back(cb_in, num_tiles_per_block);
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
@@ -104,27 +103,19 @@ void kernel_main() {
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
-    // X^2
-    mul_tiles_init(cb_in, cb_in);
-    index_h_offset = 0;
-    cb_reserve_back(cb_x2, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            mul_tiles(cb_in, cb_in, index, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_x2);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-    }
-    index_h_offset += block_w;
-    cb_push_back(cb_x2, num_tiles_per_block);
+    // X^2 — square via BinaryFpu reading cb_in for both operands. cb_in is resident/externally
+    // waited (cb_wait_front above in the FUSE path; sharded-resident otherwise) -> CallerManaged.
+    // cb_x2 reserve+push num_tiles_per_block -> Bulk. mul_tiles_init -> BinaryDataFormatReconfig::Input;
+    // plain pack_tile (pack format already programmed above) -> PackTileReconfig::None.
+    compute_kernel_lib::square<
+        cb_in,
+        cb_x2,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::OutputLifecycle::Bulk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::None,
+        compute_kernel_lib::OperandKind::Block>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // E(x^2)
     reconfig_data_format_srca(cb_in, cb_x2);
@@ -201,81 +192,67 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
-            // 1/[sqrt(Var + eps)],
-            reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats_reduced);
-            cb_wait_front(cb_var, 1);
-            cb_wait_front(cb_eps, 1);
-
-            add_tiles_init(cb_var, cb_eps);
-            tile_regs_acquire();
-            add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
-            tile_regs_wait();
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(post_dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_stats_reduced, 1);
-            pack_tile(post_dst0, cb_stats_reduced);
-            tile_regs_release();
-            cb_pop_front(cb_var, 1);
-            cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats_reduced, 1);
+            // 1/[sqrt(Var + eps)] — Variance Calc to inverse square root.
+            // PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile.
+            // Reconfig audit: explicit reconfig_data_format(cb_var, cb_eps) +
+            //   add_tiles_init reconfigs srca/srcb -> Input. Explicit
+            //   pack_reconfig_data_format(cb_stats_reduced) -> Output.
+            // Lifecycles: cb_var InputLifecycle::Streaming (wait+pop per call); cb_eps InputLifecycle::Streaming
+            //   (also wait+pop per call here, unlike other rsqrt kernels where
+            //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<cb_var, cb_eps>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_stats_reduced>{});
         }
     }
-    pack_reconfig_data_format(cb_im);
-    // (x - Ex) * 1/[sqrt(Var + eps)]
-    reconfig_data_format(cb_xmm, cb_ex_global);
-    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
-    index_h_offset = 0;
-    cb_reserve_back(cb_im, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    cb_wait_front(cb_ex_global, 1);
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset + index_h_offset;
-            mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
-        }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_im);
-        }
-        tile_regs_release();
-
-        index_subblock_w_offset += subblock_w;
-    }
-    index_h_offset += block_w;
-    cb_pop_front(cb_ex_global, 1);
-    cb_push_back(cb_im, num_tiles_per_block);
-
+    // (x - Ex) * 1/[sqrt(Var + eps)] — Col-bcast over the block, single chain.
+    // cb_xmm: resident input — original neither wait_front's it nor needs a per-tile wait, and
+    //   pops num_tiles_per_block after the loop. DeferredPop would express that but is NOT
+    //   block_size-compatible (no wait -> cannot stage a multi-tile DEST window; chain_supports_block
+    //   static_assert). So CallerManaged (no wait/pop, block-supporting) + the explicit
+    //   cb_pop_front(cb_xmm) restored after the chain. cb_ex_global: 1-tile scalar held via the
+    //   explicit wait(1)/pop(1) kept outside -> CallerManaged, Scalar index, BroadcastDim::Col.
+    //   cb_im out: reserve+push num_tiles_per_block -> Bulk. reconfig_data_format +
+    //   mul_bcast_cols_init_short -> Input; pack_reconfig(cb_im) -> Output.
+    // cb_ex_global: 1-tile scalar -> Bulk folds its wait(1)/pop(1) into the chain (Scalar
+    //   window = 1: Upfront wait_front(1) + AtEnd pop_front(1)).
+    compute_kernel_lib::mul<
+        cb_xmm,
+        cb_ex_global,
+        cb_im,
+        compute_kernel_lib::BroadcastDim::Col,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::OutputLifecycle::Bulk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::OperandKind::Scalar>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     cb_pop_front(cb_xmm, num_tiles_per_block);
-    cb_wait_front(cb_im, num_tiles_per_block);
 
-    reconfig_data_format(cb_im, cb_gamma);
-    pack_reconfig_data_format(cb_out);
-    mul_bcast_rows_init_short(cb_im, cb_gamma);
-    cb_wait_front(cb_gamma, block_w);
-    index_h_offset = 0;
-    cb_reserve_back(cb_outgamma, num_tiles_per_block);
-    index_subblock_w_offset = 0;
-    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-        tile_regs_acquire();
-        for (uint32_t w = 0; w < subblock_w; w++) {
-            index = w + index_subblock_w_offset;
-            mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < subblock_w; i++) {
-            pack_tile(i, cb_outgamma);
-        }
-        tile_regs_release();
-        index_subblock_w_offset += subblock_w;
-        cb_push_back(cb_outgamma, subblock_w);
-    }
-    index_h_offset += block_w;
-    cb_pop_front(cb_im, num_tiles_per_block);
+    // gamma: cb_im * gamma (bcast-rows) -> cb_outgamma, single chain.
+    // cb_im: Bulk (chain waits+pops num_tiles_per_block — folds the prior cb_wait_front(cb_im)
+    //   and the trailing pop). cb_gamma: HeldBulk (wait block_w upfront, never popped). Ht==1
+    //   (single-row block) so the original's Row index wt == Block flat index -> OperandKind::Block
+    //   for both with BroadcastDim::Row (the FPU bcast-rows mode). cb_outgamma: reserve(num_tiles
+    //   _per_block) upfront + push(subblock_w) per chunk -> BulkReservePerChunk.
+    //   reconfig_data_format + mul_bcast_rows_init_short -> Input; pack_reconfig(cb_out) -> Output.
+    compute_kernel_lib::mul<
+        cb_im,
+        cb_gamma,
+        cb_outgamma,
+        compute_kernel_lib::BroadcastDim::Row,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::InputLifecycle::HeldBulk,
+        compute_kernel_lib::OutputLifecycle::BulkReservePerChunk,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::PackTileReconfig::Output,
+        compute_kernel_lib::OperandKind::Block>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

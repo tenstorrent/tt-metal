@@ -8,6 +8,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 ALWI void ACQ() { acquire_dst(); }
@@ -64,17 +66,17 @@ void kernel_main() {
     /* Unnecessary CB APIs (comment out for code size)
     // Get the trans_mat
     constexpr uint32_t onetile = 1;
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
+    trans_mat_cb_obj.reserve_back(onetile);
+    trans_mat_cb_obj.push_back(onetile);
+    trans_mat_cb_obj.wait_front(onetile);
 
     // Get the sin/cos matrices
     // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
+    sin_cb_obj.reserve_back(Wt);
+    cos_cb_obj.reserve_back(Wt);
 
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
+    sin_cb_obj.push_back(Wt);
+    cos_cb_obj.push_back(Wt);
     */
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
@@ -101,14 +103,29 @@ void kernel_main() {
         rotated_in_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.wait_front(Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
+        // sin_interim = rotated * sin (ROW-bcast).
+        // PARTIAL: only the sin stage migrates here. cos and add stages BLOCKED on
+        // runtime CB ids (in_cb / out_cb selected via is_q at runtime). Chain template
+        // args require constexpr CBs; duplicating the chain in both q/k branches
+        // would inflate code size — file is already at TRISC2 size limit (see comment
+        // at line 17). PARTIAL gate cite: chain template constexpr CB constraint;
+        // file-level TRISC2 size budget blocks the duplication workaround.
+        //
+        // Lifecycles: NoWait* / NoReserve* on all sides. Outer cb_wait_front /
+        // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
+        // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
+        // No pack_reconfig -> None.
+        compute_kernel_lib::mul<
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::CallerManaged,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::PackTileReconfig::None,
+            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         sin_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.pop_front(Wt);
 
@@ -139,10 +156,10 @@ void kernel_main() {
 
     /* Unnecessary CB APIs (comment out for code size)
     // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
+    sin_cb_obj.pop_front(Wt);
+    cos_cb_obj.pop_front(Wt);
 
     // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
+    trans_mat_cb_obj.pop_front(onetile);
     */
 }
