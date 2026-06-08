@@ -878,19 +878,23 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
     """Build the host-side decode inputs both paths consume.
 
     Mirrors what ``Gemma4Model.prepare_decode_inputs_host`` packs into
-    its return tuple. Returns ``(embeds, pos_uint32, pos_int32, pli)``;
+    its return tuple. Returns ``(tokens, pos_uint32, pos_int32, pli)``;
     ``pli`` is ``None`` when the model has no PLI configured. Caller is
     responsible for deallocating the returned device tensors after
     each step.
     """
     import torch.nn.functional as F
 
-    embeds, pli = model.compute_host_embeddings(token_id)
+    pli = model.compute_host_pli(token_id)
     is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
     mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
-    embeds_tt = ttnn.from_torch(
-        embeds, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper
+    tokens_tt = ttnn.from_torch(
+        torch.tensor([[token_id]], dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=mapper,
     )
     pos_padded = F.pad(torch.tensor([position], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0)
     pos_tt = ttnn.from_torch(
@@ -912,7 +916,7 @@ def _decode_step_inputs(model, mesh_device, token_id, position):
             dtype=ttnn.bfloat16,
             mesh_mapper=mapper,
         )
-    return embeds_tt, pos_tt, pos_int32_tt, pli_tt
+    return tokens_tt, pos_tt, pos_int32_tt, pli_tt
 
 
 def _page_table_to_tt(page_table_torch, mesh_device):

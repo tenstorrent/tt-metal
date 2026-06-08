@@ -15,6 +15,7 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
 )
 
 set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
+    test_service_core_manager.cpp
     dispatch_buffer/test_sub_device.cpp
     dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
     dispatch_program/test_dispatch.cpp

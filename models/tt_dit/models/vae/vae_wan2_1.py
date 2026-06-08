@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
+from diffusers.models import AutoencoderKLWan
 from loguru import logger
 
 import ttnn
@@ -17,12 +19,14 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
     aligned_channels,
     compute_decoder_dims,
     compute_encoder_dims,
+    conv3d_blocking_hash,
     conv_pad_height,
     conv_pad_in_channels,
     conv_pad_width,
@@ -30,7 +34,14 @@ from ...utils.conv3d import (
     get_conv3d_config,
 )
 from ...utils.substate import pop_substate, rename_substate
-from ...utils.tensor import local_device_to_torch, typed_tensor
+from ...utils.tensor import (
+    fast_device_to_host,
+    float_to_uint8,
+    float_to_unit_range,
+    local_device_to_torch,
+    typed_tensor,
+    typed_tensor_2dshard,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -343,7 +354,7 @@ class WanCausalConv3d(Module):
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
+            if (is_blackhole() and dtype == ttnn.float32)
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -783,7 +794,7 @@ class WanConv2d(Module):
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
+            if (is_blackhole() and dtype == ttnn.float32)
             else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -1894,3 +1905,146 @@ def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
     for i in range(dim):
         upper_dims *= input_tensor.shape[i]
     return min(upper_dims, ccl_manager.num_links)
+
+
+class WanVAEDecoderAdapter:
+    """Torch-in (BCTHW), torch-out (output_type-dependent) VAE decoder for the Wan VAE.
+
+    Applies per-channel mean/std denormalize, runs the TT-NN decoder, and transfers the result to
+    host with output_type-aware pre-fn / permute. Weights are loaded via ``cache.load_model``;
+    ``reload_weights``/``deallocate_weights`` are idempotent and intended to be driven by the
+    caller (e.g. via ``register_coresident_exclusions``).
+    """
+
+    def __init__(
+        self,
+        *,
+        checkpoint_name: str,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        height: int,
+        width: int,
+        num_frames: int,
+        vae_t_chunk_size: int | None,
+        vae_dtype: ttnn.DataType = ttnn.bfloat16,
+        sdpa_t_fracture_w_only: bool = False,
+    ) -> None:
+        self.device = ccl_manager.mesh_device
+        self._parallel_config = parallel_config
+        self._ccl_manager = ccl_manager
+        self._checkpoint_name = checkpoint_name
+        self._t_chunk_size = vae_t_chunk_size
+
+        self._torch_vae = AutoencoderKLWan.from_pretrained(checkpoint_name, subfolder="vae", trust_remote_code=True)
+
+        full_latent_T = (num_frames - 1) // 4 + 1
+        decoder_t_chunk_size = full_latent_T if vae_t_chunk_size is None else vae_t_chunk_size
+
+        self._decoder = WanDecoder(
+            base_dim=self._torch_vae.config.base_dim,
+            z_dim=self._torch_vae.config.z_dim,
+            dim_mult=self._torch_vae.config.dim_mult,
+            num_res_blocks=self._torch_vae.config.num_res_blocks,
+            attn_scales=self._torch_vae.config.attn_scales,
+            temperal_downsample=self._torch_vae.config.temperal_downsample,
+            out_channels=self._torch_vae.config.out_channels,
+            is_residual=self._torch_vae.config.is_residual,
+            mesh_device=self.device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            dtype=vae_dtype,
+            sdpa_t_fracture_w_only=sdpa_t_fracture_w_only,
+            height=height,
+            width=width,
+            t_chunk_size=decoder_t_chunk_size,
+            cached=(vae_t_chunk_size is not None),
+        )
+
+        self._latents_mean = torch.tensor(self._torch_vae.config.latents_mean, dtype=self._torch_vae.dtype).view(
+            1, self._torch_vae.config.z_dim, 1, 1, 1
+        )
+        self._latents_std = torch.tensor(self._torch_vae.config.latents_std, dtype=self._torch_vae.dtype).view(
+            1, self._torch_vae.config.z_dim, 1, 1, 1
+        )
+
+    @property
+    def config(self):
+        return self._torch_vae.config
+
+    @property
+    def dtype(self):
+        return self._torch_vae.dtype
+
+    @property
+    def decoder(self) -> WanDecoder:
+        return self._decoder
+
+    def torch_state_dict(self) -> dict[str, torch.Tensor]:
+        return self._torch_vae.state_dict()
+
+    def is_loaded(self) -> bool:
+        return self._decoder.is_loaded()
+
+    def deallocate_weights(self) -> None:
+        self._decoder.deallocate_weights()
+
+    def reload_weights(self) -> None:
+        blocking_key = conv3d_blocking_hash(self._decoder)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
+        cache.load_model(
+            self._decoder,
+            model_name=os.path.basename(self._checkpoint_name),
+            subfolder=subfolder,
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self.device.shape),
+            get_torch_state_dict=lambda: self._torch_vae.state_dict(),
+        )
+
+    @torch.no_grad()
+    def decode(self, latents: torch.Tensor, *, output_type: str) -> torch.Tensor:
+        latents = latents.to(self._torch_vae.dtype)
+        latents = latents * self._latents_std + self._latents_mean
+
+        tt_latents_BTHWC, logical_h, logical_w = self._decoder.prepare_input(latents)
+        tt_latents_BTHWC = typed_tensor_2dshard(
+            tt_latents_BTHWC,
+            self.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self._parallel_config.height_parallel.mesh_axis: 2,
+                self._parallel_config.width_parallel.mesh_axis: 3,
+            },
+            dtype=self._decoder.dtype,
+        )
+
+        self.reload_weights()
+        tt_video_BCTHW, new_logical_h, new_logical_w = self._decoder(
+            tt_latents_BTHWC, logical_h, t_chunk_size=self._t_chunk_size, logical_w=logical_w
+        )
+
+        concat_dims = [None, None]
+        concat_dims[self._parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self._parallel_config.width_parallel.mesh_axis] = 4
+        d2h_permute = (0, 2, 3, 4, 1) if output_type in ("np", "uint8") else None
+
+        if output_type == "uint8":
+            pre_fn = float_to_uint8
+        elif output_type == "np":
+            pre_fn = float_to_unit_range
+        else:
+            pre_fn = None
+
+        video_torch = fast_device_to_host(
+            tt_video_BCTHW,
+            self.device,
+            concat_dims,
+            ccl_manager=self._ccl_manager,
+            pre_transfer_fn=pre_fn,
+            permute=d2h_permute,
+        )
+
+        if d2h_permute is not None:
+            # Output is (B, T, H, W, C) — trim height and width.
+            return video_torch[:, :, :new_logical_h, :new_logical_w, :]
+        # Output is (B, C, T, H, W) — trim height and width.
+        return video_torch[:, :, :, :new_logical_h, :new_logical_w]

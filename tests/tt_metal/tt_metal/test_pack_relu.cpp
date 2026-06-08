@@ -57,11 +57,11 @@ static void run_pack_relu_test(
     auto dst_dram_buffer = CreateBuffer(dst_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    constexpr const char* INPUT_DFB = "input_dfb";
-    constexpr const char* OUTPUT_DFB = "output_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
+    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     // Implicit sync is enabled by default for both DFBs (no DM kernel opts out
     // via Gen2Config::disable_implicit_sync_for). The program-level
@@ -155,28 +155,26 @@ static void run_pack_relu_test(
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
+            .kernel = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", dram_buffer_src_addr},
-                       {"src_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", src_aligned_page_size}}}},
+                {{node,
+                  {{"src_addr", dram_buffer_src_addr},
+                   {"src_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", src_aligned_page_size}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
+            .kernel = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", dram_buffer_dst_addr},
-                       {"dst_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"dram_page_stride", dst_aligned_page_size}}}},
+                {{node,
+                  {{"dst_addr", dram_buffer_dst_addr},
+                   {"dst_bank_id", 0u},
+                   {"num_tiles", num_tiles},
+                   {"dram_page_stride", dst_aligned_page_size}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-            .runtime_arg_values = {{.node = node, .args = {{"relu_config", relu_config}}}},
+            .kernel = COMPUTE,
+            .runtime_arg_values = {{node, {{"relu_config", relu_config}}}},
         },
     };
     experimental::SetProgramRunArgs(program, params);

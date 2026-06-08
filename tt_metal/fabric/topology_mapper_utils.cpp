@@ -1475,6 +1475,23 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             tt::LogFabric,
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
+
+    // Ask the solver to minimize the number of distinct host partitions the mapping uses. The SAT backend turns
+    // this into an at-most-K host budget walked up from the capacity lower bound (finding the true minimum host
+    // count); the DFS backend approximates it via a host-affinity value-ordering bias. Both rely on the host
+    // partitions being registered as same-rank global groups (below).
+    inter_mesh_constraints.set_minimize_same_rank_groups_used(true);
+
+    // Register the host partitions as same-rank GLOBAL groups with NO target groups. This imposes no hard
+    // grouping (the same-rank constraint is inert when no target is bound to a group), but it exposes per-mesh
+    // host membership to the solver so the SAT host-budget loop / DFS host-affinity term can pack connected
+    // meshes onto the fewest hosts.
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(
+            /*target_groups=*/{}, global_mesh_groups)) {
+        log_warning(
+            tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
+    }
+
     if (!preferred_globals.empty()) {
         if (!single_group_fits) {
             log_debug(
@@ -1795,10 +1812,10 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
-                log_critical(
+                log_warning(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
-                    "{}) from MGD not found in physical topology",
+                    "{}) from MGD not found in physical topology; skipping this pin",
                     position.first.get(),
                     position.second.get(),
                     fabric_node.mesh_id.get(),
@@ -1818,7 +1835,14 @@ void add_pinning_constraints(
             }
         }
     }
-    TT_FATAL(success, "Failed to add pinning constraints");
+    // TODO: Would like to communicate this to the caller so they can fail the mapping if any pinnings are skipped.
+    // https://github.com/tenstorrent/tt-metal/issues/43451
+    if (!success) {
+        log_warning(
+            tt::LogFabric,
+            "Some pinning constraints were skipped because the ASIC (tray, location) was absent from the physical "
+            "mesh; topology mapping proceeds without those pins");
+    }
 }
 
 // Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
