@@ -15,25 +15,118 @@ from models.tt_transformers.tt.generator import (
 # Kernel sequence lengths that may capture/replay prefill device traces (MoE only).
 GEMMA4_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
 
+# Prefill trace is disabled above 4k ISL (no perf gain, OOM risk) and at or above 32k
+# batched virtual tokens (batch_size × padded prefill length).
+GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
+GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
+
 
 def model_uses_pli(model) -> bool:
     """True for E2B/E4B-style models with per-layer-input embeddings."""
     return bool(getattr(model, "hidden_size_per_layer_input", 0))
 
 
+def can_gemma4_enable_prefill_trace(
+    prefill_seq_len: int,
+    *,
+    batch_size: int = 1,
+    num_cached_tokens: int = 0,
+    uses_pli: bool = False,
+) -> bool:
+    """Return True when Gemma4 prefill device trace may be captured or replayed."""
+    if uses_pli or num_cached_tokens != 0:
+        return False
+    if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+        return False
+    if prefill_seq_len not in GEMMA4_TRACE_PREFILL_SEQ_LENS:
+        return False
+    if batch_size * prefill_seq_len >= GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS:
+        return False
+    return True
+
+
+def apply_gemma4_prefill_trace_policy(
+    enable_trace: bool,
+    prefill_seq_len: int,
+    batch_size: int,
+    model,
+) -> bool:
+    """Apply Gemma4 prefill trace limits; log and return False when trace is disabled."""
+    if not enable_trace:
+        return False
+    if can_gemma4_enable_prefill_trace(
+        prefill_seq_len,
+        batch_size=batch_size,
+        uses_pli=model_uses_pli(model),
+    ):
+        return True
+    if prefill_seq_len > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+        logger.info(
+            "Disabling prefill trace for seq_len={}: above {} ISL (no perf gain, OOM risk)",
+            prefill_seq_len,
+            GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
+        )
+    elif batch_size * prefill_seq_len >= GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS:
+        logger.info(
+            "Disabling prefill trace for batch_size={} seq_len={}: "
+            "{}+ batched virtual tokens (no perf gain, OOM risk)",
+            batch_size,
+            prefill_seq_len,
+            GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
+        )
+    else:
+        logger.info(
+            "Disabling prefill trace for batch_size={} seq_len={}: not eligible for capture",
+            batch_size,
+            prefill_seq_len,
+        )
+    return False
+
+
+def resolve_gemma4_prefill_trace_enable(
+    enable_trace: bool,
+    model,
+    model_args,
+    *,
+    batch_size: int,
+    prefill_seq_lens: list[int],
+    can_batch_prefill: bool,
+) -> bool:
+    """Resolve whether prefill trace stays enabled for this batch/prefill shape."""
+    trace_batch_size = batch_size
+    if can_batch_prefill:
+        trace_batch_size = next(
+            (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
+            model_args.max_batch_size,
+        )
+    return apply_gemma4_prefill_trace_policy(
+        enable_trace,
+        prefill_seq_lens[0],
+        trace_batch_size,
+        model,
+    )
+
+
 def patch_gemma4_trace_model_args(model_args, *, prefill_trace_enabled: bool = True) -> None:
     """Configure trace_prefill_supported_seq_lens and can_enable_trace on model_args."""
     if prefill_trace_enabled:
-        model_args.trace_prefill_supported_seq_lens = list(GEMMA4_TRACE_PREFILL_SEQ_LENS)
+        model_args.trace_prefill_supported_seq_lens = [
+            length for length in GEMMA4_TRACE_PREFILL_SEQ_LENS if length <= GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN
+        ]
         uses_pli = bool(getattr(model_args, "hidden_size_per_layer_input", 0))
-        model_args.can_enable_trace = (
-            lambda prefill_seq_len, num_cached_tokens=0: not uses_pli
-            and num_cached_tokens == 0
-            and prefill_seq_len in model_args.trace_prefill_supported_seq_lens
-        )
+
+        def _can_enable_trace(prefill_seq_len, num_cached_tokens=0, batch_size=1):
+            return can_gemma4_enable_prefill_trace(
+                prefill_seq_len,
+                batch_size=batch_size,
+                num_cached_tokens=num_cached_tokens,
+                uses_pli=uses_pli,
+            )
+
+        model_args.can_enable_trace = _can_enable_trace
     else:
         model_args.trace_prefill_supported_seq_lens = []
-        model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0: False
+        model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0, batch_size=1: False
 
 
 def maybe_disable_pli_prefill_trace(enable_trace: bool, model, batch_size: int = 1) -> bool:
@@ -50,6 +143,33 @@ def maybe_disable_pli_prefill_trace(enable_trace: bool, model, batch_size: int =
         )
         return False
     return enable_trace
+
+
+def skip_gemma4_full_prefill_warmup(generator) -> None:
+    """Skip the full batch×ISL prefill warmup sweep on the next ``prefill_forward_text`` call."""
+    generator.already_warmed_up_prefill = True
+
+
+def warmup_gemma4_prefill_bucket(
+    generator,
+    kv_cache,
+    *,
+    enable_trace: bool,
+    **prefill_kwargs,
+) -> None:
+    """Compile or capture prefill trace for one bucket only (no full warmup matrix).
+
+    Used by parity/perf tests that exercise a single ``(batch_size, prefill_seq_len)``
+    combination. Production/demo startup should still call
+    :func:`warmup_gemma4_model_prefill` for the full sweep.
+    """
+    skip_gemma4_full_prefill_warmup(generator)
+    generator.prefill_forward_text(
+        **prefill_kwargs,
+        kv_cache=kv_cache,
+        enable_trace=maybe_disable_pli_prefill_trace(enable_trace, generator.model[0]),
+        warmup_prefill=False,
+    )
 
 
 def warmup_gemma4_batched_prefill_traces(
@@ -126,17 +246,34 @@ def warmup_gemma4_batched_prefill_traces(
                 else:
                     sampling_params = [None]
 
+                capture_trace = apply_gemma4_prefill_trace_policy(
+                    enable_trace,
+                    supported_length,
+                    batch_size,
+                    generator.model[model_id],
+                )
+
                 for param in sampling_params:
-                    logger.info(
-                        "Warming up prefill trace for sequence length: {} batch size: {} " "with sampling params: {}",
-                        supported_length,
-                        batch_size,
-                        param,
-                    )
+                    if capture_trace:
+                        logger.info(
+                            "Warming up prefill trace for sequence length: {} batch size: {} "
+                            "with sampling params: {}",
+                            supported_length,
+                            batch_size,
+                            param,
+                        )
+                    else:
+                        logger.info(
+                            "Warming up prefill (trace off) for sequence length: {} batch size: {} "
+                            "with sampling params: {}",
+                            supported_length,
+                            batch_size,
+                            param,
+                        )
                     generator.prefill_forward_text(
                         **warmup_args,
                         kv_cache=kv_cache,
-                        enable_trace=enable_trace,
+                        enable_trace=capture_trace,
                         model_id_warmup=model_id,
                         sampling_params=param,
                     )

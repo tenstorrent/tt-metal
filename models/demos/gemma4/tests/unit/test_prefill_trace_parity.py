@@ -19,7 +19,13 @@ from transformers import AutoModelForCausalLM
 
 from models.demos.gemma4.demo.text_demo import _batch_prefill_hits_ceiling, _maybe_xfail_batch_prefill_dram
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import GEMMA4_TRACE_PREFILL_SEQ_LENS
+from models.demos.gemma4.tt.generator_trace import (
+    GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
+    GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
+    GEMMA4_TRACE_PREFILL_SEQ_LENS,
+    can_gemma4_enable_prefill_trace,
+    warmup_gemma4_prefill_bucket,
+)
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
@@ -33,6 +39,7 @@ from ..test_factory import (
 
 # Trace ISL buckets × SUPPORTED_PREFILL_BATCH_SIZES, minus:
 #   - batch×kernel ≥ 128k (e.g. 32×4096 skips trace warmup)
+#   - batch×kernel ≥ 32k or ISL > 4k (prefill trace disabled by policy)
 #   - 31B 1×4 DRAM xfail: batch-32 × {2048, 4096} (2048 valid through batch-16 on QB2)
 _PREFILL_TRACE_BUCKETS = list(GEMMA4_TRACE_PREFILL_SEQ_LENS)
 _PREFILL_TRACE_BATCH_SIZES = list(SUPPORTED_PREFILL_BATCH_SIZES)
@@ -186,18 +193,17 @@ def _run_ashai_style_last_logit(generator, tokens, prompt_lens):
 
 
 def _ensure_prefill_warmup(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace):
-    """Compile kernels once per (generator, trace mode); warmup mocks pollute ``kv_cache``."""
+    """Compile/capture prefill once for this bucket; skip the full batch×ISL warmup matrix."""
     warmed_attr = f"_parity_prefill_warmed_{enable_trace}"
     if getattr(generator, warmed_attr, False):
         return
-    generator.already_warmed_up_prefill = False
-    generator.prefill_forward_text(
-        tokens,
-        page_table=page_table,
-        kv_cache=kv_cache,
-        prompt_lens=prompt_lens,
+    warmup_gemma4_prefill_bucket(
+        generator,
+        kv_cache,
         enable_trace=enable_trace,
-        warmup_prefill=True,
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
     )
     setattr(generator, warmed_attr, True)
 
@@ -244,9 +250,12 @@ def _assert_parity(name, reference, candidate, request):
 def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, reset_seeds, request, hf_causal_lm):
     """Eager and traced prefill last-token logits must match HF (and each other).
 
-    Full trace matrix: ISL buckets {128,512,1024,2048,4096} × batch {1..32}.
-    On QB2 (31B 1×4), prefill 2048 is expected through batch 16; batch-32×2048/4096
-    are xfails (DRAM). Batch-32×4096 also skips the 128k batched-prefill ceiling.
+    Param matrix: ISL buckets {128,512,1024,2048,4096} × batch {1..32}. Each case warms
+    up only its own bucket (no full batch×ISL trace capture sweep).
+    Prefill trace is disabled when ISL > 4096 or padded_batch×kernel ≥ 32k.
+    On QB2 (31B 1×4), prefill 2048 is expected through batch 8; batch-16×2048+
+    are skipped (32k trace ceiling). batch-32×2048/4096 are xfails (DRAM).
+    Batch-32×4096 also skips the 128k batched-prefill ceiling.
     """
     max_prefill = request.config.getoption("--max-prefill")
     if prefill_len > max_prefill:
@@ -265,6 +274,14 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
 
     if kernel_len not in GEMMA4_TRACE_PREFILL_SEQ_LENS:
         pytest.skip(f"kernel_len={kernel_len} not in trace ISL buckets {GEMMA4_TRACE_PREFILL_SEQ_LENS}")
+
+    max_padded_batch = next(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size)
+    if not can_gemma4_enable_prefill_trace(kernel_len, batch_size=max_padded_batch):
+        pytest.skip(
+            f"prefill trace disabled for padded_batch={max_padded_batch} x kernel={kernel_len} "
+            f"(ISL>{GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN} or "
+            f"batch×kernel>={GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS})"
+        )
 
     model_path = _get_model_path()
     _maybe_xfail_batch_prefill_dram(mesh_device, model_path, batch_size, prefill_len)
@@ -290,7 +307,7 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
         kernel_len,
     )
 
-    max_batch_size = next(b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size)
+    max_batch_size = max_padded_batch
 
     generator, kv_caches, _tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -300,7 +317,9 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
         paged_attention_config=paged_cfg,
     )
     model_args = generator.model_args[0]
-    assert model_args.can_enable_trace(kernel_len), f"Trace not enabled for kernel_len={kernel_len}"
+    assert model_args.can_enable_trace(
+        kernel_len, batch_size=max_batch_size
+    ), f"Trace not enabled for kernel_len={kernel_len} batch_size={max_batch_size}"
 
     kv_eager = kv_caches
     kv_trace = [

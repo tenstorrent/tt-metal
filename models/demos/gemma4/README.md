@@ -118,6 +118,7 @@ HF_MODEL=<path-or-id> pytest models/demos/gemma4/demo/text_demo.py::test_demo_si
 - **Entry point:** `models/demos/gemma4/demo/text_demo.py` — single-prompt prefill + decode loop with on-device decode trace.
 - **Batch size:** 1 (single-user demo).
 - **Sequence length:** up to 4096 tokens in the demo; the model itself supports the upstream context window.
+- **Prefill trace:** enabled for MoE models on ISL buckets up to 4096 when `padded_batch × kernel < 32k`. Above 4k ISL or at/above 32k batched virtual tokens, prefill trace is disabled automatically (no perf gain, OOM risk).
 - **Architecture:**
   - Mixed attention pattern: `sliding_attention` and `full_attention` layers interleaved per `hf_config.layer_types`.
   - Partial RoPE (factor 0.25) on global layers, full RoPE on sliding-window layers.

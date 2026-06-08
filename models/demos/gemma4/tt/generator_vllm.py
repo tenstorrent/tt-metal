@@ -10,8 +10,10 @@ from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
 )
+from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
 
@@ -79,6 +81,35 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         tokens = args[0] if args else kwargs.get("tokens")
         batch_size = tokens.shape[0] if tokens is not None else 1
         enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace, batch_size=batch_size)
+        if tokens is not None:
+            batch_seq_len = tokens.shape[1]
+            prompt_lens = kwargs.get("prompt_lens")
+            start_pos = kwargs.get("start_pos")
+            prompt_lens_list = prompt_lens if prompt_lens is not None else [batch_seq_len] * batch_size
+            if not isinstance(prompt_lens_list, list):
+                prompt_lens_list = prompt_lens_list.tolist()
+            num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
+            prefill_seq_lens = [
+                get_padded_prefill_len(seq_len - num_cached)
+                for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
+            ]
+            page_table = kwargs.get("page_table")
+            can_batch_prefill = (
+                page_table is not None
+                and batch_size > 1
+                and len(set(prefill_seq_lens)) == 1
+                and self.data_parallel == 1
+                and not getattr(self.model_args[0], "disable_batched_prefill", False)
+                and all(n == 0 for n in num_cached_per_user)
+            )
+            enable_trace = resolve_gemma4_prefill_trace_enable(
+                enable_trace,
+                self.model[0],
+                self.model_args[0],
+                batch_size=batch_size,
+                prefill_seq_lens=prefill_seq_lens,
+                can_batch_prefill=can_batch_prefill,
+            )
         return super().prefill_forward_text(*args, enable_trace=enable_trace, **kwargs)
 
     def _get_prefill_user_page_table(

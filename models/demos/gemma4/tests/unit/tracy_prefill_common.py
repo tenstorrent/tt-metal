@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.gemma4.tt.generator import Gemma4Generator
+from models.demos.gemma4.tt.generator_trace import skip_gemma4_full_prefill_warmup
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from .test_prefill_trace_parity import _build_tokens, _create_page_table, _page_params
@@ -92,7 +93,7 @@ def load_prefill_trace_generator(mesh_device, model_path, fixtures):
     model_args = generator.model_args[0]
     kernel_len = fixtures["kernel_len"]
     assert model_args.can_enable_trace(kernel_len), f"Trace not enabled for kernel_len={kernel_len}"
-    generator.already_warmed_up_prefill = True
+    skip_gemma4_full_prefill_warmup(generator)
     return generator, kv_caches
 
 

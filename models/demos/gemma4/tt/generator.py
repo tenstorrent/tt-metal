@@ -9,8 +9,10 @@ from transformers import AutoTokenizer
 
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
+    apply_gemma4_prefill_trace_policy,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
 )
 from models.tt_transformers.tt.common import get_padded_prefill_len
@@ -143,6 +145,12 @@ class Gemma4Generator(Generator):
                 for chunk_start in range(0, batch_size, max_users_per_chunk):
                     chunk_end = min(chunk_start + max_users_per_chunk, batch_size)
                     chunk_size = chunk_end - chunk_start
+                    chunk_enable_trace = apply_gemma4_prefill_trace_policy(
+                        enable_trace,
+                        prefill_seq_lens[0],
+                        chunk_size,
+                        self.model[0],
+                    )
                     # Each chunk is an independent batched-prefill call with local
                     # slot indices 0..chunk_size-1; global user identity comes
                     # from the sliced tokens/page_table/prompt_lens.
@@ -152,7 +160,7 @@ class Gemma4Generator(Generator):
                         kv_cache=kv_cache,
                         prompt_lens=prompt_lens_list[chunk_start:chunk_end],
                         empty_slots=list(range(chunk_size)),
-                        enable_trace=enable_trace,
+                        enable_trace=chunk_enable_trace,
                         model_id_warmup=model_id_warmup,
                         sampling_params=sampling_params,
                         start_pos=num_cached_per_user[chunk_start:chunk_end] if start_pos is not None else None,
@@ -207,6 +215,15 @@ class Gemma4Generator(Generator):
                 if sampling_params is not None:
                     return merged_tokens, merged_log_probs
                 return merged_output
+
+        enable_trace = resolve_gemma4_prefill_trace_enable(
+            enable_trace,
+            self.model[0],
+            self.model_args[0],
+            batch_size=batch_size,
+            prefill_seq_lens=prefill_seq_lens,
+            can_batch_prefill=can_batch_prefill,
+        )
 
         return super().prefill_forward_text(
             tokens=tokens,
