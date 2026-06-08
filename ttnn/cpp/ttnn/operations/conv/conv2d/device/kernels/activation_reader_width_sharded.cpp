@@ -219,8 +219,7 @@ void kernel_main() {
                     tilized_in0_cb.wait_front(act_block_num_tiles);
 
                     // Now we have the block in the CB address, we can mcast to dests!
-                    auto tilized_src =
-                        use<CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
+                    auto tilized_src = use<CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
 
                     // Multicast tilized activations to all reader cores (including self)
                     mcast_dst.addr = act_cb.get_write_ptr();
