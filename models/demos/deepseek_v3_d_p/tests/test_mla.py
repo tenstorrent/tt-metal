@@ -532,8 +532,10 @@ def _run_chunked_prefill(
     if use_trace:
         if DEEPSEEK_MLA_TRACE_DIR is None:
             pytest.skip("reference='trace' requires DEEPSEEK_MLA_TRACE_DIR (trace-only scenario)")
-        assert all(v == chunk_size_global for v in iters_isl), "trace reference requires full-chunk iters (dense trace)"
-        assert prefill_len % chunk_size_global == 0, "trace prefill must be chunk-aligned"
+        # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
+        # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
+        # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
+        # total_len <= trace length, asserted per-user below.
         use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
@@ -771,6 +773,9 @@ _CHUNKED_SCENARIOS = (
         # skip without DEEPSEEK_MLA_TRACE_DIR. Rotation/partial cases have no dense-trace equivalent.
         ("production-trace", (8, 4), dict(iters_isl=[5120] * 11, reference="trace")),
         ("multiuser-U2-trace", (8, 4), dict(iters_isl=[5120] * 4, num_users=2, reference="trace")),
+        # Variable-width / rotation chunking of a dense trace prefix: same pattern as rot8x4-maxedge
+        # (interior partials + mid-chip straddle + multi-slab) but validated vs the GPU trace.
+        ("rot8x4-maxedge-trace", (8, 4), dict(iters_isl=[2592, 2560, 5120], reference="trace")),
         ("trace-50k+5k", (8, 4), dict(iters_isl=[5120], prefill_len=50 * 1024, reference="trace")),
         (
             "trace-multiuser-U2",
