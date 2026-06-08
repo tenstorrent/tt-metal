@@ -37,7 +37,6 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.utils import passed_test
-from test_zzz_pack import is_relu_threshold_tolerance_issue
 
 
 def generate_qsr_pack_combinations(
@@ -281,7 +280,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
             PackerReluType.MinThresholdRelu,
             PackerReluType.MaxThresholdRelu,
         ]
-        and is_relu_threshold_tolerance_issue(
+        and PackGolden.is_relu_threshold_tolerance_issue(
             golden_tensor,
             res_tensor,
             relu_config,

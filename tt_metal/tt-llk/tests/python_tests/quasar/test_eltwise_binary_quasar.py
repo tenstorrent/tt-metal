@@ -196,6 +196,4 @@ def test_eltwise_binary(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=True,
-        print_pcc=True,
     ), "Assert against golden failed"

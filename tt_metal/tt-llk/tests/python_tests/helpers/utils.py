@@ -45,6 +45,12 @@ tolerances = {
     DataFormat.Fp8_e4m3: Tolerance(atol=0.2, rtol=0.2),
 }
 
+# Golden tensors whose entire magnitude is below this are treated as "no signal":
+# PCC has ~zero variance and becomes meaningless, so passed_test falls back to the
+# per-element tolerance check. Set ~10x above float32 eps (1.19e-7) so genuine
+# rounding noise stays below it while any real signal stays above.
+PCC_SIGNAL_FLOOR = 1e-6
+
 
 def print_faces(operand1, tile_shape=None):
     if tile_shape is None:
@@ -619,14 +625,7 @@ def passed_test(
                     golden_tensor[idx],
                 )
 
-    # If the golden tensor has essentially no signal (all near-zero), PCC is
-    # mathematically undefined (variance = 0). calculate_pcc's "either is
-    # completely zero" branch returns 0.0 when one side is exactly zero and
-    # the other has any non-zero — including sub-tolerance HW noise — which
-    # spuriously fails tests like Elwmul with a zero scalar broadcast where
-    # the true result is 0 everywhere. When golden is effectively zero, rely
-    # on the per-element tolerance check alone.
-    if golden_tensor.abs().max().item() < 1e-6:
+    if golden_tensor.abs().max().item() < PCC_SIGNAL_FLOOR:
         return bool(is_within_tolerance)
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
