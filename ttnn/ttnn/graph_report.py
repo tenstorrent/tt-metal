@@ -61,7 +61,7 @@ else:
     )
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = "3"
+DATABASE_SCHEMA_VERSION = "2.2"
 
 # Matches "File \"path\", line N" lines in formatted Python stack traces (see ttnn.graph._capture_python_stack_trace).
 _STACK_FILE_LINE_RE = re.compile(r'^\s*File "([^"]+)", line (\d+)', re.MULTILINE)
