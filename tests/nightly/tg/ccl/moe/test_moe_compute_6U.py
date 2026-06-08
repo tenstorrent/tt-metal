@@ -171,9 +171,10 @@ def _expand_model_configs(
                 for epd in cfg.experts_per_device_values:
                     for act in cfg.activation_types:
                         # enable_trace innermost so a shape's trace variants run back-to-back and the
-                        # second hits the host_data_cache (single-entry, evicted on every key miss).
-                        # bh_ring_size is part of the cache key (it changes the prepped weight layout),
-                        # so it must sit outside enable_trace or the trace pair would never be adjacent.
+                        # second hits the _build_moe_host_data lru_cache (maxsize=1, evicted on every
+                        # new shape). bh_ring_size is part of that cache key (it changes the prepped
+                        # weight layout), so it must sit outside enable_trace or the trace pair — which
+                        # shares a ring size — would never be adjacent and every call would evict.
                         for bh_ring_size in cfg.bh_ring_size_values:
                             for enable_trace in trace_values_fn(cfg, test_mode):
                                 bias_tag = "bias" if has_bias else "no_bias"
@@ -301,7 +302,6 @@ def _run_model_test(
     num_links,
     topology=None,
     bh_ring_size=12,
-    host_data_cache=None,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -335,7 +335,6 @@ def _run_model_test(
         topology=topology,
         num_links=num_links,
         bh_ring_size=bh_ring_size,
-        host_data_cache=host_data_cache,
     )
 
 
@@ -1471,9 +1470,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 
 @dataclasses.dataclass
 class _MoEWeightInputs:
-    """Raw torch weights/biases — transient inputs consumed once (on a cache miss)
-    to build the golden and the quantized weight host tensors, then discarded.
-    Not cached: the bf4 host tensors in ``_MoEHostData`` supersede them."""
+    """Raw torch weights/biases — consumed once (on a cache miss) to build the golden
+    and the quantized weight host tensors. Returned alongside the cached
+    ``_MoEHostData`` so the device-dependent quantization can run after the (pure)
+    golden build; once the bf4 host tensors land on ``_MoEHostData`` they supersede
+    these for all downstream use."""
 
     torch_w0: "torch.Tensor"
     torch_w1: "torch.Tensor"
@@ -1515,48 +1516,7 @@ class _MoEHostData:
     w2_host: object = None
 
 
-def _moe_host_data_key(
-    mesh_shape,
-    cluster_axis,
-    experts_per_device,
-    tokens_per_device,
-    selected_experts_k,
-    num_layers,
-    N,
-    hidden_size,
-    dtype,
-    activation_type,
-    has_bias,
-    bh_ring_size,
-):
-    """Hashable key over every parameter that affects the cached host inputs/goldens
-    and the cached quantized weight host tensors.
-
-    Parameters that change only how the op runs on device (enable_trace,
-    num_iterations, topology, num_links, output shard dims) are intentionally
-    excluded so trace/non-trace runs of the same shape hit the same cache entry.
-
-    ``bh_ring_size`` IS included: although it doesn't affect the torch goldens, it
-    changes the on-device weight prepare/interleave layout baked into the cached
-    bfloat4_b weight host tensors (see ``_build_quantized_weight_host_tensors`` and
-    ``get_weight_mem_configs``), so runs with different ring sizes must not share an entry.
-    """
-    return (
-        tuple(mesh_shape),
-        cluster_axis,
-        experts_per_device,
-        tokens_per_device,
-        selected_experts_k,
-        num_layers,
-        N,
-        hidden_size,
-        str(dtype),
-        activation_type,
-        has_bias,
-        bh_ring_size,
-    )
-
-
+@functools.lru_cache(maxsize=1)
 @torch.no_grad()
 def _build_moe_host_data(
     mesh_shape,
@@ -1570,11 +1530,21 @@ def _build_moe_host_data(
     dtype,
     activation_type,
     has_bias,
+    bh_ring_size,
 ):
     """Build all device-independent inputs and golden references for the test.
 
-    Deterministic given the fixed seeds below, so the result is safe to cache and
-    reuse across runs that share the same shape (see ``_moe_host_data_key``).
+    Deterministic given the fixed seeds below, so the result is safe to memoize
+    (``lru_cache`` above) and reuse across runs that share the same shape. The op-run
+    knobs that don't change the data (enable_trace, num_iterations, topology, num_links,
+    output shard dims) are intentionally NOT parameters, so trace/non-trace runs of the
+    same shape share an entry. ``maxsize=1`` keeps at most one (large) shape's artifacts
+    alive: a new shape evicts the previous one.
+
+    ``bh_ring_size`` is a parameter (the goldens don't use it) purely so it participates
+    in the lru_cache key: the quantized bfloat4_b weight host tensors attached to the
+    returned object in ``_run_moe_compute_impl`` DO depend on it (prepare/interleave
+    layout), so two ring sizes of the same shape must not share a cached object.
     """
     torch.manual_seed(2003)
     random.seed(2003)
@@ -1820,21 +1790,6 @@ def _build_quantized_weight_host_tensors(
     return w0_w1_host, w2_host
 
 
-@pytest.fixture(scope="module")
-def moe_host_data_cache():
-    """Module-scoped cache of ``_MoEHostData`` keyed by test shape.
-
-    Module scope (not function) is required because ``mesh_device`` is
-    function-scoped and torn down between parametrized runs; this cache must
-    outlive it so the host inputs/goldens survive across the two ``enable_trace``
-    variants of a model. ``_run_moe_compute_impl`` evicts the previous shape on a
-    miss, so the dict holds at most one (large) entry at a time.
-    """
-    cache = {}
-    yield cache
-    cache.clear()
-
-
 @torch.no_grad()
 def _run_moe_compute_impl(
     mesh_device,
@@ -1856,7 +1811,6 @@ def _run_moe_compute_impl(
     num_links,
     topology=None,
     bh_ring_size=12,
-    host_data_cache=None,
 ):
     """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     experts = experts_per_device * mesh_shape[cluster_axis]
@@ -1889,12 +1843,18 @@ def _run_moe_compute_impl(
     #########################################
     # The two expensive, device-independent (or device-detachable) artifacts —
     # the torch goldens (compute_matmul_golden) and the quantized bfloat4_b weight
-    # host tensors — are cached and reused across pytest parameters that don't
-    # change the shape.
-    if host_data_cache is None:
-        host_data_cache = {}
-    host_key = _moe_host_data_key(
-        mesh_shape,
+    # host tensors — are reused across pytest parameters that don't change the shape
+    # (notably the two enable_trace variants of a model, which run back-to-back).
+    #
+    # _build_moe_host_data is memoized with functools.lru_cache(maxsize=1): the same
+    # shape returns the same cached (host, weight_inputs), and a new shape evicts the
+    # previous entry so at most one (large) shape's artifacts live at a time. The
+    # quantized weights need a live device, so they can't be built inside that pure
+    # function; instead they're built once on the miss and attached to the cached host
+    # object, so later hits (e.g. the trace variant) reuse them without re-quantizing.
+    _hits_before = _build_moe_host_data.cache_info().hits
+    host, weight_inputs = _build_moe_host_data(
+        tuple(mesh_shape),
         cluster_axis,
         experts_per_device,
         tokens_per_device,
@@ -1907,31 +1867,30 @@ def _run_moe_compute_impl(
         has_bias,
         bh_ring_size,
     )
-    host = host_data_cache.get(host_key)
-    if host is None:
-        host_data_cache.clear()  # drop the previous shape's artifacts before allocating the next
-        host, weight_inputs = _build_moe_host_data(
-            mesh_shape,
-            cluster_axis,
-            experts_per_device,
-            tokens_per_device,
-            selected_experts_k,
-            num_layers,
-            N,
-            hidden_size,
-            dtype,
-            activation_type,
-            has_bias,
-        )
-        # Quantization needs a live device; the resulting host tensors are cached and
-        # the raw torch weights (weight_inputs) are dropped when this scope exits.
+    cache_hit = _build_moe_host_data.cache_info().hits > _hits_before
+    shape_desc = (
+        f"mesh={tuple(mesh_shape)} EP={experts_per_device} T/dev={tokens_per_device} "
+        f"k={selected_experts_k} L={num_layers} N={N} H={hidden_size} act={activation_type} bias={has_bias} "
+        f"bh_ring_size={bh_ring_size}"
+    )
+    if host.w0_w1_host is None:
+        # Quantization needs a live device, so it can't run inside the pure (cached)
+        # _build_moe_host_data; the host tensors it produces survive mesh_device
+        # teardown. lru_cache returns the SAME host object on every hit, so mutating
+        # these fields in place here memoizes the quantized weights alongside the
+        # goldens: a hit (e.g. the trace variant) finds them already set and skips
+        # re-quantizing. w0_w1_host is None only on a genuine miss (fresh or evicted
+        # shape), which is exactly when we want to (re)build them.
         host.w0_w1_host, host.w2_host = _build_quantized_weight_host_tensors(
             mesh_device, weight_inputs, num_layers, experts_per_device, hidden_size, N, has_bias, bh_ring_size
         )
-        host_data_cache[host_key] = host
-        logger.info("Built host inputs/goldens/quantized weights (cache miss)")
+    # cache_hit (lru_cache) and "w0_w1_host was None" (quantization) always agree: a
+    # goldens hit returns the already-quantized object; a miss rebuilds it with None.
+    if cache_hit:
+        logger.info(f"MoE host-data cache HIT — reusing goldens + quantized weights for {shape_desc}")
     else:
-        logger.info("Reusing cached host inputs/goldens/quantized weights (cache hit)")
+        logger.info(f"MoE host-data cache MISS — built goldens + quantized weights for {shape_desc}")
+    logger.info(f"MoE host-data cache stats: {_build_moe_host_data.cache_info()}")
 
     per_expert_tokens_goldens = host.per_expert_tokens_goldens
     activation_goldens = host.activation_goldens
@@ -2364,7 +2323,6 @@ def test_moe_compute(
     experts_per_device,
     activation_type,
     bh_ring_size,
-    moe_host_data_cache,
 ):
     from ttnn.operations.ccl import Topology
 
@@ -2381,7 +2339,6 @@ def test_moe_compute(
         topology=topology,
         num_links=mesh_cfg.num_links,
         bh_ring_size=bh_ring_size,
-        host_data_cache=moe_host_data_cache,
     )
 
 
