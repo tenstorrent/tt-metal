@@ -185,6 +185,11 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
+        is_chunked: bool = False,
+        slot_num: int = 1,
+        layer_num: int = 61,
+        mla_seq_len: Optional[int] = None,
+        chunked_kv_buf: Optional[ttnn.Tensor] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -210,16 +215,23 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- MLA ---
+        # In chunked-prefill mode the MLA's seq_len sizes the KV ring buffer (= full cache length,
+        # e.g. 56320), while the block-level `seq_len` is the per-chunk size (e.g. 5120) used to size
+        # the MoE/FFN dispatch buffers. They are equal in the single-shot path.
         self.mla = ttMLA(
             config,
             state_dict.get("mla_weights", {}),  # Empty dict if cache exists
             mesh_device,
             layer_idx=layer_idx,
-            seq_len=seq_len,
+            seq_len=mla_seq_len if mla_seq_len is not None else seq_len,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
+            is_chunked=is_chunked,
+            slot_num=slot_num,
+            layer_num=layer_num,
+            chunked_kv_buf=chunked_kv_buf,
         )
 
         # --- FFN norm ---
@@ -344,6 +356,9 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_isl: Optional[int] = None,
+        kv_actual_isl: Optional[int] = None,
+        cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
     ):
         """
         Args:
@@ -357,9 +372,17 @@ class TtPrefillBlock(LightweightModule):
                 fill_cache_for_user_(). MLA also zeros padding before fill when set.
             actual_isl: actual (unpadded) input sequence length; required when
                 on_layer_complete is set.
+            kv_actual_isl: chunked-prefill cumulative valid-KV count before this chunk
+                (None for single-shot). Selects the MLA chunked path; requires the block
+                to have been built with is_chunked=True.
+            cache_user_id: chunked-prefill cache slot index (user-major batch).
+            return_kv_intermediates: if True, MLA surfaces the 4 KV stages
+                (tt_kv, tt_kv_nope, tt_kv_rope, tt_kvpe) and this returns
+                (output_tensor, kv_intermediates_dict) instead of (output_tensor, kv_cache).
 
         Returns:
-            (output_tensor, kv_cache) where kv_cache is a host tensor or None
+            (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
+            (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
         # --- Attention ---
         attn_norm_out = self.attn_norm(x)
@@ -370,13 +393,25 @@ class TtPrefillBlock(LightweightModule):
             cache_layer_idx=cache_layer_idx,
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
+            kv_actual_isl=kv_actual_isl,
+            cache_user_id=cache_user_id,
+            return_kv_intermediates=return_kv_intermediates,
         )
+        kv_intermediates = None
+        if return_kv_intermediates:
+            mla_out, kv_intermediates = mla_out
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
+        if return_kv_intermediates:
+            # post-MLA residual (x + mla_out), TP-sharded on hidden.
+            kv_intermediates["post_mla_residual"] = ttnn.clone(x)
 
         # --- FFN ---
         ffn_norm_out = self.ffn_norm(x)
+        if return_kv_intermediates:
+            # "post_attn_norm" = post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
+            kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
         if self.is_moe:
             ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)
@@ -386,6 +421,9 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_norm_out)
         x = ttnn.add(x, ffn_out)
         ttnn.deallocate(ffn_out)
+
+        if return_kv_intermediates:
+            return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
         return x, kv_cache
