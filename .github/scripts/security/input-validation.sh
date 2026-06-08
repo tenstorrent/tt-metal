@@ -305,7 +305,7 @@ validate_branch_name() {
     # are used in shell contexts (e.g., $() for command substitution, glob chars).
     # Pattern stored in variable to prevent bash from consuming escape sequences.
     # The ] must be first in the bracket expression to be treated as literal.
-    local _shell_metachar_pattern='[][$*?{}"'"'"'!#()<>`]'
+    local _shell_metachar_pattern='[][$*?{}"'"'"'!#()<>`;&|]'
     if [[ "${branch}" =~ ${_shell_metachar_pattern} ]]; then
         validation_error "Branch name cannot contain shell metacharacters"
         return 1
@@ -462,6 +462,11 @@ validate_positive_integer() {
         return 1
     fi
 
+    if [[ "${#value}" -gt 1 && "${value}" =~ ^0 ]]; then
+        validation_error "${label} cannot have leading zeros"
+        return 1
+    fi
+
     if [[ -n "${max}" ]] && [[ "${value}" -gt "${max}" ]]; then
         validation_error "${label} exceeds maximum of ${max}"
         return 1
@@ -541,6 +546,11 @@ validate_docker_image() {
     # Validate image name characters (registry/namespace/name, may include port numbers)
     if [[ ! "${name}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:-]*$ ]]; then
         validation_error "Docker image name contains invalid characters"
+        return 1
+    fi
+
+    if [[ "${name}" =~ \.\. ]]; then
+        validation_error "Docker image name cannot contain '..' path segments"
         return 1
     fi
 
@@ -657,6 +667,25 @@ validate_semver() {
         done
     fi
 
+    # Validate build metadata if present (after +, with optional prerelease before it).
+    if [[ "${remainder}" == *+* ]]; then
+        local build="${remainder#*+}"
+        if [[ -z "${build}" || "${build}" == *+* ]]; then
+            validation_error "Invalid build metadata"
+            return 1
+        fi
+
+        local IFS='.'
+        local build_ids build_id
+        LC_ALL=C read -ra build_ids <<< "${build}"
+        for build_id in "${build_ids[@]}"; do
+            if [[ -z "${build_id}" || ! "${build_id}" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                validation_error "Invalid build metadata identifier: ${build_id}"
+                return 1
+            fi
+        done
+    fi
+
     return 0
 }
 
@@ -721,7 +750,7 @@ validate_url() {
     # Note: '#' (fragment) is intentionally NOT blocked — it is safe inside double-quoted
     # shell strings and is a legitimate part of URL fragment identifiers.
     # Pattern stored in variable to prevent bash from consuming escape sequences.
-    local _url_metachar_pattern='[$`!<>|;&(){}"'"'"']'
+    local _url_metachar_pattern='[$`!<>|;&(){}"'"'"'\\]'
     if [[ "${url}" =~ ${_url_metachar_pattern} ]]; then
         validation_error "URL contains forbidden shell metacharacters"
         return 1
@@ -730,6 +759,13 @@ validate_url() {
     # Reject spaces (would cause word splitting if unquoted)
     if [[ "${url}" =~ [[:space:]] ]]; then
         validation_error "URL cannot contain spaces"
+        return 1
+    fi
+
+    # Reject userinfo (user:pass@host) in the authority. It hides the real
+    # destination host and can bypass human review or naive allowlist checks.
+    if [[ "${url}" =~ ^https?://[^/?#]*@ ]]; then
+        validation_error "URL cannot contain userinfo before the host"
         return 1
     fi
 
@@ -1037,7 +1073,7 @@ validate_github_ref() {
     fi
 
     # Reject shell metacharacters
-    local _ref_metachar_pattern='[][$*?{}"'"'"'!#()<>`\\]'
+    local _ref_metachar_pattern='[][$*?{}"'"'"'!#()<>`\\;&|]'
     if [[ "${ref}" =~ ${_ref_metachar_pattern} ]]; then
         validation_error "Git ref cannot contain shell metacharacters"
         return 1
@@ -1192,6 +1228,8 @@ escape_quotes() {
     str="${str//\$/\\$}"
     str="${str//\`/\\\`}"
     str="${str//\"/\\\"}"
+    str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
     printf '%s\n' "${str}"
 }
 
@@ -1203,6 +1241,8 @@ sanitize_sed_replacement() {
     str="${str//\\/\\\\}"
     str="${str//\&/\\&}"
     str="${str//\//\\/}"
+    str="${str//$'\n'/\\n}"
+    str="${str//$'\r'/\\r}"
     printf '%s\n' "${str}"
 }
 
@@ -1334,10 +1374,24 @@ safe_docker_exec() {
         done
 
         # Block volume mounts of host root or sensitive directories.
-        # Handle both forms: "--volume=/src:/dst" and "-v /src:/dst" (two separate args)
+        # Handle split and inline forms for -v/--volume/--mount.
         local mount_spec=""
         if [[ "${opt}" == --volume=* ]]; then
             mount_spec="${opt#--volume=}"
+        elif [[ "${opt}" == "--volume" ]]; then
+            local next_idx=$((i + 1))
+            if [[ ${next_idx} -lt ${#docker_opts[@]} ]]; then
+                mount_spec="${docker_opts[${next_idx}]}"
+                _skip_next=true
+            fi
+        elif [[ "${opt}" == --mount=* ]]; then
+            mount_spec="${opt#--mount=}"
+        elif [[ "${opt}" == "--mount" ]]; then
+            local next_idx=$((i + 1))
+            if [[ ${next_idx} -lt ${#docker_opts[@]} ]]; then
+                mount_spec="${docker_opts[${next_idx}]}"
+                _skip_next=true
+            fi
         elif [[ "${opt}" == "-v" ]]; then
             local next_idx=$((i + 1))
             if [[ ${next_idx} -lt ${#docker_opts[@]} ]]; then
@@ -1350,7 +1404,14 @@ safe_docker_exec() {
 
         if [[ -n "${mount_spec}" ]]; then
             local mount_src="${mount_spec%%:*}"
-            if [[ "${mount_src}" == "/" || "${mount_src}" == /etc* || "${mount_src}" == /var/run/docker* ]]; then
+            if [[ "${mount_spec}" == *source=* ]]; then
+                mount_src="${mount_spec#*source=}"
+                mount_src="${mount_src%%,*}"
+            elif [[ "${mount_spec}" == *src=* ]]; then
+                mount_src="${mount_spec#*src=}"
+                mount_src="${mount_src%%,*}"
+            fi
+            if [[ "${mount_src}" == "/" || "${mount_src}" == /etc* || "${mount_src}" == /var/run/docker* || "${mount_src}" == /dev* || "${mount_src}" == /proc* || "${mount_src}" == /root* || "${mount_src}" == /sys* ]]; then
                 validation_error "Dangerous Docker volume mount blocked: ${mount_src}"
                 return 1
             fi
@@ -1438,14 +1499,26 @@ safe_ssh_exec() {
             return 1
         fi
     done
+    local _had_nocasematch=false
+    if shopt -q nocasematch; then
+        _had_nocasematch=true
+    else
+        shopt -s nocasematch
+    fi
     for opt in "${ssh_opts[@]}"; do
         for pattern in "${_dangerous_ssh_patterns[@]}"; do
             if [[ "${opt}" == *"${pattern}"* ]]; then
+                if [[ "${_had_nocasematch}" == false ]]; then
+                    shopt -u nocasematch
+                fi
                 validation_error "Dangerous SSH option blocked: ${opt}"
                 return 1
             fi
         done
     done
+    if [[ "${_had_nocasematch}" == false ]]; then
+        shopt -u nocasematch
+    fi
 
     # Build ssh command
     local ssh_cmd=("ssh")

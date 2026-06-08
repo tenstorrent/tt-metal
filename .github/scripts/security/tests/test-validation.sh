@@ -236,6 +236,9 @@ assert_returns_1 "branch_name: hash (comment)" validate_branch_name "feature/#co
 assert_returns_1 "branch_name: square bracket (glob)" validate_branch_name "feature/[abc]"
 assert_returns_1 "branch_name: parentheses (subshell)" validate_branch_name "feature/(sub)"
 assert_returns_1 "branch_name: angle brackets (redirect)" validate_branch_name "feature/<file"
+assert_returns_1 "branch_name: semicolon (shell meta)" validate_branch_name "feature;id"
+assert_returns_1 "branch_name: ampersand (shell meta)" validate_branch_name "feature&id"
+assert_returns_1 "branch_name: pipe (shell meta)" validate_branch_name "feature|id"
 
 # GitHub Actions expression injection
 assert_returns_1 "branch_name: GHA expression \${{ }}" validate_branch_name '${{ github.event.comment.body }}'
@@ -361,6 +364,7 @@ assert_returns_1 "docker_image: contains parentheses" validate_docker_image "alp
 assert_returns_1 "docker_image: strict mode with unknown registry" validate_docker_image "evil.com/malicious:latest" --strict
 assert_returns_1 "docker_image: invalid digest format" validate_docker_image "alpine@sha256:invalid"
 assert_returns_1 "docker_image: digest too short" validate_docker_image "alpine@sha256:abc123"
+assert_returns_1 "docker_image: path traversal in name" validate_docker_image "ghcr.io/org/foo/../evil:latest"
 
 # Newline injection
 assert_returns_1 "docker_image: embedded newline" validate_docker_image $'alpine\n:latest'
@@ -421,6 +425,10 @@ assert_returns_1 "semver: leading zero in prerelease num" validate_semver "1.2.3
 assert_returns_1 "semver: trailing semicolon (injection)" validate_semver "1.2.3; rm -rf /"
 assert_returns_1 "semver: trailing pipe" validate_semver "1.2.3|cat /etc/passwd"
 assert_returns_1 "semver: trailing text" validate_semver "1.2.3extra"
+assert_returns_1 "semver: build metadata semicolon" validate_semver "1.2.3+build;rm"
+assert_returns_1 "semver: build metadata pipe" validate_semver "1.2.3+evil|cmd"
+assert_returns_1 "semver: build metadata space" validate_semver "1.2.3+a b"
+assert_returns_1 "semver: empty build metadata" validate_semver "1.2.3+"
 
 echo ""
 
@@ -531,6 +539,7 @@ assert_output_equals 'hello\"world\"test' "escape_quotes: escapes multiple quote
 assert_output_equals 'hello\$world' "escape_quotes: escapes dollar sign" escape_quotes 'hello$world'
 assert_output_equals 'hello\`world' "escape_quotes: escapes backtick" escape_quotes 'hello`world'
 assert_output_equals 'hello\\world' "escape_quotes: escapes backslash" escape_quotes 'hello\world'
+assert_output_equals 'hello\nworld' "escape_quotes: escapes newline" escape_quotes $'hello\nworld'
 
 # Combined dangerous sequence
 result=$(escape_quotes '$(rm -rf /)')
@@ -547,6 +556,7 @@ assert_output_equals "hello" "sanitize_sed_replacement: no special chars" saniti
 assert_output_equals "hello\\/world" "sanitize_sed_replacement: escapes slash" sanitize_sed_replacement "hello/world"
 assert_output_equals "hello\\&world" "sanitize_sed_replacement: escapes ampersand" sanitize_sed_replacement "hello&world"
 assert_output_equals "hello\\\\world" "sanitize_sed_replacement: escapes backslash" sanitize_sed_replacement "hello\\world"
+assert_output_equals "safe\\ninjected" "sanitize_sed_replacement: escapes newline" sanitize_sed_replacement $'safe\ninjected'
 
 test_string="hello/world&test"
 sanitized=$(sanitize_sed_replacement "${test_string}")
@@ -665,6 +675,30 @@ else
     test_fail "safe_docker_exec: blocks --security-opt flag"
 fi
 
+docker_volume_output=$(safe_docker_exec "alpine" "echo test" "--volume" "/var/run/docker.sock:/var/run/docker.sock" 2>&1)
+ret=$?
+if [[ ${ret} -ne 0 && "${docker_volume_output}" == *"Dangerous Docker volume mount"* ]]; then
+    test_pass "safe_docker_exec: blocks split --volume docker socket mount"
+else
+    test_fail "safe_docker_exec: blocks split --volume docker socket mount"
+fi
+
+docker_dev_output=$(safe_docker_exec "alpine" "echo test" "-v" "/dev:/dev" 2>&1)
+ret=$?
+if [[ ${ret} -ne 0 && "${docker_dev_output}" == *"Dangerous Docker volume mount"* ]]; then
+    test_pass "safe_docker_exec: blocks /dev mount"
+else
+    test_fail "safe_docker_exec: blocks /dev mount"
+fi
+
+docker_mount_output=$(safe_docker_exec "alpine" "echo test" "--mount" "type=bind,source=/etc,target=/mnt" 2>&1)
+ret=$?
+if [[ ${ret} -ne 0 && "${docker_mount_output}" == *"Dangerous Docker volume mount"* ]]; then
+    test_pass "safe_docker_exec: blocks split --mount sensitive source"
+else
+    test_fail "safe_docker_exec: blocks split --mount sensitive source"
+fi
+
 echo ""
 echo "Testing safe_ssh_exec (validation only, no SSH required)..."
 
@@ -717,6 +751,14 @@ if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: blocks PermitLocalCommand"
 else
     test_fail "safe_ssh_exec: blocks PermitLocalCommand"
+fi
+
+safe_ssh_exec "valid.host" "echo test" "user" "-o" "proxycommand=evil" 2>/dev/null
+ret=$?
+if [[ ${ret} -ne 0 ]]; then
+    test_pass "safe_ssh_exec: blocks lowercase proxycommand"
+else
+    test_fail "safe_ssh_exec: blocks lowercase proxycommand"
 fi
 
 echo ""
@@ -1041,6 +1083,18 @@ fi
 echo ""
 
 # ============================================
+# validate_no_newlines
+# ============================================
+echo "Testing validate_no_newlines..."
+
+assert_returns_0 "no_newlines: safe scalar" validate_no_newlines "TITLE" "safe value"
+assert_returns_0 "no_newlines: multiple safe values" validate_no_newlines "TITLE" "safe" "BODY" "also safe"
+assert_returns_1 "no_newlines: newline injection" validate_no_newlines "TITLE" $'safe\nINJECTED=1'
+assert_returns_1 "no_newlines: carriage return injection" validate_no_newlines "TITLE" $'safe\rINJECTED=1'
+
+echo ""
+
+# ============================================
 # validate_positive_integer
 # ============================================
 echo "Testing validate_positive_integer..."
@@ -1059,6 +1113,7 @@ assert_returns_1 "positive_integer: mixed" validate_positive_integer "12abc"
 assert_returns_1 "positive_integer: exceeds max" validate_positive_integer "101" "Value" "100"
 assert_returns_1 "positive_integer: injection attempt" validate_positive_integer '$(whoami)'
 assert_returns_1 "positive_integer: newline injection" validate_positive_integer $'5\n6'
+assert_returns_1 "positive_integer: leading zeros" validate_positive_integer "007"
 
 echo ""
 
@@ -1092,6 +1147,7 @@ assert_returns_0 "url: https with port"               validate_url "https://exam
 assert_returns_0 "url: https with fragment"            validate_url "https://example.com/page#anchor"
 assert_returns_0 "url: github HTTPS URL"      validate_url "https://github.com/tenstorrent/tt-metal/releases/download/v1.0/artifact.tar.gz"
 assert_returns_1 "url: empty"                 validate_url ""
+assert_returns_1 "url: userinfo hides real host" validate_url "https://trusted.example@169.254.169.254/latest/meta-data"
 assert_returns_1 "url: javascript scheme"     validate_url "javascript:alert(1)"
 assert_returns_1 "url: file scheme"           validate_url "file:///etc/passwd"
 assert_returns_1 "url: ftp scheme"            validate_url "ftp://example.com"
@@ -1100,6 +1156,7 @@ assert_returns_1 "url: shell injection \$("   validate_url 'https://example.com/
 assert_returns_1 "url: shell injection backtick" validate_url 'https://example.com/`id`'
 assert_returns_1 "url: newline injection"     validate_url $'https://example.com\necho injected'
 assert_returns_1 "url: space injection"       validate_url "https://example.com; rm -rf /"
+assert_returns_1 "url: backslash in path"     validate_url 'https://example.com\evil'
 assert_returns_1 "url: data scheme"           validate_url "data:text/html,<script>alert(1)</script>"
 assert_returns_1 "url: too long (>2048)"      validate_url "https://$(python3 -c 'print("a"*2050)')"
 
@@ -1235,6 +1292,9 @@ assert_returns_1 "github_ref: starts with hyphen"              validate_github_r
 assert_returns_1 "github_ref: @{ sequence"                     validate_github_ref "refs/heads/foo@{bad}"
 assert_returns_1 "github_ref: tilde"                           validate_github_ref "refs/heads/main~1"
 assert_returns_1 "github_ref: caret"                           validate_github_ref "refs/heads/main^"
+assert_returns_1 "github_ref: semicolon (shell meta)"          validate_github_ref "refs/heads/feature;id"
+assert_returns_1 "github_ref: ampersand (shell meta)"          validate_github_ref "refs/heads/feature&id"
+assert_returns_1 "github_ref: pipe (shell meta)"               validate_github_ref "refs/heads/feature|id"
 
 echo ""
 

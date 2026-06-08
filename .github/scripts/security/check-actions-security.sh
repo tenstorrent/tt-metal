@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=81
+MAX_CHECK_NUM=88
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -91,7 +91,7 @@ Checks:
  29  Artifact path expressions (MEDIUM)
  30  URL construction in HTTP clients (MEDIUM)
  31  Container volume mount expressions (MEDIUM)
- 32  Expression interpolation in GITHUB_ENV/PATH/OUTPUT writes (HIGH)
+ 32  Expression interpolation in GITHUB_ENV/PATH/OUTPUT/STATE writes (HIGH)
  33  Missing explicit permissions key (LOW)
  34  Concurrency group with attacker-controlled data (MEDIUM)
  35  issue_comment trigger without authorization gate (MEDIUM)
@@ -103,7 +103,7 @@ Checks:
  41  Inline interpreter command execution APIs (HIGH)
  42  Shell command execution from variables (HIGH)
  43  Remote script execution variants beyond pipes (HIGH)
- 44  Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT (HIGH)
+ 44  Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT/STATE (HIGH)
  45  Expression injection in 'if:' conditions (HIGH)
  46  Bracket notation bypass in expressions (HIGH)
  47  Additional attacker-controlled event contexts (HIGH)
@@ -141,6 +141,13 @@ Checks:
  79  Archive extraction to filesystem root or system directories (HIGH)
  80  Hardcoded Slack or Discord webhook token (HIGH)
  81  pip install --extra-index-url without --no-index (dependency confusion) (MEDIUM)
+ 82  docker run host namespace or Docker socket mount escape (HIGH)
+ 83  Package manager TLS verification disabled (HIGH)
+ 84  pull_request_target with gh pr checkout (HIGH)
+ 85  Attacker-controlled env var executed as shell command (HIGH)
+ 86  Dynamic runs-on with attacker-controlled expression (HIGH)
+ 87  Dangerous or dynamic container options (HIGH)
+ 88  Action command/script inputs with attacker-controlled expressions (HIGH)
 EOF
     exit 0
 }
@@ -347,10 +354,15 @@ has_untrusted_trigger() {
     local file="$1"
     # Only check the on: trigger section, not the entire file
     awk '
-        /^on:/ || /^"on":/ || /^on :/ { in_on = 1; next }
+        BEGIN {
+            trigger_re = "(^|[^A-Za-z0-9_-])(pull_request_target|pull_request|issue_comment|issues|discussion|discussion_comment)([^A-Za-z0-9_-]|$)"
+        }
+        /^on:/ || /^"on":/ || /^on :/ {
+            if ($0 ~ trigger_re) { found = 1; exit }
+            in_on = 1; next
+        }
         in_on && /^[a-z]/ && !/^[[:space:]]/ { in_on = 0 }
-        in_on && /^[[:space:]]*(pull_request_target|pull_request|issue_comment|issues|discussion|discussion_comment)[[:space:]]*:/ { found = 1; exit }
-        in_on && /^[[:space:]]*(pull_request_target|pull_request|issue_comment|issues|discussion|discussion_comment)[[:space:]]*$/ { found = 1; exit }
+        in_on && $0 ~ trigger_re { found = 1; exit }
         END { exit !found }
     ' "${file}" 2>/dev/null
 }
@@ -361,16 +373,15 @@ has_untrusted_trigger() {
 _has_untrusted_input_trigger() {
     local file="$1"
     awk '
+        BEGIN {
+            trigger_re = "(^|[^A-Za-z0-9_-])(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)([^A-Za-z0-9_-]|$)"
+        }
         /^on:/ || /^"on":/ || /^on :/ {
-            # Handle single-line: on: workflow_dispatch
-            if ($0 ~ /^on:[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*$/) {
-                found = 1; exit
-            }
+            if ($0 ~ trigger_re) { found = 1; exit }
             in_on = 1; next
         }
         in_on && /^[a-z]/ && !/^[[:space:]]/ { in_on = 0 }
-        in_on && /^[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*:/ { found = 1; exit }
-        in_on && /^[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*$/ { found = 1; exit }
+        in_on && $0 ~ trigger_re { found = 1; exit }
         END { exit !found }
     ' "${file}" 2>/dev/null
 }
@@ -670,7 +681,7 @@ EOF
 check_7() {
     local file="$1"
     local hits
-    hits=$(grep -nE '(echo|printf).*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|print\s*\(.*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "${file}" 2>/dev/null || true)
+    hits=$(grep -nE '(echo|printf).*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|print\s*\(.*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|node[[:space:]].*(-e|-p).*console\.(log|info|debug).*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "${file}" 2>/dev/null || true)
     if [[ -n "${hits}" ]]; then
         log_issue "HIGH" "${file}" "Potential token exposure in echo/printf/print statement" "$(_extract_lines "${hits}")"
         return 1
@@ -1434,8 +1445,13 @@ check_25() {
             if (image ~ /^docker-image:\/\//) next
             # Allow internal registry images (tag-based workflow with expression interpolation)
             if (image ~ /^harbor\.ci\.tenstorrent\.net\//) next
-            # Allow images that are entirely expression-interpolated (resolved at runtime)
-            if (image ~ /^\$\{\{.*\}\}$/) next
+            # Entirely interpolated images are only safe if they do not come from attacker-controlled contexts.
+            if (image ~ /^\$\{\{.*\}\}$/) {
+                if (image ~ /(inputs\.|github\.event\.|github\.head_ref|github\.base_ref|matrix\.)/) {
+                    print NR
+                }
+                next
+            }
             # Allow format() expressions that construct harbor.ci.tenstorrent.net URLs
             if (image ~ /format\(.*harbor\.ci\.tenstorrent\.net/) next
             # Allow conditional expressions that resolve to harbor URLs
@@ -1552,9 +1568,9 @@ check_27() {
 }
 
 # =============================================================================
-# Check 28: Cache key injection patterns
+# Check 28: Cache key/path injection patterns
 # =============================================================================
-check_28_description="cache key injection patterns"
+check_28_description="cache key/path injection patterns"
 check_28_severity="MEDIUM"
 
 example_check_28() {
@@ -1579,7 +1595,8 @@ check_28() {
     local file="$1"
     local risky_cache
 
-    # Look for actions/cache or cache-related actions with inputs/github.event in keys
+    # Look for actions/cache or cache-related actions with attacker-controlled
+    # expressions in key, restore-keys, or path fields.
     risky_cache=$(awk '
         /^[[:space:]]*-[[:space:]]*uses:.*actions\/cache/ ||
         /^[[:space:]]*uses:.*actions\/cache/ {
@@ -1587,23 +1604,23 @@ check_28() {
             next
         }
         in_cache && /^[[:space:]]*-( |$)/ { in_cache = 0 }
-        in_cache && /key:/ && /\$\{\{.*(inputs\.|github\.event\.)/ {
+        in_cache && /(key|restore-keys|path):/ && /\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref|github\.actor|github\.triggering_actor|matrix\.)/ {
             print NR
             in_cache = 0
         }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_cache}" ]]; then
-        log_issue "MEDIUM" "${file}" "Cache key contains potentially attacker-controlled input - can enable cache poisoning attacks" "$(_extract_lines "${risky_cache}")"
+        log_issue "MEDIUM" "${file}" "Cache key/restore-keys/path contains potentially attacker-controlled input - can enable cache poisoning or unintended file restore attacks" "$(_extract_lines "${risky_cache}")"
         return 1
     fi
     return 0
 }
 
 # =============================================================================
-# Check 29: Artifact path expressions
+# Check 29: Artifact path/name expressions
 # =============================================================================
-check_29_description="artifact path expressions"
+check_29_description="artifact path/name expressions"
 check_29_severity="MEDIUM"
 
 example_check_29() {
@@ -1622,7 +1639,7 @@ EOF
 check_29() {
     local file="$1"
 
-    # Always flag github.event.* in artifact paths
+    # Always flag github.event.* in artifact path/name/pattern fields
     local risky_artifact
     risky_artifact=$(awk '
         /^[[:space:]]*-[[:space:]]*uses:.*actions\/(upload|download)-artifact/ ||
@@ -1631,7 +1648,7 @@ check_29() {
             next
         }
         in_artifact && /^[[:space:]]*-( |$)/ { in_artifact = 0 }
-        in_artifact && /path:/ && /\$\{\{.*github\.event\./ {
+        in_artifact && /(path|name|pattern):/ && /\$\{\{.*github\.event\./ {
             print NR
             in_artifact = 0
         }
@@ -1649,7 +1666,7 @@ check_29() {
                     next
                 }
                 in_artifact && /^[[:space:]]*-( |$)/ { in_artifact = 0 }
-                in_artifact && /path:/ && /\$\{\{.*inputs\./ {
+                in_artifact && /(path|name|pattern):/ && /\$\{\{.*inputs\./ {
                     print NR
                     in_artifact = 0
                 }
@@ -1658,7 +1675,7 @@ check_29() {
     fi
 
     if [[ -n "${risky_artifact}" ]]; then
-        log_issue "MEDIUM" "${file}" "Artifact path contains expression interpolation - can lead to path traversal or unintended file access" "$(_extract_lines "${risky_artifact}")"
+        log_issue "MEDIUM" "${file}" "Artifact path/name/pattern contains expression interpolation - can lead to path traversal, artifact confusion, or unintended file access" "$(_extract_lines "${risky_artifact}")"
         return 1
     fi
     return 0
@@ -1769,6 +1786,8 @@ check_31() {
             in_volumes = 1
             next
         }
+        in_volumes && /\/var\/run\/docker\.sock:/ { print NR }
+        in_volumes && /^[[:space:]]*-[[:space:]]*\/(dev|proc|sys|root)(:|\/)/ { print NR }
         in_volumes && /^[[:space:]]*-[[:space:]]*\$\{\{/ {
             # Accumulate multi-line ${{ }} expressions
             expr_line = $0
@@ -1797,16 +1816,16 @@ check_31() {
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_volume}" ]]; then
-        log_issue "MEDIUM" "${file}" "Container volume mount contains expression interpolation - can lead to container escape or unauthorized host filesystem access" "$(_extract_lines "${risky_volume}")"
+        log_issue "MEDIUM" "${file}" "Container volume mount contains expression interpolation or host-sensitive path - can lead to container escape or unauthorized host filesystem access" "$(_extract_lines "${risky_volume}")"
         return 1
     fi
     return 0
 }
 
 # =============================================================================
-# Check 32: Expression interpolation written to GITHUB_ENV/PATH/OUTPUT
+# Check 32: Expression interpolation written to GITHUB_ENV/PATH/OUTPUT/STATE
 # =============================================================================
-check_32_description="expression interpolation in GITHUB_ENV/PATH/OUTPUT writes"
+check_32_description="expression interpolation in GITHUB_ENV/PATH/OUTPUT/STATE writes"
 check_32_severity="HIGH"
 
 example_check_32() {
@@ -1828,7 +1847,7 @@ EOF
 
 check_32() {
     local file="$1"
-    if ! grep -qE 'GITHUB_(ENV|PATH|OUTPUT)' "${file}" 2>/dev/null; then
+    if ! grep -qE 'GITHUB_(ENV|PATH|OUTPUT|STATE)' "${file}" 2>/dev/null; then
         return 0
     fi
     if ! grep -qE '\$\{\{' "${file}" 2>/dev/null; then
@@ -1837,11 +1856,11 @@ check_32() {
 
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print NR; next }
-        in_run_block && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print NR }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT|STATE)/ { print NR; next }
+        in_run_block && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT|STATE)/ { print NR }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Contains \${{ }} expression on line that writes to GITHUB_ENV/PATH/OUTPUT - enables environment variable injection (LD_PRELOAD, BASH_ENV)" "$(_extract_lines "${unsafe_usage}")"
+        log_issue "HIGH" "${file}" "Contains \${{ }} expression on line that writes to GITHUB_ENV/PATH/OUTPUT/STATE - enables environment variable or state injection" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1963,9 +1982,9 @@ check_34() {
 }
 
 # =============================================================================
-# Check 35: issue_comment trigger without authorization gate
+# Check 35: comment trigger without authorization gate
 # =============================================================================
-check_35_description="issue_comment trigger without authorization gate"
+check_35_description="comment trigger without authorization gate"
 check_35_severity="MEDIUM"
 
 example_check_35() {
@@ -1996,7 +2015,7 @@ EOF
 check_35() {
     local file="$1"
     local trigger_hits
-    trigger_hits=$(grep -nE 'issue_comment' "${file}" 2>/dev/null || true)
+    trigger_hits=$(grep -nE '(issue_comment|discussion_comment)' "${file}" 2>/dev/null || true)
     if [[ -z "${trigger_hits}" ]]; then
         return 0
     fi
@@ -2009,7 +2028,7 @@ check_35() {
         return 0
     fi
 
-    log_issue "MEDIUM" "${file}" "issue_comment trigger has no author_association or org membership check - any commenter can trigger this workflow" "$(_extract_lines "${trigger_hits}")"
+    log_issue "MEDIUM" "${file}" "comment trigger has no author_association or org membership check - any commenter can trigger this workflow" "$(_extract_lines "${trigger_hits}")"
     return 1
 }
 
@@ -2433,9 +2452,9 @@ check_43() {
 }
 
 # =============================================================================
-# Check 44: Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT
+# Check 44: Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT/STATE
 # =============================================================================
-check_44_description="attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT"
+check_44_description="attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT/STATE"
 check_44_severity="HIGH"
 
 example_check_44() {
@@ -2569,7 +2588,7 @@ check_44() {
             next
         }
         in_step && /^[[:space:]]*run:/ {
-            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
+            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT|STATE)/ && line_uses_dangerous_var($0)) {
                 print NR
             }
             next
@@ -2586,13 +2605,13 @@ check_44() {
                 next
             }
             # Detect validation patterns (newline checks, regex validation)
-            if ($0 ~ /validate_no_newlines|\\n.*\\r|newline|exit 1/ && $0 !~ /GITHUB_(ENV|PATH|OUTPUT)/) {
+            if ($0 ~ /validate_no_newlines|\\n.*\\r|newline|exit 1/ && $0 !~ /GITHUB_(ENV|PATH|OUTPUT|STATE)/) {
                 has_validation = 1
             }
             if ($0 ~ /=~.*\^\[/ || $0 ~ /\[\[.*!~/) {
                 has_validation = 1
             }
-            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
+            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT|STATE)/ && line_uses_dangerous_var($0)) {
                 if (!has_validation) {
                     print NR
                 }
@@ -2600,7 +2619,7 @@ check_44() {
         }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT - newline injection can create unintended entries" "$(_extract_lines "${unsafe_usage}")"
+        log_issue "HIGH" "${file}" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT/STATE - newline injection can create unintended entries" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -3388,7 +3407,7 @@ check_63() {
         | grep -E 'github\.(event\.|actor|triggering_actor|workflow)|inputs\.' \
         || true)
     if [[ -n "${hits}" ]]; then
-        log_issue "MEDIUM" "${file}" "Contains attacker-controlled ${{ }} expression written to GITHUB_STEP_SUMMARY - enables markdown/UI injection in job summary" "$(_extract_lines "${hits}")"
+        log_issue "MEDIUM" "${file}" "Contains attacker-controlled \${{ }} expression written to GITHUB_STEP_SUMMARY - enables markdown/UI injection in job summary" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -3703,7 +3722,7 @@ check_70() {
     local file="$1"
 
     # Only relevant if the workflow is triggered by workflow_run
-    if ! grep -qE '^  workflow_run[[:space:]]*:' "${file}" 2>/dev/null; then
+    if ! grep -qE '^on:[[:space:]]*(workflow_run[[:space:]]*$|\[[^]]*workflow_run[^]]*\])|^[[:space:]]+workflow_run[[:space:]]*:' "${file}" 2>/dev/null; then
         return 0
     fi
 
@@ -3752,7 +3771,7 @@ check_71() {
     return 0
 }
 
-# Check 72: package install from insecure HTTP registry (npm/pip/pip3)
+# Check 72: package install from insecure HTTP registry
 check_72_description="package install from insecure HTTP (non-HTTPS) registry"
 check_72_severity="MEDIUM"
 
@@ -3760,6 +3779,7 @@ example_check_72() {
     cat <<'EOF'
     steps:
       - run: npm install --registry http://registry.npmjs.org
+      - run: yarn install --registry http://registry.yarnpkg.com
       - run: pip install --index-url http://pypi.example.com/simple/ mypkg
 EOF
 }
@@ -3767,10 +3787,10 @@ EOF
 check_72() {
     local file="$1"
     local hits
-    # npm --registry http://...
+    # npm/yarn/pnpm/bun --registry http://... or config registry http://...
     # pip/pip3 --index-url http:// or -i http:// or --extra-index-url http://
     hits=$(grep -nE \
-        '(npm[[:space:]]+(install|ci|i)[[:space:]].*--registry[[:space:]]+http://|pip[23]?[[:space:]]+(install|download)[[:space:]].*(-i|--index-url|--extra-index-url)[[:space:]]+http://)' \
+        '((npm|yarn|pnpm|bun)[[:space:]]+(install|ci|i|add)[[:space:]].*--registry[=[:space:]]*http://|(npm|yarn|pnpm|bun)[[:space:]]+config[[:space:]]+set[[:space:]]+registry[[:space:]]+http://|pip[23]?[[:space:]]+(install|download)[[:space:]].*(-i|--index-url|--extra-index-url)([=[:space:]]+)http://)' \
         "${file}" 2>/dev/null || true)
     if [[ -n "${hits}" ]]; then
         log_issue "MEDIUM" "${file}" \
@@ -3798,14 +3818,14 @@ check_73() {
     local file="$1"
     local hits
     hits=$(grep -nE \
-        'docker[[:space:]]+(run|exec)[[:space:]].*(--(privileged|network[[:space:]]+host)|--cap-add[=[:space:]]*(SYS_ADMIN|ALL)[^a-zA-Z])' \
+        'docker[[:space:]]+(run|exec)[[:space:]].*(--privileged|--network([=[:space:]]+)host|--cap-add[=[:space:]]*(SYS_ADMIN|ALL)[^a-zA-Z])' \
         "${file}" 2>/dev/null || true)
     # Two-pass: catch --cap-add=ALL or --cap-add SYS_ADMIN on separate token boundaries
     if [[ -z "${hits}" ]]; then
         hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--privileged' "${file}" 2>/dev/null || true)
     fi
     if [[ -z "${hits}" ]]; then
-        hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--network[[:space:]]+host' "${file}" 2>/dev/null || true)
+        hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--network([=[:space:]]+)host' "${file}" 2>/dev/null || true)
     fi
     if [[ -z "${hits}" ]]; then
         hits=$(grep -nE 'docker[[:space:]]+(run|exec)[[:space:]].*--cap-add[=[:space:]]*(SYS_ADMIN|ALL)' "${file}" 2>/dev/null || true)
@@ -3906,6 +3926,7 @@ example_check_76() {
     cat <<'EOF'
     steps:
       - run: curl -k -o binary https://builds.example.com/tool
+      - run: curl -fsSkL https://repo.example.com/install.sh -o install.sh
       - run: wget --no-check-certificate https://repo.example.com/install.sh
 EOF
 }
@@ -3913,10 +3934,17 @@ EOF
 check_76() {
     local file="$1"
     local hits
-    # curl -k or --insecure
-    hits=$(grep -nE \
-        'curl[[:space:]].*(-k[[:space:]]|--insecure)' \
-        "${file}" 2>/dev/null || true)
+    # curl -k, combined short flags containing k (e.g. -fsSkL), or --insecure
+    hits=$(awk '
+        /curl[[:space:]]/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "--insecure" || ($i ~ /^-[A-Za-z]+$/ && $i !~ /^--/ && $i ~ /k/)) {
+                    print NR
+                    next
+                }
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
     if [[ -z "${hits}" ]]; then
         # wget --no-check-certificate
         hits=$(grep -nE \
@@ -3924,9 +3952,11 @@ check_76() {
             "${file}" 2>/dev/null || true)
     fi
     if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
         log_issue "HIGH" "${file}" \
             "TLS certificate verification is disabled (curl -k/--insecure or wget --no-check-certificate) - allows MITM attacks; remove the flag and fix the certificate instead" \
-            "$(_extract_lines "${hits}")"
+            "${lines}"
         return 1
     fi
     return 0
@@ -4103,6 +4133,452 @@ check_81() {
         log_issue "MEDIUM" "${file}" \
             "pip install uses --extra-index-url without --no-index - PyPI is still searched first, enabling dependency confusion attacks (attacker publishes same package name to PyPI at a higher version); add --no-index or use --require-hashes" \
             "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_82_description="docker run host namespace or Docker socket mount escape"
+check_82_severity="HIGH"
+
+example_check_82() {
+    cat <<'EOF'
+    steps:
+      # Risk: host namespaces and Docker socket mounts give the container access
+      # to runner host processes or the host Docker daemon.
+      - run: docker run --pid=host ubuntu:22.04 ps aux
+      - run: docker run -v /var/run/docker.sock:/var/run/docker.sock ubuntu:22.04 docker ps
+EOF
+}
+
+check_82() {
+    local file="$1"
+    local hits
+
+    # Host namespace flags expose runner host process, IPC, user, cgroup, or UTS
+    # namespaces to the container. Docker socket mounts grant host daemon control.
+    hits=$(grep -nE \
+        'docker[[:space:]]+(run|exec)[[:space:]].*(--(pid|ipc|userns|cgroupns|uts)=host|--(pid|ipc|userns|cgroupns|uts)[[:space:]]+host)' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE \
+            'docker[[:space:]]+(run|exec)[[:space:]].*(-v[[:space:]]*/var/run/docker\.sock:|-v/var/run/docker\.sock:|--volume[=[:space:]]*/var/run/docker\.sock:|--mount[=[:space:]]*[^[:space:]]*(source|src|type=bind,source)=/var/run/docker\.sock)' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE \
+            'docker[[:space:]]+(run|exec)[[:space:]].*(--device=/dev/|--device[[:space:]]+/dev/|--security-opt=(seccomp|apparmor)=?unconfined|--security-opt[[:space:]]+(seccomp|apparmor)=?unconfined)' \
+            "${file}" 2>/dev/null || true)
+    fi
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "docker run exposes host namespaces, host devices, unconfined security profile, or Docker socket - this can escape container isolation and control the runner host; use isolated containers without host-level mounts/flags" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_83_description="package manager TLS verification disabled"
+check_83_severity="HIGH"
+
+example_check_83() {
+    cat <<'EOF'
+    steps:
+      - run: pip install --trusted-host pypi.org --index-url https://pypi.org/simple mypackage
+      - run: npm config set strict-ssl false
+EOF
+}
+
+check_83() {
+    local file="$1"
+    local hits
+
+    # pip --trusted-host disables certificate and hostname verification for that
+    # host. npm/yarn/pnpm strict-ssl false does the same for package downloads.
+    hits=$(grep -nE \
+        '(pip[23]?|uv[[:space:]]+pip)[[:space:]]+(install|download)[[:space:]].*--trusted-host([=[:space:]]|$)|PIP_TRUSTED_HOST[[:space:]]*=' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        hits=$(grep -nE \
+            '(npm|yarn|pnpm)[[:space:]]+config[[:space:]]+set[[:space:]]+strict-ssl[[:space:]]+false|--strict-ssl[=[:space:]]*false' \
+            "${file}" 2>/dev/null || true)
+    fi
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "Package manager TLS verification is disabled (--trusted-host or strict-ssl false) - allows MITM supply-chain attacks; use valid HTTPS certificates instead" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_84_description="pull_request_target with gh pr checkout"
+check_84_severity="HIGH"
+
+example_check_84() {
+    cat <<'EOF'
+    on: pull_request_target
+    steps:
+      - run: gh pr checkout "$PR_NUMBER"
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+EOF
+}
+
+check_84() {
+    local file="$1"
+    local hits
+
+    if ! grep -qE 'pull_request_target' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    hits=$(grep -nE '(^|[[:space:]])gh[[:space:]]+pr[[:space:]]+checkout([[:space:]]|$)' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "pull_request_target uses 'gh pr checkout' - this checks out untrusted PR code in a privileged base-repository context; use pull_request for untrusted code or avoid checkout in privileged jobs" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_85_description="attacker-controlled env var executed as shell command"
+check_85_severity="HIGH"
+
+example_check_85() {
+    cat <<'EOF'
+    steps:
+      - env:
+          CMD: ${{ github.event.pull_request.title }}
+        run: $CMD
+EOF
+}
+
+check_85() {
+    local file="$1"
+    local hits
+
+    hits=$(awk '
+        function clear_env(    k) {
+            for (k in dangerous_env) {
+                delete dangerous_env[k]
+            }
+        }
+        function reset_step() {
+            in_step = 0
+            in_env = 0
+            in_run_block = 0
+            step_indent = -1
+            env_indent = -1
+            run_indent = -1
+            clear_env()
+        }
+        function line_executes_dangerous_var(line,    k, text, re) {
+            text = line
+            sub(/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/, "", text)
+            for (k in dangerous_env) {
+                re = "^[[:space:]]*\\$\\{?" k "\\}?[[:space:]]*([|;&].*)?$"
+                if (text ~ re) {
+                    return 1
+                }
+                re = "`[^`]*\\$\\{?" k "\\}?[^`]*`"
+                if (text ~ re) {
+                    return 1
+                }
+                re = "(^|[[:space:]])(source|\\.)[[:space:]]+[\"\\047]?\\$\\{?" k "\\}?[\"\\047]?"
+                if (text ~ re) {
+                    return 1
+                }
+                re = "(^|[[:space:]])(exec|command)[[:space:]]+[\"\\047]?\\$\\{?" k "\\}?[\"\\047]?([[:space:]]|$)"
+                if (text ~ re) {
+                    return 1
+                }
+            }
+            return 0
+        }
+        {
+            match($0, /^[[:space:]]*/)
+            curr_indent = RLENGTH
+        }
+        /^[[:space:]]*-[[:space:]]/ {
+            reset_step()
+            in_step = 1
+            step_indent = curr_indent
+        }
+        in_step && curr_indent <= step_indent && $0 !~ /^[[:space:]]*-[[:space:]]/ && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/ {
+            reset_step()
+        }
+        in_step && /^[[:space:]]*(-[[:space:]]+)?env:[[:space:]]*$/ {
+            in_env = 1
+            env_indent = curr_indent
+            next
+        }
+        in_env {
+            if (curr_indent <= env_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
+                in_env = 0
+            } else if ($0 ~ /\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref|inputs\.|matrix\.)/ &&
+                       $0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*/) {
+                line = $0
+                sub(/^[[:space:]]*/, "", line)
+                split(line, parts, ":")
+                dangerous_env[parts[1]] = 1
+            }
+        }
+        in_step && /^[[:space:]]*run:[[:space:]]*\|/ {
+            in_run_block = 1
+            run_indent = curr_indent
+            next
+        }
+        in_step && /^[[:space:]]*run:/ {
+            if (line_executes_dangerous_var($0)) {
+                print NR
+            }
+            next
+        }
+        in_run_block {
+            if ($0 ~ /^[[:space:]]*-[[:space:]]/) {
+                in_run_block = 0
+                next
+            }
+            if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
+                in_run_block = 0
+                next
+            }
+            if (line_executes_dangerous_var($0)) {
+                print NR
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "Attacker-controlled env var is executed as a shell command - env indirection does not make runtime data safe to execute" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_86_description="dynamic runs-on with attacker-controlled expression"
+check_86_severity="HIGH"
+
+example_check_86() {
+    cat <<'EOF'
+    jobs:
+      test:
+        runs-on: ${{ inputs.runner-label }}
+EOF
+}
+
+check_86() {
+    local file="$1"
+    local hits
+    local check_inputs=false
+
+    # shellcheck disable=SC2310
+    if _has_untrusted_input_trigger "${file}"; then
+        check_inputs=true
+    fi
+
+    hits=$(awk -v check_inputs="${check_inputs}" '
+        function unsafe(line) {
+            if (line ~ /\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref)/) {
+                return 1
+            }
+            if (check_inputs == "true" && line ~ /\$\{\{.*(inputs\.|matrix\.)/) {
+                return 1
+            }
+            return 0
+        }
+        {
+            match($0, /^[[:space:]]*/)
+            curr_indent = RLENGTH
+        }
+        in_runs_on_block {
+            if (curr_indent <= runs_on_indent && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*/) {
+                in_runs_on_block = 0
+            } else {
+                if (unsafe($0)) {
+                    print NR
+                    in_runs_on_block = 0
+                }
+                next
+            }
+        }
+        /^[[:space:]]+runs-on:[[:space:]]*/ {
+            if (unsafe($0)) {
+                print NR
+            }
+            if ($0 ~ /^[[:space:]]+runs-on:[[:space:]]*$/) {
+                in_runs_on_block = 1
+                runs_on_indent = curr_indent
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "runs-on contains attacker-controlled expression - can route jobs to unintended or self-hosted runner labels" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_87_description="dangerous or dynamic container options"
+check_87_severity="HIGH"
+
+example_check_87() {
+    cat <<'EOF'
+    jobs:
+      test:
+        container:
+          image: ubuntu@sha256:...
+          options: --privileged
+EOF
+}
+
+check_87() {
+    local file="$1"
+    local hits
+
+    hits=$(awk '
+        function dangerous(line) {
+            return line ~ /(--privileged|--network[=[:space:]]+host|--cap-add[=[:space:]]*(SYS_ADMIN|ALL)|--pid[=[:space:]]*host|--ipc[=[:space:]]*host|\/var\/run\/docker\.sock|\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref|matrix\.))/
+        }
+        {
+            match($0, /^[[:space:]]*/)
+            curr_indent = RLENGTH
+        }
+        in_options_block {
+            if (curr_indent <= options_indent && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*/) {
+                in_options_block = 0
+            } else {
+                if (dangerous($0)) {
+                    print NR
+                    in_options_block = 0
+                }
+                next
+            }
+        }
+        /^[[:space:]]+options:[[:space:]]/ {
+            if (dangerous($0)) {
+                print NR
+            }
+            if ($0 ~ /^[[:space:]]+options:[[:space:]]*[|>][-+]?/) {
+                in_options_block = 1
+                options_indent = curr_indent
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "Container options include dangerous host-level flags or attacker-controlled expressions - can weaken container isolation or mount host resources" \
+            "${lines}"
+        return 1
+    fi
+    return 0
+}
+
+check_88_description="action command/script inputs with attacker-controlled expressions"
+check_88_severity="HIGH"
+
+example_check_88() {
+    cat <<'EOF'
+    steps:
+      - uses: some/action@0123456789abcdef0123456789abcdef01234567
+        with:
+          command: ${{ github.event.pull_request.title }}
+EOF
+}
+
+check_88() {
+    local file="$1"
+    local hits
+
+    hits=$(awk '
+        function reset_action() {
+            in_action = 0
+            in_with = 0
+            in_risky_block = 0
+            action_indent = -1
+            with_indent = -1
+            block_indent = -1
+        }
+        {
+            match($0, /^[[:space:]]*/)
+            curr_indent = RLENGTH
+        }
+        /^[[:space:]]*-[[:space:]]*uses:/ || /^[[:space:]]*uses:/ {
+            in_action = 1
+            in_with = 0
+            in_risky_block = 0
+            action_indent = curr_indent
+            next
+        }
+        in_action && /^[[:space:]]*with:[[:space:]]*$/ {
+            in_with = 1
+            with_indent = curr_indent
+            next
+        }
+        in_action && curr_indent <= action_indent && $0 ~ /^[[:space:]]*-[[:space:]]/ {
+            reset_action()
+            next
+        }
+        in_risky_block {
+            if (curr_indent <= action_indent && $0 ~ /^[[:space:]]*-[[:space:]]/) {
+                reset_action()
+                next
+            }
+            if (curr_indent <= block_indent && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*/) {
+                in_risky_block = 0
+            } else if ($0 ~ /\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref|inputs\.|matrix\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/) {
+                print NR
+                in_risky_block = 0
+                next
+            } else {
+                next
+            }
+        }
+        in_with && curr_indent <= with_indent && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:[[:space:]]*/ {
+            in_with = 0
+            in_risky_block = 0
+        }
+        in_with && /^[[:space:]]*(command|cmd|script|inlineScript|inline-script|args|entrypoint|shell):[[:space:]]*.*\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref|inputs\.|matrix\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ {
+            print NR
+            reset_action()
+            next
+        }
+        in_with && /^[[:space:]]*(command|cmd|script|inlineScript|inline-script|args|entrypoint|shell):[[:space:]]*[|>][-+]?/ {
+            in_risky_block = 1
+            block_indent = curr_indent
+            next
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${hits}" ]]; then
+        local lines
+        lines=$(_extract_lines "${hits}")
+        log_issue "HIGH" "${file}" \
+            "Action command/script input contains attacker-controlled expression - many actions execute these fields as shell code" \
+            "${lines}"
         return 1
     fi
     return 0
