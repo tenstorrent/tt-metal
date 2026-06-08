@@ -380,6 +380,7 @@ Every entry from Appendix A appears in this summary table, in the same order as 
 | Non-zero semaphore initial value | GREEN | |
 | Dynamic TensorAccessor (`ArgConfig::Runtime*`) | GREEN | |
 | `UpdateCircularBuffer*` | GREEN | |
+| Variable-count compile-time arguments (CTA varargs) | GREEN | |
 
 For each non-GREEN row, follow up with an H3 detail section. Omit detail sections for GREEN rows.
 
@@ -771,6 +772,29 @@ The single-argument form `TensorAccessorArgs(buffer)` (with no second arg, or wi
 - `ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/attn_matmul_program_factory.cpp`
 - `ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/group_attn_matmul_program_factory.cpp`
 - `ttnn/cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp`
+
+---
+
+### Variable-count compile-time arguments (CTA varargs) — UNSUPPORTED
+
+**Status**: Not yet supported in Metal 2.0. Ops whose structure requires a *variable number of compile-time arguments* — for example, ops that accept a list of input tensors of runtime-varying count, or kernels that iterate over a runtime-varying number of CTAs — cannot be ported today. Metal 2.0's `compile_time_args` schema requires fixed-shape declaration at factory-construction time; there is no kernel-side equivalent of the legacy positional-CTA loop yet. A CTA-vararg feature is on the host API roadmap.
+
+**Recognition — definitely this feature** (refuse and report):
+
+- **Op-level signal.** The op accepts a *variable number of input tensors* — e.g., the device-operation class's `tensor_args_t` carries a `std::vector<Tensor>` (or equivalent variable-count container) rather than a fixed-count tuple of named tensors. The variadic input signature is the strongest cue: if the op author needed a variable-count input list, the legacy kernel almost certainly threads per-input metadata through CTA varargs.
+- **Kernel-level signal.** The kernel reads compile-time args using a *runtime-varying index* — e.g., `get_compile_time_arg_val(i)` inside a loop where `i` depends on a count value, or a kernel template instantiated over a variable count derived from a CTA.
+
+Either signal fires the rule.
+
+**Recognition — false-positive guard**:
+
+- *RTA varargs* (`get_vararg(i)` for runtime args) ARE supported in Metal 2.0 via the kernel-side vararg mechanism — see the porter recipe's [kernel-side whitelist rule 4](port_op_to_metal2_recipe.md#kernel-side-whitelist) and the [patterns catalog's Caution on varargs](metal2_port_patterns.md#caution-avoid-varargs-unless-absolutely-necessary). The rule fires only on *compile-time* varargs.
+- A fixed-count list of input tensors known at port time (e.g., always exactly 4 inputs) is not variadic — that's a multi-input op with a known shape. Port it as multiple named `TensorParameter`s and `TensorBinding`s.
+
+**Action**: STOP. Report to the user that this op's structure requires a CTA-vararg feature Metal 2.0 does not yet support. Do not attempt to capitulate by demoting CTAs to RTAs (that's the [Demoting per-group CTA to RTA anti-pattern](metal2_port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta)) or by hand-unrolling the variable-count loop in the kernel.
+
+**Examples in the wild** (for ground-truthing your match):
+- `ttnn/cpp/ttnn/operations/data_movement/concat/` — accepts a runtime-varying list of input tensors.
 
 ---
 
