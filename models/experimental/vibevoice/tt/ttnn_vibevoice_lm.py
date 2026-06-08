@@ -216,10 +216,10 @@ def _build_rope_cache_tt(
     cos_4d = cos[np.newaxis, np.newaxis, :, :]  # [1, 1, S, head_dim]
     sin_4d = sin[np.newaxis, np.newaxis, :, :]
     cos_tt = ttnn.as_tensor(
-        cos_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        cos_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     sin_tt = ttnn.as_tensor(
-        sin_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        sin_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     return cos_tt, sin_tt
 
@@ -237,12 +237,14 @@ def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Apply RoPE. x: [B, n, S, hd], cos/sin: [1, 1, S, hd] (broadcasts over n)."""
-    return ttnn.add(
-        ttnn.mul(x, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        ttnn.mul(_rotate_half_ttnn(x), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    """Apply RoPE in float32 (matches reference fp32 RoPE numerics)."""
+    x_f32 = ttnn.typecast(x, ttnn.float32)
+    rotated = ttnn.add(
+        ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ttnn.mul(_rotate_half_ttnn(x_f32), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    return ttnn.typecast(rotated, ttnn.bfloat16)
 
 
 def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
@@ -504,6 +506,8 @@ class TTVibeVoiceLM:
         cos_tt, sin_tt = self._cos_tt, self._sin_tt
 
         x = inputs_embeds
+        if x.dtype == ttnn.float32:
+            x = ttnn.typecast(x, ttnn.bfloat16)
         for layer_idx in range(cfg.num_hidden_layers):
             x = self._transformer_layer(x, layer_idx, (cos_tt, sin_tt), kv_cache, start_pos)
 
@@ -516,7 +520,7 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        last_hidden = x if return_last_hidden else None
+        last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
 
         # LM head projection → logits
         logits = ttnn.linear(
