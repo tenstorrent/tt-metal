@@ -1788,6 +1788,15 @@ class LocalFiveHzLMHandler:
         if target_duration is not None and float(target_duration) > 0:
             metadata["duration"] = int(round(float(target_duration)))
 
+        if caption and str(caption).strip():
+            from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import reconcile_lm_caption_with_user
+
+            metadata = reconcile_lm_caption_with_user(
+                user_caption=str(caption),
+                metadata=metadata,
+                use_cot_caption=bool(use_cot_caption),
+            )
+
         # When the caller did not supply an explicit target_duration, use the
         # duration that Phase 1 (CoT) produced so that Phase 2 code generation
         # is properly constrained.  Without this, a null API duration lets

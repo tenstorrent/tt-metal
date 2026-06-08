@@ -89,28 +89,138 @@ export MESH_DEVICE=BH_QB          # or P150 / BH_LB — DiT/VAE mesh SKU
 
 ---
 
-Generate a WAV audio file from a text prompt using TTNN-accelerated inference.
+## How to use the demo
 
-Entry point: `demo/run_prompt_to_wav.py` (see `demo/demo.md` for session passes and perf tuning).
+Entry point: `demo/run_prompt_to_wav.py` (session passes, perf tuning, and device lifecycle: [`demo/demo.md`](demo/demo.md)).
+
+### 1. One-time setup
+
+From the **tt-metal repo root** (see [Prerequisites](#prerequisites) and [Environment](#environment-every-run)):
+
+```bash
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+export MESH_DEVICE=BH_QB
+pip install -r models/experimental/ace_step_v1_5/requirements.txt
+```
+
+Checkpoints download automatically on first run to `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/` (needs `HF_TOKEN` or `huggingface-cli login`).
+
+### 2. Minimal command
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB \
   --variant acestep-v15-turbo \
   --lm_variant acestep-5Hz-lm-1.7B \
   --duration_sec 15 \
   --prompt "epic orchestral cinematic music for a movie trailer" \
   --infer_steps 8 \
   --guidance_scale 1 \
-  --mesh-device BH_QB \
+  --seed 0 \
   --out /tmp/turbo_15s.wav
 ```
 
-On first run, any missing model checkpoints are automatically downloaded from HuggingFace
-into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
+Required: `--prompt`. Everything else has sensible defaults (`--variant acestep-v15-base`, `--lm_variant acestep-5Hz-lm-1.7B`, `--duration_sec 10`, `--out ttnn_out.wav`).
 
-### Trace (default: on)
+### 3. BH_QB run flow (what happens)
 
-TTNN trace + 2CQ is **enabled by default**. To run in fully-eager single-CQ mode (e.g. for debugging or Tracy profiling):
+On **BH_QB** the demo uses **split preprocess**:
+
+| Phase | Device | Work |
+|-------|--------|------|
+| **A — preprocess** | 1×1 TT chip | 5 Hz LM, Qwen3 caption, audio-code detokenizer, (optional) condition encode |
+| **Handoff** | process re-exec | Closes 1×1, opens fresh 2×2 mesh (required on Blackhole) |
+| **B — generate** | 2×2 mesh | Condition encode (long clips), DiT denoise, TTNN VAE decode → WAV |
+
+Healthy long-clip logs include:
+
+```
+[ace_step_v1_5] mesh SKU=BH_QB split_preprocess=True
+[ace_step_v1_5] defer TTNN condition encoder to DiT mesh ...   # ≥30 s (≥750 latent frames)
+[ace_step_v1_5] DiT: re-exec for full mesh (BH_QB), handoff=...
+[ace_step_v1_5] opened DiT mesh for SKU=BH_QB
+[condition] backend=ttnn on DiT mesh (...)
+```
+
+If a prior run left the device busy: `kill <pid>` then `tt-smi -r 0` if needed.
+
+### 4. Recommended recipes
+
+**Turbo — fast, best for long clips (60–120 s):**
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB --variant acestep-v15-turbo \
+  --lm_variant acestep-5Hz-lm-1.7B --duration_sec 60 \
+  --infer_steps 8 --guidance_scale 1 \
+  --prompt "guitar, saxophone and drums" \
+  --seed 0 --out /tmp/ace_turbo_60s.wav
+```
+
+**Multi-instrument — when drums or listed instruments drop out**, add `--no-use-cot-caption` so DiT gets your exact prompt (see [Caption / text conditioning](#caption--text-conditioning-default-lm-cot-rewrite)):
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB --variant acestep-v15-turbo \
+  --lm_variant acestep-5Hz-lm-1.7B --duration_sec 120 \
+  --infer_steps 8 --guidance_scale 1 \
+  --prompt "guitar, saxophone and prominent drums with clear kick and snare" \
+  --no-use-cot-caption --seed 0 --out /tmp/ace_multi_120.wav
+```
+
+**Base / SFT — higher quality, slower** (50 steps, CFG=7; use `--clarity` at ≥30 s):
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB --variant acestep-v15-base \
+  --lm_variant acestep-5Hz-lm-1.7B --duration_sec 30 \
+  --prompt "Acoustic guitar ballad with soft vocals and ambient strings" \
+  --seed 42 --out /tmp/ballad.wav
+```
+
+### 5. TTNN vs host PyTorch (default path)
+
+The demo is **TTNN-first** on BH_QB. PyTorch on CPU/GPU is used for orchestration and a few stages that cannot fit on device or are host-only by design.
+
+| Stage | Default backend | Notes |
+|-------|-----------------|-------|
+| 5 Hz LM forward | **TTNN** | Host PyTorch only with `--pytorch-lm` |
+| LM tokenize / decode / constrained FSM | **Host** | HF `AutoTokenizer` + metadata FSM (not full LM forward) |
+| Qwen3 caption + lyric embed | **TTNN** | On 1×1 preprocess chip |
+| Audio-code → 25 Hz hints | **TTNN** if ≤200 codes | **HF PyTorch detokenizer** when codes >200 (e.g. 120 s ≈600 codes) |
+| Condition encoder | **TTNN** | Deferred to 2×2 mesh for ≥750 frames (~30 s+) |
+| DiT denoise forward | **TTNN** | Opt-in HF DiT: `ACE_STEP_PYTORCH_DIT=1` |
+| Latent noise + Euler steps | **Host CPU** at ≥30 s | Trace auto-off on long mesh clips; DiT forward still on mesh |
+| VAE decode | **TTNN** | Opt-in: `--torch-vae` |
+| WAV write | **Host** | Peak normalize + file I/O |
+
+**Not used in the default demo** unless you opt in:
+
+| Flag / env | Effect |
+|------------|--------|
+| `--pytorch-lm` | 5 Hz LM on host PyTorch instead of TTNN |
+| `--torch-vae` | PyTorch Oobleck decode instead of TTNN tiled VAE |
+| `ACE_STEP_PYTORCH_DIT=1` | HF PyTorch DiT denoise instead of TTNN |
+| `ACE_STEP_PYTORCH_CONDITION=1` | HF `prepare_condition` instead of TTNN condition encoder |
+| `ACE_STEP_MESH_HOST_PREPROCESS=1` | Skip TTNN Phase A entirely (host preprocess) |
+
+### 6. Long clips (≥30 s on mesh)
+
+Automatic behavior (no extra flags):
+
+- **DiT trace off** — `--use-trace` is forced off at ≥30 s (long-clip quality mode).
+- **Condition encode on DiT mesh** — avoids 1×1 readback drift at ≥750 latent frames.
+- **Host latent sampler** — latents and Euler updates on CPU; TTNN runs DiT forwards on the mesh.
+- **Wider VAE overlap** — fewer tile-boundary artifacts on decode.
+- **Audio codes** — demo sets `ACE_STEP_MAX_AUDIO_CODES` from `--duration_sec`; streams >200 codes use the HF PyTorch detokenizer (see table above).
+
+For turbo at 60–120 s, **`acestep-v15-turbo`** + **`--guidance_scale 1`** + **`--infer_steps 8`** is the recommended starting point.
+
+### Trace (default: on for ≤15 s)
+
+TTNN trace + 2 command queues is **enabled by default** on short clips. Long mesh clips auto-disable trace (see above). For manual eager mode:
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py ... --no-use-trace
@@ -130,19 +240,6 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --mesh-device BH_QB \
   --prompt "EDM: deep bass, punchy kick, bright synth lead" \
   --out /tmp/turbo_15s.wav
-```
-
-**Base model with 1.7B LM (balanced quality/speed):**
-
-```bash
-python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
-  --prompt "Acoustic guitar ballad with soft vocals and ambient strings" \
-  --variant acestep-v15-base \
-  --lm_variant acestep-5Hz-lm-1.7B \
-  --duration_sec 30 \
-  --seed 42 \
-  --mesh-device BH_QB \
-  --out /tmp/ballad.wav
 ```
 
 **SFT model (same defaults as base — 50 steps, CFG=7):**
@@ -170,6 +267,37 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --mesh-device BH_QB \
   --out /tmp/orchestral.wav
 ```
+
+### Caption / text conditioning (default: LM CoT rewrite)
+
+By default the 5 Hz LM **rewrites** your `--prompt` into a richer chain-of-thought caption during Phase 1. That caption (with instrument merge when needed) conditions the DiT. This matches upstream ACE-Step behavior and is what the BH_QB quality benchmarks used.
+
+| Mode | Flag | DiT caption source | When to use |
+|------|------|-------------------|-------------|
+| **LM CoT rewrite** (default) | *(none)* | 5 Hz LM Phase-1 caption (+ merge if user listed instruments) | Most prompts; best subjective quality in turbo/base 60s runs |
+| **Exact prompt** | `--no-use-cot-caption` | Same string as `--prompt` | Multi-instrument lists or when the LM drops instruments from your wording |
+
+**Example — multi-instrument (opt out of LM caption rewrite):**
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB --variant acestep-v15-turbo \
+  --lm_variant acestep-5Hz-lm-1.7B --duration_sec 60 \
+  --infer_steps 8 --guidance_scale 1 \
+  --prompt "guitar, saxophone and drums" \
+  --no-use-cot-caption \
+  --seed 0 --out /tmp/ace_multi.wav
+```
+
+Caption trace logs (when the LM runs CoT):
+
+```
+[ace_step_v1_5] caption trace: user='guitar, saxophone and drums' use_cot_caption=True
+[ace_step_v1_5] caption trace: lm_cot='...'
+[ace_step_v1_5] caption trace: dit_final='...'
+```
+
+If instruments are missing from the final caption, the demo tries to merge them back; if drums (or others) still drop out, use `--no-use-cot-caption`.
 
 ### Weight caching (avoid reloading from disk)
 
@@ -216,6 +344,7 @@ Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam)
 | `--use-trace` / `--no-use-trace` | bool | **on** | TTNN trace + 2 command queues for preprocess + DiT body. Auto-off for ≥30s mesh long clips. |
 | `--clarity` / `--no-clarity` | bool | off | Mesh quality preset: ADG guidance, wider VAE overlap, BF16 VAE at ≥30s. |
 | `--use-adg` / `--no-use-adg` | bool | auto | DiT CFG: **ADG** (default base/sft) vs **APG** (default mesh without clarity). |
+| `--no-use-cot-caption` | flag | off | Skip LM caption rewrite; use exact `--prompt` for DiT (multi-instrument lists). **Default: LM CoT caption.** |
 | `--llm-debug` | flag | off | Extra constrained-decoding debug logs. Tokens/sec always in KEY METRICS when LM runs. |
 
 **Variant defaults (when flags omitted):**

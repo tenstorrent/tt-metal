@@ -16,6 +16,7 @@ from __future__ import annotations
 import inspect
 import math
 import os
+import re
 import sys
 from typing import Any, Callable
 
@@ -86,6 +87,122 @@ def condition_encode_tt(
         enc_mask_np = condition_encoder._enc_mask_np(valid, s)
         return enc_tt, enc_mask_np, null_tt
     return condition_encoder.forward(text_hidden_tt, attn_mask_np)
+
+
+def split_prompt_instruments(text: str) -> list[str]:
+    """Split comma/and-separated instrument phrases from a user caption."""
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    parts = re.split(r"[,;&]|\band\b", raw, flags=re.IGNORECASE)
+    out: list[str] = []
+    for part in parts:
+        p = part.strip()
+        if len(p) > 1:
+            out.append(p)
+    return out
+
+
+def _instrument_aliases(token: str) -> set[str]:
+    t = token.lower().strip()
+    aliases = {t}
+    if t.endswith("s"):
+        aliases.add(t[:-1])
+    else:
+        aliases.add(f"{t}s")
+    if "sax" in t:
+        aliases.update({"sax", "saxophone", "saxaphone"})
+    if "drum" in t or t == "percussion":
+        aliases.update({"drum", "drums", "percussion", "kit"})
+    if "guitar" in t:
+        aliases.update({"guitar", "guitars"})
+    return aliases
+
+
+def instrument_mentioned_in_caption(instrument: str, caption: str) -> bool:
+    cap = str(caption or "").lower()
+    return any(alias in cap for alias in _instrument_aliases(instrument))
+
+
+def instruments_missing_from_caption(user_caption: str, final_caption: str) -> list[str]:
+    parts = split_prompt_instruments(user_caption)
+    if len(parts) < 2:
+        return []
+    return [p for p in parts if not instrument_mentioned_in_caption(p, final_caption)]
+
+
+def merge_user_instruments_into_caption(user_caption: str, cot_caption: str) -> tuple[str, list[str]]:
+    """Keep CoT prose but re-inject user-listed instruments dropped from LM caption."""
+    user = str(user_caption or "").strip()
+    cot = str(cot_caption or "").strip()
+    if not user or not cot:
+        return cot or user, []
+    missing = instruments_missing_from_caption(user, cot)
+    if not missing:
+        return cot, []
+    addon = ", ".join(missing)
+    if cot.rstrip().endswith("."):
+        merged = f"{cot.rstrip()} Also featuring {addon}."
+    else:
+        merged = f"{cot.rstrip()}, featuring {addon}"
+    return merged, missing
+
+
+def reconcile_lm_caption_with_user(
+    *,
+    user_caption: str,
+    metadata: dict[str, Any],
+    use_cot_caption: bool,
+) -> dict[str, Any]:
+    """Ensure Phase-2 YAML + DiT caption retain explicit multi-instrument user prompts."""
+    user = str(user_caption or "").strip()
+    if not user:
+        return metadata
+    cot_cap = str(metadata.get("caption") or "").strip()
+    if cot_cap and use_cot_caption:
+        merged, missing = merge_user_instruments_into_caption(user, cot_cap)
+        if missing:
+            metadata = dict(metadata)
+            metadata["caption"] = merged
+    elif not cot_cap:
+        metadata = dict(metadata)
+        metadata["caption"] = user
+    return metadata
+
+
+def log_caption_conditioning_trace(
+    *,
+    user_caption: str,
+    lm_cot_caption: str | None,
+    final_caption: str,
+    use_cot_caption: bool,
+) -> None:
+    """Print how user prompt flows into LM CoT and DiT text conditioning."""
+    user = str(user_caption or "").strip()
+    final = str(final_caption or "").strip()
+    cot = str(lm_cot_caption or "").strip() if lm_cot_caption else ""
+    parts = split_prompt_instruments(user)
+    missing = instruments_missing_from_caption(user, final) if user else []
+    print(
+        f"[ace_step_v1_5] caption trace: user={user!r} use_cot_caption={use_cot_caption}",
+        flush=True,
+    )
+    if cot and cot != user:
+        print(f"[ace_step_v1_5] caption trace: lm_cot={cot!r}", flush=True)
+    print(f"[ace_step_v1_5] caption trace: dit_final={final!r}", flush=True)
+    if len(parts) >= 2:
+        present = [p for p in parts if instrument_mentioned_in_caption(p, final)]
+        print(
+            f"[ace_step_v1_5] caption trace: instruments listed={parts} "
+            f"present_in_final={present} missing={missing}",
+            flush=True,
+        )
+        if missing:
+            print(
+                f"[ace_step_v1_5] WARNING: user listed {missing} but final caption may omit them — "
+                "try --no-use-cot-caption or a more explicit prompt",
+                flush=True,
+            )
 
 
 def _code_window_unique_ratio(codes: list[int], start: int, window: int) -> float:
@@ -654,11 +771,32 @@ def build_filtered_dit_kwargs_for_handler(
             if not params.lyrics:
                 params.cot_lyrics = lyrics
 
+        lm_cot_caption: str | None = None
         if lm_generated_metadata is not None:
-            if params.use_cot_caption:
-                dit_input_caption = lm_generated_metadata.get("caption", dit_input_caption)
+            lm_cot_caption = str(lm_generated_metadata.get("caption") or "").strip() or None
+            if params.use_cot_caption and lm_cot_caption:
+                dit_input_caption = lm_cot_caption
             if params.use_cot_language:
                 dit_input_vocal_language = lm_generated_metadata.get("vocal_language", dit_input_vocal_language)
+
+        user_cap = str(params.caption or "").strip()
+        if user_cap:
+            merged_cap, missing = merge_user_instruments_into_caption(user_cap, str(dit_input_caption or ""))
+            if missing:
+                dit_input_caption = merged_cap
+                if lm_generated_metadata is not None:
+                    lm_generated_metadata = dict(lm_generated_metadata)
+                    lm_generated_metadata["caption"] = merged_cap
+                print(
+                    f"[ace_step_v1_5] caption: merged user instruments {missing} into CoT/DiT caption",
+                    flush=True,
+                )
+            log_caption_conditioning_trace(
+                user_caption=user_cap,
+                lm_cot_caption=lm_cot_caption if lm_generated_metadata else None,
+                final_caption=str(dit_input_caption or ""),
+                use_cot_caption=bool(params.use_cot_caption),
+            )
 
         if llm_handler is not None:
             llm_handler.last_lm_perf = {

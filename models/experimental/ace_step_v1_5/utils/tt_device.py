@@ -176,7 +176,7 @@ def _apply_preprocess_cluster_env(mesh_sku: str | None, device_id: int) -> dict[
 def _restore_cluster_visibility(saved: dict[str, str | None] | None) -> None:
     if saved is None:
         return
-    for key in (_TT_VISIBLE_DEVICES_ENV, _TT_MESH_GRAPH_DESC_PATH_ENV):
+    for key in (_TT_VISIBLE_DEVICES_ENV, _TT_MESH_GRAPH_DESC_PATH_ENV, _TT_METAL_FORCE_REINIT_ENV):
         prior = saved.get(key)
         if prior is None:
             os.environ.pop(key, None)
@@ -602,7 +602,7 @@ def _format_mesh_open_failure_hint(
     return "\n".join(lines)
 
 
-def close_ace_step_device(ttnn_mod: Any, device: Any) -> None:
+def close_ace_step_device(ttnn_mod: Any, device: Any, *, restore_cluster_env: bool = True) -> None:
     if device is None:
         return
     try:
@@ -619,7 +619,7 @@ def close_ace_step_device(ttnn_mod: Any, device: Any) -> None:
     except Exception:
         # Stale/remote-only meshes can abort pytest teardown (SubDeviceManagerTracker).
         pass
-    if visible_saved is not None:
+    if restore_cluster_env and visible_saved is not None:
         _restore_cluster_visibility(visible_saved)
 
 
@@ -630,11 +630,13 @@ def _ensure_full_cluster_env_for_dit(mesh_sku: str | None) -> dict[str, str | No
     saved: dict[str, str | None] = {
         _TT_VISIBLE_DEVICES_ENV: os.environ.get(_TT_VISIBLE_DEVICES_ENV),
         _TT_MESH_GRAPH_DESC_PATH_ENV: os.environ.get(_TT_MESH_GRAPH_DESC_PATH_ENV),
+        _TT_METAL_FORCE_REINIT_ENV: os.environ.get(_TT_METAL_FORCE_REINIT_ENV),
     }
     os.environ.pop(_TT_VISIBLE_DEVICES_ENV, None)
     dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
     if dit_mgd is not None:
         os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = dit_mgd
+    os.environ[_TT_METAL_FORCE_REINIT_ENV] = "1"
     print(
         f"[ace_step_v1_5] DiT: full cluster ({mesh_sku}), {_TT_MESH_GRAPH_DESC_PATH_ENV} set",
         flush=True,
@@ -672,29 +674,40 @@ def ace_step_reexec_for_dit_mesh(
     ttnn_mod: Any,
     *,
     preprocess_dev: Any,
-    cached_preprocess: Any,
     mesh_sku: str | None,
     argv: list[str],
+    cached_preprocess: Any = None,
+    deferred_condition_payload: Any = None,
+    frames: int | None = None,
 ) -> None:
     """Re-exec demo in a fresh process so DiT opens the full mesh after single-chip preprocess."""
     import pickle
     import sys
     import tempfile
 
-    if cached_preprocess is None:
-        raise RuntimeError("ace_step_reexec_for_dit_mesh requires cached preprocess tensors")
+    if cached_preprocess is None and deferred_condition_payload is None:
+        raise RuntimeError("ace_step_reexec_for_dit_mesh requires cached_preprocess or deferred_condition_payload")
 
-    close_ace_step_device(ttnn_mod, preprocess_dev)
+    close_ace_step_device(ttnn_mod, preprocess_dev, restore_cluster_env=False)
 
     fd, handoff_path = tempfile.mkstemp(prefix="ace_step_dit_handoff_", suffix=".pkl")
     os.close(fd)
     with open(handoff_path, "wb") as f:
-        pickle.dump({"cached_preprocess": cached_preprocess, "mesh_sku": mesh_sku}, f)
+        pickle.dump(
+            {
+                "cached_preprocess": cached_preprocess,
+                "deferred_condition_payload": deferred_condition_payload,
+                "frames": frames,
+                "mesh_sku": mesh_sku,
+            },
+            f,
+        )
 
     os.environ.pop(_TT_VISIBLE_DEVICES_ENV, None)
     dit_mgd = _dit_mesh_graph_descriptor_path(mesh_sku)
     if dit_mgd is not None:
         os.environ[_TT_MESH_GRAPH_DESC_PATH_ENV] = dit_mgd
+    os.environ[_TT_METAL_FORCE_REINIT_ENV] = "1"
     print(
         f"[ace_step_v1_5] DiT: re-exec for full mesh ({mesh_sku}), handoff={handoff_path}",
         flush=True,
