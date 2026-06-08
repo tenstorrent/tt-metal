@@ -458,7 +458,7 @@ For each resource type, construct the spec entry and its run-params entry as a p
 - **`TensorParameter` ↔ `TensorArgument`.** Declare each tensor as a `TensorParameter` (using `<tensor>.tensor_spec()`); alongside, add the corresponding `TensorArgument` to `ProgramRunArgs::tensor_args`. Here `<tensor>` is the `MeshTensor` extracted from the input `ttnn::Tensor` at the top of the factory — see the [migration guide's tensor-types callout](metal2_migration_guide.md#ttnn-framework-integration) for the extraction convention.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_args = std::move(run_args)}`.
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_params)}` — note that `ProgramArtifacts`'s field is named `run_params` even though the type it holds is `ProgramRunArgs`.
 
 **Hardware-config shortcuts.** Two helpers worth knowing for the `hw_config` field on `KernelSpec`:
 
