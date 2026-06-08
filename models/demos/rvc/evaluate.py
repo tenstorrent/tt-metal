@@ -19,11 +19,8 @@ Usage:
 
 import argparse
 import os
-import sys
-import warnings
 
 import numpy as np
-import torch
 import soundfile as sf
 
 
@@ -54,9 +51,11 @@ def compute_speaker_similarity(wav1, sr1, wav2, sr2):
 
     if sr1 != 16000:
         from scipy.signal import resample
+
         wav1 = resample(wav1, int(len(wav1) * 16000 / sr1))
     if sr2 != 16000:
         from scipy.signal import resample
+
         wav2 = resample(wav2, int(len(wav2) * 16000 / sr2))
 
     emb1 = encoder.embed_utterance(preprocess_wav(wav1.astype(np.float32), source_sr=16000))
@@ -80,10 +79,10 @@ def compute_wer_score(hypothesis, reference):
         dp[0][j] = j
     for i in range(1, m + 1):
         for j in range(1, n + 1):
-            if ref_words[i-1] == hyp_words[j-1]:
-                dp[i][j] = dp[i-1][j-1]
+            if ref_words[i - 1] == hyp_words[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
             else:
-                dp[i][j] = 1 + min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+                dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
     wer = dp[m][n] / m if m > 0 else 0.0
     return wer
 
@@ -110,6 +109,7 @@ def transcribe_wav(wav_path, max_secs=None):
     wav = wav.astype(np.float32)
     if sr != 16000:
         from scipy.signal import resample
+
         wav = resample(wav, int(len(wav) * 16000 / sr)).astype(np.float32)
         sr = 16000
 
@@ -117,7 +117,7 @@ def transcribe_wav(wav_path, max_secs=None):
         n_samples = min(len(wav), int(max_secs * sr))
         wav = wav[:n_samples]
 
-    if not hasattr(transcribe_wav, '_model'):
+    if not hasattr(transcribe_wav, "_model"):
         transcribe_wav._model = whisper.load_model("base")
     result = transcribe_wav._model.transcribe(wav)
     return result["text"].strip()
@@ -194,20 +194,22 @@ def main():
 
     ttnn_text = transcribe_wav(args.ttnn)
     if ttnn_text is not None:
-        print(f"  TTNN output:   \"{ttnn_text}\"")
+        print(f'  TTNN output:   "{ttnn_text}"')
 
         if src_wav is not None:
             # Truncate source to TTNN output duration — otherwise WER is
             # dominated by source words past the converted clip's end.
             src_text = transcribe_wav(args.source, max_secs=ttnn_dur)
             if src_text is not None:
-                print(f"  Source input ({ttnn_dur:.2f}s window):  \"{src_text}\"")
+                print(f'  Source input ({ttnn_dur:.2f}s window):  "{src_text}"')
                 wer_content = compute_wer_score(ttnn_text, src_text)
-                print(f"  WER (output vs source, matched window): {wer_content:.4f}  {'PASS' if wer_content < 2.5 else 'FAIL'} (threshold: 2.5)")
+                print(
+                    f"  WER (output vs source, matched window): {wer_content:.4f}  {'PASS' if wer_content < 2.5 else 'FAIL'} (threshold: 2.5)"
+                )
 
         ref_text = transcribe_wav(args.ref)
         if ref_text is not None:
-            print(f"  Torch ref:     \"{ref_text}\"")
+            print(f'  Torch ref:     "{ref_text}"')
             wer_correct = compute_wer_score(ttnn_text, ref_text)
             print(f"  WER (TTNN vs Torch): {wer_correct:.4f}  (correctness check)")
 
@@ -225,4 +227,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

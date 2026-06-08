@@ -14,15 +14,13 @@ Usage:
     python -m models.demos.rvc.demo [--f0_method rmvpe] [--index_path path.index]
 """
 
-import sys
 import os
+import sys
 
 _DEMO_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_DEMO_DIR, "..", "..", "..", ".."))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
-
-import ttnn  # noqa: E402
 
 import argparse
 import json
@@ -30,19 +28,22 @@ import math
 import time
 
 import numpy as np
+import soundfile as sf
 import torch
 import torch.nn.functional as F
-import soundfile as sf
 from safetensors.torch import load_file
 from scipy import signal
 
+import ttnn  # noqa: E402
 from models.demos.rvc.torch_impl.vc.hubert import HubertModel
-from models.demos.rvc.torch_impl.vc.synthesizer import TextEncoder, SourceModuleHnNSF
+from models.demos.rvc.torch_impl.vc.synthesizer import SourceModuleHnNSF, TextEncoder
 from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import (
-    HubertPretrainingConfig, HubertPretrainingTask,
-    get_hubert_paths, get_model_and_config_paths,
+    HubertPretrainingConfig,
+    HubertPretrainingTask,
+    get_hubert_paths,
+    get_model_and_config_paths,
 )
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -73,11 +74,16 @@ def load_hubert(device="cpu"):
 def load_text_encoder(state_dict):
     """Load TextEncoder from synthesizer checkpoint."""
     enc_p = TextEncoder(
-        embedding_dims=768, out_channels=192, hidden_channels=192,
-        filter_channels=768, num_heads=2, num_layers=6, kernel_size=3, f0=True,
+        embedding_dims=768,
+        out_channels=192,
+        hidden_channels=192,
+        filter_channels=768,
+        num_heads=2,
+        num_layers=6,
+        kernel_size=3,
+        f0=True,
     )
-    enc_state = {k.replace("enc_p.", ""): v.float()
-                  for k, v in state_dict.items() if k.startswith("enc_p.")}
+    enc_state = {k.replace("enc_p.", ""): v.float() for k, v in state_dict.items() if k.startswith("enc_p.")}
     enc_p.load_state_dict(enc_state, strict=True)
     return enc_p.eval()
 
@@ -86,8 +92,9 @@ def load_source_module(state_dict):
     """Load SineGen/SourceModule from checkpoint.
     validation=False enables noise + random phase for natural output."""
     m_source = SourceModuleHnNSF(sampling_rate=SR_TARGET, harmonic_num=0, validation=False)
-    m_state = {k.replace("dec.m_source.", ""): v.float()
-                for k, v in state_dict.items() if k.startswith("dec.m_source.")}
+    m_state = {
+        k.replace("dec.m_source.", ""): v.float() for k, v in state_dict.items() if k.startswith("dec.m_source.")
+    }
     m_source.load_state_dict(m_state, strict=True)
     return m_source.eval()
 
@@ -98,8 +105,7 @@ def extract_f0_dio(audio_np, f0_up_key=0):
 
     audio_f64 = audio_np.astype(np.float64)
     frame_period = WINDOW / SR_HUBERT * 1000.0
-    f0, t = pw.dio(audio_f64, SR_HUBERT, f0_floor=50, f0_ceil=1100,
-                    frame_period=frame_period, allowed_range=0.1)
+    f0, t = pw.dio(audio_f64, SR_HUBERT, f0_floor=50, f0_ceil=1100, frame_period=frame_period, allowed_range=0.1)
     f0 = pw.stonemask(audio_f64, f0, t, SR_HUBERT)
     f0 = torch.from_numpy(f0.astype(np.float32)).unsqueeze(0)
     f0 *= pow(2, f0_up_key / 12)
@@ -115,6 +121,7 @@ def extract_f0_rmvpe(audio, f0_up_key=0, rmvpe=None):
     """
     if rmvpe is None:
         from models.demos.rvc.torch_impl.rmvpe import RMVPEPitchAlgorithm
+
         rmvpe = RMVPEPitchAlgorithm(sample_rate=SR_HUBERT, hop_size=WINDOW)
     with torch.no_grad():
         f0 = rmvpe.extract_pitch(audio)  # [1, T]
@@ -151,16 +158,14 @@ def load_feature_index(index_path):
 _torch_fallback_cache = {}
 
 
-def change_rms(src_audio_np: np.ndarray, src_sr: int,
-               tgt_audio_np: np.ndarray, tgt_sr: int, rate: float) -> np.ndarray:
+def change_rms(src_audio_np: np.ndarray, src_sr: int, tgt_audio_np: np.ndarray, tgt_sr: int, rate: float) -> np.ndarray:
     """Blend the source-audio RMS envelope into the converted output to
     preserve dynamics. rate=1.0 keeps converted RMS; rate=0.0 fully transfers
     source RMS. Mirrors upstream RVC's vc_infer change_rms()."""
     import librosa
-    rms1 = librosa.feature.rms(y=src_audio_np, frame_length=src_sr // 2 * 2,
-                                hop_length=src_sr // 2)
-    rms2 = librosa.feature.rms(y=tgt_audio_np, frame_length=tgt_sr // 2 * 2,
-                                hop_length=tgt_sr // 2)
+
+    rms1 = librosa.feature.rms(y=src_audio_np, frame_length=src_sr // 2 * 2, hop_length=src_sr // 2)
+    rms2 = librosa.feature.rms(y=tgt_audio_np, frame_length=tgt_sr // 2 * 2, hop_length=tgt_sr // 2)
     rms1 = torch.from_numpy(rms1).float().unsqueeze(0)
     rms2 = torch.from_numpy(rms2).float().unsqueeze(0)
     rms1 = F.interpolate(rms1, size=tgt_audio_np.shape[0], mode="linear").squeeze()
@@ -170,10 +175,18 @@ def change_rms(src_audio_np: np.ndarray, src_sr: int,
     return tgt_audio_np * scale
 
 
-def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
-             f0_method="rmvpe", index_path=None, index_rate=0.0,
-             protect=0.33, rms_mix_rate=0.25,
-             allow_torch_fallback=False):
+def run_demo(
+    speaker_id=0,
+    f0_up_key=0,
+    device_id=0,
+    max_secs=5.0,
+    f0_method="rmvpe",
+    index_path=None,
+    index_rate=0.0,
+    protect=0.33,
+    rms_mix_rate=0.25,
+    allow_torch_fallback=False,
+):
     """Run full hybrid inference pipeline.
 
     allow_torch_fallback=False (default): TTNN errors on any chunk raise.
@@ -308,7 +321,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             ext_len = ext_end - ext_start
 
             z_p_chunk = z_p[:, :, ext_start:ext_end]
-            har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
+            har_chunk = har_source[:, :, ext_start * UPP : ext_end * UPP]
 
             # Pad to uniform shape so conv1d cache reuses entries.
             if ext_len < TARGET_LEN:
@@ -343,31 +356,40 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
                     if "out of memory" not in str(e).lower() and "l1" not in str(e).lower():
                         raise
                     from models.demos.rvc.torch_impl.reference import (
-                        load_flow_torch_modules, torch_flow_forward,
-                        build_torch_generator, torch_generator_forward,
+                        build_torch_generator,
+                        load_flow_torch_modules,
+                        torch_flow_forward,
+                        torch_generator_forward,
                     )
-                    if 'flow_mods' not in _torch_fallback_cache:
-                        _torch_fallback_cache['flow_mods'] = load_flow_torch_modules(sd)
-                        _torch_fallback_cache['gen'] = build_torch_generator(sd)
-                    z_chunk = torch_flow_forward(z_p_chunk, g, _torch_fallback_cache['flow_mods'])
-                    audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, _torch_fallback_cache['gen'])
+
+                    if "flow_mods" not in _torch_fallback_cache:
+                        _torch_fallback_cache["flow_mods"] = load_flow_torch_modules(sd)
+                        _torch_fallback_cache["gen"] = build_torch_generator(sd)
+                    z_chunk = torch_flow_forward(z_p_chunk, g, _torch_fallback_cache["flow_mods"])
+                    audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, _torch_fallback_cache["gen"])
                     backend = "torch"
                     fallback_chunks.append(c)
 
-            audio_chunk = audio_chunk[:, :, :ext_len * UPP]
+            audio_chunk = audio_chunk[:, :, : ext_len * UPP]
             z_chunk = z_chunk[:, :, :ext_len]
 
             left_trim = (nom_start - ext_start) * UPP
             right_trim = (ext_end - nom_end) * UPP
-            nominal_audio = audio_chunk[:, :, left_trim:audio_chunk.shape[2] - right_trim if right_trim > 0 else audio_chunk.shape[2]]
+            nominal_audio = audio_chunk[
+                :, :, left_trim : audio_chunk.shape[2] - right_trim if right_trim > 0 else audio_chunk.shape[2]
+            ]
 
             left_z_trim = nom_start - ext_start
             right_z_trim = ext_end - nom_end
-            nominal_z = z_chunk[:, :, left_z_trim:z_chunk.shape[2] - right_z_trim if right_z_trim > 0 else z_chunk.shape[2]]
+            nominal_z = z_chunk[
+                :, :, left_z_trim : z_chunk.shape[2] - right_z_trim if right_z_trim > 0 else z_chunk.shape[2]
+            ]
             ttnn_z_chunks.append(nominal_z)
 
             audio_segments.append(nominal_audio)
-            print(f"    Chunk {c+1}/{n_chunks}: T={nom_end-nom_start} (ext={ext_end-ext_start}) [{backend}] → audio {nominal_audio.shape}")
+            print(
+                f"    Chunk {c+1}/{n_chunks}: T={nom_end-nom_start} (ext={ext_end-ext_start}) [{backend}] → audio {nominal_audio.shape}"
+            )
 
     audio_out = torch.cat(audio_segments, dim=2)
     z_out = torch.cat(ttnn_z_chunks, dim=2)
@@ -376,9 +398,12 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print("\n--- Torch Reference ---")
     with torch.no_grad():
         from models.demos.rvc.torch_impl.reference import (
-            load_flow_torch_modules, torch_flow_forward,
-            build_torch_generator, torch_generator_forward,
+            build_torch_generator,
+            load_flow_torch_modules,
+            torch_flow_forward,
+            torch_generator_forward,
         )
+
         flow_mods = load_flow_torch_modules(sd)
         gen_torch = build_torch_generator(sd)
 
@@ -393,7 +418,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             ext_len = ext_end - ext_start
 
             z_p_chunk = z_p[:, :, ext_start:ext_end]
-            har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
+            har_chunk = har_source[:, :, ext_start * UPP : ext_end * UPP]
 
             if ext_len < TARGET_LEN:
                 pad_len = TARGET_LEN - ext_len
@@ -403,17 +428,19 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             z_ref_c = torch_flow_forward(z_p_chunk, g, flow_mods)
             audio_ref_c = torch_generator_forward(z_ref_c, har_chunk, g, gen_torch)
 
-            audio_ref_c = audio_ref_c[:, :, :ext_len * UPP]
+            audio_ref_c = audio_ref_c[:, :, : ext_len * UPP]
             z_ref_c = z_ref_c[:, :, :ext_len]
 
             left_trim = (nom_start - ext_start) * UPP
             right_trim = (ext_end - nom_end) * UPP
-            nominal = audio_ref_c[:, :, left_trim:audio_ref_c.shape[2] - right_trim if right_trim > 0 else audio_ref_c.shape[2]]
+            nominal = audio_ref_c[
+                :, :, left_trim : audio_ref_c.shape[2] - right_trim if right_trim > 0 else audio_ref_c.shape[2]
+            ]
             ref_audio_segments.append(nominal)
 
             left_z = nom_start - ext_start
             right_z = ext_end - nom_end
-            nom_z = z_ref_c[:, :, left_z:z_ref_c.shape[2] - right_z if right_z > 0 else z_ref_c.shape[2]]
+            nom_z = z_ref_c[:, :, left_z : z_ref_c.shape[2] - right_z if right_z > 0 else z_ref_c.shape[2]]
             ref_z_chunks.append(nom_z)
         t_ref = time.time() - t_ref_start
 
@@ -424,6 +451,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     # === COMPARISON ===
     print("\n--- Comparison ---")
     from models.demos.rvc.tests.pcc_utils import compute_pcc
+
     flow_pcc = compute_pcc(z_ref, z_out)
     audio_pcc = compute_pcc(audio_ref, audio_out)
     max_err = (audio_ref - audio_out).abs().max().item()
@@ -461,7 +489,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
         ttnn_secs = output_secs * (n_ttnn_chunks / n_chunks)
         rtf = t_ttnn_total / ttnn_secs
     else:
-        rtf = float('inf')
+        rtf = float("inf")
 
     print(f"\n{'=' * 60}")
     print(f"TIMING SUMMARY")
@@ -470,7 +498,9 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print(f"  Output audio:     {output_secs:.2f}s @ {SR_TARGET}Hz")
     print(f"  Chunks:           {n_chunks} × {MAX_CHUNK_FRAMES} frames")
     if fallback_chunks:
-        print(f"  TTNN chunks:      {n_ttnn_chunks}/{n_chunks}  ({len(fallback_chunks)} fell back to torch: {fallback_chunks})")
+        print(
+            f"  TTNN chunks:      {n_ttnn_chunks}/{n_chunks}  ({len(fallback_chunks)} fell back to torch: {fallback_chunks})"
+        )
     print(f"  Preprocessing:    {t_preprocessing:.3f}s")
     print(f"  TTNN flow:        {t_flow_total:.3f}s   ({n_ttnn_chunks} TTNN chunks)")
     print(f"  TTNN generator:   {t_gen_total:.3f}s   ({n_ttnn_chunks} TTNN chunks)")
@@ -497,28 +527,44 @@ if __name__ == "__main__":
     parser.add_argument("--key", type=int, default=0, help="Pitch shift in semitones")
     parser.add_argument("--device_id", type=int, default=0, help="TTNN device ID")
     parser.add_argument("--max_secs", type=float, default=5.0, help="Max input audio seconds")
-    parser.add_argument("--f0_method", type=str, default="rmvpe",
-                        choices=["dio", "rmvpe"], help="Pitch extraction method")
-    parser.add_argument("--index_path", type=str, default=None,
-                        help="Path to FAISS .index file for feature retrieval")
-    parser.add_argument("--index_rate", type=float, default=0.0,
-                        help="Feature retrieval blending rate (0=disabled, 1=full retrieval)")
-    parser.add_argument("--protect", type=float, default=0.33,
-                        help="Consonant protection blend for unvoiced frames "
-                             "(lower=more original features kept; 0.5 disables)")
-    parser.add_argument("--rms_mix_rate", type=float, default=0.25,
-                        help="Volume envelope blend rate (1=keep converted dynamics, "
-                             "0=transfer source dynamics)")
-    parser.add_argument("--allow-torch-fallback", action="store_true",
-                        help="Catch TTNN OOM/L1 errors on a per-chunk basis and run torch "
-                             "for that chunk. Off by default — silent fallback hides device "
-                             "regressions and contaminates the TTNN timing summary. When on, "
-                             "fallback chunks are excluded from the TTNN-only RTF.")
+    parser.add_argument(
+        "--f0_method", type=str, default="rmvpe", choices=["dio", "rmvpe"], help="Pitch extraction method"
+    )
+    parser.add_argument("--index_path", type=str, default=None, help="Path to FAISS .index file for feature retrieval")
+    parser.add_argument(
+        "--index_rate", type=float, default=0.0, help="Feature retrieval blending rate (0=disabled, 1=full retrieval)"
+    )
+    parser.add_argument(
+        "--protect",
+        type=float,
+        default=0.33,
+        help="Consonant protection blend for unvoiced frames " "(lower=more original features kept; 0.5 disables)",
+    )
+    parser.add_argument(
+        "--rms_mix_rate",
+        type=float,
+        default=0.25,
+        help="Volume envelope blend rate (1=keep converted dynamics, " "0=transfer source dynamics)",
+    )
+    parser.add_argument(
+        "--allow-torch-fallback",
+        action="store_true",
+        help="Catch TTNN OOM/L1 errors on a per-chunk basis and run torch "
+        "for that chunk. Off by default — silent fallback hides device "
+        "regressions and contaminates the TTNN timing summary. When on, "
+        "fallback chunks are excluded from the TTNN-only RTF.",
+    )
     args = parser.parse_args()
 
-    run_demo(speaker_id=args.speaker_id, f0_up_key=args.key,
-             device_id=args.device_id, max_secs=args.max_secs,
-             f0_method=args.f0_method, index_path=args.index_path,
-             index_rate=args.index_rate,
-             protect=args.protect, rms_mix_rate=args.rms_mix_rate,
-             allow_torch_fallback=args.allow_torch_fallback)
+    run_demo(
+        speaker_id=args.speaker_id,
+        f0_up_key=args.key,
+        device_id=args.device_id,
+        max_secs=args.max_secs,
+        f0_method=args.f0_method,
+        index_path=args.index_path,
+        index_rate=args.index_rate,
+        protect=args.protect,
+        rms_mix_rate=args.rms_mix_rate,
+        allow_torch_fallback=args.allow_torch_fallback,
+    )

@@ -13,10 +13,9 @@ Usage:
 
 import pytest
 import torch
+
 import ttnn
-
-from models.demos.rvc.tests.pcc_utils import compute_pcc, assert_pcc
-
+from models.demos.rvc.tests.pcc_utils import assert_pcc
 
 # 1. LINEAR TESTS
 
@@ -239,9 +238,7 @@ class TestConv1d:
         out_torch = out_torch.squeeze(1)
         out_nchw = out_torch.permute(0, 2, 1).float()
 
-        assert out_nchw.shape == ref.shape, (
-            f"conv1d/{desc}: Shape mismatch: TTNN {out_nchw.shape} vs torch {ref.shape}"
-        )
+        assert out_nchw.shape == ref.shape, f"conv1d/{desc}: Shape mismatch: TTNN {out_nchw.shape} vs torch {ref.shape}"
 
         passed, pcc = assert_pcc(ref, out_nchw, threshold=0.998, op_name=f"conv1d_{desc}")
         print(f"  conv1d/{desc}: PCC={pcc:.6f}, shape={ref.shape}")
@@ -270,15 +267,11 @@ class TestConvTranspose1d:
         ],
         ids=lambda x: x if isinstance(x, str) else None,
     )
-    def test_conv_transpose1d_feasibility(
-        self, device, batch, seq, in_ch, out_ch, kernel, stride, pad, desc
-    ):
+    def test_conv_transpose1d_feasibility(self, device, batch, seq, in_ch, out_ch, kernel, stride, pad, desc):
         """Test ConvTranspose1d via ttnn.conv_transpose2d."""
         torch.manual_seed(42)
 
-        conv_t = torch.nn.ConvTranspose1d(
-            in_ch, out_ch, kernel, stride=stride, padding=pad, bias=True
-        )
+        conv_t = torch.nn.ConvTranspose1d(in_ch, out_ch, kernel, stride=stride, padding=pad, bias=True)
         x_nchw = torch.randn(batch, in_ch, seq)
         ref = conv_t(x_nchw)
 
@@ -315,9 +308,7 @@ class TestConvTranspose1d:
                 output_tensor = result
                 out_w = (seq - 1) * stride - 2 * pad + kernel
         except Exception as e:
-            pytest.skip(
-                f"conv_transpose1d/{desc}: UNSUPPORTED - ttnn.conv_transpose2d failed: {e}"
-            )
+            pytest.skip(f"conv_transpose1d/{desc}: UNSUPPORTED - ttnn.conv_transpose2d failed: {e}")
             return
 
         output = ttnn.from_device(output_tensor)

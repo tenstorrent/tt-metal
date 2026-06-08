@@ -13,12 +13,11 @@ Used by:
   - demo.py (generating reference WAV for comparison)
 """
 
-import math
 import torch
 
 from models.demos.rvc.torch_impl.vc.synthesizer import (
-    ResidualCouplingBlock,
     GeneratorNSF,
+    ResidualCouplingBlock,
 )
 
 
@@ -32,8 +31,11 @@ def load_flow_torch_modules(sd):
         dict with 'flow' key containing the loaded torch module.
     """
     flow = ResidualCouplingBlock(
-        channels=192, hidden_channels=192,
-        kernel_size=5, dilation_rate=1, num_layers=3,
+        channels=192,
+        hidden_channels=192,
+        kernel_size=5,
+        dilation_rate=1,
+        num_layers=3,
         gin_channels=256,
     )
     flow_sd = {k.replace("flow.", "", 1): v for k, v in sd.items() if k.startswith("flow.")}
@@ -103,6 +105,7 @@ def torch_generator_forward(z, har_source, g, gen_mods):
     # GeneratorNSF.forward internally generates har_source from f0; we
     # replicate the forward inline so PCC tests can pass har_source directly.
     import torch.nn.functional as F
+
     from models.demos.rvc.torch_impl.vc.synthesizer import linear_channel_first
 
     with torch.no_grad():
@@ -117,7 +120,7 @@ def torch_generator_forward(z, har_source, g, gen_mods):
                 x_source = linear_channel_first(har_source, noise_convs)
             else:
                 x_source = noise_convs(har_source)
-            x = x + x_source[:, :, :x.shape[2]]
+            x = x + x_source[:, :, : x.shape[2]]
 
             xs = gen.resblocks[i * gen.num_kernels](x)
             for j in range(i * gen.num_kernels + 1, (i + 1) * gen.num_kernels):

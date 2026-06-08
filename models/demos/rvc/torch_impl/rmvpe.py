@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
@@ -292,7 +291,6 @@ class RMVPE(nn.Module):
         return self.fc(x)
 
 
-
 def to_local_average_cents(salience, thred=0.5):
     batch_size, n_features, n_bins = salience.shape
     salience = salience.reshape(batch_size * n_features, n_bins)
@@ -370,9 +368,7 @@ class RMVPEPitchAlgorithm:
 
         return audio
 
-    def _extract_raw_pitch_and_periodicity(
-        self, audio: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _extract_raw_pitch_and_periodicity(self, audio: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         audio_processed = self._preprocess_audio(audio)
 
         with torch.no_grad():
