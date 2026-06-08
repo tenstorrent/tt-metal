@@ -1854,10 +1854,7 @@ class TestBufferChunksSchemaAndAggregation:
         conn, cursor = self._open_db(tmp_path)
         try:
             tables = {
-                row[0]
-                for row in cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
-                ).fetchall()
+                row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
             }
             assert "buffer_chunks" in tables
             assert "buffer_pages" not in tables
@@ -1889,9 +1886,7 @@ class TestBufferChunksSchemaAndAggregation:
         """``save_database_schema_version`` writes ``3.1`` into ``report_metadata``."""
         conn, cursor = self._open_db(tmp_path)
         try:
-            row = cursor.execute(
-                "SELECT value FROM report_metadata WHERE key = 'schema_version'"
-            ).fetchone()
+            row = cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone()
             assert row is not None
             assert row[0] == "3.1"
         finally:

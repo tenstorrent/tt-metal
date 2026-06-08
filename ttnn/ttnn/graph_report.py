@@ -418,7 +418,12 @@ def _aggregate_pages_to_chunks(op_id, pages):
             existing[3] += 1
 
     rows = []
-    for (device_id, address, bank_id, core_x, core_y, buffer_type), (start, end, max_page_size, count) in groups.items():
+    for (device_id, address, bank_id, core_x, core_y, buffer_type), (
+        start,
+        end,
+        max_page_size,
+        count,
+    ) in groups.items():
         rows.append(
             (
                 op_id,
