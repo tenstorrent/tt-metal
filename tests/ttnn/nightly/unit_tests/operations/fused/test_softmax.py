@@ -8,6 +8,7 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_softmax
 
 
 @pytest.mark.parametrize("shape", [[2, 10, 512, 8192]])
@@ -23,7 +24,7 @@ def test_ttnn_softmax_sdxl_attention(device, shape):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
-    tt_output = ttnn.softmax(tt_input, dim=-1, numeric_stable=True)
+    tt_output = ttnn_softmax(tt_input, dim=-1, numeric_stable=True)
     tt_output_torch = ttnn.to_torch(tt_output)
     # PCC at bf16 on Wt=256 numeric-stable softmax is sensitive to the small/large-kernel
     # choice in softmax_program_factory_attention_optimized.cpp; 0.998 is within bf16 noise.
@@ -38,7 +39,7 @@ def test_ttnn_softmax_sdxl_attention(device, shape):
 
     # test program cache
     torch_output2 = F.softmax(torch_output, dim=-1, dtype=torch.bfloat16)
-    tt_output2 = ttnn.softmax(tt_output, dim=-1, numeric_stable=True)
+    tt_output2 = ttnn_softmax(tt_output, dim=-1, numeric_stable=True)
     tt_output_torch2 = ttnn.to_torch(tt_output2)
     assert_numeric_metrics(
         torch_output2,

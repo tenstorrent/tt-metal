@@ -34,6 +34,8 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm
+
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -103,7 +105,7 @@ def _run_ttnn_layer_norm(
         ln_kwargs["weight"] = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     if torch_bias is not None:
         ln_kwargs["bias"] = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.layer_norm(input_tensor, **ln_kwargs)
+    output_tensor = ttnn_layer_norm(input_tensor, **ln_kwargs)
     output_tensor = ttnn.from_device(output_tensor)
     return ttnn.to_torch(output_tensor)
 

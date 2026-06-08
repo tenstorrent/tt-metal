@@ -13,6 +13,14 @@ import ttnn
 
 from models.common.utility_functions import comp_allclose_and_pcc, torch_random, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import (
+    ttnn_sum,
+    ttnn_topk,
+    ttnn_argmax,
+    ttnn_moe,
+    ttnn_sampling,
+    TTNN_REDUCTION_WRAPPERS,
+)
 from loguru import logger
 
 TEST_PADDING_VALUE = -42
@@ -38,7 +46,7 @@ def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
         device=device,
         memory_config=ttnn_result[1].memory_config(),
     )
-    ttnn.topk(input_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
+    ttnn_topk(input_tensor, k, dim=dim, output_tensor=(prealloc_values, prealloc_indices))
     return (
         ttnn.to_torch(ttnn.from_device(prealloc_values)),
         ttnn.to_torch(ttnn.from_device(prealloc_indices)),
@@ -58,7 +66,7 @@ def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_resul
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn.argmax(input_tensor, dim=dim, keepdim=keepdim, output_tensor=prealloc_output)
+    ttnn_argmax(input_tensor, dim=dim, keepdim=keepdim, output_tensor=prealloc_output)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
@@ -91,7 +99,7 @@ def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tenso
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn.moe(input_tensor, expert_mask_tensor, topk_mask_tensor, k, output_tensor=prealloc_output)
+    ttnn_moe(input_tensor, expert_mask_tensor, topk_mask_tensor, k, output_tensor=prealloc_output)
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
@@ -109,7 +117,7 @@ def _run_sampling_with_preallocated(
         device=device,
         memory_config=ttnn_result.memory_config(),
     )
-    ttnn.sampling(
+    ttnn_sampling(
         input_values,
         input_indices,
         k=k_tensor,
@@ -213,7 +221,7 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
     torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
     torch_op = getattr(torch, torch_op_name)
 
-    ttnn_op = getattr(ttnn, op)
+    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -340,6 +348,8 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op, explicit_ou
     torch_op = getattr(torch, torch_op_name)
     torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
 
+    # Use the op directly (not the ttnn_<op> determinism wrapper): the wrapper's
+    # second execution exhausts device memory for the larger sharded shapes here.
     ttnn_op = getattr(ttnn, op)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -454,7 +464,7 @@ def test_generic_ops_wh_block_shard(
     torch_op = getattr(torch, torch_op_name)
     torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
 
-    ttnn_op = getattr(ttnn, op)
+    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.float32,
@@ -586,7 +596,7 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape, dtype)
     torch_input = torch.randn(shape, dtype=dtype)
 
     ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_op = getattr(ttnn, op)
+    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
     ttnn_result = ttnn.to_torch(ttnn_op(ttnn_input, dim=dim, scalar=scalar, correction=correction))
 
     # torch.max/min don't accept a tuple for dim; use amax/amin which do.
@@ -775,7 +785,7 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
     torch_op = getattr(torch, torch_op_name)
     torch_result = torch_op(torch_tensor, dim=dim)
 
-    ttnn_op = getattr(ttnn, op)
+    ttnn_op = TTNN_REDUCTION_WRAPPERS[op]
     ttnn_result = ttnn_op(ttnn_tensor, dim=dim)
 
     # Validate output dtype matches input dtype
@@ -832,7 +842,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn.topk(ttnn_tensor, k, dim=dim)
+        ttnn_result = ttnn_topk(ttnn_tensor, k, dim=dim)
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
         if not torch_errored:
@@ -954,7 +964,7 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn.argmax(ttnn_tensor, dim=dim, keepdim=keepdim)
+        ttnn_result = ttnn_argmax(ttnn_tensor, dim=dim, keepdim=keepdim)
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
         if not torch_errored:
@@ -1054,7 +1064,7 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     pad_value = 1.0 if op == "cumprod" else None
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, pad_value=pad_value)
 
-    torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+    torch_op, ttnn_op = getattr(torch, op), TTNN_REDUCTION_WRAPPERS[op]
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -1180,7 +1190,7 @@ def test_moe(device, tensor_shape, dtype, layout):
         ttnn_expert_mask = ttnn.fill_implicit_tile_padding(ttnn_expert_mask, TEST_PADDING_VALUE)
         ttnn_topE_mask = ttnn.from_torch(topE_mask, layout=layout, device=device)
         ttnn_topE_mask = ttnn.fill_implicit_tile_padding(ttnn_topE_mask, TEST_PADDING_VALUE)
-        ttnn_result = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
+        ttnn_result = ttnn_moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
     except (IndexError, TypeError, RuntimeError) as e:
         ttnn_errored = True
         if not torch_errored:
@@ -1283,7 +1293,7 @@ def test_sampling(device, tensor_shape, dtype, layout):
         k_tensor = ttnn.from_torch(k_vals, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         p_tensor = ttnn.from_torch(p_vals, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         temp_tensor = ttnn.from_torch(temp_vals, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_result = ttnn.sampling(
+        ttnn_result = ttnn_sampling(
             input_values,
             input_indices,
             k=k_tensor,
@@ -1319,7 +1329,7 @@ def test_sampling(device, tensor_shape, dtype, layout):
         return
 
     # Determinism: two ttnn runs with same seed must match (we cannot compare to torch; RNG differs).
-    ttnn_result_2 = ttnn.sampling(
+    ttnn_result_2 = ttnn_sampling(
         input_values, input_indices, k=k_tensor, p=p_tensor, temp=temp_tensor, seed=SAMPLING_SEED
     )
     ttnn_result_2_torch = ttnn.to_torch(ttnn.from_device(ttnn_result_2))
@@ -1355,7 +1365,7 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
 
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
 
-    output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
+    output_tensor = ttnn_sum(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
     # This test uses larger absolute values, so we need to use a larger atol.
