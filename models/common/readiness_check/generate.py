@@ -210,6 +210,139 @@ def _generate_continuation_tokens(
     return generated
 
 
+def _load_aime24_prompt(prompts_file: Path, prompt_index: int) -> str:
+    """Load one AIME24 prompt from DeepSeek's curated teacher-forcing prompt set."""
+    if prompt_index < 0:
+        raise ValueError(f"aime24_prompt_index must be >= 0, got {prompt_index}")
+    if not prompts_file.exists():
+        raise FileNotFoundError(f"AIME24 prompts file not found: {prompts_file}")
+
+    with prompts_file.open("r", encoding="utf-8") as f:
+        prompt_items = json.load(f)
+
+    if not isinstance(prompt_items, list) or not prompt_items:
+        raise ValueError(f"AIME24 prompts file must contain a non-empty list: {prompts_file}")
+    if prompt_index >= len(prompt_items):
+        raise ValueError(f"AIME24 prompt index {prompt_index} out of range for {len(prompt_items)} prompts")
+
+    item = prompt_items[prompt_index]
+    if not isinstance(item, dict) or not isinstance(item.get("prompt"), str):
+        raise ValueError(f"AIME24 prompt item {prompt_index} must contain a string 'prompt' field")
+    task = item.get("task")
+    if task not in {"aime24", "r1_aime24"}:
+        raise ValueError(f"AIME24 prompt item {prompt_index} has unexpected task {task!r}")
+    return item["prompt"]
+
+
+def _resolve_prompt_text(
+    prompt_source: str,
+    *,
+    prompt: Optional[str],
+    prompt_file: Optional[Path],
+    aime24_prompts_file: Path,
+    aime24_prompt_index: int,
+) -> str:
+    if prompt_source == "aime24":
+        return _load_aime24_prompt(aime24_prompts_file, aime24_prompt_index)
+    if prompt_source == "text":
+        if prompt is None:
+            raise ValueError("--prompt is required when --prompt-source=text")
+        return prompt
+    if prompt_source == "file":
+        if prompt_file is None:
+            raise ValueError("--prompt-file is required when --prompt-source=file")
+        return prompt_file.read_text(encoding="utf-8")
+    raise ValueError(f"Prompt source {prompt_source!r} does not provide a direct prompt")
+
+
+def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: bool) -> list[int]:
+    if chat_template:
+        if not hasattr(tokenizer, "apply_chat_template"):
+            raise RuntimeError(f"Tokenizer {type(tokenizer).__name__} does not support apply_chat_template")
+        prompt_tokens = tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt_text}],
+            add_generation_prompt=True,
+            tokenize=True,
+        )
+    else:
+        prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+
+    if not prompt_tokens:
+        raise ValueError("Prompt tokenization produced no tokens")
+    return [int(token_id) for token_id in prompt_tokens]
+
+
+def _normal_token_ids(token_ids) -> list[int]:
+    if token_ids is None:
+        return []
+    if isinstance(token_ids, int):
+        return [token_ids]
+    return [int(token_id) for token_id in token_ids if token_id is not None]
+
+
+def _generation_stop_ids(tokenizer, model: torch.nn.Module) -> list[int]:
+    stop_ids = _normal_token_ids(tokenizer.eos_token_id)
+    stop_ids.extend(_normal_token_ids(getattr(model.config, "eos_token_id", None)))
+
+    eot_id = getattr(tokenizer, "eot_token_id", None)
+    if eot_id is None and hasattr(tokenizer, "convert_tokens_to_ids"):
+        vocab = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
+        for token in ("<|eot_id|>", "<end_of_turn>"):
+            if vocab and token not in vocab:
+                continue
+            converted = tokenizer.convert_tokens_to_ids(token)
+            if isinstance(converted, int) and converted >= 0 and converted != tokenizer.unk_token_id:
+                eot_id = converted
+                break
+    stop_ids.extend(_normal_token_ids(eot_id))
+
+    deduped = []
+    for token_id in stop_ids:
+        if token_id not in deduped:
+            deduped.append(token_id)
+    if not deduped:
+        raise RuntimeError("Could not determine eos/eot token id from tokenizer or model config")
+    return deduped
+
+
+def _safe_pad_id(tokenizer, stop_ids: list[int]) -> Optional[int]:
+    pad_id = tokenizer.pad_token_id
+    if pad_id is not None and pad_id != tokenizer.bos_token_id:
+        return int(pad_id)
+    return int(stop_ids[0]) if stop_ids else None
+
+
+def _generate_continuation_tokens(
+    model: torch.nn.Module,
+    tokenizer,
+    prompt_tokens: torch.Tensor,
+    gen_len: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Generate a deterministic HF continuation to use as the teacher-forcing target."""
+    input_ids = prompt_tokens.unsqueeze(0).to(device)
+    attention_mask = torch.ones_like(input_ids)
+    stop_ids = _generation_stop_ids(tokenizer, model)
+    eos_token_id = stop_ids[0] if len(stop_ids) == 1 else stop_ids
+
+    with torch.no_grad():
+        outputs = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=gen_len,
+            do_sample=False,
+            pad_token_id=_safe_pad_id(tokenizer, stop_ids),
+            eos_token_id=eos_token_id,
+            use_cache=True,
+        )
+
+    sequences = outputs.sequences if hasattr(outputs, "sequences") else outputs
+    generated = sequences[0, prompt_tokens.numel() :].detach().cpu().to(torch.long)
+    if generated.numel() == 0:
+        raise RuntimeError("HF generation produced no continuation tokens")
+    return generated
+
+
 def _generate_one_entry(
     model: torch.nn.Module,
     tokenizer,

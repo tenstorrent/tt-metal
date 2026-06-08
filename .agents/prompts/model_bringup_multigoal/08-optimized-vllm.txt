@@ -16,5 +16,6 @@ Goal completion requirements:
 - models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md summarize commands, before/after serving metrics, optimized-full-model comparison, trace/async decisions, profiler conclusions, rejected options, limitations, and exact artifacts.
 - Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
 - Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
+- Prefill TTFT and decode t/s/u reported for batch 1 inference reported at the top of README.md
 
 Do not mark blocked just because PCC, trace replay, watcher, profiler, CCL, cache, MoE, vLLM serving, async decode, sampling, or benchmark validation currently fails. Those are expected optimization work. Before blocking, isolate the smallest repro, compare optimized full-model and vLLM integration baselines, try a concrete fix/refutation loop, and for subtle trace, cache, serving, scheduler, or sampling bugs use $autofix or document why it could not be used. Blocking requires evidence that continued debugging is no longer meaningful, not merely that a requirement still fails.
