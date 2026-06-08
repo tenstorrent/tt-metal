@@ -451,43 +451,21 @@ inline void _llk_pack_hw_configure_(
 }
 
 /**
- * @brief Initialize the packer (addrmod + MOP) for a pack op, without touching packer strides.
- *
- * Lightweight init overload that skips stride setup and the final ADC X configuration; used when the
- * packer strides were already established by a prior hw-configure.
- *
- * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
- * @tparam zero_output: When true, packer emits zeros instead of dest data.
- * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
- * @param face_r_dim: Number of rows per face.
- * @param tile_c_dim: Tile column dimension (datums).
- * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param num_tiles: Number of tiles processed per MOP run.
- * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
- */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
-inline void _llk_pack_init_(
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const std::uint32_t num_tiles  = 1)
-{
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, true /* skip_packer_strides */, true /* skip_final_adcxx */>(
-        0 /* pack_src_format unused */, face_r_dim, tile_c_dim, num_faces, num_tiles);
-}
-
-/**
  * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
  *
- * Full init overload: programs ADDR_MODs, the MOP template, packer strides, and the final ADC X
- * configuration. When packing tilized 8-bit datums the Blackhole row-unswizzle workaround can be
- * skipped (the issue does not affect 8-bit datums).
+ * Single init entry point (the redundant no-`pack_src_format` overload was removed; see #35020).
+ * By default programs ADDR_MODs, the MOP template, packer strides, and the final ADC X configuration.
+ * Callers whose packer strides / X counter were already established by a prior hw-configure (or set
+ * manually) can opt out via the skip_packer_strides / skip_final_adcxx template flags, in which case
+ * pack_src_format is only used for the num_tiles bounds checks and the tilize-workaround MOP choice.
+ * When packing tilized 8-bit datums the Blackhole row-unswizzle workaround can be skipped (the issue
+ * does not affect 8-bit datums).
  *
  * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
  * @tparam zero_output: When true, packer emits zeros instead of dest data.
  * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
  * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam skip_final_adcxx: When true, skip the closing SETADCXX of the packer X counter.
  * @param pack_src_format: Source (dest register) data format.
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
@@ -495,8 +473,18 @@ inline void _llk_pack_init_(
  * @param num_tiles: Number of tiles processed per MOP run.
  * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
  * @note Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ * @note Arch difference (#35020): unlike the Wormhole B0 _llk_pack_init_ (which takes pack_dst_format and
+ *       owns no packer strides/X-counter state), the Blackhole entry point takes pack_src_format and by
+ *       default still programs strides + SETADCXX (reconfig_packer_data_format also programs them, so the
+ *       state has a single source of truth after any reconfig). The arch-agnostic test/metal layers hide
+ *       this src-vs-dst arg-order difference behind _llk_pack_init_wrapper_ / the metal llk_pack_init.
  */
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <
+    PackMode pack_mode       = PackMode::Default,
+    bool zero_output         = false,
+    bool skip_addrmod_config = false,
+    bool skip_packer_strides = false,
+    bool skip_final_adcxx    = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
     const std::uint32_t face_r_dim,
@@ -520,12 +508,12 @@ inline void _llk_pack_init_(
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
     {
-        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<PackMode::Default, zero_output, skip_addrmod_config, skip_packer_strides, skip_final_adcxx>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
     else
     {
-        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false /* skip_final_adcxx */>(
+        llk_pack_internal_bh::pack_init_apply<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, skip_final_adcxx>(
             pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
     }
 }

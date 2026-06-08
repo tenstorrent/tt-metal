@@ -670,6 +670,12 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides(pack_src_format);
+
+    // Program the packer X counter for the standard tiled (PackMode::Default) layout: one face row of
+    // datums (face_r_dim * FACE_C_DIM) per pack. _llk_pack_init_ no longer owns this state, so the
+    // reconfig path must establish it (untilize geometry is handled by configure_pack). See #35020.
+    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
+    TT_SETADCXX(p_setadc::PAC, face_dim - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>

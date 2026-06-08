@@ -188,7 +188,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         tile_size); // need to reconfigure data formats_array for next pack, also calls set_packer_strides to readjust strides after pack tilizing
 
 #ifdef ARCH_BLACKHOLE
-    _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */>();
+    // Strides + packer X counter were re-established by _llk_pack_reconfig_data_format_ above, so only
+    // refresh ADDR_MODs + MOP here via the single _llk_pack_init_ overload (#35020).
+    _llk_pack_init_<
+        ckernel::PackMode::Default,
+        false /* zero_output */,
+        false /* skip_addrmod_config */,
+        true /* skip_packer_strides */,
+        true /* skip_final_adcxx */>(formats_array[run].pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */);
 #endif
 
     _llk_packer_wait_for_math_done_();

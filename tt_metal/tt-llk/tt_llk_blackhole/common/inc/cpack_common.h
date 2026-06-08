@@ -570,6 +570,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     // Set packer strides
     set_packer_strides<PackMode::Default>(pack_output_src_format, tile_c_dim);
+
+    // Program the packer X counter. On Blackhole x_start/x_end must be within one row (0..15), so the
+    // standard tiled (PackMode::Default) layout uses FACE_C_DIM - 1. _llk_pack_init_ no longer owns
+    // this state in the reconfig path, so reconfig must establish it. See #35020.
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>

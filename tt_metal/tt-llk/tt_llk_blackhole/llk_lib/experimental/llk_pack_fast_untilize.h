@@ -385,7 +385,10 @@ inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
     }
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
-    _llk_pack_init_<PackMode::Default, false, false>(FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1);
+    // Strides and the packer X counter are restored manually above; the single _llk_pack_init_ overload
+    // is invoked with skip_packer_strides/skip_final_adcxx to only refresh ADDR_MODs + MOP (#35020).
+    _llk_pack_init_<PackMode::Default, false, false, true /* skip_packer_strides */, true /* skip_final_adcxx */>(
+        pack_src_format, FACE_R_DIM, TILE_C_DIM, FAST_UNTILIZE_NUM_FACES, 1);
 }
 
 } // namespace ckernel

@@ -256,7 +256,15 @@ inline void _llk_pack_hw_configure_(
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+// NOTE: _llk_pack_init_ only programs the ADDR_MOD slots and the MOP template. It deliberately does
+// NOT touch packer strides, the packer L1 offset, or the packer X counter (SETADCXX): those packer
+// states are owned exclusively by configure_pack (_llk_pack_hw_configure_) and
+// reconfig_packer_data_format (_llk_pack_reconfig_data_format_). Always run one of those before the
+// first _llk_pack_init_ for a given output format/geometry. See issue #35020.
+//
+// skip_packer_strides is retained as a (now no-op) template parameter so the WH and BH _llk_pack_init_
+// surfaces stay identical for arch-agnostic callers; init no longer programs strides regardless.
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool /*skip_packer_strides*/ = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -273,14 +281,6 @@ inline void _llk_pack_init_(
         _llk_pack_configure_addrmod_<pack_mode>();
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
-
-    if constexpr (!skip_packer_strides)
-    {
-        set_packer_l1_offset(pack_dst_format, face_r_dim);
-    }
-    const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
 inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)

@@ -196,7 +196,7 @@ inline void _llk_pack_reconfig_data_format_wrapper_(
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_init_wrapper_(
-    [[maybe_unused]] const std::uint32_t pack_dst_format,
+    const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim           = FACE_R_DIM,
     const std::uint32_t tile_c_dim           = TILE_C_DIM,
     const std::uint32_t num_faces            = 4,
@@ -204,7 +204,13 @@ inline void _llk_pack_init_wrapper_(
     [[maybe_unused]] const bool narrow_tile  = false,
     const std::uint32_t num_tiles            = 1)
 {
-    _llk_pack_init_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    // The redundant no-`pack_src_format` _llk_pack_init_ overload was removed (#35020). Route through
+    // the single (src-format) overload while preserving this wrapper's lightweight semantics: packer
+    // strides and the final X counter were already established by the preceding hw-configure, so skip
+    // both here. pack_src_format is unused when strides are skipped — pass the dst format as a harmless
+    // placeholder.
+    _llk_pack_init_<pack_mode, zero_output, false /* skip_addrmod_config */, true /* skip_packer_strides */, true /* skip_final_adcxx */>(
+        pack_dst_format, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
