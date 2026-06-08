@@ -1,9 +1,10 @@
-from typing import Optional, AsyncIterator, Iterator
+from typing import Optional, AsyncIterator, Iterator, TextIO
 from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
 from asyncio import StreamReader
 from dateutil import parser
 from enum import Enum, auto
+from sys import stdout
 import fileinput
 import asyncio
 import pprint
@@ -313,9 +314,12 @@ def parse_done(l: str) -> Optional[Event]:
     return Event(EventType.TESTDONE, {})
 
 
-def parse_line(l: str) -> Optional[Event]:
+def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
     if print_logs:
         print(f"l: {l}")
+
+    if logf:
+        print(f"l: {l}", file=logf)
 
     parsers = [
         parse_testdevices,
@@ -341,20 +345,20 @@ def parse_line(l: str) -> Optional[Event]:
     return None
 
 
-async def parse_logs_stream(inf: asyncio.StreamReader) -> AsyncIterator[Event]:
+async def parse_logs_stream(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> AsyncIterator[Event]:
     while True:
         l = await inf.readline()
         if l == b"":
             break
 
-        r = parse_line(l.decode("utf-8").strip())
+        r = parse_line(l.decode("utf-8").strip(), logf)
         if r is not None:
             yield r
 
 
-async def parse_logs(inf: asyncio.StreamReader) -> list[Event]:
+async def parse_logs(inf: asyncio.StreamReader, logf: Optional[TextIO]) -> list[Event]:
     evs = []
-    async for e in parse_logs_stream(inf):
+    async for e in parse_logs_stream(inf, logf):
         evs.append(e)
 
     return evs
@@ -466,13 +470,13 @@ def shortname(n: str) -> str:
     return n if "." not in n else n.split(".")[1]
 
 
-def print_summary(runs: list[TestRun]):
+def print_summary(runs: list[TestRun], logf: TextIO):
     headers = ["test name", "status"]
     rows = []
     for r in runs:
         rows.append([shortname(r.name), r.status])
 
-    print_table(table("Test summary", headers, rows))
+    print_table(table("Test summary", headers, rows), logf)
 
 
 def link_name(l: TestedLink) -> str:
@@ -499,14 +503,14 @@ def format_fail(fail: bool) -> str:
 refail = re.compile("(FAILED|FAIL)")
 
 
-def print_table(t: str):
-    if not sys.stdout.isatty():
-        print(t)
+def print_table(t: str, logf: TextIO):
+    if not logf.isatty():
+        print(t, file=logf)
     else:
-        print(re.sub(refail, "\x1b[31m\\1\x1b[0m", t))
+        print(re.sub(refail, "\x1b[31m\\1\x1b[0m", t), file=logf)
 
 
-def print_test_summary(t: TestCase, runs: list[TestRun]):
+def print_test_summary(t: TestCase, runs: list[TestRun], logf: TextIO):
     for r in runs:
         if not r.name.endswith(t):
             continue
@@ -550,10 +554,10 @@ def print_test_summary(t: TestCase, runs: list[TestRun]):
             row += [len(links[k]["errors"]), format_rate(rate), format_fail(bool(links[k]["errors"]))]
             rows.append(row)
 
-        print_table(table(f"{t} test summary", headers, rows))
+        print_table(table(f"{t} test summary", headers, rows), logf)
 
 
-def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
+def print_test_summary_per_chip(t: TestCase, runs: list[TestRun], logf: TextIO):
     for r in runs:
         if not r.name.endswith(t):
             continue
@@ -606,10 +610,10 @@ def print_test_summary_per_chip(t: TestCase, runs: list[TestRun]):
 
             rows.append(row)
 
-        print_table(table(f"{t} per chip test summary", headers, rows))
+        print_table(table(f"{t} per chip test summary", headers, rows), logf)
 
 
-def print_failing(runs: list[TestRun]):
+def print_failing(runs: list[TestRun], logf: TextIO):
     headers = ["test name", "link", "direction", "processor", "errors"]
     rows = []
     for r in runs:
@@ -621,16 +625,16 @@ def print_failing(runs: list[TestRun]):
                 # print(name, l)
                 rows.append([r.name, name, d, l.proc, errors])
 
-    print_table(table("Failing tests/links", headers, rows))
+    print_table(table("Failing tests/links", headers, rows), logf)
 
 
-def print_results(runs: list[TestRun]):
-    print_failing(runs)
+def print_results(runs: list[TestRun], logf: TextIO = stdout):
+    print_failing(runs, logf)
     for t in TestCase:
-        print_test_summary(t, runs)
+        print_test_summary(t, runs, logf)
     for t in TestCase:
-        print_test_summary_per_chip(t, runs)
-    print_summary(runs)
+        print_test_summary_per_chip(t, runs, logf)
+    print_summary(runs, logf)
 
 
 async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReader:
@@ -651,9 +655,9 @@ async def file_to_streamreader(path: str, chunk_size: int = 8192) -> StreamReade
     return reader
 
 
-async def parse_file(file: str) -> list[Event]:
+async def parse_file(file: str, logf: Optional[TextIO]) -> list[Event]:
     sr = await file_to_streamreader(file)
-    return await parse_logs(sr)
+    return await parse_logs(sr, logf)
 
 
 async def main():
@@ -665,7 +669,11 @@ async def main():
     parser.add_argument("-v", action="store_true", help="Verbose output")
     parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
+    parser.add_argument("-f", type=str, help="File to use for logging")
     opts = parser.parse_args()
+
+    logpath = opts.f if opts.f else None
+    logf = open(logpath, "w") if logpath else None
 
     tests = [TestCase.LINK_UP, TestCase.BANDWIDTH_BIDIR]
 
@@ -690,9 +698,11 @@ async def main():
 
     outfile = opts.o if opts.o else "out.json"
     print(f"Writing results to '{outfile}'")
+    if logpath:
+        print(f"Writing logs to '{logpath}'")
 
     if opts.i:
-        evs = await parse_file(opts.i)
+        evs = await parse_file(opts.i, logf)
     else:
         print("Running tests: ", ", ".join(t.value for t in tests))
 
@@ -706,7 +716,7 @@ async def main():
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
-        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout))
+        p, evs = await asyncio.gather(proc.wait(), parse_logs(proc.stdout, logf))
 
     # pprint.pp(evs)
     runs = list(parse_evs(evs))
@@ -714,7 +724,13 @@ async def main():
     # print(runs_to_json(runs, sort_keys=True, indent=4))
     if not opts.n:
         print_results(runs)
+    if logf:
+        print_results(runs, logf)
+
     runs_to_jsonf(outfile, runs, sort_keys=True, indent=4)
+
+    if logf:
+        logf.close()
 
 
 if __name__ == "__main__":
