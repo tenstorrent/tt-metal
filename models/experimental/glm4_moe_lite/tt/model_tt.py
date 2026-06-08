@@ -974,29 +974,22 @@ class Glm4MoeLiteDenseOnlyTT:
         x_last = self.final_norm(_x_last_l1, mode="decode")
         ttnn.deallocate(_x_last_l1, force=False)
         logits_tt = self._lm_head_linear(x_last, self.lm_head_w)
-        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
-            cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-            _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-            _topo = (
-                ttnn.Topology.Ring
-                if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-                else ttnn.Topology.Linear
-            )
-            logits_tt_full = ttnn.all_gather(
-                logits_tt,
-                dim=3,
-                num_links=_nl,
-                topology=_topo,
-                cluster_axis=cluster_axis,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(logits_tt, force=False)
-            logits_tt = logits_tt_full
         if profile_on:
             prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
 
-        logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
-        logits_torch = logits_torch[..., :vocab]
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            # Read each vocab shard back to CPU and concatenate — avoids an on-device
+            # AllGather since the logits go to CPU anyway.
+            shards = ttnn.get_device_tensors(logits_tt)
+            if not shards:
+                raise RuntimeError("ttnn.get_device_tensors returned empty list for sharded lm_head")
+            logits_torch = torch.cat([ttnn.to_torch(t)[..., : int(t.shape[-1])] for t in shards], dim=-1)[..., :vocab]
+            ttnn.deallocate(logits_tt, force=False)
+        else:
+            logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+            logits_torch = logits_torch[..., :vocab]
+            ttnn.deallocate(logits_tt, force=False)
+
         logits_flat = logits_torch.reshape(-1, vocab)
         if logits_flat.shape[0] != 1:
             raise RuntimeError(
@@ -1004,7 +997,6 @@ class Glm4MoeLiteDenseOnlyTT:
                 f"(logits_torch.shape={tuple(logits_torch.shape)})"
             )
         logits_i = logits_flat.to(dtype=torch.float32).cpu()
-        ttnn.deallocate(logits_tt, force=False)
         ttnn.deallocate(x_last, force=False)
         return logits_i
 
@@ -1138,35 +1130,26 @@ class Glm4MoeLiteDenseOnlyTT:
 
             t0 = time.perf_counter() if profile_on else 0.0
             x_last = self.final_norm(x_last, mode="decode")
-            logits_tt = self._lm_head_linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
-            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
-                cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-                _nl = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
-                _topo = (
-                    ttnn.Topology.Ring
-                    if os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower() == "ring"
-                    else ttnn.Topology.Linear
-                )
-                logits_tt_full = ttnn.all_gather(
-                    logits_tt,
-                    dim=3,
-                    num_links=_nl,
-                    topology=_topo,
-                    cluster_axis=cluster_axis,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(logits_tt, force=False)
-                logits_tt = logits_tt_full
+            logits_tt = self._lm_head_linear(x_last, self.lm_head_w)  # [1,1,1,vocab_shard?]
             if profile_on:
                 prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
 
-            logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
-            logits_torch = logits_torch[..., :vocab]
+            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+                shards = ttnn.get_device_tensors(logits_tt)
+                if not shards:
+                    raise RuntimeError("ttnn.get_device_tensors returned empty list for sharded lm_head")
+                logits_torch = torch.cat([ttnn.to_torch(t)[..., : int(t.shape[-1])] for t in shards], dim=-1)[
+                    ..., :vocab
+                ]
+                ttnn.deallocate(logits_tt, force=False)
+            else:
+                logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+                logits_torch = logits_torch[..., :vocab]
+                ttnn.deallocate(logits_tt, force=False)
+
             logits_flat = logits_torch.reshape(-1, vocab)
             logits_i = logits_flat.to(dtype=torch.float32).cpu()
             out_logits.append(logits_i)
-
-            ttnn.deallocate(logits_tt, force=False)
             ttnn.deallocate(x_last, force=False)
 
         ttnn.deallocate(x, force=False)

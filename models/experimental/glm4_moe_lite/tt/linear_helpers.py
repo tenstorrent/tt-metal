@@ -165,7 +165,6 @@ def _lm_head_dram_sharded(
 
     Eliminates the NOC weight multicast used by 1D configs: each compute core reads
     directly from its DRAM bank, achieving higher parallel DRAM bandwidth utilization.
-    HiFi4 + fp32_dest_acc is preserved to avoid top-1 logit flip vs the 1D path.
     """
     from models.demos.deepseek_v3.utils.config_helpers import (
         get_activation_sharding_core_counts_for_dram_matmul,

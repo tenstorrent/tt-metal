@@ -133,14 +133,18 @@ def _env_lm_head_weight_dtype() -> ttnn.DataType:
 
 
 def _env_dram_sharded_lm_head() -> bool:
-    """DRAM-shard the LM head weight for higher-bandwidth decode (M=32, K=2048, N=vocab).
+    """DRAM-shard the LM head weight for higher-bandwidth decode (M=32, K=2048, N=vocab_shard).
 
-    Enable via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1.
+    Off by default. Enable via GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD=1.
 
-    The standard 1D-multicast LM head broadcasts the full BF16 weight over the NOC,
-    saturating it at ~74% DRAM utilization.  DRAM-sharded eliminates the NOC multicast
-    for weights: each compute core reads directly from its assigned DRAM bank, giving
-    full parallel DRAM bandwidth and typically 2-4× lower latency on this op.
+    IMPORTANT — Blackhole alignment requirement:
+    Blackhole has 12 DRAM banks. For DRAM-sharded to use more than 12 compute cores,
+    n_tiles = ceil(N/32) must be divisible by 12. Without TP, N=154880 → n_tiles=4840,
+    4840%12=4 → misaligned, only 12 cores used, worse than 1D multicast.
+    With TP=4, N=38720 → n_tiles=1210, 1210%12=10 → also misaligned, same issue.
+
+    Only enable manually when N satisfies n_tiles % 12 == 0 (e.g. N that is a multiple
+    of 12×32=384).
     """
     return os.environ.get("GLM4_MOE_LITE_DRAM_SHARDED_LM_HEAD", "").strip() == "1"
 
