@@ -256,19 +256,40 @@ void kernel_main() {
                     num_done++;
                     DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
                 } else {
+                    uint32_t route = route_info[0];
                     uint32_t distance = route_info[1];
                     uint32_t page_idx = route_info[2];
+                    uint32_t dst_chip_index = route_info[3];
                     uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
                     uint32_t metadata_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
-                    DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route_info[0], page_idx);
+                    DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route, page_idx);
 #ifdef DEST_CHIP_ID
-                    fabric_set_unicast_route<false>(
-                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                    // route_info layout (written by writer_untilize_dispatch): [0]=route (1D EDM
+                    // index), [1]=distance_hops, [2]=page_idx, [3]=dst_chip_index (2D). Mirrors the
+                    // row-major path: under 2D the 1D-style route_info[0] doesn't match the physical
+                    // EDM index, so recompute the direction and the (mesh, chip) header from the dest.
+                    ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+                    uint32_t fabric_route;
+                    if constexpr (
+                        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::HybridMeshPacketHeader> ||
+                        std::is_same_v<PACKET_HEADER_TYPE, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
+                        pkt_route_info.dst_chip_id = dest_chip_ids[dst_chip_index];
+                        pkt_route_info.dst_mesh_id = dest_mesh_ids[dst_chip_index];
+                        // TODO(#46174): drop the private tt_fabric_api.h dependency once
+                        // RoutingPlaneConnectionManager exposes a portable (mesh, chip) -> slot lookup.
+                        fabric_route = static_cast<uint32_t>(get_next_hop_router_direction(
+                            dest_mesh_ids[dst_chip_index], dest_chip_ids[dst_chip_index]));
+                    } else {
+                        pkt_route_info.distance_in_hops = static_cast<uint16_t>(distance);
+                        fabric_route = route;
+                    }
 
                     // Send payload
+                    ccl_routing_utils::fabric_set_line_unicast_route(
+                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
                     fabric_send_noc_unicast<fabric_max_packet_size>(
                         output_addr_gen,
-                        fabric_connections[route_info[0]],
+                        fabric_connections[fabric_route],
                         unicast_packet_header,
                         payload_addr,
                         page_idx,
@@ -276,9 +297,11 @@ void kernel_main() {
                         l1_alignment);
 
                     // Send metadata
+                    ccl_routing_utils::fabric_set_line_unicast_route(
+                        pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
                     fabric_send_noc_unicast<fabric_max_packet_size>(
                         metadata_addr_gen,
-                        fabric_connections[route_info[0]],
+                        fabric_connections[fabric_route],
                         unicast_packet_header,
                         metadata_addr,
                         page_idx,

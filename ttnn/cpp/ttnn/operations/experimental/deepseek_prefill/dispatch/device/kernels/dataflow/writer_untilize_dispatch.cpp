@@ -207,6 +207,7 @@ void kernel_main() {
                     // fabric writer where to send.
                     uint32_t route = entry->route;
                     uint32_t distance = entry->distance;
+                    uint32_t dst_chip = entry->dst_chip;
 
                     // Per-entry credit: wait until the sender has fabric-sent the slot we're
                     // about to overwrite (sender writer inc's space_avail once per slot freed).
@@ -222,10 +223,12 @@ void kernel_main() {
                     uint32_t slot = produced_count % writer_cb_size;
 
                     // Build route_info (4 × u32) in local scratch, send as one NOC write.
+                    // [3]=dst_chip carries the linearized dest device index for the sender's 2D
+                    // fabric route (ignored under 1D, where [0]=route/[1]=distance drive the send).
                     route_info_scratch[0] = route;
                     route_info_scratch[1] = distance;
                     route_info_scratch[2] = page_idx;
-                    route_info_scratch[3] = 0;
+                    route_info_scratch[3] = dst_chip;
                     uint64_t c4_slot = sender_c4_base_noc_addr + slot * route_info_slot_stride;
                     noc_async_write_one_packet_with_trid(
                         route_info_scratch_addr, c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);

@@ -325,8 +325,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*cb_id=*/tt::CBIndex::c_13,
         "untilize_metadata_scratch");
     // c_15: route_info scratch (16B = l1_alignment). Untilize writer builds the 4-u32
-    // route_info entry [route, distance, page_idx, 0] here, then NOC-writes the whole
+    // route_info entry [route, distance, page_idx, dst_chip] here, then NOC-writes the whole
     // block as a single noc_async_write to the sender's c_4 slot (replaces 4× inline_dw).
+    // dst_chip is the linearized dest device index used by the sender's 2D fabric route.
     {
         uint32_t route_info_scratch_size = l1_alignment;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -341,9 +342,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
     // c_14: per-batch route plan (reader RISC → writer RISC, on same untilize core).
     // Layout (PlanHeader + PlanEntry[]) is defined in kernels/dataflow/dispatch_plan.hpp:
-    // [PlanHeader: 32B][PlanEntry × 8 u32 (32B) each].
+    // [PlanHeader: 32B][PlanEntry × 9 u32 (36B) each].
     {
-        constexpr uint32_t plan_entry_u32s = 8;
+        constexpr uint32_t plan_entry_u32s = 9;
         uint32_t max_plan_entries = read_batch_size * operation_attributes.num_experts_per_tok;
         uint32_t plan_page_size = tt::round_up(
             32u + max_plan_entries * plan_entry_u32s * static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);

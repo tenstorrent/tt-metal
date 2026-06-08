@@ -297,6 +297,10 @@ void kernel_main() {
                 entry->token_idx = token_idx;
                 entry->weight = weight;
                 entry->k = (uint16_t)k;
+                // Linearized destination device index. Under 1D it is unused by the fabric writer
+                // (route/distance drive the send); under 2D it is the only routing input — the
+                // writer recomputes the EDM direction and (mesh,chip) header from it.
+                entry->dst_chip = expert_chip;
 
                 if (!is_local) {
                     if constexpr (is_1d_topology<topology>()) {
