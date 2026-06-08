@@ -91,7 +91,25 @@ def get_generic_stage_size_loopback_topology_config() -> PhysicalTopologyConfig:
     )
 
 
-GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
+# These tests are a multi-rank pipeline (one MPI rank per stage) launched via tt-run on galaxy
+# stage-size hardware. Any plain-pytest CI box is a single process -- a p150 (shape (1,1)) or a BH
+# loudbox that presents as (4,2)/(2,4) -- and is NOT that deployment. Gate on rank count first so we
+# skip every single-box run regardless of shape (a (4,2) loudbox would otherwise pass the shape
+# check below and run). The build is also at import time because the parametrize decorators read its
+# attributes during collection; skip the whole module rather than let it become a collection ERROR.
+if int(ttnn.distributed_context_get_size()) <= 1:
+    pytest.skip(
+        "stage-size loopback smoke requires a multi-rank (tt-run) pipeline launch on galaxy "
+        "stage-size HW; single-process run detected",
+        allow_module_level=True,
+    )
+try:
+    GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
+except ValueError as exc:
+    pytest.skip(
+        f"stage-size loopback smoke requires a 4x2/4x4/8x4 stage mesh: {exc}",
+        allow_module_level=True,
+    )
 PIPELINE_ENDPOINT_CORE_COORD = ttnn.CoreCoord(0, 0)
 
 
