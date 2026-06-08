@@ -91,8 +91,11 @@ auto launch_mux_workers(
     // shape variant pushes per-core L1 differently), the TT_FATAL just below will fire with
     // a clear "mux L1 overlaps tensor" message — at that point either drop the buffer count
     // further (e.g. 13) or revisit the L1 layout to free more headroom for tilize_output.
-    const uint8_t num_buffers_full_size_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
-    const uint8_t num_buffers_header_only_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 14 : 15;
+    const uint8_t num_buffers_full_size_channels =
+        (mesh_device.arch() == tt::ARCH::BLACKHOLE)
+            ? 13
+            : 15;  // LOCAL: 14->13 for 4x8 cax=0 epd=8 hidden=7168 L1 overlap (#46208); not for upstream
+    const uint8_t num_buffers_header_only_channels = (mesh_device.arch() == tt::ARCH::BLACKHOLE) ? 13 : 15;
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto l1_unreserved_base_address =
