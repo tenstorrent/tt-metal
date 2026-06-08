@@ -108,6 +108,30 @@ def _should_skip_prefix_caching(
     return True
 
 
+def _should_disable_batched_prefill_for_chunked(prefill_seq_lens, max_prefill_chunk_size):
+    return max_prefill_chunk_size is not None and any(s > max_prefill_chunk_size for s in prefill_seq_lens)
+
+
+def _normalize_single_user_last_token_idx(last_token_idx, context):
+    if last_token_idx is None:
+        return None
+    if isinstance(last_token_idx, (list, tuple)):
+        if len(last_token_idx) != 1:
+            raise ValueError(
+                f"{context} requires a scalar last_token_idx for single-user prefill, "
+                f"got {type(last_token_idx).__name__} of length {len(last_token_idx)}: {last_token_idx}"
+            )
+        last_token_idx = last_token_idx[0]
+    if isinstance(last_token_idx, torch.Tensor):
+        if last_token_idx.numel() != 1:
+            raise ValueError(
+                f"{context} requires a scalar last_token_idx for single-user prefill, "
+                f"got tensor with shape {tuple(last_token_idx.shape)}"
+            )
+        last_token_idx = last_token_idx.item()
+    return int(last_token_idx)
+
+
 def _get_max_blocks_prefill(kv_cache) -> int:
     """
     Return the maximum number of blocks to use for prefill trace page_table shape,
@@ -421,6 +445,17 @@ class Generator(WarmupForwardMixin):
         ):
             use_batched_prefill = True
 
+        max_prefill_chunk_size = getattr(self.model_args, "max_prefill_chunk_size", None)
+        if use_batched_prefill and _should_disable_batched_prefill_for_chunked(
+            prefill_seq_lens, max_prefill_chunk_size
+        ):
+            logger.info(
+                f"Batched prefill disabled: padded prefill len {prefill_seq_lens[0]} exceeds "
+                f"max_prefill_chunk_size {max_prefill_chunk_size}; chunked/prefix-cached "
+                "prefill requires the sequential prefill path"
+            )
+            use_batched_prefill = False
+
         if return_logits:
             tt_out_logits_all_users = torch.zeros(batch, 1, self.model.args.padded_vocab_size)
 
@@ -716,6 +751,11 @@ class Generator(WarmupForwardMixin):
             f"num_cached_tokens={num_cached_tokens}"
         )
         seq_len = tokens.shape[-1]
+        if batch_size == 1:
+            last_token_idx = _normalize_single_user_last_token_idx(
+                last_token_idx,
+                "single-user prefill",
+            )
         use_prefix_caching = num_cached_tokens > 0
 
         # If batch_size is 1, extract the single user's page table row.
@@ -736,6 +776,11 @@ class Generator(WarmupForwardMixin):
             - page_table must match batch size of inputs (1 for single user)
             - page_table includes both cached and new blocks
             """
+            if batch_size != 1:
+                last_token_idx = _normalize_single_user_last_token_idx(
+                    last_token_idx,
+                    "prefix-cached prefill",
+                )
             assert page_table_user is not None, "page_table must be provided for prefix caching"
             assert kv_cache is not None, "kv_cache must be provided for prefix caching"
             assert last_token_idx is not None and last_token_idx < seq_len + num_cached_tokens, (

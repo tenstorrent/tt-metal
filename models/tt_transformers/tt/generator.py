@@ -53,6 +53,30 @@ def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
 
+def _should_disable_batched_prefill_for_chunked(prefill_seq_lens, max_prefill_chunk_size):
+    return max_prefill_chunk_size is not None and any(s > max_prefill_chunk_size for s in prefill_seq_lens)
+
+
+def _normalize_single_user_last_token_idx(last_token_idx, context):
+    if last_token_idx is None:
+        return None
+    if isinstance(last_token_idx, (list, tuple)):
+        if len(last_token_idx) != 1:
+            raise ValueError(
+                f"{context} requires a scalar last_token_idx for single-user prefill, "
+                f"got {type(last_token_idx).__name__} of length {len(last_token_idx)}: {last_token_idx}"
+            )
+        last_token_idx = last_token_idx[0]
+    if isinstance(last_token_idx, torch.Tensor):
+        if last_token_idx.numel() != 1:
+            raise ValueError(
+                f"{context} requires a scalar last_token_idx for single-user prefill, "
+                f"got tensor with shape {tuple(last_token_idx.shape)}"
+            )
+        last_token_idx = last_token_idx.item()
+    return int(last_token_idx)
+
+
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
 
@@ -659,7 +683,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # buys no single-pass win and would re-introduce the very DRAM pressure
         # chunking exists to relieve); keep them on the sequential per-user path
         # that chunks each prompt correctly. See tenstorrent/tt-metal#45234.
-        if use_batched_prefill and any(s > self.model_args[0].max_prefill_chunk_size for s in prefill_seq_lens):
+        if use_batched_prefill and _should_disable_batched_prefill_for_chunked(
+            prefill_seq_lens, self.model_args[0].max_prefill_chunk_size
+        ):
             logger.info(
                 f"Batched prefill disabled: padded prefill len {prefill_seq_lens[0]} exceeds "
                 f"max_prefill_chunk_size {self.model_args[0].max_prefill_chunk_size}; chunked "
@@ -1074,9 +1100,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         **kwargs,
     ):
         seq_len = tokens.shape[-1]
+        if batch_size == 1:
+            last_token_idx = _normalize_single_user_last_token_idx(
+                last_token_idx,
+                "single-user prefill",
+            )
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         use_prefix_caching = num_cached_tokens > 0
         if use_chunked_prefill or use_prefix_caching:
+            if batch_size != 1:
+                last_token_idx = _normalize_single_user_last_token_idx(
+                    last_token_idx,
+                    "chunked/prefix-cached prefill",
+                )
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
              - page_table, which is used in SDPA, must match batch size of inputs, which is 1. This is because SDPA
