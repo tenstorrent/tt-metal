@@ -1393,8 +1393,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,
-                # this traces only for the current ones
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=device_inputs[i][0])
+                # this traces only for the current ones.
+                # tt_out_tok feeds the sampled token back into the decode token
+                # buffer (device_inputs[0]) for the next traced step. Only do this
+                # for models that rely on on-device token feedback. Models that
+                # re-stage decode inputs from host every step (e.g. gemma4, via
+                # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
+                # token buffer is not shaped as a sampling output (gemma4's is
+                # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
+                # pass None so sampling allocates its own output.
+                tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok)
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1536,16 +1545,39 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             logits_i = tt_logits[i]
             if isinstance(logits_i, tuple):
                 logits_i = logits_i[0]
+            # Must match the capture-time decision in _capture_decode_trace_text:
+            # only feed the sampled token back into device_inputs[0] for models
+            # that use on-device token feedback (see _decode_token_feedback_buffer).
+            tt_out_tok = (
+                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
+                if enable_trace and self.trace_inputs_decode[True]
+                else None
+            )
             sampled_outputs.append(
                 sampling_module.sample(
                     logits=logits_i,
-                    tt_out_tok=self.trace_inputs_decode[True][i][0]
-                    if enable_trace and self.trace_inputs_decode[True]
-                    else None,
+                    tt_out_tok=tt_out_tok,
                     enable_trace=enable_trace,
                 )
             )
         return sampled_outputs
+
+    @staticmethod
+    def _decode_token_feedback_buffer(model, device_inputs):
+        """Return the device token buffer to feed the sampled token back into for
+        the next traced decode step, or None if the model doesn't use on-device
+        token feedback.
+
+        Models that re-stage all decode trace inputs from host every step (e.g.
+        gemma4, ``_tt_vllm_always_refresh_decode_trace_inputs=True``) don't rely
+        on the device feedback and their token buffer (``device_inputs[0]``) may
+        not be a valid sampling output (gemma4's is rank-2; ``ttnn.sampling``
+        requires a rank-4 preallocated output). Returning None makes sampling
+        allocate its own output instead of writing into ``device_inputs[0]``.
+        """
+        if getattr(model, "_tt_vllm_always_refresh_decode_trace_inputs", False):
+            return None
+        return device_inputs[0]
 
     def _prefill_forward_single_user(
         self,
