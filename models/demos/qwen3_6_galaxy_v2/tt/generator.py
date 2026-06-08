@@ -35,12 +35,11 @@ def get_padded_prefill_len(seq_len: int) -> int:
     Get the padded prefill length for a given sequence length.
     This is used to pad the sequence length to the nearest power of 2.
     """
-    if seq_len <= 128:
-        return 128
-    # qwen3.6: the 1024 and 2048 prefill buckets have a broken matmul program-config
-    # (num_blocks_x=9 > num_cores_x=5 on the 5-column compute grid) -> TT_FATAL at
-    # matmul_multicore_reuse_mcast_2d. Only the 128 and >=4096 buckets are valid, so
-    # pad anything in (128, 4096] up to 4096 (the bucket the demo verifies coherent).
+    # qwen3.6: pad EVERYTHING up to 4096 (the smallest reliable bucket). The 128 bucket
+    # has a server-side prefill-MLP CCL buffer corruption (short prompts garble), and the
+    # 1024/2048 buckets have a broken matmul progcfg (num_blocks_x=9 > num_cores_x=5).
+    # Routing all <=4096 prompts through 4096 (which the demo verifies coherent + stable
+    # back-to-back) sidesteps both. Cost: a tiny prompt runs a 4096-token prefill.
     if seq_len <= 4096:
         return 4096
     else:
