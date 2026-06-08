@@ -3403,8 +3403,6 @@ ProgramDescriptor MatmulMultiCoreReuseMcast2DProgramFactory::create_descriptor(
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
-    tt_metal::Buffer* out_buffer = output.buffer();
-
     // When a sub-device is present use its bounding-box start; otherwise fall
     // back to allowed_worker_cores start so non-(0,0) placements work correctly.
     CoreCoord sub_device_start_core = program_config.allowed_worker_cores.has_value()

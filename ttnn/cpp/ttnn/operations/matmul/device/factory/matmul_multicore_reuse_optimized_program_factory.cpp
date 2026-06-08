@@ -417,7 +417,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         uint32_t out_start_tile_id =
             (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
         reader_writer_kernel_desc.emplace_runtime_args(
-            core, {in1_buffer, in1_start_tile_id, num_output_blocks_per_core, out_buffer, out_start_tile_id});
+            core, {in1_buffer, in1_start_tile_id, num_output_blocks_per_core, output, out_start_tile_id});
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
