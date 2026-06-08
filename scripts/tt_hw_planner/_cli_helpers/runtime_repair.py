@@ -129,13 +129,18 @@ def _runtime_repair_loop(
             attempts_so_far=iter_idx - 1,
             force_heavy=consecutive_no_edit_iters >= 1,
         )
-        if (
-            (model_light or model_heavy or model_super_heavy)
-            and _iter_model_reason != "default"
-            and os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False")
-        ):
-            # [auto:<provider>] status — screen only under TT_HW_PLANNER_VERBOSE.
-            print(f"  [auto:runtime-repair] tiered model pick: " f"{_iter_model} ({_iter_model_reason})")
+        if (model_light or model_heavy or model_super_heavy) and _iter_model_reason != "default":
+            _tier_line = f"  [auto:runtime-repair] tiered model pick: " f"{_iter_model} ({_iter_model_reason})"
+            # Screen only under verbose; otherwise mirror to the full run log.
+            if os.environ.get("TT_HW_PLANNER_VERBOSE", "") not in ("", "0", "false", "False"):
+                print(_tier_line)
+            else:
+                try:
+                    from loguru import logger as _lg
+
+                    _lg.info(_tier_line)
+                except Exception:
+                    pass
         forced_edit_mode = consecutive_no_edit_iters >= 1
 
         pre_iter_diff_hash = _git_worktree_diff_hash()
