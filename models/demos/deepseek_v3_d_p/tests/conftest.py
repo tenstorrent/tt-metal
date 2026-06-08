@@ -23,7 +23,51 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
 from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANTS, TestVariant
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
+
+# Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
+# Minimum CI-gated coverage: (4,2) on BH LoudBox, (8,4) on BH Galaxy. (2,4) included
+# for asymmetry coverage. RELAXED_INIT matches the canonical pattern in test_prefill_block.py
+# and is required on BH Galaxy for FABRIC_2D bring-up.
+FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
+    pytest.param(
+        (4, 2),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="fabric2d-mesh-4x2",
+    ),
+    pytest.param(
+        (2, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        1,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+        id="fabric2d-mesh-2x4",
+    ),
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        id="fabric2d-mesh-8x4",
+    ),
+]
 
 
 def pytest_configure(config):

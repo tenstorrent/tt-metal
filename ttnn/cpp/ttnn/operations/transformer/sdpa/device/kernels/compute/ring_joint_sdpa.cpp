@@ -75,6 +75,9 @@ void kernel_main() {
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
+    // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
+    // Shared with the program factory and reader via kt_inplace_v_enabled().
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -310,7 +313,8 @@ void kernel_main() {
                 has_straddle && is_causal && is_balanced,
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
-                v_shares_k_buffer>(
+                v_shares_k_buffer,
+                kt_inplace_v>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -114,6 +115,9 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
         ),
+        # FABRIC_2D variants — shared list defined in conftest.py (also used by
+        # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
     ],
     indirect=["mesh_device", "device_params"],
 )
