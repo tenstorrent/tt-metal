@@ -342,6 +342,8 @@ void kernel_main() {
             experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/true>(
                 remote_cb_id, t_page_bytes_per_recv, noc_index);
 
+            // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
+            // `(a + b) - slot`.
             constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
 
             // Branch on layout. The branch is per-tensor (100% predictable across the
@@ -353,14 +355,21 @@ void kernel_main() {
                 const uint32_t t_sub_band_per_block = t_num_sub * t_M;
                 const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
+                // Prologue: issue first DMA (chunk 0) into stage_slot_a. The body's
+                // "issue next" lookahead populates subsequent slots.
                 experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
 
                 uint32_t fifo_snapshot = 0;
                 uint32_t cum_offset_in_page = 0;
-                uint32_t blk = 0;
-                uint32_t sb = 0;
-                uint32_t ch = 0;
+                // The flat chunk index `c` decomposes into three nested counters,
+                // advanced by compare-and-increment (ch fastest, then sb, then blk):
+                uint32_t blk = 0;  // K-block index within the tensor, in [0, t_block_count)
+                uint32_t sb = 0;   // sub-band index within the block, in [0, t_num_sub)
+                uint32_t ch = 0;   // chunk index within the sub-band, in [0, t_M)
                 uint32_t stage_slot = stage_slot_a;
+                // True for every chunk except the very last; flipped once the successor
+                // counters cross t_block_count, so the hot path reads a flag instead of
+                // recomputing the bound each iteration.
                 bool has_next = (total_chunks > 1);
 
                 for (uint32_t c = 0; c < total_chunks; ++c) {
@@ -398,6 +407,9 @@ void kernel_main() {
                     volatile tt_l1_ptr uint32_t* chunk_recv_xy =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
                         ch * t_recv_per_chunk * 2;
+                    // Per-tensor-stable predicate; branches are 100% predictable across the
+                    // chunk loop. Compiler folds the fast-path bodies via `if constexpr` in
+                    // `prefetcher_write_chunk`.
                     if (t_rows_per_sub == 1) {
                         if (t_coal_num_pages == 1) {
                             prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
@@ -458,6 +470,7 @@ void kernel_main() {
                         noc_async_posted_writes_flushed();
                     }
 
+                    // Advance counters to next chunk.
                     blk = next_blk;
                     sb = next_sb;
                     ch = next_ch;
