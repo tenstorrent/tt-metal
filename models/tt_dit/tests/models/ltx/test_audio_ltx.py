@@ -31,7 +31,7 @@ _WARM_ITERS = 3
 
 
 # ---------------------------------------------------------------------------
-# Mesh / device params (mirrors test_pipeline_ltx_fast_av.py)
+# Mesh / device params (mirrors test_pipeline_ltx_distilled.py)
 # ---------------------------------------------------------------------------
 def _with_audio_dev_l1(base: dict) -> dict:
     return {**base, "l1_small_size": 32768}

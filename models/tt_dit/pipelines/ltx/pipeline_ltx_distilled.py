@@ -30,11 +30,6 @@ class LTXDistilledPipeline(LTXPipeline):
 
     HAS_UPSAMPLER = True
 
-    @staticmethod
-    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXDistilledPipeline":
-        kwargs["pipeline_class"] = LTXDistilledPipeline
-        return LTXPipeline.create_pipeline(mesh_device, **kwargs)
-
     def warmup_buffers(
         self,
         *,
@@ -44,9 +39,8 @@ class LTXDistilledPipeline(LTXPipeline):
         num_inference_steps: int = 2,
         stages: tuple[str, ...] = ("s1", "s2"),
     ) -> None:
-        """Compile every program both stages will hit. Both stages use variant 0
-        (distilled doesn't swap weights between stages); only the sequence length
-        differs. Pass ``stages=("s1",)`` to skip the full-res s2 warmup."""
+        """Compile both stages' programs. Both stages use variant 0 (distilled doesn't
+        swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
         valid = {"s1", "s2"}
@@ -58,9 +52,8 @@ class LTXDistilledPipeline(LTXPipeline):
             f"stages={stages}, {num_inference_steps} steps/stage"
         )
 
-        # Dummy zero embeddings at the real shapes — the denoise warmup below only needs
-        # to compile the (shape-driven) kernels, not real prompt content. The encoder is
-        # warmed separately at the end of this method (it coresident-evicts the DiT/VAE).
+        # Zeros at the real shapes compile the shape-driven kernels; the encoder is warmed
+        # separately at the end of this method (it coresident-evicts the DiT/VAE).
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 

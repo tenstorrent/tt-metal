@@ -10,18 +10,13 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_two_stages import LTXTwoStagesPipeline
+from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_PROMPT,
+    default_ltx_checkpoint,
+    default_ltx_gemma,
+    print_ltx_timing_table,
+)
 from models.tt_dit.utils.test import line_params, ring_params
-
-
-def _default_checkpoint() -> str:
-    """Resolve base 22B checkpoint: env var > local file > HF repo string default."""
-    explicit = os.environ.get("LTX_CHECKPOINT")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
-    if os.path.exists(local):
-        return local
-    return "Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors"
 
 
 def _default_distilled_lora() -> str:
@@ -38,21 +33,6 @@ def _default_distilled_lora() -> str:
         "Resolving HuggingFace distilled LoRA Lightricks/LTX-2.3:ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
     )
     return hf_hub_download(repo_id="Lightricks/LTX-2.3", filename="ltx-2.3-22b-distilled-lora-384-1.1.safetensors")
-
-
-def _default_gemma() -> str:
-    """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
-    explicit = os.environ.get("GEMMA_PATH")
-    if explicit:
-        return explicit
-    import glob
-
-    candidates = glob.glob(
-        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
-    )
-    if candidates:
-        return candidates[0].rstrip("/")
-    return "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
 @pytest.mark.parametrize(
@@ -85,7 +65,7 @@ def _default_gemma() -> str:
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_av_two_stages(
+def test_pipeline_two_stages(
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -97,9 +77,9 @@ def test_pipeline_av_two_stages(
     no_prompt,
 ):
     """LTX-2.3 22B 2-stage AV pipeline: full-guidance s1 + distilled-LoRA s2 refine."""
-    ckpt = _default_checkpoint()
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-dev.safetensors")
     distilled_lora = _default_distilled_lora()
-    gemma = _default_gemma()
+    gemma = default_ltx_gemma()
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -127,10 +107,7 @@ def test_pipeline_av_two_stages(
         width=width,
     )
 
-    prompt = os.environ.get(
-        "PROMPT",
-        ("a cat playing piano"),
-    )
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_two_stages_{width}x{height}_{number}.mp4")
@@ -151,6 +128,19 @@ def test_pipeline_av_two_stages(
             seed=seed,
         )
         logger.info(f"Saved video to: {output_filename}")
+        print_ltx_timing_table(
+            pipeline,
+            label="LTX TWO-STAGES",
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            output_path=output_filename,
+            prompt=prompt,
+        )
 
     if no_prompt:
         run(prompt=prompt, number=0, seed=int(os.environ.get("SEED", "10")))

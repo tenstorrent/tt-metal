@@ -10,68 +10,17 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_PROMPT,
+    default_ltx_checkpoint,
+    default_ltx_gemma,
+    print_ltx_timing_table,
+)
 from models.tt_dit.utils.test import line_params, ring_params
-
-
-def _print_timing_table(
-    pipeline, *, num_frames, height, width, mesh_shape, sp_axis, tp_axis, topology, output_path, prompt
-):
-    """Print a timing summary from ``pipeline.last_timings`` (stage, seconds) rows."""
-    timings = getattr(pipeline, "last_timings", None)
-    if not timings:
-        return
-
-    mesh = tuple(mesh_shape)
-    topo = str(topology).split(".")[-1]
-    prompt_short = prompt if len(prompt) <= 60 else prompt[:57] + "..."
-    meta = [
-        f"Resolution   {height}x{width} · {num_frames} frames",
-        f"Mesh         {mesh} · sp={mesh[sp_axis]} tp={mesh[tp_axis]} · {topo}",
-        f"Output       {output_path}",
-        f"Prompt       {prompt_short}",
-    ]
-    rows = [(name, f"{secs:.2f} s") for name, secs in timings]
-    rows.append(("Total", f"{sum(s for _, s in timings):.2f} s"))
-
-    lw = max([len(n) for n, _ in rows] + [len("Stage")])
-    rw = max([len(t) for _, t in rows] + [len("Time")])
-    full = max(lw + rw + 5, max(len(m) for m in meta) + 1)
-    lw = full - rw - 5  # widen the stage column so both sections share one outer width
-
-    out = ["", "┌" + "─" * full + "┐", "│" + "LTX DISTILLED — PERFORMANCE".center(full) + "│"]
-    for m in meta:
-        out.append("│ " + m.ljust(full - 1) + "│")
-    out.append("├" + "─" * (lw + 2) + "┬" + "─" * (rw + 2) + "┤")
-    out.append("│ " + "Stage".ljust(lw) + " │ " + "Time".rjust(rw) + " │")
-    out.append("├" + "─" * (lw + 2) + "┼" + "─" * (rw + 2) + "┤")
-    for name, t in rows[:-1]:
-        out.append("│ " + name.ljust(lw) + " │ " + t.rjust(rw) + " │")
-    out.append("├" + "─" * (lw + 2) + "┼" + "─" * (rw + 2) + "┤")
-    out.append("│ " + rows[-1][0].ljust(lw) + " │ " + rows[-1][1].rjust(rw) + " │")
-    out.append("└" + "─" * (lw + 2) + "┴" + "─" * (rw + 2) + "┘")
-    print("\n".join(out))
-
 
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
 ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
-
-
-def _default_checkpoint() -> str:
-    """Resolve distilled checkpoint: env var > local file > HF repo string default."""
-    explicit = os.environ.get("LTX_CHECKPOINT")
-    if explicit:
-        return explicit
-    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors")
-    if os.path.exists(local):
-        return local
-    return "Lightricks/LTX-2.3:ltx-2.3-22b-distilled-1.1.safetensors"
-
-
-def _default_gemma() -> str:
-    """Resolve Gemma: env var > HF repo id (the pipeline resolves + caches it). Passing the
-    repo id (not a pre-resolved snapshot dir) keeps the on-device cache under a readable name."""
-    return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
 @pytest.mark.parametrize(
@@ -104,7 +53,7 @@ def _default_gemma() -> str:
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_av_fast(
+def test_pipeline_distilled(
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -116,8 +65,8 @@ def test_pipeline_av_fast(
     no_prompt,
 ):
     """LTX-2.3 distilled 2-stage AV pipeline."""
-    ckpt = _default_checkpoint()
-    gemma = _default_gemma()
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    gemma = default_ltx_gemma()
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -154,20 +103,7 @@ def test_pipeline_av_fast(
         width=width,
     )
 
-    prompt = os.environ.get(
-        "PROMPT",
-        (
-            "A young woman with shoulder-length wavy brown hair sits on a wooden stool, "
-            "cradling an acoustic guitar. The camera holds a steady medium close-up, "
-            "framing her face and guitar neck. Warm key light illuminates her left side "
-            "while soft fill light prevents harsh shadows. She strums gently, looking "
-            "directly at camera with genuine warmth. Her mouth opens clearly as she sings "
-            '"Doo-be-doo, doo-be-day, oh what a sunny day" with precise lip sync and '
-            "natural facial expressions. Her head moves subtly with the rhythm. Simple "
-            "chord progression underlies her melodic voice. Shot with 50mm lens at f/2.0, "
-            "shallow depth of field, warm color grade emphasizing skin tones."
-        ),
-    )
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -187,8 +123,9 @@ def test_pipeline_av_fast(
             seed=seed,
         )
         logger.info(f"Saved video to: {output_filename}")
-        _print_timing_table(
+        print_ltx_timing_table(
             pipeline,
+            label="LTX DISTILLED",
             num_frames=num_frames,
             height=height,
             width=width,
