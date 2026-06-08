@@ -175,7 +175,7 @@ if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
 else
   AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
 fi
-TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
+TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
 
 # Dual 4x8 Z-direction fallback (SP4 d04u08 / d05u08 — Z-only connections between galaxies; MGD from rank bindings)
 tt-run --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/dual_4x8_z_fallback_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_4x8_z_fallback_rank_bindings.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDual4x8ZDirectionFallbackControlPlaneInit"

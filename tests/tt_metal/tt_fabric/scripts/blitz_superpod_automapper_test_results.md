@@ -19,7 +19,7 @@ Mapping determinism testing: end-to-end validation that the Blitz superpod autom
 **Command:**
 ```bash
 TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 \
-  tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py \
+  tests/scripts/multihost/run_blitz_superpod_automapper_tests.py \
   --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml \
   --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto \
   --num-variations 5 --seed 42 \
@@ -50,7 +50,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 \
 **MGD:** `models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto`
 **Command:**
 ```bash
-python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py \
+python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py \
   --hosts bh-glx-c01u02,...,bh-glx-c10u08 \
   --mesh-graph-descriptor models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto \
   --tcp-interface ens5f0np0 --num-variations 10 --seed 42

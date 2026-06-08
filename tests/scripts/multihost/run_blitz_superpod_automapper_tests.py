@@ -35,18 +35,18 @@ Requires a built ``fabric_unit_tests`` binary and the same ``TT_METAL_HOME`` pat
 
 Examples:
   # Mock cluster / CI (canonical + 5 variations)
-  python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py \\
+  python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py \\
       --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml \\
       --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto
 
   # Real superpod (16 physical hosts; tt-run launched from first host if not already on-cluster)
-  python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py \\
+  python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py \\
       --hosts bh-glx-d03u02,bh-glx-d03u08,bh-glx-d04u02,... \\
       --mesh-graph-descriptor models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto \\
       --tcp-interface cnx1
 
   # Real single pod (4 hosts; canonical only)
-  python_env/bin/python3 tests/tt_metal/tt_fabric/scripts/run_blitz_superpod_automapper_tests.py \\
+  python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py \\
       --hosts bh-glx-c05u02,bh-glx-c05u08,bh-glx-c06u02,bh-glx-c06u08 \\
       --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_pod_mesh_graph_descriptor.textproto \\
       --tcp-interface cnx1 --num-variations 0
