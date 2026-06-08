@@ -129,7 +129,7 @@ ALWI void sigmoid_tile_init() {
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, idst, vec_mode, 8 /* ITERATIONS */));
+    MATH(SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, idst, vec_mode, 8 /*ITERATIONS*/));
 #else
     MATH(SFPU_CALL(
         DST_SYNC_MODE,
@@ -158,8 +158,8 @@ ALWI void sigmoid_tile(uint32_t idst) {
 // clang-format on
 ALWI void silu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_CALL_FN(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, idst, ::ckernel::VectorMode::RC, 8 /* ITERATIONS */));
+    MATH(
+        SFPU_CALL_FN(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, idst, ::ckernel::VectorMode::RC, 8 /*ITERATIONS*/));
 #else
     MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
 #endif
@@ -577,7 +577,7 @@ ALWI void exp2_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (true /* APPROXIMATE */, DST_ACCUM_MODE))); }
+ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, DST_ACCUM_MODE))); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off

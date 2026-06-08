@@ -33,7 +33,12 @@ ALWI void sqrt_tile_init() { MATH(SFPU_INIT_CB(sqrt, sfpu::sqrt_init, (APPROX)))
 template <bool FAST_APPROX = false>
 ALWI void sqrt_tile(uint32_t idst) {
     MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt, (APPROX, 8, DST_ACCUM_MODE, FAST_APPROX), RC, idst));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sqrt,
+        (APPROX, 8 /*ITERATIONS*/, DST_ACCUM_MODE, FAST_APPROX),
+        RC,
+        idst));
 }
 
 }  // namespace ckernel

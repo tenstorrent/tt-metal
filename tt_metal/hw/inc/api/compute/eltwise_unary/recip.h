@@ -40,7 +40,7 @@ ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reciprocal,
-        (APPROX, DST_ACCUM_MODE, 8, legacy_compat),
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/, legacy_compat),
         idst,
         vector_mode));
 }

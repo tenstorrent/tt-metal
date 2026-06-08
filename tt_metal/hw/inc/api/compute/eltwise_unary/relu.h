@@ -31,16 +31,16 @@ ALWI void relu_tile_init() { MATH(SFPU_INIT(relu_min)); }
 ALWI void relu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
     MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (SFPU_ITERATIONS /* ITERATIONS */), RC, idst, 0 /* threshold */));
+        DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (SFPU_ITERATIONS /*ITERATIONS*/), RC, idst, 0 /*threshold*/));
 #else
     MATH(SFPU_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vFloat /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        0 /* threshold */));
+        0 /*threshold*/));
 #endif
 }
 #ifndef ARCH_QUASAR
@@ -66,20 +66,20 @@ ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
-        (sfpi::vFloat /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        param0 /* threshold */));
+        param0 /*threshold*/));
 }
 ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
     PACK(SFPU_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
-        (sfpi::vFloat /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        param0 /* threshold */));
+        param0 /*threshold*/));
 }
 
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
@@ -87,10 +87,10 @@ ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_max_,
-        (sfpi::vInt /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        param0 /* threshold */));
+        param0 /*threshold*/));
 }
 
 ALWI void relu_max_tile_init() { MATH(SFPU_INIT(relu_max)); }
@@ -117,10 +117,10 @@ ALWI void relu_min_tile(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vFloat /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vFloat /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        param0 /* threshold */));
+        param0 /*threshold*/));
 }
 
 ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
@@ -128,10 +128,10 @@ ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vInt /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        param0 /* threshold */));
+        param0 /*threshold*/));
 }
 
 ALWI void relu_min_tile_init() { MATH(SFPU_INIT(relu_min)); }
@@ -141,10 +141,10 @@ ALWI void relu_tile_int32(uint32_t idst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _relu_min_,
-        (sfpi::vInt /* VectorType */, APPROX /* APPROXIMATION_MODE */, 8 /* ITERATIONS */, uint32_t /* T */),
+        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
         RC,
         idst,
-        0 /* threshold */));
+        0 /*threshold*/));
 }
 
 // clang-format off

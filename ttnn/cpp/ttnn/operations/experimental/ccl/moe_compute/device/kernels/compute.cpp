@@ -45,7 +45,7 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /* APPROXIMATE */)));
+    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
 
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
@@ -54,15 +54,15 @@ inline void pack_compute_activation() {};
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */), RC, 0));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/), RC, 0));
     PACK(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */), RC, 2));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/), RC, 2));
 
     PACK((SFPU_BINARY_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
         RC,
         0,
         1,
@@ -71,7 +71,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
         RC,
         2,
         3,
@@ -95,14 +95,14 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_gelu,
-        (true /* APPROXIMATE */, false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         RC,
         0));
     PACK(SFPU_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_gelu,
-        (true /* APPROXIMATE */, false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
         RC,
         2));
 
@@ -110,7 +110,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
         RC,
         0,
         1,
@@ -119,7 +119,7 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sfpu_binary,
-        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
         RC,
         2,
         3,

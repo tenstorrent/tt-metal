@@ -284,7 +284,7 @@ struct DRAMStreamingExpertsMatmul {
             }
 
             if constexpr (CTArgs::fuse_silu) {
-                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (false /* APPROXIMATE */)));
+                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (false /*APPROXIMATE*/)));
             }
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
@@ -330,7 +330,7 @@ struct DRAMStreamingExpertsMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (CTArgs::fp32_dest_acc_en, 2 /* ITER */),
+                                (CTArgs::fp32_dest_acc_en, 2 /*ITERATIONS*/),
                                 R,
                                 0));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
@@ -338,7 +338,7 @@ struct DRAMStreamingExpertsMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (CTArgs::fp32_dest_acc_en, 4 /* ITER */),
+                                (CTArgs::fp32_dest_acc_en, 4 /*ITERATIONS*/),
                                 R,
                                 0));
                         } else {
@@ -346,7 +346,7 @@ struct DRAMStreamingExpertsMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (CTArgs::fp32_dest_acc_en, 8 /* ITER */),
+                                (CTArgs::fp32_dest_acc_en, 8 /*ITERATIONS*/),
                                 R,
                                 0));
                         }

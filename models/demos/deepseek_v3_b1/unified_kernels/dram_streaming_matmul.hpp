@@ -281,7 +281,7 @@ struct DRAMStreamingMatmul {
             }
 
             if constexpr (CTArgs::fuse_silu) {
-                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /* APPROXIMATE */)));
+                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
             } else {
                 pack_block_contiguous_init(CTArgs::cb_out);
             }
@@ -329,25 +329,25 @@ struct DRAMStreamingMatmul {
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /* is_fp32_dest_acc_en */, 2 /* ITER */),
+                                (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                                 R,
-                                0 /* dst_index */));
+                                0 /*dst_index*/));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
                             PACK(SFPU_CALL_MODE(
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /* is_fp32_dest_acc_en */, 4 /* ITER */),
+                                (false /*is_fp32_dest_acc_en*/, 4 /*ITERATIONS*/),
                                 R,
-                                0 /* dst_index */));
+                                0 /*dst_index*/));
                         } else {
                             PACK(SFPU_CALL_MODE(
                                 DST_SYNC_MODE,
                                 DST_ACCUM_MODE,
                                 calculate_silu,
-                                (false /* is_fp32_dest_acc_en */, 8 /* ITER */),
+                                (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
                                 R,
-                                0 /* dst_index */));
+                                0 /*dst_index*/));
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

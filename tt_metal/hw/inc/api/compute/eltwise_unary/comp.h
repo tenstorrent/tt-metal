@@ -31,7 +31,8 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ne, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ne, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 /**
@@ -60,7 +61,7 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_comp_unary_int,
-        (APPROX, SfpuType::unary_ne, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_ne, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -83,7 +84,8 @@ ALWI void unary_ne_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_eq_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_eq, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_eq, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 /**
@@ -112,7 +114,7 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_comp_unary_int,
-        (APPROX, SfpuType::unary_eq, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_eq, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -135,7 +137,8 @@ ALWI void unary_eq_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_gt, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 /**
@@ -164,7 +167,7 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_comp_unary_int_,
-        (APPROX, SfpuType::unary_gt, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_gt, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -187,7 +190,8 @@ ALWI void unary_gt_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_ge_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_ge, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 /**
@@ -216,7 +220,7 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_comp_unary_int_,
-        (APPROX, SfpuType::unary_ge, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_ge, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -239,7 +243,8 @@ ALWI void unary_ge_tile_int32(uint32_t idst, uint32_t param0) {
  */
 // clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_lt, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 // unary lt : if x < value --> 1, else 0
@@ -263,7 +268,7 @@ ALWI void unary_lt_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_comp_unary_int_,
-        (APPROX, SfpuType::unary_lt, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_lt, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -291,7 +296,8 @@ ALWI void unary_lt_tile_init() { MATH(SFPU_INIT(unary_lt)); }
  */
 // clang-format on
 ALWI void unary_le_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX, 8 /*ITER*/), RC, idst, param0));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_le, (APPROX, 8 /*ITERATIONS*/), RC, idst, param0));
 }
 
 // unary le : if x <= value --> 1, else 0
@@ -315,7 +321,7 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         _calculate_comp_unary_int_,
-        (APPROX, SfpuType::unary_le, 8 /*ITER*/),
+        (APPROX, SfpuType::unary_le, 8 /*ITERATIONS*/),
         RC,
         idst,
         param0));
@@ -567,7 +573,8 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void eqz_tile_uint32(uint32_t idst) {
-    MATH((SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8 /*ITER*/), idst, VectorMode::RC)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
 
 /**
@@ -647,7 +654,8 @@ ALWI void nez_tile_uint16(uint32_t idst) {
  */
 // clang-format on
 ALWI void nez_tile_uint32(uint32_t idst) {
-    MATH((SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8 /*ITER*/), idst, VectorMode::RC)));
+    MATH((SFPU_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
 
 /**

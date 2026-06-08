@@ -48,7 +48,7 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_INIT_CB(erfc, sfpu::erfc_init, (true))); }
+ALWI void erfc_tile_init() { MATH(SFPU_INIT_CB(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
 
 // clang-format off
 /**

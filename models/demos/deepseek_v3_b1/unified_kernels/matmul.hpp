@@ -174,7 +174,7 @@ struct Matmul {
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_sigmoid,
-                            (CTArgs::fused_activation_approx_mode, false /* is_fp32_dest_acc_en */, 2 /* ITER */),
+                            (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             R,
                             0));
                     } else {
@@ -182,7 +182,7 @@ struct Matmul {
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,
-                            (false /* is_fp32_dest_acc_en */, 2 /* ITER */),
+                            (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             R,
                             0));
                     }

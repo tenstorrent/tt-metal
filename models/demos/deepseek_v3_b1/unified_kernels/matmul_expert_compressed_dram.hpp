@@ -989,7 +989,7 @@ struct MatmulExpertCompressedDRAM {
                             calculate_silu,
                             (DST_ACCUM_MODE, silu_iterations),
                             R,
-                            0 /* dst_index */));
+                            0 /*dst_index*/));
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(0, CTArgs::cb_out_silu, 0);
@@ -1012,7 +1012,7 @@ struct MatmulExpertCompressedDRAM {
                 uint32_t num_dram_pushed = 0;
 
                 if constexpr (CTArgs::fuse_silu) {
-                    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /* APPROXIMATE */)));
+                    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
                 }
 
                 for (uint32_t exp_i = 0; exp_i < num_active_experts; exp_i++) {
@@ -1089,9 +1089,9 @@ struct MatmulExpertCompressedDRAM {
                                     DST_SYNC_MODE,
                                     DST_ACCUM_MODE,
                                     calculate_silu,
-                                    (false /* is_fp32_dest_acc_en */, 2 /* ITER */),
+                                    (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                                     R,
-                                    sn /* dst_index */));
+                                    sn /*dst_index*/));
                             }
                             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                         } else {
