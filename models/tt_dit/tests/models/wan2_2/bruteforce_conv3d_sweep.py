@@ -19,10 +19,11 @@ Run via pytest:
         -k "bh_2x4" -s --timeout=0   # all layers sequentially
 """
 
+import csv
 import json
 import math
+import os
 import pathlib
-import statistics
 import time
 
 import pytest
@@ -37,8 +38,22 @@ from ....utils.test import line_params
 # Constants
 # ---------------------------------------------------------------------------
 
-WARMUP = 2
-RUNS = 3
+# Timing is trace-based: each blocking is compiled once, then TRACE_ITERS op
+# invocations are captured into a single trace. The trace is executed
+# TRACE_EXECUTES times and the fastest per-op time is kept. Capturing N ops in
+# one trace amortizes host dispatch to ~zero, so the reported µs is on-device
+# execution time (much less noisy than per-call perf_counter timing).
+TRACE_ITERS = 10  # op invocations captured per trace for the full measurement
+TRACE_PROBE_ITERS = 3  # cheaper trace used to gate slow combos before full measure
+TRACE_EXECUTES = 2  # timed trace executions; fastest per-op time is kept
+
+# DRAM reserved for captured trace commands. 64 MB is ample for ~10 conv3d
+# dispatches and tiny next to the activations these shapes allocate.
+TRACE_REGION_SIZE = 64 * 1024 * 1024
+
+# Compute fidelity used for every conv3d measurement in this file (sweep +
+# baseline). HiFi2 trades some matmul precision for throughput vs HiFi4.
+MATH_FIDELITY = ttnn.MathFidelity.HiFi2
 
 
 TILE_SIZE = 2048  # bf16 tile = 32 * 32 * 2
@@ -90,28 +105,22 @@ def estimate_l1_bytes(cin_block, cout_block, t_blk, h_blk, w_blk, kernel_size, C
     matmul_K_t = math.ceil(patch_size / 32)
     matmul_N_t = math.ceil(cout_block / 32)
 
-    # Tile size scales with dtype: TILE_HEIGHT*TILE_WIDTH*dtype_bytes.
-    # TILE_SIZE was originally for bf16 (dtype_bytes=2). For fp32, all
-    # tile-based CBs are 2× larger — the original formula underestimates
-    # fp32 CB usage, allowing blockings that actually overflow L1.
-    tile_bytes = TILE_HEIGHT * TILE_HEIGHT * dtype_bytes
-
     vol2col_rm_pages = TILE_HEIGHT if num_patches % TILE_HEIGHT == 0 else min(num_patches, 2 * TILE_HEIGHT)
     cb_vol2col_rm = padded_patch_bytes * vol2col_rm_pages
-    cb_vol2col_tiled = tile_bytes * matmul_K_t
-    cb_weight = tile_bytes * matmul_K_t * matmul_N_t
+    cb_vol2col_tiled = TILE_SIZE * matmul_K_t
+    cb_weight = TILE_SIZE * matmul_K_t * matmul_N_t
 
     use_fp32_partials = C_in_num_blocks > 1
-    partial_tile = FP32_TILE_SIZE if use_fp32_partials else tile_bytes
+    partial_tile = FP32_TILE_SIZE if use_fp32_partials else TILE_SIZE
     cb_interm = partial_tile * matmul_M_t * matmul_N_t
-    cb_result = tile_bytes * matmul_M_t * matmul_N_t
+    cb_result = TILE_SIZE * matmul_M_t * matmul_N_t
 
     cb_reduction = 0
     if C_in_num_blocks > 1:
-        cb_reduction = partial_tile * matmul_M_t * matmul_N_t + tile_bytes
+        cb_reduction = partial_tile * matmul_M_t * matmul_N_t + TILE_SIZE
 
-    cb_bias = tile_bytes * matmul_N_t
-    cb_zero = tile_bytes if use_fp32_partials else 0
+    cb_bias = TILE_SIZE * matmul_N_t
+    cb_zero = TILE_SIZE if use_fp32_partials else 0
 
     T_shard = (t_blk - 1) + kT
     H_shard = (h_blk - 1) + kH
@@ -169,9 +178,7 @@ def _t_needed_to_hide_weight_read(cin_block, cout_block, kernel_size):
     return max(1, math.ceil(weight_us / 4.0))  # 4 µs per M-row tilize
 
 
-def build_all_blockings(
-    C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_block=None, hw_product=None, dtype_bytes=2
-):
+def build_all_blockings(C_in, C_out, kernel_size, H, W, T, num_cores=120, max_t_block=None, hw_product=None):
     """Build sorted list of (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block) combos.
 
     max_t_block: if set, caps T_block candidates at this value.
@@ -232,10 +239,7 @@ def build_all_blockings(
                 for h, w in hw:
                     if hw_product is not None and h * w != hw_product:
                         continue
-                    if (
-                        estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in, dtype_bytes=dtype_bytes)
-                        > L1_BUDGET
-                    ):
+                    if estimate_l1_bytes(cin, cout, t_blk, h, w, kernel_size, C_in) > L1_BUDGET:
                         skipped_l1 += 1
                         continue
                     cores = compute_parallelism(cin, cout, t_blk, h, w, kernel_size, H, W, T, C_in, C_out, num_cores)
@@ -261,13 +265,17 @@ def build_all_blockings(
 
 
 # ---------------------------------------------------------------------------
-# Single timed conv3d call
+# Conv3d invocation + timing
 # ---------------------------------------------------------------------------
 
 
-def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, dtype=ttnn.bfloat16):
-    t0 = time.perf_counter()
-    o = ttnn.experimental.conv3d(
+def _invoke(args):
+    """Run conv3d once and return the (undeallocated) output tensor.
+
+    args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc)
+    """
+    _device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc = args
+    return ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
         bias_tensor=tt_bias,
@@ -277,13 +285,44 @@ def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, str
         stride=stride,
         padding=padding,
         padding_mode="zeros",
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         compute_kernel_config=ckc,
     )
-    ttnn.synchronize_device(device)
-    us = (time.perf_counter() - t0) * 1e6
+
+
+def _trace_us(args, n_iters=TRACE_ITERS, executes=TRACE_EXECUTES):
+    """Precise on-device timing via trace capture.
+
+    Compiles once, captures n_iters conv3d invocations into a single trace
+    (deallocating each output so peak memory stays at one output), then executes
+    the trace `executes` times. Returns the fastest per-op time in µs.
+    Trace execution carries no host dispatch, so the result is on-device time.
+    """
+    device = args[0]
+
+    # Warm the program cache so capture records dispatch only (no JIT).
+    o = _invoke(args)
     ttnn.deallocate(o)
-    return us
+    ttnn.synchronize_device(device)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(n_iters):
+        o = _invoke(args)
+        ttnn.deallocate(o)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.synchronize_device(device)
+
+    try:
+        best_per_op = float("inf")
+        for _ in range(executes):
+            ttnn.synchronize_device(device)
+            t0 = time.perf_counter()
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(device)
+            best_per_op = min(best_per_op, (time.perf_counter() - t0) * 1e6 / n_iters)
+    finally:
+        ttnn.release_trace(device, tid)
+    return best_per_op
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +330,9 @@ def _run_once(device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, str
 #
 # For each blocking combo the loop does:
 #   1. Skip T>1 combos whose T=1 sibling was already way off the best.
-#   2. Run 1 untimed call (JIT compile) + 1 timed probe.
+#   2. Run 1 untimed call (JIT compile) + 1 host-timed probe.
 #   3. If the probe is > 1.5× best, skip immediately ("slow").
-#   4. Otherwise run RUNS timed calls and record the mean.
+#   4. Otherwise capture a trace of trace_iters ops and record the per-op time.
 # ---------------------------------------------------------------------------
 
 
@@ -314,25 +353,15 @@ def run_sweep(
     max_combos=500,
     max_t_block=None,
     hw_product=None,
-    dtype=ttnn.bfloat16,
+    trace_iters=TRACE_ITERS,
 ):
     padded_cin = aligned_channels(C_in)
     _num_cores = grid_size.x * grid_size.y if grid_size else 120
     if grid_size is None:
         grid_size = device.compute_with_storage_grid_size()
 
-    dtype_bytes = 4 if dtype == ttnn.float32 else 2
     combos = build_all_blockings(
-        C_in,
-        C_out,
-        kernel_size,
-        H,
-        W,
-        T,
-        num_cores=_num_cores,
-        max_t_block=max_t_block,
-        hw_product=hw_product,
-        dtype_bytes=dtype_bytes,
+        C_in, C_out, kernel_size, H, W, T, num_cores=_num_cores, max_t_block=max_t_block, hw_product=hw_product
     )
     if max_combos and len(combos) > max_combos:
         print(f"Capping combos from {len(combos)} to {max_combos}")
@@ -343,7 +372,7 @@ def run_sweep(
 
     ckc = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=MATH_FIDELITY,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -356,7 +385,7 @@ def run_sweep(
     tt_input = ttnn.from_torch(
         torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
         device=device,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
@@ -365,7 +394,7 @@ def run_sweep(
     tt_bias = ttnn.from_torch(
         torch.randn(1, C_out, dtype=torch.float32),
         device=device,
-        dtype=dtype,
+        dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
         mesh_mapper=mesh_mapper,
@@ -376,12 +405,14 @@ def run_sweep(
 
     def get_weight(cin):
         if cin not in weight_cache:
-            # Match the production Conv1dViaConv3d._prepare_torch_state path:
-            # from_torch with NO device/layout (stays on CPU), then
-            # prepare_conv3d_weights handles the reshape and upload. Sending
-            # to device in TILE_LAYOUT first bloats (kH=1,kW=1) to 32×32 tiles
-            # — a 1024× size explosion for 1D (k,1,1) kernels.
-            tt_w = ttnn.from_torch(w, dtype=dtype, pad_value=0)
+            tt_w = ttnn.from_torch(
+                w,
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.TILE_LAYOUT,
+                pad_value=0,
+                mesh_mapper=mesh_mapper,
+            )
             weight_cache[cin] = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=tt_w,
                 C_in_block=cin,
@@ -391,7 +422,7 @@ def run_sweep(
 
     def make_cfg(cin, cout, t_blk, h_blk, w_blk):
         return ttnn.Conv3dConfig(
-            weights_dtype=dtype,
+            weights_dtype=ttnn.bfloat16,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             T_out_block=t_blk,
             W_out_block=w_blk,
@@ -411,26 +442,14 @@ def run_sweep(
     table_blk = _BLOCKINGS.get(
         (h_factor, w_factor, C_in, C_out, kernel_size, T, H_out_key, W_out_key)
     ) or _DEFAULT_BLOCKINGS.get((C_in, C_out, kernel_size))
+    table_us = None  # HiFi2 time of the original (table) blocking — the per-shape seed
     if table_blk is not None:
         cin, cout, t_blk, h_blk, w_blk = table_blk
         cfg_tbl = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-        tbl_args = (
-            device,
-            tt_input,
-            get_weight(cin),
-            tt_bias,
-            cfg_tbl,
-            C_out,
-            kernel_size,
-            stride,
-            padding,
-            ckc,
-            dtype,
-        )
+        tbl_args = (device, tt_input, get_weight(cin), tt_bias, cfg_tbl, C_out, kernel_size, stride, padding, ckc)
         try:
-            for _ in range(WARMUP):
-                _run_once(*tbl_args)
-            tbl_us = statistics.mean(_run_once(*tbl_args) for _ in range(RUNS))
+            tbl_us = _trace_us(tbl_args, trace_iters)
+            table_us = tbl_us
             best_us = min(best_us, tbl_us)
             if t_blk == 1:
                 t1_baseline[(cin, cout, h_blk, w_blk)] = tbl_us
@@ -450,7 +469,7 @@ def run_sweep(
         try:
             tt_weight = get_weight(cin)
             cfg = make_cfg(cin, cout, t_blk, h_blk, w_blk)
-            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc, dtype)
+            args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, stride, padding, ckc)
 
             # Skip T>1 if the same spatial with T=1 was already way off best.
             if t_blk > 1 and best_us < float("inf"):
@@ -460,18 +479,17 @@ def run_sweep(
                     results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": t1_us, "status": "skip_t1_bad"})
                     continue
 
-            # 1 untimed (JIT compile) + 1 timed probe.
-            _run_once(*args)
-            probe_us = _run_once(*args)
+            # Cheap trace probe (few iters) to gate slow combos before the full
+            # measurement. Trace-based so it is directly comparable to best_us.
+            probe_us = _trace_us(args, TRACE_PROBE_ITERS, executes=1)
 
             if best_us < float("inf") and probe_us > best_us * PROBE_THRESHOLD:
                 fail_count += 1
                 results.append({"blocking": [cin, cout, t_blk, h_blk, w_blk], "us": probe_us, "status": "slow"})
                 continue
 
-            # Full measurement.
-            times = [_run_once(*args) for _ in range(RUNS)]
-            us = statistics.mean(times)
+            # Precise trace-based measurement.
+            us = _trace_us(args, trace_iters)
             ok_count += 1
 
             if t_blk == 1:
@@ -521,6 +539,8 @@ def run_sweep(
                 "num_ok": ok_count,
                 "num_fail": fail_count,
                 "elapsed_s": elapsed,
+                "table_blocking": list(table_blk) if table_blk else None,
+                "table_us": table_us,
                 "best_blocking": list(best_blk) if best_blk else None,
                 "best_us": best_us if best_us < float("inf") else None,
                 "top_20": ok_results[:20],
@@ -568,7 +588,7 @@ _SWEEP_LAYERS_H2W4_480P_T7 = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(2, 4), (2, 4), line_params]],
+    [[(2, 4), (2, 4), {**line_params, "trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_2x4"],
     indirect=["mesh_device", "device_params"],
 )
@@ -637,7 +657,7 @@ _SWEEP_LAYERS_H4W8_720P_FULL_T = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x8_720p_full_t_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -713,7 +733,7 @@ _SWEEP_LAYERS_H4W8_720P_T16 = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x8_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -775,7 +795,7 @@ _SWEEP_LAYERS_H4W8_720P_T1 = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x8_t1_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -833,7 +853,7 @@ _SWEEP_LAYERS_H4W8_720P_T15 = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x8_t15_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -904,7 +924,7 @@ _SWEEP_LAYERS_H4W8_480P_FULL_T = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x8_480p_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -976,7 +996,7 @@ _SWEEP_LAYERS_H4W32_480P_FULL_T = [
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(1, 1), (1, 1), {}]],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
     ids=["bh_4x32_480p_1x1"],
     indirect=["mesh_device", "device_params"],
 )
@@ -1013,57 +1033,87 @@ def test_bruteforce_sweep_h4w32_480p_full_t(
 
 
 # ---------------------------------------------------------------------------
-# LTX-2.3 22B VAE decoder, BH Loud Box 2x4, 1080p (1088x1920), 145 frames
+# Table-driven generic sweep — every shape in models/tt_dit/utils/conv3d.py
 # ---------------------------------------------------------------------------
-# Mesh: h_factor=2, w_factor=4. Production shapes harvested from a
-# `test_pipeline_ltx_fast_av.py -k "bh_2x4sp1tp0"` run log (every entry
-# fires `conv3d blocking [fallback]`). Per-device (T, H_unpad, W_unpad) per
-# stage, all (3,3,3) kernels with external halo padding (internal=0):
-#   s0 (deepest):  T=21,  H=17,  W=15
-#   s1:            T=39,  H=34,  W=30
-#   s2:            T=75,  H=68,  W=60
-#   s3:            T=147, H=68,  W=60
-#   s4 (full res): T=147, H=136, W=120
-# Test entry H_sweep = H_unpad + 2 so the sweep's H_out_key matches the
-# production key (which is H_unpad). Ordered most-to-least compute.
+# Each _BLOCKINGS key is (h_factor, w_factor, C_in, C_out, kernel, T, H_out, W_out)
+# where H_out/W_out are the *output* spatial dims (the conv runs valid, padding=0,
+# so the producing pipeline pre-pads the input). The swept *input* shape is
+# recovered exactly:
+#
+#     T_in = T          (kT does not reduce T in the table convention)
+#     H_in = H_out + (kH - 1)
+#     W_in = W_out + (kW - 1)
+#     stride = (1, 1, 1), padding = (0, 0, 0)
+#
+# This reproduces every per-chip conv3d shape any production mesh would see, all
+# on a single chip (1x1 submesh). The (h_factor, w_factor) tag is carried through
+# only so the result lands in the right bucket and run_sweep can seed best_us from
+# the matching table entry.
+#
+# Run on a single chip:
+#
+#     pytest models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
+#         -k "sweep_all" -s --timeout=0                 # every table shape
+#
+#     pytest models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
+#         -k "sweep_all and h4w8 and 96x96" -s --timeout=0    # subset by id
+#
+# Search-space limits are configurable via env vars (safe BH defaults shown):
+#     CONV3D_SWEEP_MAX_T_BLOCK=8     # cap T_out_block; "none" to disable
+#     CONV3D_SWEEP_HW_PRODUCT=32     # require H_block*W_block==N; "none" for full
+#     CONV3D_SWEEP_MAX_COMBOS=500    # cap combos benchmarked per shape
+#     CONV3D_SWEEP_TRACE_ITERS=10    # conv3d invocations captured per trace
+#
+# e.g. widen the spatial search for a layer whose true winner uses hw=64:
+#     CONV3D_SWEEP_HW_PRODUCT=none pytest ... -k "sweep_all and h4w8_96x96_k333_T83_H186"
 # ---------------------------------------------------------------------------
-_SWEEP_LAYERS_LTX_H2W4_1080P = [
-    # (name,             C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
-    # --- stage 4 (highest res) ---
-    ("ltx_s4_res", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 122, 2, 4),
-    ("ltx_s4_out", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 122, 2, 4),
-    # --- stage 3 ---
-    ("ltx_s3_res", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 62, 2, 4),
-    ("ltx_s3_chg", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 62, 2, 4),
-    # --- stage 2 ---
-    ("ltx_s2_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 75, 70, 62, 2, 4),
-    # --- stage 1 ---
-    ("ltx_s1_up", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 32, 2, 4),
-    ("ltx_s1_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 32, 2, 4),
-    # --- stage 0 (deepest, smallest spatial) ---
-    ("ltx_s0_up", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 17, 2, 4),
-    ("ltx_s0_res", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 17, 2, 4),
-    ("ltx_s0_conv_in", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 17, 2, 4),
-]
+
+
+def _sweep_params_from_blockings():
+    """Derive (param tuple, pytest id) for every entry in the _BLOCKINGS table."""
+    params = []
+    ids = []
+    for h_factor, w_factor, C_in, C_out, kernel, T, H_out, W_out in _BLOCKINGS:
+        kT, kH, kW = kernel
+        H = H_out + (kH - 1)
+        W = W_out + (kW - 1)
+        params.append((C_in, C_out, kernel, (1, 1, 1), (0, 0, 0), T, H, W, h_factor, w_factor))
+        ids.append(f"h{h_factor}w{w_factor}_{C_in}x{C_out}_k{kT}{kH}{kW}_T{T}_H{H}_W{W}")
+    return params, ids
+
+
+_SWEEP_PARAMS_ALL, _SWEEP_IDS_ALL = _sweep_params_from_blockings()
+
+
+def _env_opt(name, default):
+    """Parse an int sweep-limit env var. 'none'/'off'/'' -> None; unset -> default."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    v = v.strip().lower()
+    if v in ("none", "off", ""):
+        return None
+    return int(v)
 
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(2, 4), (2, 4), line_params]],
-    ids=["bh_2x4_1080p"],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_1x1"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
-    _SWEEP_LAYERS_LTX_H2W4_1080P,
-    ids=[l[0] for l in _SWEEP_LAYERS_LTX_H2W4_1080P],
+    "C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_PARAMS_ALL,
+    ids=_SWEEP_IDS_ALL,
 )
-def test_bruteforce_sweep_ltx_h2w4_1080p(
-    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+def test_bruteforce_sweep_all(
+    mesh_device, mesh_shape, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
 ):
     parent_mesh = mesh_device
     device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
-    output = f"sweep_results_ltx_h2w4_1080p/{layer_name}_{C_in}x{C_out}.json"
+    kT, kH, kW = kernel
+    output = f"sweep_results_all/h{h_factor}w{w_factor}/{C_in}x{C_out}_k{kT}{kH}{kW}_T{T}_H{H}_W{W}.json"
     run_sweep(
         device,
         C_in,
@@ -1077,77 +1127,162 @@ def test_bruteforce_sweep_ltx_h2w4_1080p(
         padding=padding,
         h_factor=h_factor,
         w_factor=w_factor,
-        # Cap combos hard for a time-boxed sweep; combos are pre-sorted by
-        # L1-OOM-safe priority so the top-N almost always includes the winner.
-        max_combos=80,
-        max_t_block=8,
-        hw_product=32,
+        max_combos=_env_opt("CONV3D_SWEEP_MAX_COMBOS", 500),
+        max_t_block=_env_opt("CONV3D_SWEEP_MAX_T_BLOCK", 8),
+        hw_product=_env_opt("CONV3D_SWEEP_HW_PRODUCT", 32),
+        trace_iters=_env_opt("CONV3D_SWEEP_TRACE_ITERS", TRACE_ITERS),
     )
 
 
 # ---------------------------------------------------------------------------
-# LTX-2.3 22B VAE decoder, BH Loud Box 2x4, 2K (1088x2048), 145 frames
+# Baseline collection — measure every table shape with ITS OWN table blocking
 # ---------------------------------------------------------------------------
-# DCI 2K is 2048x1080; LTX rounds 1080 up to 1088 (H must be %64), so the VAE
-# sees 1088x2048. Same mesh (h_factor=2, w_factor=4) and same height (1088) as
-# the 1080p target above, so T and per-device H are IDENTICAL; only per-device
-# W changes (latent W 64 -> 16/device vs 1920's 60 -> 15/device). Per stage the
-# W_unpad values are 16/32/64/64/128 (vs 15/30/60/60/120), and W_sweep =
-# W_unpad + 2 to match the production H_out/W_out key.
+# This does NOT sweep. For each entry in _BLOCKINGS it runs the conv3d once with
+# exactly the blocking the production table prescribes and records the trace-based
+# on-device time. The result is the "current production" baseline to compare any
+# re-swept blockings against. All shapes run on a single chip (1x1 submesh).
+#
+#     pytest models/tt_dit/tests/models/wan2_2/bruteforce_conv3d_sweep.py \
+#         -k "collect_baseline" -s --timeout=0
+#
+# Output CSV path defaults to conv3d_baseline_perf.csv (override with
+# CONV3D_BASELINE_CSV=<path>). Rows are written + flushed as each shape completes,
+# so a device hang mid-run still preserves everything measured so far.
 # ---------------------------------------------------------------------------
-_SWEEP_LAYERS_LTX_H2W4_2K = [
-    # (name,             C_in, C_out, kernel,   stride,   padding,   T,   H,   W, h, w)
-    # --- stage 4 (highest res) ---
-    ("ltx_s4_res", 128, 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 130, 2, 4),
-    ("ltx_s4_out", 128, 48, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 138, 130, 2, 4),
-    # --- stage 3 ---
-    ("ltx_s3_res", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 66, 2, 4),
-    ("ltx_s3_chg", 256, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 147, 70, 66, 2, 4),
-    # --- stage 2 ---
-    ("ltx_s2_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 75, 70, 66, 2, 4),
-    # --- stage 1 ---
-    ("ltx_s1_up", 512, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 34, 2, 4),
-    ("ltx_s1_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 39, 36, 34, 2, 4),
-    # --- stage 0 (deepest, smallest spatial) ---
-    ("ltx_s0_up", 1024, 4096, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
-    ("ltx_s0_res", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
-    ("ltx_s0_conv_in", 128, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 21, 19, 18, 2, 4),
+
+BASELINE_CSV = "conv3d_baseline_perf.csv"
+
+_BASELINE_FIELDS = [
+    "h_factor",
+    "w_factor",
+    "C_in",
+    "C_out",
+    "kernel",
+    "T",
+    "H_out",
+    "W_out",
+    "H_in",
+    "W_in",
+    "Cin_block",
+    "Cout_block",
+    "T_block",
+    "H_block",
+    "W_block",
+    "baseline_us",
+    "status",
 ]
+
+
+def _measure_table_blocking(device, C_in, C_out, kernel_size, T, H, W, blocking, grid_size, ckc, trace_iters):
+    """Build fresh tensors for one shape, time the given blocking via trace, clean up."""
+    padded_cin = aligned_channels(C_in)
+    cin_blk, cout_blk, t_blk, h_blk, w_blk = blocking
+
+    torch.manual_seed(42)
+    tt_input = ttnn.from_torch(
+        torch.randn(1, T, H, W, padded_cin, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_w = ttnn.from_torch(
+        torch.randn(C_out, padded_cin, *kernel_size, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(weight_tensor=tt_w, C_in_block=cin_blk, device=device)
+    tt_bias = ttnn.from_torch(
+        torch.randn(1, C_out, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+    cfg = ttnn.Conv3dConfig(
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        T_out_block=t_blk,
+        W_out_block=w_blk,
+        H_out_block=h_blk,
+        C_out_block=cout_blk,
+        C_in_block=cin_blk,
+        compute_with_storage_grid_size=grid_size,
+    )
+    args = (device, tt_input, tt_weight, tt_bias, cfg, C_out, kernel_size, (1, 1, 1), (0, 0, 0), ckc)
+    try:
+        return _trace_us(args, trace_iters)
+    finally:
+        for t in (tt_input, tt_w, tt_weight, tt_bias):
+            ttnn.deallocate(t)
 
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, device_params",
-    [[(2, 4), (2, 4), line_params]],
-    ids=["bh_2x4_2k"],
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_1x1"],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(
-    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
-    _SWEEP_LAYERS_LTX_H2W4_2K,
-    ids=[l[0] for l in _SWEEP_LAYERS_LTX_H2W4_2K],
-)
-def test_bruteforce_sweep_ltx_h2w4_2k(
-    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
-):
+def test_collect_baseline(mesh_device, mesh_shape):
     parent_mesh = mesh_device
     device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
-    output = f"sweep_results_ltx_h2w4_2k/{layer_name}_{C_in}x{C_out}.json"
-    run_sweep(
-        device,
-        C_in,
-        C_out,
-        kernel,
-        T,
-        H,
-        W,
-        output,
-        stride=stride,
-        padding=padding,
-        h_factor=h_factor,
-        w_factor=w_factor,
-        # Cap combos hard for a time-boxed sweep; combos are pre-sorted by
-        # L1-OOM-safe priority so the top-N almost always includes the winner.
-        max_combos=80,
-        max_t_block=8,
-        hw_product=32,
+    grid_size = device.compute_with_storage_grid_size()
+    ckc = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=MATH_FIDELITY,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
+    trace_iters = _env_opt("CONV3D_SWEEP_TRACE_ITERS", TRACE_ITERS)
+
+    out_path = pathlib.Path(os.environ.get("CONV3D_BASELINE_CSV", BASELINE_CSV))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    n = len(_BLOCKINGS)
+    n_ok = 0
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_BASELINE_FIELDS)
+        writer.writeheader()
+        f.flush()
+        for i, (key, blk) in enumerate(_BLOCKINGS.items()):
+            h_factor, w_factor, C_in, C_out, kernel, T, H_out, W_out = key
+            kT, kH, kW = kernel
+            H = H_out + (kH - 1)
+            W = W_out + (kW - 1)
+            cin_blk, cout_blk, t_blk, h_blk, w_blk = blk
+            row = {
+                "h_factor": h_factor,
+                "w_factor": w_factor,
+                "C_in": C_in,
+                "C_out": C_out,
+                "kernel": f"{kT}x{kH}x{kW}",
+                "T": T,
+                "H_out": H_out,
+                "W_out": W_out,
+                "H_in": H,
+                "W_in": W,
+                "Cin_block": cin_blk,
+                "Cout_block": cout_blk,
+                "T_block": t_blk,
+                "H_block": h_blk,
+                "W_block": w_blk,
+                "baseline_us": "",
+                "status": "",
+            }
+            tag = f"[{i+1:3d}/{n}] h{h_factor}w{w_factor} {C_in}x{C_out} k{kT}{kH}{kW} T{T} H{H} W{W} blk={blk}"
+            try:
+                us = _measure_table_blocking(device, C_in, C_out, kernel, T, H, W, blk, grid_size, ckc, trace_iters)
+                row["baseline_us"] = f"{us:.1f}"
+                row["status"] = "ok"
+                n_ok += 1
+                print(f"{tag} -> {us:.1f}us", flush=True)
+            except Exception as e:
+                row["status"] = f"fail: {e}"
+                print(f"{tag} -> FAIL: {e}", flush=True)
+            writer.writerow(row)
+            f.flush()
+
+    print(f"\nBaseline: {n_ok}/{n} shapes measured. Saved to {out_path}")
