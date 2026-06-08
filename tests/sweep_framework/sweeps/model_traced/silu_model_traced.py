@@ -18,7 +18,11 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     reconcile_golden_to_actual,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
+    build_op_kwargs,
+    extract_named_tensor_kwargs,
+    parse_dict_value,
+)
 
 TIMEOUT = 300
 
@@ -65,6 +69,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config, device=device)
 
+    # Forward an explicit memory_config kwarg when the master recorded one
+    # (build_op_kwargs handles output_memory_config but strips a bare
+    # memory_config; dropping it is a memory_config extra_key diff vs master).
+    _mc = kwargs.get("memory_config")
+    if "memory_config" not in op_kwargs and _mc is not None and _mc != "__ABSENT__":
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", _mc) if isinstance(_mc, dict) else _mc
+
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -95,6 +106,34 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Reconstruct a pre-allocated output_tensor when the master passed one
+    # (in-place silu); dropping it is an output_tensor extra_key diff vs master.
+    output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    if output_tensor_info and output_tensor_info.get("shape"):
+        ot_shape = tuple(output_tensor_info["shape"])
+        ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
+        if isinstance(ot_dtype, dict):
+            ot_dtype = parse_dict_value("dtype", ot_dtype) or input_a_dtype
+        ot_layout = output_tensor_info.get("layout") or input_a_layout
+        if isinstance(ot_layout, dict):
+            ot_layout = parse_dict_value("layout", ot_layout) or input_a_layout
+        ot_mem_cfg_raw = output_tensor_info.get("memory_config")
+        ot_mem_cfg = (
+            parse_dict_value("memory_config", ot_mem_cfg_raw)
+            if isinstance(ot_mem_cfg_raw, dict)
+            else (ot_mem_cfg_raw or input_a_memory_config)
+        )
+        ot_placement = output_tensor_info.get("tensor_placement")
+        torch_out_alloc = torch.zeros(ot_shape, dtype=torch.float32)
+        if is_mesh_device and ot_placement:
+            op_kwargs["output_tensor"] = create_tensor_on_mesh(
+                torch_out_alloc, device, ot_dtype, ot_layout, ot_mem_cfg, ot_placement
+            )
+        elif not is_host:
+            op_kwargs["output_tensor"] = ttnn.from_torch(
+                torch_out_alloc, dtype=ot_dtype, layout=ot_layout, device=device, memory_config=ot_mem_cfg
+            )
 
     start_time = start_measuring_time()
     output_tensor = ttnn.silu(input_tensor_a, **op_kwargs)
