@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import data_formats
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -79,6 +80,8 @@ MATMUL_FORMAT = input_output_formats(
     ],
 )
 
+_ARCH = get_chip_architecture()
+
 
 @pytest.mark.quasar
 @parametrize(
@@ -97,7 +100,8 @@ MATMUL_FORMAT = input_output_formats(
     ),
     register_format_hint=lambda format: (
         [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
-        if format.input_format == DataFormat.MxFp4
+        # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
+        if format.input_format == DataFormat.MxFp4 and _ARCH == ChipArchitecture.QUASAR
         else [None]
     ),
     enable_direct_indexing=lambda register_format_hint: (

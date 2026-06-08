@@ -5,6 +5,7 @@ from itertools import product
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -219,6 +220,11 @@ def test_reduce_quasar(
     assert test_passed, "Assert against golden failed"
 
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+
+_ARCH = get_chip_architecture()
+
+
 # 2x-packed FP4 register-format variants for the reduce-GAPOOL pipeline. L1 stays MxFp4;
 # the unpacker produces MxFp4_2x_A/B in src registers. GAPOOL is one of the op_mmul-gated
 # instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv).
@@ -231,6 +237,10 @@ def test_reduce_quasar(
 # MOVD2B -> ZEROSRC -> ELWADDDI, and ELWADDDI is not op_mmul, so it reads SrcB through
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
 @pytest.mark.quasar
+@pytest.mark.skipif(
+    _ARCH != ChipArchitecture.QUASAR,
+    reason="MxFp4_2x GAPOOL reduce is op_mmul-family-only and exists on Quasar. Architecture derivations don't support it.",
+)
 @parametrize(
     register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
     formats=lambda register_format_hint: [
