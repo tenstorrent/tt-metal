@@ -1,6 +1,6 @@
 asic_to_fabric_node_mapping:
   hostnames:
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_0
+    - hostname: bh-glx-d03u08_0
       mesh:
         - mesh: 0
         - chips:
@@ -26,7 +26,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 7
+                chip_id: 3
               asic_id: 17473543753791420106
             - umd_chip_id: 3
               asic_position:
@@ -34,7 +34,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 6
+                chip_id: 2
               asic_id: 8966694117796549890
             - umd_chip_id: 4
               asic_position:
@@ -42,7 +42,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 3
+                chip_id: 7
               asic_id: 8736203068076780792
             - umd_chip_id: 5
               asic_position:
@@ -50,7 +50,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 2
+                chip_id: 6
               asic_id: 18436077643646566507
             - umd_chip_id: 6
               asic_position:
@@ -68,7 +68,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 0
                 chip_id: 0
               asic_id: 2094951566635963727
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_1
+    - hostname: bh-glx-d03u08_1
       mesh:
         - mesh: 1
         - chips:
@@ -78,7 +78,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 5
+                chip_id: 4
               asic_id: 13001783099147672284
             - umd_chip_id: 1
               asic_position:
@@ -86,7 +86,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 4
+                chip_id: 5
               asic_id: 3351865386869683306
             - umd_chip_id: 2
               asic_position:
@@ -94,7 +94,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 7
+                chip_id: 2
               asic_id: 12275854552662172944
             - umd_chip_id: 3
               asic_position:
@@ -102,7 +102,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 6
+                chip_id: 3
               asic_id: 15069257097787302865
             - umd_chip_id: 4
               asic_position:
@@ -110,7 +110,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 3
+                chip_id: 6
               asic_id: 16160466471288472744
             - umd_chip_id: 5
               asic_position:
@@ -118,7 +118,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 2
+                chip_id: 7
               asic_id: 7290938089592508694
             - umd_chip_id: 6
               asic_position:
@@ -126,7 +126,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 1
+                chip_id: 0
               asic_id: 2467241052041208
             - umd_chip_id: 7
               asic_position:
@@ -134,9 +134,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 1
-                chip_id: 0
+                chip_id: 1
               asic_id: 3868341087315840210
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_10
+    - hostname: bh-glx-d03u08_10
       mesh:
         - mesh: 10
         - chips:
@@ -146,7 +146,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 5
+                chip_id: 0
               asic_id: 177127060856827182
             - umd_chip_id: 1
               asic_position:
@@ -154,7 +154,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 4
+                chip_id: 6
               asic_id: 10115007130382413457
             - umd_chip_id: 2
               asic_position:
@@ -162,7 +162,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 7
+                chip_id: 1
               asic_id: 7492453979027389469
             - umd_chip_id: 3
               asic_position:
@@ -170,7 +170,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 6
+                chip_id: 7
               asic_id: 6454264650870853669
             - umd_chip_id: 4
               asic_position:
@@ -178,7 +178,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 3
+                chip_id: 2
               asic_id: 8487967722812761660
             - umd_chip_id: 5
               asic_position:
@@ -186,7 +186,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 2
+                chip_id: 4
               asic_id: 8664474434288397985
             - umd_chip_id: 6
               asic_position:
@@ -194,7 +194,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 1
+                chip_id: 3
               asic_id: 338893184642266230
             - umd_chip_id: 7
               asic_position:
@@ -202,9 +202,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 10
-                chip_id: 0
+                chip_id: 5
               asic_id: 1870569292920138712
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_11
+    - hostname: bh-glx-d03u08_11
       mesh:
         - mesh: 11
         - chips:
@@ -214,7 +214,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 11
-                chip_id: 5
+                chip_id: 2
               asic_id: 16001306078687353122
             - umd_chip_id: 1
               asic_position:
@@ -230,7 +230,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 11
-                chip_id: 7
+                chip_id: 0
               asic_id: 1847638098113896109
             - umd_chip_id: 3
               asic_position:
@@ -254,7 +254,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 11
-                chip_id: 2
+                chip_id: 5
               asic_id: 2889583347849322957
             - umd_chip_id: 6
               asic_position:
@@ -270,9 +270,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 11
-                chip_id: 0
+                chip_id: 7
               asic_id: 7608801860044290962
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_12
+    - hostname: bh-glx-d03u08_12
       mesh:
         - mesh: 12
         - chips:
@@ -298,7 +298,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 12
-                chip_id: 7
+                chip_id: 4
               asic_id: 11888806785086543223
             - umd_chip_id: 3
               asic_position:
@@ -306,7 +306,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 12
-                chip_id: 2
+                chip_id: 1
               asic_id: 4111358061326282727
             - umd_chip_id: 4
               asic_position:
@@ -330,7 +330,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 12
-                chip_id: 4
+                chip_id: 7
               asic_id: 14072157649377832527
             - umd_chip_id: 7
               asic_position:
@@ -338,9 +338,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 12
-                chip_id: 1
+                chip_id: 2
               asic_id: 5752721107569782278
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_13
+    - hostname: bh-glx-d03u08_13
       mesh:
         - mesh: 13
         - chips:
@@ -350,7 +350,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 5
+                chip_id: 4
               asic_id: 13649860546650296281
             - umd_chip_id: 1
               asic_position:
@@ -358,7 +358,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 6
+                chip_id: 3
               asic_id: 3563193742383953893
             - umd_chip_id: 2
               asic_position:
@@ -366,7 +366,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 7
+                chip_id: 2
               asic_id: 13045821867031346337
             - umd_chip_id: 3
               asic_position:
@@ -374,7 +374,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 2
+                chip_id: 7
               asic_id: 3379169373064289140
             - umd_chip_id: 4
               asic_position:
@@ -382,7 +382,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 3
+                chip_id: 6
               asic_id: 17109240272006859197
             - umd_chip_id: 5
               asic_position:
@@ -390,7 +390,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 0
+                chip_id: 1
               asic_id: 3141259074763952680
             - umd_chip_id: 6
               asic_position:
@@ -398,7 +398,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 4
+                chip_id: 5
               asic_id: 6432315237702789523
             - umd_chip_id: 7
               asic_position:
@@ -406,9 +406,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 13
-                chip_id: 1
+                chip_id: 0
               asic_id: 2093868012525681382
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_14
+    - hostname: bh-glx-d03u08_14
       mesh:
         - mesh: 14
         - chips:
@@ -418,7 +418,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 5
+                chip_id: 0
               asic_id: 1486480469639335971
             - umd_chip_id: 1
               asic_position:
@@ -426,7 +426,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 4
+                chip_id: 2
               asic_id: 13824826965310899590
             - umd_chip_id: 2
               asic_position:
@@ -434,7 +434,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 7
+                chip_id: 6
               asic_id: 15231050360131519342
             - umd_chip_id: 3
               asic_position:
@@ -442,7 +442,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 6
+                chip_id: 4
               asic_id: 14318926476223009264
             - umd_chip_id: 4
               asic_position:
@@ -450,7 +450,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 3
+                chip_id: 1
               asic_id: 7767975433654103127
             - umd_chip_id: 5
               asic_position:
@@ -458,7 +458,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 2
+                chip_id: 3
               asic_id: 7846046859762530191
             - umd_chip_id: 6
               asic_position:
@@ -466,7 +466,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 1
+                chip_id: 7
               asic_id: 12064997755891517751
             - umd_chip_id: 7
               asic_position:
@@ -474,9 +474,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 14
-                chip_id: 0
+                chip_id: 5
               asic_id: 17491092328372421324
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_15
+    - hostname: bh-glx-d03u08_15
       mesh:
         - mesh: 15
         - chips:
@@ -486,7 +486,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 5
+                chip_id: 0
               asic_id: 1709608851489938881
             - umd_chip_id: 1
               asic_position:
@@ -494,7 +494,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 4
+                chip_id: 1
               asic_id: 3463605596171063760
             - umd_chip_id: 2
               asic_position:
@@ -502,7 +502,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 7
+                chip_id: 6
               asic_id: 16509867213574936524
             - umd_chip_id: 3
               asic_position:
@@ -510,7 +510,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 6
+                chip_id: 7
               asic_id: 4211242328685544013
             - umd_chip_id: 4
               asic_position:
@@ -518,7 +518,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 3
+                chip_id: 2
               asic_id: 12128072968699407205
             - umd_chip_id: 5
               asic_position:
@@ -526,7 +526,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 2
+                chip_id: 3
               asic_id: 17242810096593771213
             - umd_chip_id: 6
               asic_position:
@@ -534,7 +534,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 1
+                chip_id: 4
               asic_id: 10408644701869850374
             - umd_chip_id: 7
               asic_position:
@@ -542,9 +542,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 15
-                chip_id: 0
+                chip_id: 5
               asic_id: 17352350493115727449
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_16
+    - hostname: bh-glx-d03u08_16
       mesh:
         - mesh: 16
         - chips:
@@ -554,7 +554,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 5
+                chip_id: 2
               asic_id: 13348207248864415022
             - umd_chip_id: 1
               asic_position:
@@ -562,7 +562,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 6
+                chip_id: 5
               asic_id: 15734880723707946971
             - umd_chip_id: 2
               asic_position:
@@ -570,7 +570,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 7
+                chip_id: 4
               asic_id: 8459214721518564018
             - umd_chip_id: 3
               asic_position:
@@ -578,7 +578,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 2
+                chip_id: 1
               asic_id: 11801811412077560056
             - umd_chip_id: 4
               asic_position:
@@ -586,7 +586,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 3
+                chip_id: 0
               asic_id: 3691193096475209730
             - umd_chip_id: 5
               asic_position:
@@ -594,7 +594,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 0
+                chip_id: 7
               asic_id: 7684193079530792198
             - umd_chip_id: 6
               asic_position:
@@ -602,7 +602,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 4
+                chip_id: 3
               asic_id: 6627942144498420210
             - umd_chip_id: 7
               asic_position:
@@ -610,9 +610,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 16
-                chip_id: 1
+                chip_id: 6
               asic_id: 17295445229584620239
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_17
+    - hostname: bh-glx-d03u08_17
       mesh:
         - mesh: 17
         - chips:
@@ -622,7 +622,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 5
+                chip_id: 2
               asic_id: 6667095843572744785
             - umd_chip_id: 1
               asic_position:
@@ -638,7 +638,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 7
+                chip_id: 4
               asic_id: 18230463828552923623
             - umd_chip_id: 3
               asic_position:
@@ -646,7 +646,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 2
+                chip_id: 1
               asic_id: 5900074705319235799
             - umd_chip_id: 4
               asic_position:
@@ -662,7 +662,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 0
+                chip_id: 7
               asic_id: 8824147760529779932
             - umd_chip_id: 6
               asic_position:
@@ -670,7 +670,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 4
+                chip_id: 0
               asic_id: 5384180571585442648
             - umd_chip_id: 7
               asic_position:
@@ -678,9 +678,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 17
-                chip_id: 1
+                chip_id: 5
               asic_id: 16239237960952268849
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_18
+    - hostname: bh-glx-d03u08_18
       mesh:
         - mesh: 18
         - chips:
@@ -690,7 +690,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 5
+                chip_id: 4
               asic_id: 12060143095851202463
             - umd_chip_id: 1
               asic_position:
@@ -698,7 +698,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 4
+                chip_id: 5
               asic_id: 5000502086494109111
             - umd_chip_id: 2
               asic_position:
@@ -706,7 +706,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 7
+                chip_id: 2
               asic_id: 13973844372361264859
             - umd_chip_id: 3
               asic_position:
@@ -714,7 +714,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 6
+                chip_id: 3
               asic_id: 4868087456632261339
             - umd_chip_id: 4
               asic_position:
@@ -722,7 +722,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 3
+                chip_id: 6
               asic_id: 17262612186027163055
             - umd_chip_id: 5
               asic_position:
@@ -730,7 +730,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 2
+                chip_id: 7
               asic_id: 17201545820656445838
             - umd_chip_id: 6
               asic_position:
@@ -738,7 +738,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 1
+                chip_id: 0
               asic_id: 2284216125494013829
             - umd_chip_id: 7
               asic_position:
@@ -746,9 +746,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 18
-                chip_id: 0
+                chip_id: 1
               asic_id: 7705623201083719757
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_19
+    - hostname: bh-glx-d03u08_19
       mesh:
         - mesh: 19
         - chips:
@@ -758,7 +758,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 5
+                chip_id: 3
               asic_id: 7705863548402255371
             - umd_chip_id: 1
               asic_position:
@@ -766,7 +766,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 6
+                chip_id: 4
               asic_id: 16135572856057234036
             - umd_chip_id: 2
               asic_position:
@@ -774,7 +774,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 7
+                chip_id: 2
               asic_id: 4322149849642751296
             - umd_chip_id: 3
               asic_position:
@@ -782,7 +782,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 2
+                chip_id: 7
               asic_id: 5903738476177459154
             - umd_chip_id: 4
               asic_position:
@@ -790,7 +790,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 3
+                chip_id: 1
               asic_id: 3119116197732969848
             - umd_chip_id: 5
               asic_position:
@@ -798,7 +798,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 0
+                chip_id: 6
               asic_id: 10778624076303990337
             - umd_chip_id: 6
               asic_position:
@@ -806,7 +806,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 4
+                chip_id: 5
               asic_id: 7082188939375003200
             - umd_chip_id: 7
               asic_position:
@@ -814,9 +814,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 19
-                chip_id: 1
+                chip_id: 0
               asic_id: 1289787471165726157
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_2
+    - hostname: bh-glx-d03u08_2
       mesh:
         - mesh: 2
         - chips:
@@ -826,7 +826,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 5
+                chip_id: 6
               asic_id: 12064810096940975009
             - umd_chip_id: 1
               asic_position:
@@ -834,7 +834,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 6
+                chip_id: 5
               asic_id: 2991544777588037107
             - umd_chip_id: 2
               asic_position:
@@ -842,7 +842,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 7
+                chip_id: 4
               asic_id: 10616734480909497223
             - umd_chip_id: 3
               asic_position:
@@ -850,7 +850,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 2
+                chip_id: 1
               asic_id: 8892358611227294380
             - umd_chip_id: 4
               asic_position:
@@ -858,7 +858,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 3
+                chip_id: 0
               asic_id: 1308562032372554992
             - umd_chip_id: 5
               asic_position:
@@ -866,7 +866,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 0
+                chip_id: 3
               asic_id: 18312295675560723286
             - umd_chip_id: 6
               asic_position:
@@ -874,7 +874,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 4
+                chip_id: 7
               asic_id: 4467939314084149303
             - umd_chip_id: 7
               asic_position:
@@ -882,9 +882,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 1
+                chip_id: 2
               asic_id: 11881887861193807234
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_20
+    - hostname: bh-glx-d03u08_20
       mesh:
         - mesh: 20
         - chips:
@@ -894,7 +894,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 5
+                chip_id: 0
               asic_id: 1316983975864004211
             - umd_chip_id: 1
               asic_position:
@@ -902,7 +902,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 6
+                chip_id: 7
               asic_id: 9544551117236321701
             - umd_chip_id: 2
               asic_position:
@@ -910,7 +910,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 7
+                chip_id: 1
               asic_id: 9852032738394723259
             - umd_chip_id: 3
               asic_position:
@@ -918,7 +918,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 2
+                chip_id: 4
               asic_id: 17033689442640077653
             - umd_chip_id: 4
               asic_position:
@@ -926,7 +926,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 3
+                chip_id: 2
               asic_id: 10666971680680594168
             - umd_chip_id: 5
               asic_position:
@@ -934,7 +934,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 0
+                chip_id: 5
               asic_id: 4881450814225876737
             - umd_chip_id: 6
               asic_position:
@@ -942,7 +942,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 4
+                chip_id: 6
               asic_id: 11478426883636003041
             - umd_chip_id: 7
               asic_position:
@@ -950,9 +950,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 20
-                chip_id: 1
+                chip_id: 3
               asic_id: 16160405194998780238
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_21
+    - hostname: bh-glx-d03u08_21
       mesh:
         - mesh: 21
         - chips:
@@ -962,7 +962,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 5
+                chip_id: 1
               asic_id: 7988267450959457112
             - umd_chip_id: 1
               asic_position:
@@ -970,7 +970,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 4
+                chip_id: 0
               asic_id: 4275221169066566369
             - umd_chip_id: 2
               asic_position:
@@ -978,7 +978,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 7
+                chip_id: 3
               asic_id: 15546336940494616930
             - umd_chip_id: 3
               asic_position:
@@ -986,7 +986,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 6
+                chip_id: 2
               asic_id: 10743403487993730303
             - umd_chip_id: 4
               asic_position:
@@ -994,7 +994,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 3
+                chip_id: 7
               asic_id: 16078939182355445674
             - umd_chip_id: 5
               asic_position:
@@ -1002,7 +1002,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 2
+                chip_id: 6
               asic_id: 15010405134732781592
             - umd_chip_id: 6
               asic_position:
@@ -1010,7 +1010,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 1
+                chip_id: 5
               asic_id: 16811904067669907300
             - umd_chip_id: 7
               asic_position:
@@ -1018,9 +1018,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 21
-                chip_id: 0
+                chip_id: 4
               asic_id: 14359329708194393833
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_22
+    - hostname: bh-glx-d03u08_22
       mesh:
         - mesh: 22
         - chips:
@@ -1030,7 +1030,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 5
+                chip_id: 6
               asic_id: 11008787649806112536
             - umd_chip_id: 1
               asic_position:
@@ -1038,7 +1038,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 6
+                chip_id: 2
               asic_id: 1835151488866750695
             - umd_chip_id: 2
               asic_position:
@@ -1046,7 +1046,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 7
+                chip_id: 4
               asic_id: 11342067109236038482
             - umd_chip_id: 3
               asic_position:
@@ -1054,7 +1054,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 2
+                chip_id: 1
               asic_id: 1738102908796741959
             - umd_chip_id: 4
               asic_position:
@@ -1062,7 +1062,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 3
+                chip_id: 7
               asic_id: 7654775542189005910
             - umd_chip_id: 5
               asic_position:
@@ -1070,7 +1070,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 0
+                chip_id: 3
               asic_id: 7385599590380007687
             - umd_chip_id: 6
               asic_position:
@@ -1078,7 +1078,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 4
+                chip_id: 0
               asic_id: 1457509588724881939
             - umd_chip_id: 7
               asic_position:
@@ -1086,9 +1086,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 22
-                chip_id: 1
+                chip_id: 5
               asic_id: 5670778640144730146
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_23
+    - hostname: bh-glx-d03u08_23
       mesh:
         - mesh: 23
         - chips:
@@ -1098,7 +1098,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 23
-                chip_id: 5
+                chip_id: 6
               asic_id: 7878120920974884728
             - umd_chip_id: 1
               asic_position:
@@ -1106,7 +1106,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 23
-                chip_id: 6
+                chip_id: 5
               asic_id: 12828276742119612199
             - umd_chip_id: 2
               asic_position:
@@ -1130,7 +1130,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 23
-                chip_id: 3
+                chip_id: 0
               asic_id: 429888889492100282
             - umd_chip_id: 5
               asic_position:
@@ -1138,7 +1138,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 23
-                chip_id: 0
+                chip_id: 3
               asic_id: 6296725952068389430
             - umd_chip_id: 6
               asic_position:
@@ -1156,7 +1156,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 23
                 chip_id: 1
               asic_id: 4243812203815546251
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_24
+    - hostname: bh-glx-d03u08_24
       mesh:
         - mesh: 24
         - chips:
@@ -1166,7 +1166,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 5
+                chip_id: 2
               asic_id: 14167935703483129106
             - umd_chip_id: 1
               asic_position:
@@ -1174,7 +1174,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 4
+                chip_id: 3
               asic_id: 12442585545086519318
             - umd_chip_id: 2
               asic_position:
@@ -1182,7 +1182,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 7
+                chip_id: 0
               asic_id: 300607166741962911
             - umd_chip_id: 3
               asic_position:
@@ -1190,7 +1190,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 6
+                chip_id: 1
               asic_id: 4204885791989635769
             - umd_chip_id: 4
               asic_position:
@@ -1198,7 +1198,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 3
+                chip_id: 4
               asic_id: 524741347184952738
             - umd_chip_id: 5
               asic_position:
@@ -1206,7 +1206,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 2
+                chip_id: 5
               asic_id: 11254217372615426667
             - umd_chip_id: 6
               asic_position:
@@ -1214,7 +1214,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 1
+                chip_id: 6
               asic_id: 14302413692393671910
             - umd_chip_id: 7
               asic_position:
@@ -1222,9 +1222,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 24
-                chip_id: 0
+                chip_id: 7
               asic_id: 10276865782299798266
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_25
+    - hostname: bh-glx-d03u08_25
       mesh:
         - mesh: 25
         - chips:
@@ -1234,7 +1234,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 5
+                chip_id: 7
               asic_id: 10466067095513010011
             - umd_chip_id: 1
               asic_position:
@@ -1242,7 +1242,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 4
+                chip_id: 1
               asic_id: 15985448363398871654
             - umd_chip_id: 2
               asic_position:
@@ -1250,7 +1250,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 7
+                chip_id: 5
               asic_id: 17408208510201265217
             - umd_chip_id: 3
               asic_position:
@@ -1258,7 +1258,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 6
+                chip_id: 3
               asic_id: 8356087684729252504
             - umd_chip_id: 4
               asic_position:
@@ -1266,7 +1266,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 3
+                chip_id: 6
               asic_id: 17481766423070931559
             - umd_chip_id: 5
               asic_position:
@@ -1274,7 +1274,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 2
+                chip_id: 0
               asic_id: 4654425669617867874
             - umd_chip_id: 6
               asic_position:
@@ -1282,7 +1282,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 1
+                chip_id: 4
               asic_id: 5851519459772515033
             - umd_chip_id: 7
               asic_position:
@@ -1290,9 +1290,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 25
-                chip_id: 0
+                chip_id: 2
               asic_id: 16123674739159269275
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_26
+    - hostname: bh-glx-d03u08_26
       mesh:
         - mesh: 26
         - chips:
@@ -1302,7 +1302,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 26
-                chip_id: 5
+                chip_id: 1
               asic_id: 5206224303732751695
             - umd_chip_id: 1
               asic_position:
@@ -1342,7 +1342,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 26
-                chip_id: 0
+                chip_id: 4
               asic_id: 6835471335358400349
             - umd_chip_id: 6
               asic_position:
@@ -1350,7 +1350,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 26
-                chip_id: 4
+                chip_id: 0
               asic_id: 2533610986616448337
             - umd_chip_id: 7
               asic_position:
@@ -1358,9 +1358,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 26
-                chip_id: 1
+                chip_id: 5
               asic_id: 13358235319667836100
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_27
+    - hostname: bh-glx-d03u08_27
       mesh:
         - mesh: 27
         - chips:
@@ -1370,7 +1370,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 5
+                chip_id: 7
               asic_id: 9088781375566746895
             - umd_chip_id: 1
               asic_position:
@@ -1378,7 +1378,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 6
+                chip_id: 3
               asic_id: 9728823744812107943
             - umd_chip_id: 2
               asic_position:
@@ -1386,7 +1386,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 7
+                chip_id: 1
               asic_id: 3829127913289355131
             - umd_chip_id: 3
               asic_position:
@@ -1394,7 +1394,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 2
+                chip_id: 4
               asic_id: 6113476959594310504
             - umd_chip_id: 4
               asic_position:
@@ -1402,7 +1402,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 3
+                chip_id: 6
               asic_id: 17908945016976355560
             - umd_chip_id: 5
               asic_position:
@@ -1410,7 +1410,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 0
+                chip_id: 2
               asic_id: 16800237537956395042
             - umd_chip_id: 6
               asic_position:
@@ -1418,7 +1418,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 4
+                chip_id: 5
               asic_id: 8716943339291848211
             - umd_chip_id: 7
               asic_position:
@@ -1426,9 +1426,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 27
-                chip_id: 1
+                chip_id: 0
               asic_id: 3793731686944455515
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_28
+    - hostname: bh-glx-d03u08_28
       mesh:
         - mesh: 28
         - chips:
@@ -1438,7 +1438,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 5
+                chip_id: 6
               asic_id: 15717098719183245474
             - umd_chip_id: 1
               asic_position:
@@ -1454,7 +1454,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 7
+                chip_id: 0
               asic_id: 3353116854111810381
             - umd_chip_id: 3
               asic_position:
@@ -1462,7 +1462,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 6
+                chip_id: 2
               asic_id: 13952807982527804753
             - umd_chip_id: 4
               asic_position:
@@ -1470,7 +1470,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 3
+                chip_id: 7
               asic_id: 12593819157163797202
             - umd_chip_id: 5
               asic_position:
@@ -1478,7 +1478,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 2
+                chip_id: 5
               asic_id: 17635132630113310861
             - umd_chip_id: 6
               asic_position:
@@ -1494,9 +1494,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 28
-                chip_id: 0
+                chip_id: 3
               asic_id: 9990471095072203556
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_29
+    - hostname: bh-glx-d03u08_29
       mesh:
         - mesh: 29
         - chips:
@@ -1506,7 +1506,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 5
+                chip_id: 0
               asic_id: 2337777341171008352
             - umd_chip_id: 1
               asic_position:
@@ -1514,7 +1514,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 4
+                chip_id: 6
               asic_id: 14478116015036758452
             - umd_chip_id: 2
               asic_position:
@@ -1522,7 +1522,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 7
+                chip_id: 1
               asic_id: 9755062759056707363
             - umd_chip_id: 3
               asic_position:
@@ -1530,7 +1530,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 6
+                chip_id: 7
               asic_id: 8107405183039703079
             - umd_chip_id: 4
               asic_position:
@@ -1538,7 +1538,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 3
+                chip_id: 2
               asic_id: 10244493220499527653
             - umd_chip_id: 5
               asic_position:
@@ -1546,7 +1546,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 2
+                chip_id: 4
               asic_id: 9252986938639196179
             - umd_chip_id: 6
               asic_position:
@@ -1554,7 +1554,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 1
+                chip_id: 3
               asic_id: 10291140929658122287
             - umd_chip_id: 7
               asic_position:
@@ -1562,9 +1562,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 29
-                chip_id: 0
+                chip_id: 5
               asic_id: 7170735033174373247
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_3
+    - hostname: bh-glx-d03u08_3
       mesh:
         - mesh: 3
         - chips:
@@ -1574,7 +1574,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 3
-                chip_id: 5
+                chip_id: 2
               asic_id: 15769276473807194899
             - umd_chip_id: 1
               asic_position:
@@ -1590,7 +1590,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 3
-                chip_id: 7
+                chip_id: 0
               asic_id: 526158955621198538
             - umd_chip_id: 3
               asic_position:
@@ -1614,7 +1614,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 3
-                chip_id: 2
+                chip_id: 5
               asic_id: 890321020828740093
             - umd_chip_id: 6
               asic_position:
@@ -1630,9 +1630,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 3
-                chip_id: 0
+                chip_id: 7
               asic_id: 3795650484393163876
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_30
+    - hostname: bh-glx-d03u08_30
       mesh:
         - mesh: 30
         - chips:
@@ -1642,7 +1642,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 5
+                chip_id: 2
               asic_id: 16009557461808682275
             - umd_chip_id: 1
               asic_position:
@@ -1650,7 +1650,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 6
+                chip_id: 5
               asic_id: 10284774117718751487
             - umd_chip_id: 2
               asic_position:
@@ -1658,7 +1658,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 7
+                chip_id: 4
               asic_id: 13158702528178239894
             - umd_chip_id: 3
               asic_position:
@@ -1666,7 +1666,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 2
+                chip_id: 1
               asic_id: 5762216697545642539
             - umd_chip_id: 4
               asic_position:
@@ -1674,7 +1674,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 3
+                chip_id: 0
               asic_id: 812924512349210926
             - umd_chip_id: 5
               asic_position:
@@ -1682,7 +1682,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 0
+                chip_id: 7
               asic_id: 15302748714520504438
             - umd_chip_id: 6
               asic_position:
@@ -1690,7 +1690,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 4
+                chip_id: 3
               asic_id: 17812805863928362832
             - umd_chip_id: 7
               asic_position:
@@ -1698,9 +1698,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 30
-                chip_id: 1
+                chip_id: 6
               asic_id: 16533956147285383196
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_31
+    - hostname: bh-glx-d03u08_31
       mesh:
         - mesh: 31
         - chips:
@@ -1710,7 +1710,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 5
+                chip_id: 3
               asic_id: 18141692207415477042
             - umd_chip_id: 1
               asic_position:
@@ -1718,7 +1718,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 6
+                chip_id: 4
               asic_id: 4158941848889700623
             - umd_chip_id: 2
               asic_position:
@@ -1726,7 +1726,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 7
+                chip_id: 2
               asic_id: 8186662373605681713
             - umd_chip_id: 3
               asic_position:
@@ -1734,7 +1734,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 2
+                chip_id: 7
               asic_id: 9730347197362559636
             - umd_chip_id: 4
               asic_position:
@@ -1742,7 +1742,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 3
+                chip_id: 1
               asic_id: 4482046951193034864
             - umd_chip_id: 5
               asic_position:
@@ -1750,7 +1750,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 0
+                chip_id: 6
               asic_id: 11176041732935204605
             - umd_chip_id: 6
               asic_position:
@@ -1758,7 +1758,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 4
+                chip_id: 5
               asic_id: 13546152322276063820
             - umd_chip_id: 7
               asic_position:
@@ -1766,9 +1766,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 31
-                chip_id: 1
+                chip_id: 0
               asic_id: 3040657209802731046
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_32
+    - hostname: bh-glx-d03u08_32
       mesh:
         - mesh: 32
         - chips:
@@ -1778,7 +1778,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 5
+                chip_id: 3
               asic_id: 16506427066644341252
             - umd_chip_id: 1
               asic_position:
@@ -1786,7 +1786,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 4
+                chip_id: 1
               asic_id: 6285340500721488828
             - umd_chip_id: 2
               asic_position:
@@ -1794,7 +1794,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 7
+                chip_id: 2
               asic_id: 6374243516254707835
             - umd_chip_id: 3
               asic_position:
@@ -1802,7 +1802,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 6
+                chip_id: 0
               asic_id: 287690205619783654
             - umd_chip_id: 4
               asic_position:
@@ -1810,7 +1810,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 3
+                chip_id: 5
               asic_id: 13359371454944465509
             - umd_chip_id: 5
               asic_position:
@@ -1818,7 +1818,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 2
+                chip_id: 7
               asic_id: 18417766280857483680
             - umd_chip_id: 6
               asic_position:
@@ -1826,7 +1826,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 1
+                chip_id: 4
               asic_id: 12109931833003845037
             - umd_chip_id: 7
               asic_position:
@@ -1834,9 +1834,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 32
-                chip_id: 0
+                chip_id: 6
               asic_id: 12521821334682892802
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_33
+    - hostname: bh-glx-d03u08_33
       mesh:
         - mesh: 33
         - chips:
@@ -1846,7 +1846,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 5
+                chip_id: 0
               asic_id: 2785289776139883431
             - umd_chip_id: 1
               asic_position:
@@ -1854,7 +1854,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 4
+                chip_id: 1
               asic_id: 11235830341019362977
             - umd_chip_id: 2
               asic_position:
@@ -1862,7 +1862,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 7
+                chip_id: 2
               asic_id: 16800279976825750635
             - umd_chip_id: 3
               asic_position:
@@ -1870,7 +1870,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 6
+                chip_id: 3
               asic_id: 9842318624031284678
             - umd_chip_id: 4
               asic_position:
@@ -1878,7 +1878,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 3
+                chip_id: 6
               asic_id: 17361559487697462760
             - umd_chip_id: 5
               asic_position:
@@ -1886,7 +1886,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 2
+                chip_id: 7
               asic_id: 6291078219564685822
             - umd_chip_id: 6
               asic_position:
@@ -1894,7 +1894,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 1
+                chip_id: 4
               asic_id: 18076886341398417806
             - umd_chip_id: 7
               asic_position:
@@ -1902,9 +1902,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 33
-                chip_id: 0
+                chip_id: 5
               asic_id: 15312641366032103285
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_34
+    - hostname: bh-glx-d03u08_34
       mesh:
         - mesh: 34
         - chips:
@@ -1914,7 +1914,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 5
+                chip_id: 4
               asic_id: 18177131969945037153
             - umd_chip_id: 1
               asic_position:
@@ -1922,7 +1922,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 6
+                chip_id: 3
               asic_id: 18278400463835878573
             - umd_chip_id: 2
               asic_position:
@@ -1930,7 +1930,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 7
+                chip_id: 5
               asic_id: 16526010702558731162
             - umd_chip_id: 3
               asic_position:
@@ -1938,7 +1938,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 2
+                chip_id: 0
               asic_id: 818088731094215729
             - umd_chip_id: 4
               asic_position:
@@ -1946,7 +1946,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 3
+                chip_id: 6
               asic_id: 10238576167244865905
             - umd_chip_id: 5
               asic_position:
@@ -1954,7 +1954,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 0
+                chip_id: 1
               asic_id: 3276638325010726439
             - umd_chip_id: 6
               asic_position:
@@ -1962,7 +1962,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 4
+                chip_id: 2
               asic_id: 7283100990109113907
             - umd_chip_id: 7
               asic_position:
@@ -1970,9 +1970,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 34
-                chip_id: 1
+                chip_id: 7
               asic_id: 5752271162180024754
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_35
+    - hostname: bh-glx-d03u08_35
       mesh:
         - mesh: 35
         - chips:
@@ -1982,7 +1982,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 5
+                chip_id: 2
               asic_id: 17425826376848863834
             - umd_chip_id: 1
               asic_position:
@@ -1990,7 +1990,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 6
+                chip_id: 5
               asic_id: 13357716912541410186
             - umd_chip_id: 2
               asic_position:
@@ -1998,7 +1998,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 7
+                chip_id: 3
               asic_id: 7225245871838120217
             - umd_chip_id: 3
               asic_position:
@@ -2006,7 +2006,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 2
+                chip_id: 6
               asic_id: 18371256341237133519
             - umd_chip_id: 4
               asic_position:
@@ -2014,7 +2014,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 3
+                chip_id: 0
               asic_id: 6893319623116258730
             - umd_chip_id: 5
               asic_position:
@@ -2022,7 +2022,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 35
-                chip_id: 0
+                chip_id: 7
               asic_id: 9619322145853147279
             - umd_chip_id: 6
               asic_position:
@@ -2040,7 +2040,7 @@ asic_to_fabric_node_mapping:
                 mesh_id: 35
                 chip_id: 1
               asic_id: 9394870631221255312
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_36
+    - hostname: bh-glx-d03u08_36
       mesh:
         - mesh: 36
         - chips:
@@ -2050,7 +2050,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 5
+                chip_id: 0
               asic_id: 2842730311413033310
             - umd_chip_id: 1
               asic_position:
@@ -2058,7 +2058,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 4
+                chip_id: 2
               asic_id: 8444718494735347137
             - umd_chip_id: 2
               asic_position:
@@ -2066,7 +2066,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 7
+                chip_id: 1
               asic_id: 6641505709787200841
             - umd_chip_id: 3
               asic_position:
@@ -2074,7 +2074,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 6
+                chip_id: 3
               asic_id: 16860668890732972878
             - umd_chip_id: 4
               asic_position:
@@ -2082,7 +2082,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 3
+                chip_id: 6
               asic_id: 17554315731734223271
             - umd_chip_id: 5
               asic_position:
@@ -2090,7 +2090,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 2
+                chip_id: 4
               asic_id: 4556906345409755907
             - umd_chip_id: 6
               asic_position:
@@ -2098,7 +2098,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 1
+                chip_id: 7
               asic_id: 10641817919599683445
             - umd_chip_id: 7
               asic_position:
@@ -2106,9 +2106,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 36
-                chip_id: 0
+                chip_id: 5
               asic_id: 16753619853266968757
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_37
+    - hostname: bh-glx-d03u08_37
       mesh:
         - mesh: 37
         - chips:
@@ -2118,7 +2118,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 5
+                chip_id: 4
               asic_id: 8745719324908990193
             - umd_chip_id: 1
               asic_position:
@@ -2126,7 +2126,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 4
+                chip_id: 5
               asic_id: 12100547585034739379
             - umd_chip_id: 2
               asic_position:
@@ -2134,7 +2134,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 7
+                chip_id: 6
               asic_id: 17708240353977058438
             - umd_chip_id: 3
               asic_position:
@@ -2142,7 +2142,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 6
+                chip_id: 7
               asic_id: 17890258228802474127
             - umd_chip_id: 4
               asic_position:
@@ -2150,7 +2150,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 3
+                chip_id: 2
               asic_id: 7782087637162326179
             - umd_chip_id: 5
               asic_position:
@@ -2158,7 +2158,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 2
+                chip_id: 3
               asic_id: 16838654027923135830
             - umd_chip_id: 6
               asic_position:
@@ -2166,7 +2166,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 1
+                chip_id: 0
               asic_id: 4424366875635182953
             - umd_chip_id: 7
               asic_position:
@@ -2174,9 +2174,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 37
-                chip_id: 0
+                chip_id: 1
               asic_id: 7680107641566339825
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_38
+    - hostname: bh-glx-d03u08_38
       mesh:
         - mesh: 38
         - chips:
@@ -2186,7 +2186,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 5
+                chip_id: 1
               asic_id: 1536575218408937423
             - umd_chip_id: 1
               asic_position:
@@ -2194,7 +2194,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 6
+                chip_id: 2
               asic_id: 9480156280076631936
             - umd_chip_id: 2
               asic_position:
@@ -2202,7 +2202,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 7
+                chip_id: 0
               asic_id: 1078046135936462905
             - umd_chip_id: 3
               asic_position:
@@ -2210,7 +2210,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 2
+                chip_id: 5
               asic_id: 11942989571667069359
             - umd_chip_id: 4
               asic_position:
@@ -2218,7 +2218,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 3
+                chip_id: 7
               asic_id: 18173260730337322466
             - umd_chip_id: 5
               asic_position:
@@ -2226,7 +2226,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 0
+                chip_id: 4
               asic_id: 10811337254943637169
             - umd_chip_id: 6
               asic_position:
@@ -2234,7 +2234,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 4
+                chip_id: 3
               asic_id: 16509905763059000389
             - umd_chip_id: 7
               asic_position:
@@ -2242,9 +2242,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 38
-                chip_id: 1
+                chip_id: 6
               asic_id: 10067926037207310381
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_39
+    - hostname: bh-glx-d03u08_39
       mesh:
         - mesh: 39
         - chips:
@@ -2254,7 +2254,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 5
+                chip_id: 4
               asic_id: 10632926958766895977
             - umd_chip_id: 1
               asic_position:
@@ -2262,7 +2262,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 6
+                chip_id: 0
               asic_id: 4258304747927159645
             - umd_chip_id: 2
               asic_position:
@@ -2270,7 +2270,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 7
+                chip_id: 2
               asic_id: 5537830311541086885
             - umd_chip_id: 3
               asic_position:
@@ -2278,7 +2278,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 2
+                chip_id: 7
               asic_id: 11555989227393923057
             - umd_chip_id: 4
               asic_position:
@@ -2286,7 +2286,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 3
+                chip_id: 5
               asic_id: 7630134765035361838
             - umd_chip_id: 5
               asic_position:
@@ -2294,7 +2294,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 0
+                chip_id: 1
               asic_id: 4320113989807287967
             - umd_chip_id: 6
               asic_position:
@@ -2302,7 +2302,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 4
+                chip_id: 6
               asic_id: 14686161163199692436
             - umd_chip_id: 7
               asic_position:
@@ -2310,9 +2310,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 39
-                chip_id: 1
+                chip_id: 3
               asic_id: 15476266450711875340
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_4
+    - hostname: bh-glx-d03u08_4
       mesh:
         - mesh: 4
         - chips:
@@ -2322,7 +2322,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 5
+                chip_id: 7
               asic_id: 9093680903433213156
             - umd_chip_id: 1
               asic_position:
@@ -2330,7 +2330,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 6
+                chip_id: 4
               asic_id: 3987029371762093487
             - umd_chip_id: 2
               asic_position:
@@ -2338,7 +2338,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 7
+                chip_id: 5
               asic_id: 15924280082353661037
             - umd_chip_id: 3
               asic_position:
@@ -2346,7 +2346,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 2
+                chip_id: 0
               asic_id: 107758125611043101
             - umd_chip_id: 4
               asic_position:
@@ -2354,7 +2354,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 3
+                chip_id: 1
               asic_id: 1629699181206337760
             - umd_chip_id: 5
               asic_position:
@@ -2362,7 +2362,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 0
+                chip_id: 2
               asic_id: 14380527000930691623
             - umd_chip_id: 6
               asic_position:
@@ -2370,7 +2370,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 4
+                chip_id: 6
               asic_id: 17379335532730750137
             - umd_chip_id: 7
               asic_position:
@@ -2378,9 +2378,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 4
-                chip_id: 1
+                chip_id: 3
               asic_id: 18251489318244579981
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_40
+    - hostname: bh-glx-d03u08_40
       mesh:
         - mesh: 40
         - chips:
@@ -2390,7 +2390,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 5
+                chip_id: 2
               asic_id: 6906402073766592788
             - umd_chip_id: 1
               asic_position:
@@ -2406,7 +2406,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 7
+                chip_id: 3
               asic_id: 7051187655003936214
             - umd_chip_id: 3
               asic_position:
@@ -2414,7 +2414,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 6
+                chip_id: 5
               asic_id: 4901815699300951927
             - umd_chip_id: 4
               asic_position:
@@ -2422,7 +2422,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 3
+                chip_id: 0
               asic_id: 875601291695488544
             - umd_chip_id: 5
               asic_position:
@@ -2430,7 +2430,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 2
+                chip_id: 6
               asic_id: 10123102260497779113
             - umd_chip_id: 6
               asic_position:
@@ -2446,9 +2446,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 40
-                chip_id: 0
+                chip_id: 7
               asic_id: 11336884375678284840
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_41
+    - hostname: bh-glx-d03u08_41
       mesh:
         - mesh: 41
         - chips:
@@ -2458,7 +2458,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 41
-                chip_id: 5
+                chip_id: 6
               asic_id: 12392838017438723449
             - umd_chip_id: 1
               asic_position:
@@ -2482,7 +2482,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 41
-                chip_id: 6
+                chip_id: 5
               asic_id: 17819179437855475114
             - umd_chip_id: 4
               asic_position:
@@ -2490,7 +2490,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 41
-                chip_id: 3
+                chip_id: 0
               asic_id: 1272377275952210331
             - umd_chip_id: 5
               asic_position:
@@ -2514,9 +2514,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 41
-                chip_id: 0
+                chip_id: 3
               asic_id: 10145009310774598967
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_42
+    - hostname: bh-glx-d03u08_42
       mesh:
         - mesh: 42
         - chips:
@@ -2526,7 +2526,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 5
+                chip_id: 0
               asic_id: 3682501398682376800
             - umd_chip_id: 1
               asic_position:
@@ -2534,7 +2534,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 6
+                chip_id: 3
               asic_id: 14658439907945146832
             - umd_chip_id: 2
               asic_position:
@@ -2542,7 +2542,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 7
+                chip_id: 1
               asic_id: 6130568186214017661
             - umd_chip_id: 3
               asic_position:
@@ -2550,7 +2550,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 2
+                chip_id: 4
               asic_id: 7643164980090023156
             - umd_chip_id: 4
               asic_position:
@@ -2558,7 +2558,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 3
+                chip_id: 6
               asic_id: 12460998733291048056
             - umd_chip_id: 5
               asic_position:
@@ -2566,7 +2566,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 0
+                chip_id: 5
               asic_id: 8773927515307786381
             - umd_chip_id: 6
               asic_position:
@@ -2574,7 +2574,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 4
+                chip_id: 2
               asic_id: 11760348432535030656
             - umd_chip_id: 7
               asic_position:
@@ -2582,9 +2582,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 42
-                chip_id: 1
+                chip_id: 7
               asic_id: 12492018707679192901
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_43
+    - hostname: bh-glx-d03u08_43
       mesh:
         - mesh: 43
         - chips:
@@ -2594,7 +2594,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 5
+                chip_id: 4
               asic_id: 9826912081925935097
             - umd_chip_id: 1
               asic_position:
@@ -2602,7 +2602,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 6
+                chip_id: 0
               asic_id: 89316163026801103
             - umd_chip_id: 2
               asic_position:
@@ -2610,7 +2610,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 7
+                chip_id: 6
               asic_id: 15117412552324233424
             - umd_chip_id: 3
               asic_position:
@@ -2618,7 +2618,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 2
+                chip_id: 3
               asic_id: 15817418711322796708
             - umd_chip_id: 4
               asic_position:
@@ -2626,7 +2626,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 3
+                chip_id: 5
               asic_id: 3610897483260372681
             - umd_chip_id: 5
               asic_position:
@@ -2634,7 +2634,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 0
+                chip_id: 1
               asic_id: 9807815481303003444
             - umd_chip_id: 6
               asic_position:
@@ -2642,7 +2642,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 4
+                chip_id: 2
               asic_id: 12533426408746737476
             - umd_chip_id: 7
               asic_position:
@@ -2650,9 +2650,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 43
-                chip_id: 1
+                chip_id: 7
               asic_id: 12230073045238709244
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_44
+    - hostname: bh-glx-d03u08_44
       mesh:
         - mesh: 44
         - chips:
@@ -2662,7 +2662,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 5
+                chip_id: 6
               asic_id: 16696018284483091843
             - umd_chip_id: 1
               asic_position:
@@ -2670,7 +2670,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 4
+                chip_id: 0
               asic_id: 5049303072872419337
             - umd_chip_id: 2
               asic_position:
@@ -2686,7 +2686,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 6
+                chip_id: 1
               asic_id: 11860423120223002955
             - umd_chip_id: 4
               asic_position:
@@ -2694,7 +2694,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 3
+                chip_id: 4
               asic_id: 16101783422121042934
             - umd_chip_id: 5
               asic_position:
@@ -2710,7 +2710,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 1
+                chip_id: 5
               asic_id: 12257734435621845493
             - umd_chip_id: 7
               asic_position:
@@ -2718,9 +2718,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 44
-                chip_id: 0
+                chip_id: 3
               asic_id: 10858281385197882208
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_45
+    - hostname: bh-glx-d03u08_45
       mesh:
         - mesh: 45
         - chips:
@@ -2730,7 +2730,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 5
+                chip_id: 1
               asic_id: 3289894051591875356
             - umd_chip_id: 1
               asic_position:
@@ -2738,7 +2738,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 4
+                chip_id: 7
               asic_id: 18392514324793660933
             - umd_chip_id: 2
               asic_position:
@@ -2746,7 +2746,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 7
+                chip_id: 0
               asic_id: 1284405276360325565
             - umd_chip_id: 3
               asic_position:
@@ -2770,7 +2770,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 2
+                chip_id: 5
               asic_id: 6500788168482162414
             - umd_chip_id: 6
               asic_position:
@@ -2778,7 +2778,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 1
+                chip_id: 2
               asic_id: 9820198870331054471
             - umd_chip_id: 7
               asic_position:
@@ -2786,9 +2786,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 45
-                chip_id: 0
+                chip_id: 4
               asic_id: 10272368071379752254
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_46
+    - hostname: bh-glx-d03u08_46
       mesh:
         - mesh: 46
         - chips:
@@ -2798,7 +2798,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 5
+                chip_id: 4
               asic_id: 8185381716445776373
             - umd_chip_id: 1
               asic_position:
@@ -2806,7 +2806,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 6
+                chip_id: 0
               asic_id: 3808097669020956459
             - umd_chip_id: 2
               asic_position:
@@ -2814,7 +2814,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 7
+                chip_id: 6
               asic_id: 15926689925871286225
             - umd_chip_id: 3
               asic_position:
@@ -2822,7 +2822,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 2
+                chip_id: 3
               asic_id: 7211508056133702926
             - umd_chip_id: 4
               asic_position:
@@ -2830,7 +2830,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 3
+                chip_id: 5
               asic_id: 18111331784109153546
             - umd_chip_id: 5
               asic_position:
@@ -2838,7 +2838,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 0
+                chip_id: 1
               asic_id: 10057554315176554942
             - umd_chip_id: 6
               asic_position:
@@ -2846,7 +2846,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 4
+                chip_id: 2
               asic_id: 13256897718572470644
             - umd_chip_id: 7
               asic_position:
@@ -2854,9 +2854,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 46
-                chip_id: 1
+                chip_id: 7
               asic_id: 8673356211640278479
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_47
+    - hostname: bh-glx-d03u08_47
       mesh:
         - mesh: 47
         - chips:
@@ -2866,7 +2866,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 5
+                chip_id: 7
               asic_id: 4532564537696114167
             - umd_chip_id: 1
               asic_position:
@@ -2874,7 +2874,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 6
+                chip_id: 0
               asic_id: 371892772031324679
             - umd_chip_id: 2
               asic_position:
@@ -2882,7 +2882,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 7
+                chip_id: 1
               asic_id: 9273713651241478914
             - umd_chip_id: 3
               asic_position:
@@ -2890,7 +2890,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 2
+                chip_id: 4
               asic_id: 6687819789687867691
             - umd_chip_id: 4
               asic_position:
@@ -2898,7 +2898,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 3
+                chip_id: 5
               asic_id: 9161003039013231953
             - umd_chip_id: 5
               asic_position:
@@ -2906,7 +2906,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 0
+                chip_id: 2
               asic_id: 11491997635029857223
             - umd_chip_id: 6
               asic_position:
@@ -2914,7 +2914,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 4
+                chip_id: 6
               asic_id: 17150374640803244457
             - umd_chip_id: 7
               asic_position:
@@ -2922,9 +2922,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 47
-                chip_id: 1
+                chip_id: 3
               asic_id: 4094776836739217219
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_5
+    - hostname: bh-glx-d03u08_5
       mesh:
         - mesh: 5
         - chips:
@@ -2934,7 +2934,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 5
+                chip_id: 4
               asic_id: 12966347750871724641
             - umd_chip_id: 1
               asic_position:
@@ -2942,7 +2942,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 6
+                chip_id: 3
               asic_id: 17136169789437991096
             - umd_chip_id: 2
               asic_position:
@@ -2950,7 +2950,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 7
+                chip_id: 2
               asic_id: 7944663697380482723
             - umd_chip_id: 3
               asic_position:
@@ -2958,7 +2958,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 2
+                chip_id: 7
               asic_id: 14500311465688926495
             - umd_chip_id: 4
               asic_position:
@@ -2966,7 +2966,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 3
+                chip_id: 6
               asic_id: 8109917399857023846
             - umd_chip_id: 5
               asic_position:
@@ -2974,7 +2974,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 0
+                chip_id: 1
               asic_id: 7930106402435840711
             - umd_chip_id: 6
               asic_position:
@@ -2982,7 +2982,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 4
+                chip_id: 5
               asic_id: 2545411250791794144
             - umd_chip_id: 7
               asic_position:
@@ -2990,9 +2990,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 5
-                chip_id: 1
+                chip_id: 0
               asic_id: 426337650959028430
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_6
+    - hostname: bh-glx-d03u08_6
       mesh:
         - mesh: 6
         - chips:
@@ -3002,7 +3002,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 5
+                chip_id: 1
               asic_id: 7619199387253569311
             - umd_chip_id: 1
               asic_position:
@@ -3010,7 +3010,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 4
+                chip_id: 0
               asic_id: 1291542933758784109
             - umd_chip_id: 2
               asic_position:
@@ -3018,7 +3018,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 7
+                chip_id: 3
               asic_id: 1350142134585656580
             - umd_chip_id: 3
               asic_position:
@@ -3026,7 +3026,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 6
+                chip_id: 2
               asic_id: 7704844523296742395
             - umd_chip_id: 4
               asic_position:
@@ -3034,7 +3034,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 3
+                chip_id: 7
               asic_id: 9804540789678569610
             - umd_chip_id: 5
               asic_position:
@@ -3042,7 +3042,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 2
+                chip_id: 6
               asic_id: 11963410648939273357
             - umd_chip_id: 6
               asic_position:
@@ -3050,7 +3050,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 1
+                chip_id: 5
               asic_id: 18333255811685529797
             - umd_chip_id: 7
               asic_position:
@@ -3058,9 +3058,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 6
-                chip_id: 0
+                chip_id: 4
               asic_id: 9418732762146702091
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_7
+    - hostname: bh-glx-d03u08_7
       mesh:
         - mesh: 7
         - chips:
@@ -3070,7 +3070,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 5
+                chip_id: 7
               asic_id: 3509405147933189096
             - umd_chip_id: 1
               asic_position:
@@ -3078,7 +3078,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 4
+                chip_id: 5
               asic_id: 3650792362704566843
             - umd_chip_id: 2
               asic_position:
@@ -3086,7 +3086,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 7
+                chip_id: 6
               asic_id: 15912961644730419228
             - umd_chip_id: 3
               asic_position:
@@ -3094,7 +3094,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 6
+                chip_id: 4
               asic_id: 5952787987249728030
             - umd_chip_id: 4
               asic_position:
@@ -3102,7 +3102,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 3
+                chip_id: 1
               asic_id: 5887444308137117967
             - umd_chip_id: 5
               asic_position:
@@ -3110,7 +3110,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 2
+                chip_id: 3
               asic_id: 17902919209385098159
             - umd_chip_id: 6
               asic_position:
@@ -3118,7 +3118,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 1
+                chip_id: 0
               asic_id: 1079118396370025951
             - umd_chip_id: 7
               asic_position:
@@ -3126,9 +3126,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 7
-                chip_id: 0
+                chip_id: 2
               asic_id: 13286783246641959229
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_8
+    - hostname: bh-glx-d03u08_8
       mesh:
         - mesh: 8
         - chips:
@@ -3146,7 +3146,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 8
-                chip_id: 6
+                chip_id: 1
               asic_id: 3057414301055217449
             - umd_chip_id: 2
               asic_position:
@@ -3170,7 +3170,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 8
-                chip_id: 3
+                chip_id: 4
               asic_id: 16712011927668772093
             - umd_chip_id: 5
               asic_position:
@@ -3186,7 +3186,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 8
-                chip_id: 4
+                chip_id: 3
               asic_id: 7691515768967032364
             - umd_chip_id: 7
               asic_position:
@@ -3194,9 +3194,9 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 8
-                chip_id: 1
+                chip_id: 6
               asic_id: 14491595713301183834
-    - hostname: yyzo-bh-17-special-pstankiewicz-for-reservation-77668_9
+    - hostname: bh-glx-d03u08_9
       mesh:
         - mesh: 9
         - chips:
@@ -3206,7 +3206,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 5
+                chip_id: 2
               asic_id: 9960702364312382776
             - umd_chip_id: 1
               asic_position:
@@ -3214,7 +3214,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 6
+                chip_id: 5
               asic_id: 5230955422975078278
             - umd_chip_id: 2
               asic_position:
@@ -3222,7 +3222,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 7
+                chip_id: 3
               asic_id: 17511333351633864414
             - umd_chip_id: 3
               asic_position:
@@ -3230,7 +3230,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 2
+                chip_id: 6
               asic_id: 16054581901615393636
             - umd_chip_id: 4
               asic_position:
@@ -3238,7 +3238,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 3
+                chip_id: 0
               asic_id: 2106351074855704247
             - umd_chip_id: 5
               asic_position:
@@ -3246,7 +3246,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 9
-                chip_id: 0
+                chip_id: 7
               asic_id: 6807132636891109783
             - umd_chip_id: 6
               asic_position:
