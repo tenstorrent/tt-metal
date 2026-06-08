@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=88
+MAX_CHECK_NUM=96
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -148,6 +148,14 @@ Checks:
  86  Dynamic runs-on with attacker-controlled expression (HIGH)
  87  Dangerous or dynamic container options (HIGH)
  88  Action command/script inputs with attacker-controlled expressions (HIGH)
+ 89  Environment/secret dump to logs via env/printenv/set/export -p (HIGH)
+ 90  Sensitive credential files uploaded as build artifacts (HIGH)
+ 91  SSH host key verification disabled (StrictHostKeyChecking=no) (HIGH)
+ 92  TLS verification disabled via git/runtime config (http.sslVerify=false) (HIGH)
+ 93  Cleartext HTTP download via curl/wget (MEDIUM)
+ 94  Remote script piped to an interpreter or privileged shell (HIGH)
+ 95  Insecure git transport (git:// or http:// clone/fetch) (MEDIUM)
+ 96  github.token interpolation in run blocks (HIGH)
 EOF
     exit 0
 }
@@ -4580,6 +4588,393 @@ check_88() {
             "Action command/script input contains attacker-controlled expression - many actions execute these fields as shell code" \
             "${lines}"
         return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 89: Environment/secret dump to logs
+# =============================================================================
+check_89_description="environment dump to logs (env/printenv/set) leaking secrets"
+check_89_severity="HIGH"
+
+example_check_89() {
+    cat <<'EOF'
+# Why: env, printenv, set, export -p, and declare -p print the entire process
+# environment (and shell state) to the build log. Any secret mapped into the
+# environment - via an env: block, secrets context, or the auto-provided
+# token - is then written in plaintext to logs that may be world-readable on
+# public repositories (CWE-532). Print only the specific, non-sensitive
+# variables you actually need.
+#
+# BEFORE (unsafe - dumps every env var, including secrets, to the log):
+  env:
+    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  run: env
+# AFTER (safe - print only the specific non-secret value you need):
+  run: echo "Building ref ${GITHUB_REF}"
+EOF
+}
+
+check_89() {
+    local file="$1"
+    local unsafe_usage
+    # Walk run-block lines, split each into command segments on ; | &, and flag
+    # only a segment whose FIRST token is a bare environment-dump command. This
+    # avoids false positives on prose/comments that merely end in the word "set"
+    # or "env" (e.g. "# token is set") and on "env FOO=bar cmd" / "set -euo".
+    unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        function is_dump(seg,    cmd, rest) {
+            sub(/^[[:space:]]+/, "", seg)
+            if (seg ~ /^#/) return 0
+            cmd = seg; sub(/[[:space:]].*$/, "", cmd)
+            rest = seg; sub(/^[^[:space:]]+/, "", rest); sub(/^[[:space:]]+/, "", rest)
+            if (cmd == "env" || cmd == "printenv" || cmd == "set") {
+                return (rest == "" || rest ~ /^[0-9]*[|><&]/)
+            }
+            if (cmd == "export") {
+                return (rest == "" || rest ~ /^-[A-Za-z]*p/)
+            }
+            if (cmd == "declare" || cmd == "typeset") {
+                return (rest ~ /^-[A-Za-z]*p/)
+            }
+            return 0
+        }
+        function scan(line,    n, i, arr) {
+            sub(/^[[:space:]]*-?[[:space:]]*run:[[:space:]]*[|>]?[-+]?[[:space:]]*/, "", line)
+            n = split(line, arr, "[;|&]+")
+            for (i = 1; i <= n; i++) {
+                if (is_dump(arr[i])) return 1
+            }
+            return 0
+        }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { if (scan($0)) print NR; next }
+        in_run_block { if (scan($0)) print NR }
+    ' "${file}" 2>/dev/null || true)
+    if [[ -n "${unsafe_usage}" ]]; then
+        log_issue "HIGH" "${file}" "Dumps the full environment to logs (env/printenv/set/export -p) - leaks any secret present in the environment to potentially public logs (CWE-532); print only the specific non-sensitive values you need" "$(_extract_lines "${unsafe_usage}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 90: Sensitive credential files uploaded as build artifacts
+# =============================================================================
+check_90_description="sensitive credential files uploaded as build artifacts"
+check_90_severity="HIGH"
+
+example_check_90() {
+    cat <<'EOF'
+# Why: Build artifacts are downloadable by anyone with read access to the
+# repository (on public repos, by anyone at all) and persist after the run.
+# Uploading credential files - SSH keys, cloud credentials, .npmrc/.netrc
+# auth tokens, .env files, or the .git directory (which may contain a
+# persisted token) - leaks those secrets to artifact storage (CWE-200/538).
+#
+# BEFORE (unsafe - private key uploaded as a downloadable artifact):
+  - uses: actions/upload-artifact@<sha>
+    with:
+      name: keys
+      path: ~/.ssh/id_rsa
+# AFTER (safe - upload only the non-sensitive build outputs):
+  - uses: actions/upload-artifact@<sha>
+    with:
+      name: dist
+      path: ./dist
+EOF
+}
+
+check_90() {
+    local file="$1"
+
+    if ! grep -qE 'actions/upload-artifact' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    local hits
+    hits=$(awk '
+        function sensitive(s) {
+            return s ~ /(\.ssh|\.aws|\.kube|\.gnupg|\.config\/gcloud|\.azure|\.npmrc|\.netrc|\.pypirc|\.git-credentials|\.gitconfig|id_rsa|id_dsa|id_ecdsa|id_ed25519|\.pem|\.p12|\.pfx|\.keystore|\.jks|\.env($|[^a-zA-Z])|\.git($|\/)|docker\/config\.json)/
+        }
+        function reset_step() {
+            in_step = 0; step_indent = -1; is_artifact = 0; in_path = 0; path_indent = -1
+        }
+        { match($0, /^[[:space:]]*/); ci = RLENGTH }
+        /^[[:space:]]*-[[:space:]]/ {
+            # A sibling/shallower list item starts a new step; a deeper one
+            # (e.g. a path list entry) belongs to the current step.
+            if (!in_step || ci <= step_indent) {
+                reset_step(); in_step = 1; step_indent = ci
+                if ($0 ~ /uses:.*actions\/upload-artifact/) is_artifact = 1
+                next
+            }
+        }
+        in_step && ci <= step_indent && $0 !~ /^[[:space:]]*-[[:space:]]/ && $0 ~ /^[[:space:]]*[A-Za-z0-9_-]+:/ {
+            reset_step()
+        }
+        in_step {
+            if ($0 ~ /uses:.*actions\/upload-artifact/) is_artifact = 1
+            if (is_artifact) {
+                if ($0 ~ /^[[:space:]]*path:[[:space:]]*[^[:space:]|>]/) {
+                    val = $0; sub(/^[[:space:]]*path:[[:space:]]*/, "", val)
+                    if (sensitive(val)) print NR
+                    in_path = 0
+                    next
+                }
+                if ($0 ~ /^[[:space:]]*path:[[:space:]]*([|>][-+0-9]*)?[[:space:]]*$/) {
+                    in_path = 1; path_indent = ci; next
+                }
+                if (in_path) {
+                    if ($0 ~ /[^[:space:]]/ && ci <= path_indent) {
+                        in_path = 0
+                    } else {
+                        if (sensitive($0)) print NR
+                        next
+                    }
+                }
+            }
+        }
+    ' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Uploads a sensitive credential file (SSH key, cloud credentials, .npmrc/.netrc, .env, or .git directory) as a build artifact - artifacts are downloadable and persist; upload only non-sensitive outputs" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 91: SSH host key verification disabled
+# =============================================================================
+check_91_description="SSH host key verification disabled"
+check_91_severity="HIGH"
+
+example_check_91() {
+    cat <<'EOF'
+# Why: StrictHostKeyChecking=no (or =false/=off) and UserKnownHostsFile=/dev/null
+# disable SSH host key verification, so the client accepts any server key without
+# warning. This removes protection against man-in-the-middle attacks: an attacker
+# who can intercept the connection can impersonate the target host and capture
+# commands, credentials, or deployed payloads (CWE-295).
+#
+# BEFORE (unsafe - accepts any host key, no MITM protection):
+  run: ssh -o StrictHostKeyChecking=no deploy@host.example.com 'deploy.sh'
+# AFTER (safe - pin the expected host key ahead of time):
+  run: |
+    ssh-keyscan -H host.example.com >> ~/.ssh/known_hosts   # verify the fingerprint
+    ssh deploy@host.example.com 'deploy.sh'
+EOF
+}
+
+check_91() {
+    local file="$1"
+    local hits
+    hits=$(grep -nE \
+        'StrictHostKeyChecking[=[:space:]]+["'\'']?(no|false|off|0)([^a-zA-Z]|$)|UserKnownHostsFile[=[:space:]]+["'\'']?/dev/null' \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Disables SSH host key verification (StrictHostKeyChecking=no/false or UserKnownHostsFile=/dev/null) - removes MITM protection (CWE-295); verify the host key with ssh-keyscan or use accept-new instead" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 92: TLS verification disabled via git/runtime configuration
+# =============================================================================
+check_92_description="TLS verification disabled via git or runtime configuration"
+check_92_severity="HIGH"
+
+example_check_92() {
+    cat <<'EOF'
+# Why: git's http.sslVerify=false and the GIT_SSL_NO_VERIFY, NODE_TLS_REJECT_-
+# UNAUTHORIZED=0, and PYTHONHTTPSVERIFY=0 environment variables turn off TLS
+# certificate verification for git, Node.js, and Python respectively. Cloning,
+# fetching, or downloading then proceeds over an unauthenticated channel, so a
+# man-in-the-middle can serve tampered code or capture credentials (CWE-295).
+# Checks 76 and 83 cover curl/wget and package managers; this covers git/runtime.
+#
+# BEFORE (unsafe - clones over an unverified TLS connection):
+  run: git -c http.sslVerify=false clone https://repo.example.com/x.git
+# AFTER (safe - keep verification on and fix the trust chain instead):
+  run: git clone https://repo.example.com/x.git
+EOF
+}
+
+check_92() {
+    local file="$1"
+    local hits
+    hits=$(grep -nE \
+        'http\.sslVerify[=:[:space:]]+["'\'']?(false|0|no)|GIT_SSL_NO_VERIFY[=:[:space:]]+["'\'']?(1|true|yes|on)|NODE_TLS_REJECT_UNAUTHORIZED[=:[:space:]]+["'\'']?0([^0-9]|$)|PYTHONHTTPSVERIFY[=:[:space:]]+["'\'']?0([^0-9]|$)' \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Disables TLS certificate verification via git config or runtime env (http.sslVerify=false, GIT_SSL_NO_VERIFY, NODE_TLS_REJECT_UNAUTHORIZED=0, PYTHONHTTPSVERIFY=0) - allows MITM supply-chain attacks (CWE-295); keep verification enabled and fix the certificate trust chain" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 93: Cleartext HTTP download via curl/wget
+# =============================================================================
+check_93_description="cleartext HTTP download via curl/wget"
+check_93_severity="MEDIUM"
+
+example_check_93() {
+    cat <<'EOF'
+# Why: Downloading scripts, binaries, or archives over plaintext http:// gives
+# no integrity or authenticity guarantee - a network man-in-the-middle can
+# replace the payload with malicious content before it reaches the runner
+# (CWE-319). Loopback addresses and the cloud metadata endpoint are excluded
+# (the latter is covered by check 74).
+#
+# BEFORE (unsafe - fetches a tool over cleartext HTTP):
+  run: curl -fsSL http://downloads.example.com/tool.tar.gz -o tool.tar.gz
+# AFTER (safe - use HTTPS and verify a checksum):
+  run: |
+    curl -fsSL https://downloads.example.com/tool.tar.gz -o tool.tar.gz
+    sha256sum -c <<< "<expected-hash>  tool.tar.gz"
+EOF
+}
+
+check_93() {
+    local file="$1"
+    local wget_hits curl_hits hits
+    # wget always downloads; flag any wget over http://.
+    wget_hits=$(grep -nE '(^|[[:space:]`;&|(])wget([[:space:]]).*http://' "${file}" 2>/dev/null || true)
+    # curl only downloads to a file with -O/-o/--output/--remote-name; a bare
+    # "curl http://host/health" (no output flag) is usually a probe, not a fetch.
+    curl_hits=$(grep -nE '(^|[[:space:]`;&|(])curl([[:space:]])' "${file}" 2>/dev/null \
+        | grep -E 'http://' \
+        | grep -E '(-O|-o|--output|--remote-name)' || true)
+    # Exclude loopback addresses and the cloud metadata endpoint (check 74).
+    hits=$(printf '%s\n%s\n' "${wget_hits}" "${curl_hits}" \
+        | grep -E '^[0-9]+:' \
+        | grep -vE 'http://(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?|169\.254\.169\.254|metadata\.google\.internal)' \
+        | sort -t: -k1,1n -u || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Downloads content over cleartext HTTP via curl/wget - susceptible to MITM tampering (CWE-319); use https:// and verify a checksum or signature after download" "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 94: Remote script piped to an interpreter or privileged shell
+# =============================================================================
+check_94_description="remote script piped to an interpreter or privileged shell"
+check_94_severity="HIGH"
+
+example_check_94() {
+    cat <<'EOF'
+# Why: Piping a downloaded script straight into an interpreter executes remote
+# code with no integrity check, exactly like "curl | bash" (check 10) - but
+# check 10 only matches sh/bash. Piping to python/node/ruby/perl/php, or
+# inserting "sudo" before the shell (curl | sudo bash), bypasses it while still
+# running attacker-controlled code, possibly as root (CWE-494).
+#
+# BEFORE (unsafe - remote code executed by an interpreter / as root):
+  run: curl -sSL https://example.com/get.py | python3
+  run: curl -sSL https://example.com/i.sh  | sudo bash
+# AFTER (safe - download, verify a checksum, then run):
+  run: |
+    curl -sSL -o get.py https://example.com/get.py
+    sha256sum -c <<< "<expected-hash>  get.py"
+    python3 get.py
+EOF
+}
+
+check_94() {
+    local file="$1"
+    local unsafe_usage
+    # check 10 already covers "curl|bash"/"curl|sh"; this covers the variants it
+    # misses: piping to a scripting interpreter, or via sudo to a shell.
+    unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print NR ":" $0; next }
+        in_run_block { print NR ":" $0 }
+    ' "${file}" 2>/dev/null | grep -aE \
+        '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+(-[^[:space:]]+[[:space:]]+)*)?(python[0-9.]*|node|nodejs|deno|bun|ruby|perl|php|pwsh|powershell)([[:space:]]|$|;|-)|(curl|wget)[^|]*\|[[:space:]]*sudo[[:space:]]+(-[^[:space:]]+[[:space:]]+)*(ba|z|k|da)?sh([[:space:]]|$|;|-)' \
+        || true)
+    if [[ -n "${unsafe_usage}" ]]; then
+        log_issue "HIGH" "${file}" "Pipes a downloaded script into an interpreter (python/node/ruby/...) or a privileged shell (sudo) - remote code execution without verification (CWE-494); download, verify a checksum, then run" "$(_extract_lines "${unsafe_usage}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 95: Insecure git transport (git:// or cleartext http://)
+# =============================================================================
+check_95_description="insecure git transport (git:// or http:// clone/fetch)"
+check_95_severity="MEDIUM"
+
+example_check_95() {
+    cat <<'EOF'
+# Why: The git:// protocol provides no encryption and no server authentication,
+# and cloning/fetching over http:// is cleartext. A network man-in-the-middle
+# can substitute malicious commits or capture credentials embedded in the URL
+# (CWE-319). Always use encrypted, authenticated https:// (or ssh) remotes.
+#
+# BEFORE (unsafe - unauthenticated/cleartext git transport):
+  run: git clone git://github.com/example/repo.git
+  run: git clone http://internal.example.com/repo.git
+# AFTER (safe - encrypted, authenticated transport):
+  run: git clone https://github.com/example/repo.git
+EOF
+}
+
+check_95() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print NR ":" $0; next }
+        in_run_block { print NR ":" $0 }
+    ' "${file}" 2>/dev/null | grep -aE \
+        'git://[A-Za-z0-9._-]|git[[:space:]]+([^#|;]*[[:space:]])?(clone|fetch|pull|ls-remote|submodule|remote|archive)[^#|;]*[[:space:]]http://' \
+        || true)
+    if [[ -n "${unsafe_usage}" ]]; then
+        log_issue "MEDIUM" "${file}" "Uses an insecure git transport (git:// is unencrypted/unauthenticated, or git over cleartext http://) - susceptible to MITM (CWE-319); use https:// or ssh remotes" "$(_extract_lines "${unsafe_usage}")"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 96: github.token interpolation in run blocks
+# =============================================================================
+check_96_description="github.token interpolation in run blocks"
+check_96_severity="HIGH"
+
+example_check_96() {
+    cat <<'EOF'
+# Why: ${{ github.token }} resolves to the live GITHUB_TOKEN credential.
+# Interpolating it directly into a run: block bakes the secret into the shell
+# source, where it can surface in set -x traces or error output and is not
+# masked as reliably as an env var. Check 18 covers ${{ secrets.* }} but not the
+# github.token context, which is the same credential.
+#
+# BEFORE (unsafe - token expanded into shell source):
+  run: git remote set-url origin https://x-access-token:${{ github.token }}@github.com/o/r.git
+# AFTER (safe - pass via env and reference as a shell variable):
+  env:
+    GH_TOKEN: ${{ github.token }}
+  run: git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/o/r.git"
+EOF
+}
+
+check_96() {
+    local file="$1"
+    if grep -qE '\$\{\{[^}]*github\.token([^a-zA-Z0-9_]|$)' "${file}" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{[^}]*github\.token([^a-zA-Z0-9_]|$)/ { print NR; next }
+            in_run_block && /\$\{\{[^}]*github\.token([^a-zA-Z0-9_]|$)/ { print NR }
+        ' "${file}" 2>/dev/null)
+        if [[ -n "${unsafe_usage}" ]]; then
+            log_issue "HIGH" "${file}" "Contains \${{ github.token }} directly in run: block - the GITHUB_TOKEN is exposed in shell source (set -x/error traces); pass it via an env var instead (check 18 covers secrets.*)" "$(_extract_lines "${unsafe_usage}")"
+            return 1
+        fi
     fi
     return 0
 }

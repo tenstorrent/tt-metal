@@ -964,6 +964,77 @@ A standalone linting script that scans GitHub Actions workflows and composite ac
 | 23 | Self-hosted runners on untrusted triggers | HIGH | Public-input triggers targeting self-hosted runners |
 | 24 | Write-capable permissions on untrusted triggers | MEDIUM | Explicit write scopes granted to `pull_request`, `pull_request_target`, `issue_comment`, and similar events |
 | 25 | Mutable container image references | MEDIUM | `docker://` or `image:` references not pinned to immutable `@sha256` digests |
+| 26 | `fromJSON()` with attacker input | MEDIUM | `fromJSON()` parsing `inputs.*`, `github.event.*`, or `matrix.*` on untrusted triggers |
+| 27 | Dynamic expression in `uses:` | HIGH | `${{ }}` interpolation in a `uses:` ref — path traversal or unintended action execution |
+| 28 | Cache key injection | MEDIUM | `actions/cache` key/restore-keys/path built from attacker-controlled expressions |
+| 29 | Artifact path/name expressions | MEDIUM | `upload`/`download-artifact` path/name/pattern with `github.event.*`/`inputs.*` interpolation |
+| 30 | URL construction in HTTP clients | MEDIUM | `${{ }}` interpolation in curl/wget URLs (SSRF / attacker-controlled host) |
+| 31 | Container volume mount expressions | MEDIUM | `volumes:` with expression interpolation or host-sensitive paths (`/var/run/docker.sock`, `/etc`) |
+| 32 | Expression in env-file writes | HIGH | `${{ }}` on a line writing to `GITHUB_ENV/PATH/OUTPUT/STATE` (env/state injection) |
+| 33 | Missing explicit `permissions:` key | LOW | Workflows without a top-level `permissions:` block (aggregate) |
+| 34 | Concurrency group with attacker data | MEDIUM | `concurrency.group` built from `head_ref`/`inputs.*`/event text (run-cancellation DoS) |
+| 35 | Comment trigger without authz gate | MEDIUM | `issue_comment`/`discussion_comment` with no `author_association`/org-membership check |
+| 36 | `working-directory` expressions | MEDIUM | `working-directory:` with attacker-controlled interpolation |
+| 37 | `github-script` inputs/outputs/secrets | HIGH | `${{ inputs.* / secrets.* / steps.*.outputs.* }}` in a `github-script` body |
+| 38 | `github-script` dynamic code exec | HIGH | `eval` / `new Function` / `vm.*` in a `github-script` body |
+| 39 | Inline interpreter eval/exec | HIGH | `python -c "exec(...)"`, `node -e "eval(...)"`, `Invoke-Expression`, etc. in run blocks |
+| 40 | `github-script` command exec APIs | HIGH | `child_process` exec/spawn fed by `core.getInput`/`process.env` |
+| 41 | Inline interpreter command exec APIs | HIGH | `subprocess(..., shell=True)`, `os.system`, `system()`/`exec()` over runtime data |
+| 42 | Shell command exec from variables | HIGH | `bash -c "$VAR"` or PowerShell `-Command $env:VAR` |
+| 43 | Remote script exec beyond pipes | HIGH | `bash <(curl …)`, PowerShell `iex (irm …)` |
+| 44 | Attacker env vars to env files | HIGH | Attacker-controlled env var written to `GITHUB_ENV/PATH/OUTPUT/STATE` (newline injection) |
+| 45 | Expression injection in `if:` | HIGH | `${{ }}` with attacker-controlled event/`inputs.*` data in `if:` logic |
+| 46 | Bracket-notation bypass | HIGH | `${{ inputs['x'] }}` / `${{ github.event['…'] }}` in run blocks |
+| 47 | Additional event contexts | HIGH | `release.*`, `client_payload.*`, `pusher.*`, `forkee.*`, etc. in run blocks |
+| 48 | `export` with direct interpolation | HIGH | `export VAR="${{ … }}"` in a run block (propagates to child processes) |
+| 49 | Dynamic `shell:` property | MEDIUM | `shell:` value containing `${{ }}` interpolation |
+| 50 | `env.*` context in run blocks | HIGH | `${{ env.* }}` macro-expanded into shell source |
+| 51 | `github.ref`/`ref_name` in run blocks | HIGH | Ref/branch/tag name interpolated into a run block |
+| 52 | Dynamic environment variable names | HIGH | `${{ }}` used as an env var *key* (env pollution: LD_PRELOAD/BASH_ENV) |
+| 53 | `github.actor`/`triggering_actor` | HIGH | Actor username interpolated into a run block |
+| 54 | `github.event.issue.title` | HIGH | Issue title interpolated into a run block |
+| 55 | `pull_request.head.repo`/`head.label` | HIGH | Fork repo/label interpolated into a run block |
+| 56 | `*.user.login`/`sender.login` | MEDIUM | Event actor login interpolated into a run block |
+| 57 | `workflow_run.head_commit.message/author` | HIGH | Triggering commit message/author interpolated into a run block |
+| 58 | `deployment.payload/environment/description` | HIGH | Deployment data interpolated into a run block |
+| 59 | `discussion` sub-fields | MEDIUM | `discussion.category.*`/`answer.*` interpolated into a run block |
+| 60 | `github.workflow` in run blocks | MEDIUM | Workflow name interpolated into a run block |
+| 61 | `run-name` with attacker data | LOW | Attacker-controlled text in top-level `run-name:` (UI social engineering) |
+| 62 | `environment:` with attacker data | HIGH | `environment:` value built from event/`inputs.*`/ref (secret-scope redirection) |
+| 63 | Attacker data to `GITHUB_STEP_SUMMARY` | MEDIUM | `${{ … }}` event/`inputs.*` written to the job summary (markdown/UI injection) |
+| 64 | `continue-on-error: true` | MEDIUM | Silently ignored step failures (security-check bypass risk) |
+| 65 | `merge_group.head_commit.message` | HIGH | Merge-queue commit message interpolated into a run block |
+| 66 | Concurrency group with `github.actor` | MEDIUM | `concurrency.group` built from actor (run-cancellation attacks) |
+| 67 | `actions/cache` of credential dirs | HIGH | Caching `~/.aws`, `~/.kube`, `~/.ssh`, etc. (credential exfiltration) |
+| 68 | `id-token: write` on untrusted triggers | HIGH | OIDC token minting exposed to fork contributors |
+| 69 | Missing job `timeout-minutes` | LOW | Jobs without explicit timeouts (runaway-job DoS) |
+| 70 | `workflow_run` with write permissions | HIGH | Write-capable token in base-branch context consuming untrusted artifacts |
+| 71 | `safe.directory '*'` wildcard | MEDIUM | `git config --global safe.directory '*'` disables ownership protection everywhere |
+| 72 | Package install from HTTP registry | MEDIUM | npm/yarn/pnpm `--registry http://` or pip `--index-url http://` |
+| 73 | `docker run` dangerous flags | HIGH | `--privileged` / `--network host` / `--cap-add SYS_ADMIN` |
+| 74 | Cloud metadata endpoint (IMDS) access | HIGH | curl/wget to `169.254.169.254` or `metadata.google.internal` |
+| 75 | Hardcoded credentials | HIGH | AWS access key, GitHub classic/fine-grained PAT literals |
+| 76 | TLS verification disabled (curl/wget) | HIGH | `curl -k`/`--insecure`, `wget --no-check-certificate` |
+| 77 | Insecure HTTP VCS install source | MEDIUM | `pip`/`uv`/`poetry install git+http://` |
+| 78 | Hardcoded PEM private key | HIGH | `-----BEGIN … PRIVATE KEY-----` marker in a workflow file |
+| 79 | Archive extraction to root/system dirs | HIGH | `tar -C /…` / `unzip -d /…` (zip-slip / path traversal) |
+| 80 | Hardcoded Slack/Discord webhook | HIGH | `hooks.slack.com/services/…` or `discord.com/api/webhooks/…` token literals |
+| 81 | `--extra-index-url` without `--no-index` | MEDIUM | pip dependency-confusion risk (PyPI fallback) |
+| 82 | `docker run` host namespace / socket | HIGH | `--pid/ipc/userns=host`, `/var/run/docker.sock` mount, `--device`, unconfined seccomp/apparmor |
+| 83 | Package manager TLS disabled | HIGH | pip `--trusted-host`, npm/yarn/pnpm `strict-ssl false` |
+| 84 | `pull_request_target` + `gh pr checkout` | HIGH | Untrusted PR checkout in a privileged base-repository context |
+| 85 | Env var executed as command | HIGH | `run: $CMD` / `source "$VAR"` / `exec "$VAR"` where the var holds event/`inputs.*` data |
+| 86 | Dynamic `runs-on` | HIGH | `runs-on` built from an attacker-controlled expression (runner routing) |
+| 87 | Dangerous/dynamic container options | HIGH | `container.options` with host-level flags or attacker-controlled expressions |
+| 88 | Action command/script inputs | HIGH | `command`/`script`/`args`/`entrypoint` action inputs with attacker-controlled expressions |
+| 89 | Environment dump to logs | HIGH | `env`/`printenv`/`set`/`export -p` dumping secrets to logs (CWE-532) |
+| 90 | Sensitive files as artifacts | HIGH | `upload-artifact` of SSH keys, cloud creds, `.npmrc`/`.netrc`, `.env`, or `.git` |
+| 91 | SSH host key verification disabled | HIGH | `StrictHostKeyChecking=no/false` or `UserKnownHostsFile=/dev/null` (CWE-295) |
+| 92 | TLS verification disabled (git/runtime) | HIGH | `http.sslVerify=false`, `GIT_SSL_NO_VERIFY`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, `PYTHONHTTPSVERIFY=0` |
+| 93 | Cleartext HTTP download | MEDIUM | curl/wget downloading over `http://` (CWE-319; loopback and IMDS excluded) |
+| 94 | Remote script to interpreter/priv shell | HIGH | Piping a download to `python`/`node`/`ruby`/… or via `sudo` to a shell (CWE-494) |
+| 95 | Insecure git transport | MEDIUM | `git://` or git `clone`/`fetch` over cleartext `http://` (CWE-319) |
+| 96 | `github.token` in run blocks | HIGH | `${{ github.token }}` interpolated directly into shell source |
 
 ### Suppressing Findings with NOLINT
 

@@ -3423,6 +3423,358 @@ jobs:
           command: npm test
 EOF
 
+# --- Check 89: environment/secret dump to logs ---
+
+assert_detects "check 89 flags bare env dump" "89" "Dumps the full environment to logs" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: env
+EOF
+
+assert_detects "check 89 flags printenv dump in run block" "89" "Dumps the full environment to logs" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          echo start
+          printenv | sort
+EOF
+
+assert_detects "check 89 flags export -p dump" "89" "Dumps the full environment to logs" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: export -p > vars.txt
+EOF
+
+assert_clean "check 89 accepts set -euo, env VAR=x cmd, and printenv VAR" "89" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          set -euo pipefail
+          env FOO=bar make build
+          printenv GITHUB_REF
+          echo "ref ${GITHUB_REF}"
+EOF
+
+# --- Check 90: sensitive credential files uploaded as build artifacts ---
+
+assert_detects "check 90 flags SSH private key upload" "90" "Uploads a sensitive credential file" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/upload-artifact@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          name: keys
+          path: ~/.ssh/id_rsa
+EOF
+
+assert_detects "check 90 flags .env in a multiline path list" "90" "Uploads a sensitive credential file" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/upload-artifact@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          name: bundle
+          path: |
+            dist/
+            .env
+EOF
+
+assert_clean "check 90 accepts non-sensitive build output upload" "90" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/upload-artifact@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          name: env-report
+          path: ./dist
+EOF
+
+# --- Check 91: SSH host key verification disabled ---
+
+assert_detects "check 91 flags StrictHostKeyChecking=no" "91" "Disables SSH host key verification" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: ssh -o StrictHostKeyChecking=no deploy@host.example.com 'uptime'
+EOF
+
+assert_detects "check 91 flags UserKnownHostsFile=/dev/null" "91" "Disables SSH host key verification" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: scp -oStrictHostKeyChecking=false -oUserKnownHostsFile=/dev/null f host:/tmp/f
+EOF
+
+assert_clean "check 91 accepts StrictHostKeyChecking=accept-new" "91" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: ssh -o StrictHostKeyChecking=accept-new deploy@host.example.com 'uptime'
+EOF
+
+# --- Check 92: TLS verification disabled via git/runtime configuration ---
+
+assert_detects "check 92 flags git http.sslVerify=false" "92" "Disables TLS certificate verification" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: git -c http.sslVerify=false clone https://repo.example.com/x.git
+EOF
+
+assert_detects "check 92 flags NODE_TLS_REJECT_UNAUTHORIZED=0" "92" "Disables TLS certificate verification" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          NODE_TLS_REJECT_UNAUTHORIZED: 0
+        run: node fetch.js
+EOF
+
+assert_clean "check 92 accepts verification left enabled" "92" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          NODE_TLS_REJECT_UNAUTHORIZED: 1
+        run: git clone https://repo.example.com/x.git
+EOF
+
+# --- Check 93: cleartext HTTP download via curl/wget ---
+
+assert_detects "check 93 flags curl http download" "93" "Downloads content over cleartext HTTP" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: curl -fsSL http://downloads.example.com/tool.tar.gz -o tool.tar.gz
+EOF
+
+assert_detects "check 93 flags wget http download" "93" "Downloads content over cleartext HTTP" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: wget http://downloads.example.com/installer.sh
+EOF
+
+assert_clean "check 93 accepts https and loopback http probe" "93" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          curl -fsSL https://downloads.example.com/tool.tgz -o tool.tgz
+          curl -sf http://localhost:8000/health
+          curl http://127.0.0.1:9000/ready
+EOF
+
+# --- Check 94: remote script piped to an interpreter or privileged shell ---
+
+assert_detects "check 94 flags curl piped to python" "94" "Pipes a downloaded script into an interpreter" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: curl -sSL https://example.com/get.py | python3
+EOF
+
+assert_detects "check 94 flags curl piped to sudo bash" "94" "Pipes a downloaded script into an interpreter" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: curl -sSL https://example.com/i.sh | sudo bash
+EOF
+
+assert_clean "check 94 accepts curl|bash (check 10) and grep python" "94" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          curl -sSL https://example.com/i.sh | bash
+          curl -sSL https://example.com/list | grep python
+          python3 build.py
+EOF
+
+# --- Check 95: insecure git transport (git:// or http://) ---
+
+assert_detects "check 95 flags git:// clone" "95" "Uses an insecure git transport" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: git clone git://github.com/example/repo.git
+EOF
+
+assert_detects "check 95 flags git clone over http" "95" "Uses an insecure git transport" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: git clone http://internal.example.com/repo.git
+EOF
+
+assert_clean "check 95 accepts https git clone" "95" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          git clone https://github.com/example/repo.git
+          git remote -v   # docs at http://example.com/help
+EOF
+
+# --- Check 96: github.token interpolation in run blocks ---
+
+assert_detects "check 96 flags github.token in run block" "96" "github.token }} directly in run: block" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: git remote set-url origin https://x-access-token:${{ github.token }}@github.com/o/r.git
+EOF
+
+assert_detects "check 96 flags github.token echoed in run block" "96" "github.token }} directly in run: block" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: echo "${{ github.token }}"
+EOF
+
+assert_clean "check 96 accepts github.token passed via env/with" "96" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr list
+      - uses: some/action@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        with:
+          github-token: ${{ github.token }}
+EOF
+
 printf '\n'
 printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
