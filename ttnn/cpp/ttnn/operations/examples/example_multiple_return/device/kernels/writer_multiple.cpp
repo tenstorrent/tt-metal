@@ -26,12 +26,12 @@ void kernel_main() {
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out);
         if (dst_addr1 != 0) {
-            noc_async_write_tile(i, s1, l1_read_addr);
+            noc_async_write_page(i, s1, l1_read_addr);
             noc_async_write_barrier();
         }
 
         if (dst_addr2 != 0) {
-            noc_async_write_tile(i, s2, l1_read_addr);
+            noc_async_write_page(i, s2, l1_read_addr);
             noc_async_write_barrier();
         }
 

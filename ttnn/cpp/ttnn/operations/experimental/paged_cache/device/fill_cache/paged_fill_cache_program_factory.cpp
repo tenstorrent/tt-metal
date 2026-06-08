@@ -142,6 +142,11 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, Wt};
     TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
+    // capacity_t (in TILE rows; 0 = unbounded/legacy) wraps seq_tile_id mod this value
+    // before page_table lookup. cache_position_modulo % effective_block_size == 0 is
+    // enforced in the validator, so the divide is exact.
+    const uint32_t capacity_t = operation_attributes.cache_position_modulo.value_or(0u) / TILE_HEIGHT;
+
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)src0_cb_index,
         (uint32_t)page_table_cb_index,
@@ -158,6 +163,7 @@ PagedFillCacheProgramFactory::cached_program_t PagedFillCacheProgramFactory::cre
         batch_idx_stick_size_B,        // per-element size, e.g. 4 for uint32
         batch_idx_num_elements,        // 1 = legacy single-batch, N = batched
         num_blocks_of_work_per_batch,  // num_heads * input_seq_len_t, for row_id -> batch decode
+        capacity_t,
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
     TensorAccessorArgs(page_table_buffer).append_to(writer_compile_time_args);
@@ -341,7 +347,8 @@ PagedFillCacheMeshWorkloadFactory::cached_mesh_workload_t PagedFillCacheMeshWork
                     .batch_idx_fallback = operation_attributes.batch_idx_fallback,
                     .mesh_coords = operation_attributes.mesh_coords,
                     .noop = true,
-                    .block_size_override = operation_attributes.block_size_override};
+                    .block_size_override = operation_attributes.block_size_override,
+                    .cache_position_modulo = operation_attributes.cache_position_modulo};
                 auto cached_program =
                     PagedFillCacheProgramFactory::create(dummy_attrs, tensor_args, tensor_return_value);
                 shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
@@ -390,7 +397,8 @@ void PagedFillCacheMeshWorkloadFactory::override_runtime_arguments(
             .batch_idx_fallback = operation_attributes.batch_idx_fallback,
             .mesh_coords = operation_attributes.mesh_coords,
             .noop = is_dummy,
-            .block_size_override = operation_attributes.block_size_override};
+            .block_size_override = operation_attributes.block_size_override,
+            .cache_position_modulo = operation_attributes.cache_position_modulo};
 
         ttnn::device_operation::mesh_device_operation_utils::apply_override_runtime_arguments(
             program_factory, program, shared_variables, coord_attrs, coord, tensor_args, tensor_return_value);

@@ -15,13 +15,12 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::create_descriptor(
+ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::create_descriptor(
     const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
     const NlpConcatHeadsDecodeInputs& tensor_args,
     Tensor& output) {
-    ProgramDescriptor desc;
-
     const auto& input_tensor = tensor_args.input;
+    ProgramDescriptor desc;
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t head_dim = input_shape[-1];
@@ -53,19 +52,19 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::
     const auto in_shard_spec = input_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
 
-    constexpr uint8_t q_output_cb_index = CBIndex::c_16;
+    uint32_t q_output_cb_index = CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = q_num_tiles * single_tile_size,
         .core_ranges = q_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = q_output_cb_index,
+            .buffer_index = static_cast<uint8_t>(q_output_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
         .buffer = output.buffer(),
     });
 
-    auto* input_buffer = input_tensor.buffer();
+    Buffer* in_buffer = input_tensor.buffer();
 
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -97,8 +96,6 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::
         in_num_cores,
         face_h,
         face_hw};
-    std::vector<uint32_t> writer_compile_time_args = reader_compile_time_args;
-    writer_compile_time_args[6] = 2;  // read the second phase
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -106,8 +103,11 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::
         "reader_tm_tile_layout_nlp_concat_heads_decode_subcoregrid.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = q_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.config = ReaderConfigDescriptor{};
+
+    std::vector<uint32_t> writer_compile_time_args = reader_compile_time_args;
+    writer_compile_time_args[6] = 2;  // read the second phase
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -118,8 +118,6 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    reader_desc.runtime_args.reserve(num_cores);
-    writer_desc.runtime_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         // in_tile_offset_by_batch is the byte offset of head row i within the input shard. Within
         // a single 32x32 tile (= 2*face_h rows), the first face_h rows live in face 0 and the rest
@@ -136,7 +134,7 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsDecodeSubcoregridsProgramFactory::
         KernelDescriptor::RTArgList rt_args;
         rt_args.reserve(2 + (2 * in_num_cores));
         rt_args.push_back(in_tile_offset_by_batch);
-        rt_args.push_back(input_buffer);  // q_start_addr — patched on cache hits via BufferBinding
+        rt_args.push_back(in_buffer);
         rt_args.append(noc_x_coords);
         rt_args.append(noc_y_coords);
 

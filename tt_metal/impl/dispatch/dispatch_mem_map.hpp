@@ -40,6 +40,7 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
+        bool are_fd_kernels_on_same_core,
         const tt::llrt::RunTimeOptions& rtoptions);
 
     uint32_t prefetch_q_entries() const;

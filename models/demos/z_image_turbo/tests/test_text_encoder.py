@@ -48,7 +48,7 @@ def pcc(a, b):
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    return {"l1_small_size": 1 << 15, "trace_region_size": 70_000_000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)

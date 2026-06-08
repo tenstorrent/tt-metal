@@ -311,10 +311,17 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
 
+    // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
+    // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
+    // The last block per device may be a "tail" block of K_block_tail_tiles < K_block_tiles
+    // when K_block_tiles does not divide K_tiles_per_device; otherwise tail == K_block_tiles.
+    uint32_t K_tiles_per_device = K_tiles / ring_size;
+    uint32_t K_blocks_per_device = tt::div_up(K_tiles_per_device, K_block_tiles);
+    uint32_t K_block_tail_tiles = K_tiles_per_device - (K_blocks_per_device - 1) * K_block_tiles;
+    uint32_t K_blocks = K_blocks_per_device * ring_size;
+
     uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
-
-    uint32_t K_blocks = padded_K_tiles / K_block_tiles;
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
@@ -329,11 +336,60 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
     uint32_t in2_block_num_tiles = N_block_tiles;
 
-    const uint32_t double_buffer_factor = 2;
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    // TODO: consider not double buffering the output
-    uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
+    // Adaptive CB depth: maximize in0_cb depth (it hides chain mcast pipeline build-up,
+    // ~100us at depth 2), then opportunistically bump in1_cb.
+    //
+    // Budget = (lowest L1 address occupied by allocator buffers) - (allocator base) -
+    // a small safety margin for non-CB allocations the allocator does not yet account
+    // for at program-factory time (semaphores allocated below, runtime-args staging).
+    // Pattern lifted from ttnn::operations::data_movement::common::get_max_l1_space.
+    // Falls back to `l1_size_per_core` when no L1 buffers are placed yet (typical for
+    // AGMM where input tensors are in DRAM and the op's own buffers haven't been
+    // allocated). On WH 4x8 this yields ~1300 KB — the same value the earlier
+    // hardcoded constant gave — without needing arch- or sweep-specific tuning.
+    auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address();
+    const uint32_t l1_top =
+        lowest_occupied_l1.has_value() ? static_cast<uint32_t>(lowest_occupied_l1.value()) : device->l1_size_per_core();
+    const uint32_t l1_unreserved = l1_top - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    constexpr uint32_t L1_NON_CB_MARGIN_BYTES = 64 * 1024;
+    const uint32_t L1_BUDGET_BYTES =
+        l1_unreserved > L1_NON_CB_MARGIN_BYTES ? l1_unreserved - L1_NON_CB_MARGIN_BYTES : 0u;
+    // Warn if L1 is under pressure (existing tensors take up enough room that our
+    // CB budget falls noticeably below the sweep-validated working point of ~1300 KB
+    // on WH 4x8). Smaller budget forces shallower CBs and degrades perf. Trigger at
+    // 1100 KB to allow ~200 KB of normal headroom variation without false alarms.
+    constexpr uint32_t L1_BUDGET_WARN_THRESHOLD_BYTES = 1100 * 1024;
+    if (L1_BUDGET_BYTES < L1_BUDGET_WARN_THRESHOLD_BYTES) {
+        log_warning(
+            tt::LogOp,
+            "AGMM L1 budget is unexpectedly small ({} KB); CB depths will be capped and perf may "
+            "regress. lowest_occupied_l1={} alloc_base={} l1_size={}. Check L1 allocator pressure "
+            "(persistent tensors in L1, large sharded buffers).",
+            L1_BUDGET_BYTES / 1024,
+            l1_top,
+            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            device->l1_size_per_core());
+    }
+    const uint32_t base_fixed_bytes = out_block_num_tiles * out_tile_size                      // out (single)
+                                      + out_block_num_tiles * intermediate_tile_size           // intermediate (single)
+                                      + (use_bias ? in2_block_num_tiles * in2_tile_size : 0);  // bias (single)
+    const uint32_t in0_block_bytes = in0_block_num_tiles * in0_tile_size;
+    const uint32_t in1_block_bytes = in1_block_num_tiles * in1_tile_size;
+    // Start with in1 depth-2 (safe). Maximize in0_cb depth.
+    uint32_t in0_depth = 2;
+    const uint32_t fixed_with_in1_depth2 = base_fixed_bytes + in1_block_bytes * 2;
+    if (fixed_with_in1_depth2 + 2 * in0_block_bytes <= L1_BUDGET_BYTES) {
+        in0_depth = std::min(8u, (L1_BUDGET_BYTES - fixed_with_in1_depth2) / std::max(1u, in0_block_bytes));
+        in0_depth = std::max(2u, in0_depth);
+    }
+    // Opportunistically bump in1 to depth 3 if there's room left.
+    uint32_t in1_depth = 2;
+    if (fixed_with_in1_depth2 + in0_depth * in0_block_bytes + in1_block_bytes <= L1_BUDGET_BYTES) {
+        in1_depth = 3;
+    }
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * in0_depth;
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * in1_depth;
+    uint32_t out_cb_num_tiles = out_block_num_tiles;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -483,6 +539,9 @@ all_gather_minimal_matmul_async_factory_helper(
     log_debug(tt::LogOp, "padded_N_tiles: {}", padded_N_tiles);
     log_debug(tt::LogOp, "M_block_tiles: {}", M_block_tiles);
     log_debug(tt::LogOp, "K_block_tiles: {}", K_block_tiles);
+    log_debug(tt::LogOp, "K_tiles_per_device: {}", K_tiles_per_device);
+    log_debug(tt::LogOp, "K_blocks_per_device: {}", K_blocks_per_device);
+    log_debug(tt::LogOp, "K_block_tail_tiles: {}", K_block_tail_tiles);
     log_debug(tt::LogOp, "N_block_tiles: {}", N_block_tiles);
     log_debug(tt::LogOp, "subblock_h: {}", subblock_h);
     log_debug(tt::LogOp, "subblock_w: {}", subblock_w);
@@ -519,6 +578,14 @@ all_gather_minimal_matmul_async_factory_helper(
     in0_defines["IS_IN0"] = "1";
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
+
+    // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
+    // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
+    // sends the packet to the device `distance` hops away, with no intermediate
+    // deliveries.
+    if (topology == ttnn::ccl::Topology::Linear && ring_index == 0) {
+        unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+    }
 
     uint32_t in0_addr = ag_output_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
@@ -562,6 +629,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -608,6 +677,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in0_receiver_no_fabric_compile_time_args,
@@ -655,6 +726,8 @@ all_gather_minimal_matmul_async_factory_helper(
         static_cast<uint32_t>(topology),
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     fabric_mux_connection_ct_args(
         num_workers_per_link,
@@ -704,8 +777,11 @@ all_gather_minimal_matmul_async_factory_helper(
         true,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -743,8 +819,11 @@ all_gather_minimal_matmul_async_factory_helper(
         false,  // is_injector_core
         ring_size,
         ring_index,
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        N_chunks,                         // N_chunks
+        N_tiles_per_chunk,                // N_tiles_per_chunk
+        static_cast<uint32_t>(topology),  // topology
+        K_tiles_per_device,
+        K_block_tail_tiles,
     };
     append_accessors(
         in1_receiver_compile_time_args,
@@ -774,6 +853,9 @@ all_gather_minimal_matmul_async_factory_helper(
         subblock_w};
 
     auto compute_defines = defines;
+    if (topology == ttnn::ccl::Topology::Linear) {
+        compute_defines["IS_LINEAR"] = "1";
+    }
     std::map<std::string, std::string> compute_activation_defines;
     if (fused_activation.has_value()) {
         compute_activation_defines = ttnn::operations::unary::utils::get_defines(
@@ -795,8 +877,7 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    // mux kernel
-    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
         mux_core_range_set,

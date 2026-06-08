@@ -29,6 +29,12 @@ ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id);
 ALWI bool is_valid_dfb_tile_page_size(uint32_t dfb_id, DataFormat format);
 #endif  // !ARCH_QUASAR
 
+template <uint32_t dfb_id>
+constexpr uint32_t dfb_l1_format();
+
+template <uint32_t dfb_id>
+constexpr bool dfb_has_32x32_tiles();
+
 }  // namespace compute_kernel_lib
 
 #include "dfb_helpers_compute.inl"

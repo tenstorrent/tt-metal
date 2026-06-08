@@ -30,7 +30,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // dispatch cores and the reserved RT-profiler tensix; allocated as a dispatch-core-local
     // region rather than a per-core mailbox because no worker core touches it.
     REALTIME_PROFILER_MSG = 10,
-    UNRESERVED = 11,
+    DISPATCH_TELEMETRY = 11,
+    UNRESERVED = 12,
 };
 
 // likely only used in impl

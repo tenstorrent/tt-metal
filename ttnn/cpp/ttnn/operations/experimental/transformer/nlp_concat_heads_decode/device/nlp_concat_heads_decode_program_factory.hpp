@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <tt-metalium/program_descriptors.hpp>
+
 #include "nlp_concat_heads_decode_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 

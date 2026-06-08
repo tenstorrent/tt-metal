@@ -95,39 +95,37 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
     // On Quasar a single DM KernelSpec with num_threads = 6 covers DM2..DM7.
     // On WH/BH each DM processor (BRISC, NCRISC) requires its own KernelSpec.
-    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
-    std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
-    std::vector<experimental::metal2_host_api::ProgramRunParams::KernelRunParams> kernel_run_params;
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
+    experimental::ProgramRunArgs params;
     auto add_dm_kernel =
-        [&](const char* name, uint8_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
+        [&](const char* name, uint32_t num_threads, std::optional<tt::tt_metal::DataMovementProcessor> gen1_processor) {
             // Always provide both gen1 and gen2 configs; the runtime picks the one matching the
             // current arch. The unused config is ignored on the other arch.
             auto gen1_proc = gen1_processor.value_or(tt::tt_metal::DataMovementProcessor::RISCV_0);
             auto gen1_noc = (gen1_proc == tt::tt_metal::DataMovementProcessor::RISCV_1)
                                 ? tt::tt_metal::NOC::RISCV_1_default
                                 : tt::tt_metal::NOC::RISCV_0_default;
-            experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                        .processor = gen1_proc, .noc = gen1_noc},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+            experimental::DataMovementHardwareConfig dm_cfg{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_proc, .noc = gen1_noc},
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
             };
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
-                .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = experimental::KernelSpecName{name},
+                .source = kernel_path_metal2,
                 .num_threads = num_threads,
-                .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
-                .config_spec = dm_cfg,
+                .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
+                .hw_config = dm_cfg,
             });
             kernel_names.emplace_back(name);
-            kernel_run_params.push_back({
-                .kernel_spec_name = name,
-                .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}},
+            params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+                .kernel = experimental::KernelSpecName{name},
+                .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
             });
         };
 
-    constexpr const char* COMPUTE_KERNEL_NAME = "wp_compute";
+    const experimental::KernelSpecName COMPUTE_KERNEL_NAME{"wp_compute"};
     if (is_quasar) {
         constexpr uint32_t kQuasarUserDmCores = 6;
         add_dm_kernel("wp_dm", kQuasarUserDmCores, std::nullopt);
@@ -135,35 +133,33 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         add_dm_kernel("wp_brisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_0);
         add_dm_kernel("wp_ncrisc", 1, tt::tt_metal::DataMovementProcessor::RISCV_1);
     }
-    kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+    kernel_specs.push_back(experimental::KernelSpec{
         .unique_id = COMPUTE_KERNEL_NAME,
-        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path_metal2},
+        .source = kernel_path_metal2,
         // Quasar Tensix has 4 Neos so the compute kernel fans out across all of them; WH/BH has 1 TRISC group.
-        .num_threads = static_cast<uint8_t>(is_quasar ? 4 : 1),
-        .runtime_arguments_schema = {.named_common_runtime_args = {"sync_flag_addr"}},
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .num_threads = is_quasar ? 4u : 1u,
+        .runtime_arg_schema = {.common_runtime_arg_names = {"sync_flag_addr"}},
+        .hw_config = experimental::ComputeHardwareConfig{},
     });
     kernel_names.emplace_back(COMPUTE_KERNEL_NAME);
-    kernel_run_params.push_back({
-        .kernel_spec_name = COMPUTE_KERNEL_NAME,
-        .named_common_runtime_args = {{"sync_flag_addr", tensix_sync_addr}},
+    params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL_NAME,
+        .common_runtime_arg_values = {{"sync_flag_addr", tensix_sync_addr}},
     });
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::metal2_host_api::NodeRange{CoreRange(xy_start, xy_end)},
+        .target_nodes = experimental::NodeRange{CoreRange(xy_start, xy_end)},
     };
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "watcher_waypoints",
+    experimental::ProgramSpec spec{
+        .name = "watcher_waypoints",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = std::move(kernel_run_params);
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     // ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

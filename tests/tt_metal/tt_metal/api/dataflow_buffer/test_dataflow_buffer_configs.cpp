@@ -21,7 +21,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"

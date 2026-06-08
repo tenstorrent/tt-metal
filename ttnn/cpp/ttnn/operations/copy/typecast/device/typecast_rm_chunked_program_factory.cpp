@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt_stl/span.hpp>
@@ -15,7 +14,6 @@
 namespace ttnn::prim {
 
 using namespace tt::constants;
-using namespace tt::tt_metal;
 
 namespace {
 struct ChunkSizeConfig {
@@ -66,13 +64,16 @@ ChunkSizeConfig calculate_chunk_config(
 
 tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_descriptor(
     const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
     const Tensor& input = tensor_args.input;
     const DataType& input_dtype = args.input_dtype;
     const DataType& output_dtype = args.output_dtype;
 
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "This factory is only for ROW_MAJOR layout");
 
-    ProgramDescriptor desc;
+    tt::tt_metal::ProgramDescriptor desc;
 
     const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t input_element_size = tt::datum_size(cb_data_format_input);
@@ -107,6 +108,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     // Split work by rows (each core handles complete rows with both full and partial chunks)
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true);
+    (void)num_cores;
 
     constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
     constexpr uint8_t output_cb_index = tt::CBIndex::c_2;
@@ -123,20 +125,20 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     const uint32_t input_cb_page_size_bytes = tt::align(padded_input_full_chunk_size_bytes, src_buffer->alignment());
     const uint32_t output_cb_page_size_bytes = tt::align(padded_output_full_chunk_size_bytes, dst_buffer->alignment());
 
-    desc.cbs.push_back(CBDescriptor{
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_input_pages * input_cb_page_size_bytes,
         .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = input_cb_index,
             .data_format = cb_data_format_input,
             .page_size = input_cb_page_size_bytes,
         }}},
     });
 
-    desc.cbs.push_back(CBDescriptor{
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = num_output_pages * output_cb_page_size_bytes,
         .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = output_cb_index,
             .data_format = cb_data_format_output,
             .page_size = output_cb_page_size_bytes,
@@ -161,21 +163,21 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    KernelDescriptor reader_desc;
+    tt::tt_metal::KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/reader_typecast_rm_chunked.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
-    KernelDescriptor writer_desc;
+    tt::tt_metal::KernelDescriptor writer_desc;
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/dataflow/writer_typecast_rm_chunked.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Create compute kernels - compute per_core_block_cnt as total chunks (full + partial) per core
     const uint32_t chunks_per_row_total = full_chunks_per_row + partial_chunks_per_row;
@@ -192,8 +194,7 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
         input_cb_index,
         output_cb_index};
 
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[input_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
@@ -212,46 +213,46 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
 
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
+    std::optional<tt::tt_metal::KernelDescriptor> compute_desc_group_1;
     if (!core_group_1.ranges().empty()) {
-        KernelDescriptor compute_desc_g1;
-        compute_desc_g1.kernel_source = path;
-        compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_g1.core_ranges = core_group_1;
-        compute_desc_g1.compile_time_args = std::move(compute_kernel_args_group_1);
-        compute_desc_g1.defines = {unary_defines.begin(), unary_defines.end()};
-        compute_desc_g1.config = ComputeConfigDescriptor{
+        compute_desc_group_1.emplace();
+        compute_desc_group_1->kernel_source = path;
+        compute_desc_group_1->source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_group_1->core_ranges = core_group_1;
+        compute_desc_group_1->compile_time_args = compute_kernel_args_group_1;
+        for (const auto& [name, value] : unary_defines) {
+            compute_desc_group_1->defines.emplace_back(name, value);
+        }
+        compute_desc_group_1->config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode,
-        };
-        desc.kernels.push_back(std::move(compute_desc_g1));
+            .math_approx_mode = math_approx_mode};
     }
 
+    std::optional<tt::tt_metal::KernelDescriptor> compute_desc_group_2;
     if (!core_group_2.ranges().empty()) {
-        KernelDescriptor compute_desc_g2;
-        compute_desc_g2.kernel_source = path;
-        compute_desc_g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc_g2.core_ranges = core_group_2;
-        compute_desc_g2.compile_time_args = std::move(compute_kernel_args_group_2);
-        compute_desc_g2.defines = {unary_defines.begin(), unary_defines.end()};
-        compute_desc_g2.config = ComputeConfigDescriptor{
+        compute_desc_group_2.emplace();
+        compute_desc_group_2->kernel_source = path;
+        compute_desc_group_2->source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_group_2->core_ranges = core_group_2;
+        compute_desc_group_2->compile_time_args = compute_kernel_args_group_2;
+        for (const auto& [name, value] : unary_defines) {
+            compute_desc_group_2->defines.emplace_back(name, value);
+        }
+        compute_desc_group_2->config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
-            .math_approx_mode = math_approx_mode,
-        };
-        desc.kernels.push_back(std::move(compute_desc_g2));
+            .math_approx_mode = math_approx_mode};
     }
 
     // Assign runtime args to cores (distributing rows)
     auto cores_vec = corerange_to_cores(all_cores, std::nullopt, true);
-    reader_desc.runtime_args.reserve(cores_vec.size());
-    writer_desc.runtime_args.reserve(cores_vec.size());
-
     uint32_t row_idx = 0;
+
     for (const auto& core : cores_vec) {
         bool is_group_1 = core_group_1.contains(core);
         uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
@@ -265,6 +266,12 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
+    if (compute_desc_group_1.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_group_1));
+    }
+    if (compute_desc_group_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_group_2));
+    }
 
     return desc;
 }

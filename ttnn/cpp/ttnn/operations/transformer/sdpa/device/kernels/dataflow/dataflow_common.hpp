@@ -42,7 +42,13 @@ void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     }
 }
 
-template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+// capacity_t = 0 means "no wrap" (legacy / unbounded cache).  Nonzero means the cache
+// holds capacity_t tile-rows in a circular buffer; the kernel wraps seq_tile_idx
+// modulo capacity_t before resolving the page_table entry, so callers can pass
+// absolute (un-wrapped) positions even with bounded sliding-window allocations.
+// capacity_t must be a multiple of block_size_t (validated on the caller side); that
+// guarantees the wrap preserves intra-block offsets.
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, uint32_t capacity_t = 0>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
     uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
@@ -50,6 +56,9 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
+    if constexpr (capacity_t > 0) {
+        seq_tile_idx %= capacity_t;
+    }
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
     const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;

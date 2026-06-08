@@ -33,6 +33,7 @@ from .llk_params import (
     TopKSortDirection,
     Transpose,
     UnpackerEngine,
+    VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
 
@@ -286,6 +287,14 @@ class UNPACKER_ENGINE_SEL(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::{self.unpacker_engine_sel.value};"
+
+
+@dataclass
+class VECTOR_MODE(TemplateParameter):
+    vector_mode: VectorMode = VectorMode.RC
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int VECTOR_MODE = static_cast<int>({self.vector_mode.cpp_enum_value});"
 
 
 @dataclass

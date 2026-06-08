@@ -336,16 +336,32 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
 
 void bind_ternary_snake_beta(nb::module_& mod, const std::string& description) {
     auto doc = std::string(R"doc(
-SnakeBeta activation (canonical, BigVGAN-style):
+Computes the SnakeBeta activation element-wise on :attr:`input_tensor`:
 
-    y = x + sin^2(alpha * x) / beta
+.. math::
 
-Constraints (v1):
-  - input/alpha/beta must be tile layout
-  - dtype in {bfloat16, float32}; alpha.dtype == beta.dtype == input.dtype
-  - alpha.shape == beta.shape
-  - alpha and beta have non-1 size only on the last dim, which must equal input.shape[-1]
-  - caller is responsible for beta != 0 (no internal epsilon)
+    \text{output}_i = \text{input}_i + \frac{\sin^2(\text{alpha}_i \cdot \text{input}_i)}{\text{beta}_i}
+
+This is the BigVGAN-style Snake activation with separate learnable ``alpha`` and ``beta`` parameters.
+
+Args:
+    input_tensor (ttnn.Tensor): the input tensor. Must be rank >= 2 and in TILE layout.
+    alpha (ttnn.Tensor): the frequency parameter tensor. Broadcastable on the last dimension.
+    beta (ttnn.Tensor): the denominator parameter tensor. Same shape as ``alpha``.
+        Caller is responsible for ensuring ``beta != 0`` (no internal epsilon).
+
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to ``None``.
+    output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to ``None``.
+
+Note:
+    - ``alpha``, ``beta``, and ``input_tensor`` must all be TILE layout and share the same dtype (BFLOAT16 or FLOAT32).
+    - ``alpha.shape == beta.shape``; both may only have non-1 size on the last dimension, which must equal ``input_tensor.shape[-1]``.
+
+Example:
+    >>> alpha = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> beta = ttnn.from_torch(torch.ones(48, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    >>> output = ttnn.snake_beta(input_tensor, alpha, beta)
 )doc") + description;
 
     ttnn::bind_function<"snake_beta">(

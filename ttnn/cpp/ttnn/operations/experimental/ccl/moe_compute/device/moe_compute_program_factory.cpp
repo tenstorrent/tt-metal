@@ -288,6 +288,17 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     return combine_cores;
 }
 
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const uint32_t bh_ring_size) {
+    const auto core_ret =
+        get_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, bh_ring_size);
+    return std::get<7>(core_ret).bounding_box();
+}
+
 MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFactory::create_mesh_workload(
     const MoEComputeParams& args,
     const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
@@ -429,12 +440,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     // General info
     uint32_t tokens = get_num_rows_st(tilize_input_tensor);
     uint32_t hidden_size = tilize_input_shape[-1];
-    uint32_t experts = tilize_mapping_shape[-1];
-    uint32_t selected_experts_k = tilize_indices_shape[-1];
 
-    // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
-    // result is fractional experts per device so div_up is required to get the right value here.
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    // Logical experts, routed + shared (replicated experts counted as 1)
+    uint32_t experts = tilize_mapping_shape[-1];
+    // physical experts per device, replicated shared experts are counted per device
+    uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    uint32_t selected_experts_k = tilize_indices_shape[-1];
 
     // Output/Combine input core dims, for core selection. These are top-level (lifted) so they
     // remain valid even when combine_params is nullopt (ComputeOnly mode).
@@ -958,6 +969,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"hidden_size", hidden_size},
         {"remote_counts_entry_size", remote_counts_entry_size},
         {"experts", experts},
+        {"experts_per_device", experts_per_device},
         {"selected_experts_k", selected_experts_k},
 
         // Chunk info

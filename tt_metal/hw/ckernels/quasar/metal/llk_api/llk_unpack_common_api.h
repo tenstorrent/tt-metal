@@ -30,8 +30,15 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id
-    for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
+    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
+    // Skip non-participating DFBs via entry_size==0 (g_dfb_interface[] is zero-init,
+    // so non-populated entries naturally fall out). Loop bound is dfb::NUM_DFBS because
+    // g_dfb_interface[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS resolves to 64
+    // on Quasar — GCC -Werror=aggressive-loop-optimizations rejects the OOB.
+    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
+        if (g_dfb_interface[i].entry_size == 0) {
+            continue;
+        }
         const DataFormat l1_data_format = static_cast<DataFormat>(unpack_src_format[i]);
 
         if (l1_data_format == DataFormat::Invalid) {

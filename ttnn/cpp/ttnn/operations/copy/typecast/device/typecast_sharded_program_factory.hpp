@@ -4,10 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/device_operation.hpp"
 #include "typecast_device_op_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 

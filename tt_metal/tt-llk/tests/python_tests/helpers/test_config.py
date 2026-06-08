@@ -390,7 +390,11 @@ class TestConfig:
         speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
-        TestConfig.OPTIONS_ALL = f"{debug_flag}-O3 -std=c++17 -ffast-math"
+        TestConfig.OPTIONS_ALL = (
+            f"{debug_flag}-O3 "
+            "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
+            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+        )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
         TestConfig.SPEED_OF_LIGHT = speed_of_light
@@ -415,10 +419,13 @@ class TestConfig:
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
-                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
+                "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v "
             )
 
-        TestConfig.OPTIONS_LINK = "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
+        TestConfig.OPTIONS_LINK = (
+            "-nostdlib -nostartfiles "
+            "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--trace "
+        )
         # LLK_ASSERT uses ebreak under ENV_LLK_INFRA (see common/llk_assert.h). Match Hal tensix cflags
         # (wh_hal.cpp / bh_hal.cpp): -mno-tt-fix-whbhebreak avoids 8 NOPs after ebreak.
         no_wh_ebreak_fixup = (
@@ -428,8 +435,10 @@ class TestConfig:
             else ""
         )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
-            "-nostdlib -fno-use-cxa-atexit -Werror -Wall -fno-asynchronous-unwind-tables -fno-exceptions -fno-rtti -Wunused-parameter "
-            "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -Wmaybe-uninitialized "
+            "-Wall -Werror -Wno-error=deprecated-declarations "
+            "-Wunused-parameter "
+            "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
+            "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"

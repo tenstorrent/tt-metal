@@ -508,14 +508,24 @@ def comp_pcc(golden, calculated, pcc=0.99):
     # For now, mask all infs and nans so that we check the rest... TODO
     # Skip this for integer types which don't have NaN/Inf values
     if golden.dtype.is_floating_point:
+        # Check if dtype is FP8 - they don't support isinf/isneginf/masked_fill operations
+        is_fp8 = golden.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]
+
+        if is_fp8:
+            # Convert FP8 to float32 for comparison since FP8 doesn't support many operations
+            golden = golden.to(torch.float32)
+            calculated = calculated.to(torch.float32)
+
         golden = golden.clone()
+        calculated = calculated.clone()
+
+        # Mask NaN and inf values
         golden[
             torch.logical_or(
                 torch.isnan(golden),
                 torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
             )
         ] = 0
-        calculated = calculated.clone()
         calculated[
             torch.logical_or(
                 torch.isnan(calculated),

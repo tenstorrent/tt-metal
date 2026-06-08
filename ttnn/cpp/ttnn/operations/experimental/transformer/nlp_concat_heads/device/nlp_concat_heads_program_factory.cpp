@@ -16,10 +16,8 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
 
-tt::tt_metal::ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
+ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     const NlpConcatHeadsParams& /*operation_attributes*/, const Tensor& input, Tensor& output) {
-    ProgramDescriptor desc;
-
     const auto& a = input;
     const auto& ashape = a.padded_shape();
 
@@ -71,11 +69,17 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Grayskull Device Setup
+    ////////////////////////////////////////////////////////////////////////////
     tt_metal::Buffer* out_buffer = output.buffer();
     TT_ASSERT(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    constexpr uint8_t src0_cb_index = 0;
-    constexpr uint8_t out_cb_index = 16;
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Application Setup
+    ////////////////////////////////////////////////////////////////////////////
+    ProgramDescriptor desc;
+    uint32_t src0_cb_index = 0, out_cb_index = 16;
 
     KernelDescriptor reader_desc;
     KernelDescriptor writer_desc;
@@ -135,19 +139,16 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     if (!in_sharded) {
         cb_src0_num_tiles *= 2;  // double buffer
     }
-    CBDescriptor cb_src0_desc{
+    desc.cbs.push_back(CBDescriptor{
         .total_size = cb_src0_num_tiles * single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-    };
-    if (in_sharded) {
-        cb_src0_desc.buffer = in0_buffer;
-    }
-    desc.cbs.push_back(std::move(cb_src0_desc));
+        .buffer = in_sharded ? in0_buffer : nullptr,
+    });
 
     if (out_sharded) {
         uint32_t cb_out_num_tiles = per_tensor_tiles;
@@ -155,7 +156,7 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
             .total_size = cb_out_num_tiles * single_tile_size,
             .core_ranges = all_cores,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = out_cb_index,
+                .buffer_index = static_cast<uint8_t>(out_cb_index),
                 .data_format = cb_data_format,
                 .page_size = single_tile_size,
             }}},
@@ -167,27 +168,26 @@ tt::tt_metal::ProgramDescriptor NLPConcatHeadsProgramFactory::create_descriptor(
     if (in_sharded) {
         uint32_t nheads_first_risc = div_up(num_blocks_per_core_group_1, 2);
         uint32_t nheads_second_risc = num_blocks_per_core_group_1 - nheads_first_risc;
-        std::vector<uint32_t> reader_runtime_args = {
-            (std::uint32_t)nheads_first_risc,
-            0,
-            0,
-        };
-        std::vector<uint32_t> writer_runtime_args = {
-            (std::uint32_t)nheads_second_risc,
-            (std::uint32_t)nheads_first_risc * in0_HtWt * single_tile_size,
-            (std::uint32_t)nheads_first_risc * in0_w_tiles * single_tile_size,
-        };
-        // Same args applied to every core in the range; emit per-core entries
-        // for each core in `all_cores` so the framework can replay them.
-        reader_desc.runtime_args.reserve(cores.size());
-        writer_desc.runtime_args.reserve(cores.size());
-        for (const auto& core : cores) {
-            reader_desc.runtime_args.emplace_back(core, reader_runtime_args);
-            writer_desc.runtime_args.emplace_back(core, writer_runtime_args);
+        // Mirror SetRuntimeArgs(program, kernel, all_cores, args) by emplacing the same
+        // per-core args on every logical core in the sharded range set.
+        for (const auto& core : corerange_to_cores(all_cores, num_cores, /*row_wise=*/true)) {
+            reader_desc.emplace_runtime_args(
+                core,
+                {
+                    (std::uint32_t)nheads_first_risc,
+                    uint32_t{0},
+                    uint32_t{0},
+                });
+            writer_desc.emplace_runtime_args(
+                core,
+                {
+                    (std::uint32_t)nheads_second_risc,
+                    (std::uint32_t)nheads_first_risc * in0_HtWt * single_tile_size,
+                    (std::uint32_t)nheads_first_risc * in0_w_tiles * single_tile_size,
+                });
         }
+
     } else {
-        reader_desc.runtime_args.reserve(cores.size());
-        writer_desc.runtime_args.reserve(cores.size());
         for (uint32_t i = 0, num_blocks_written = 0; i < cores.size(); ++i) {
             const CoreCoord& core = cores[i];
             uint32_t num_blocks_per_core = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
