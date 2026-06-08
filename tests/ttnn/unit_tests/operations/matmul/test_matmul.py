@@ -16,7 +16,7 @@ from models.common.utility_functions import (
     skip_for_blackhole,
     skip_for_slow_dispatch,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -3908,6 +3908,15 @@ def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits
     out_interleaved = run(in1_interleaved)
     out_nd = run(in1_nd)
 
-    assert_with_pcc(pt_out, out_nd, 0.99)
-    # The ND read must produce the same result as the interleaved read of the same weight.
-    assert_with_pcc(out_interleaved, out_nd, 0.999)
+    assert_numeric_metrics(
+        pt_out,
+        out_nd,
+        atol=0.004 * k,
+        rtol=0.227 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
+    # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
+    # read must reproduce the interleaved read bit-for-bit.
+    assert_equal(out_interleaved, out_nd)
