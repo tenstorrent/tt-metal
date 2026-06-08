@@ -10,6 +10,7 @@ This test verifies that both modules can be created and weights are loaded corre
 import pytest
 import torch
 from loguru import logger
+from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
@@ -18,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import reverse_reorder_tensor_chu
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     create_kv_chunk_address_table,
+    create_kv_chunk_address_table_kimi,
     init_kvpe_cache,
 )
 from tests.ttnn.utils_for_testing import assert_equal
