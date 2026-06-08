@@ -122,11 +122,12 @@ jobs:
                             Path("reports/wormhole/ttsim-version")):
               if candidate.is_file():
                   for line in candidate.read_text().splitlines():
-                      m = re.match(r"ttsim_version=['\"]?([\w.]+)['\"]?", line.strip())
+                      m = re.match(r"ttsim_version=['\"]?([\w.-]+)['\"]?", line.strip())
                       if m:
                           TTSIM_VERSION = m.group(1)
                           break
-                  break
+                  if TTSIM_VERSION != "unknown":
+                      break
 
           def summarize(xml_path: Path):
               if not xml_path.is_file():
