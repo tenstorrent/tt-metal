@@ -29,6 +29,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 import ttnn
 from models.common.modules.moe.tt_moe_decode import TTMoEDecode
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3.tests.fused_op_unit_tests.moe.test_optimized_moe_decode_block import (
     create_torch_dispatch_input_expert_scores_tensor,
     create_torch_dispatch_input_tensor,
@@ -292,7 +293,6 @@ def _config_id(path: Path) -> str:
 # known failures
 # Note: it would be better to test all of these and let them fail but some cause hard crashes and derail the test
 SKIP_LIST = [
-    "deepseek_ocr.yaml",  # this one is actually unexpected and causes the test to hang (watcher assert)
     "ling_1t.yaml",
     "mistral_large_3.yaml",
     "deepseek_v4_pro.yaml",
@@ -319,7 +319,7 @@ SKIP_LIST = [
         pytest.param(
             (8, 1),
             id="8x1",
-            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+            marks=pytest.mark.skipif(not is_blackhole(), reason=f"8x1 grid is only for BH testing"),
         ),
     ],
     indirect=True,

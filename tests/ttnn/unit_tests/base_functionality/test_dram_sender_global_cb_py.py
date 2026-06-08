@@ -2,20 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import pytest
 import ttnn
 
 from models.common.utility_functions import run_for_blackhole
 
 
-pytestmark = [
-    run_for_blackhole("DramSenderGCB requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DramSenderGCB requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_dram_core_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
 def _single_recv(x: int, y: int) -> ttnn.CoreRangeSet:
