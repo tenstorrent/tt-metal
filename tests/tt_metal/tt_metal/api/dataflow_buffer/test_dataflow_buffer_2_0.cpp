@@ -94,7 +94,7 @@ static inline TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, ui
 // DFBs (post-DFBSpec API change: disable_implicit_sync moved from DataflowBufferSpec
 // to per-kernel Gen2Config::disable_implicit_sync_for).
 static inline m2::KernelSpec make_dm_kernel(
-    const std::string& unique_id,
+    const m2::KernelSpecName& unique_id,
     const std::string& source_path,
     uint8_t num_threads = 1,
     std::vector<m2::DFBSpecName> disable_implicit_sync_for = {}) {
@@ -114,7 +114,7 @@ static inline m2::KernelSpec make_dm_kernel(
 // Build a Gen2 compute KernelSpec. Compute kernels don't issue NoC ops directly
 // so they have no implicit-sync knob (the field lives on DataMovementHardwareConfig only).
 static inline m2::KernelSpec make_compute_kernel(
-    const std::string& unique_id, const std::string& source_path, uint8_t num_threads = 1) {
+    const m2::KernelSpecName& unique_id, const std::string& source_path, uint8_t num_threads = 1) {
     return m2::KernelSpec{
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
@@ -172,13 +172,13 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
     auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    constexpr const char* DFB_IN = "dfb_in";
-    constexpr const char* DFB_OUT = "dfb_out";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     // DFBs — disable_implicit_sync=true matches kernels' explicit credit-flow path.
     m2::DataflowBufferSpec dfb_in{
@@ -262,18 +262,18 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -326,11 +326,11 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     IDevice* device = mesh_device->get_devices()[0];
     const m2::NodeCoord node{0, 0};
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_tiles, DataType::UINT32);
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
@@ -391,17 +391,17 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
         },
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -453,14 +453,14 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     constexpr uint32_t num_entries = 4;
     const m2::NodeCoord node{0, 0};
 
-    constexpr const char* DFB_IN = "dfb_in";
-    constexpr const char* DFB_SELF = "dfb_self";
-    constexpr const char* DFB_OUT = "dfb_out";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB_IN{"dfb_in"};
+    const m2::DFBSpecName DFB_SELF{"dfb_self"};
+    const m2::DFBSpecName DFB_OUT{"dfb_out"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
@@ -551,18 +551,18 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -603,11 +603,11 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     constexpr uint32_t kRingEntries = 16;
     const m2::NodeCoord node{0, 0};
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(kEntrySize, kPushTiles, DataType::UINT32);
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
@@ -666,17 +666,17 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
         },
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -787,14 +787,14 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     const m2::NodeCoord core_a{0, 0};
     const m2::NodeCoord core_b{1, 0};
 
-    constexpr const char* DECOY_DFB = "decoy_dfb";
-    constexpr const char* SHARED_DFB = "shared_dfb";
-    constexpr const char* DECOY_PRODUCER = "decoy_producer";
-    constexpr const char* DECOY_CONSUMER = "decoy_consumer";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DECOY_DFB{"decoy_dfb"};
+    const m2::DFBSpecName SHARED_DFB{"shared_dfb"};
+    const m2::KernelSpecName DECOY_PRODUCER{"decoy_producer"};
+    const m2::KernelSpecName DECOY_CONSUMER{"decoy_consumer"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * entries_per_core, DataType::UINT32);
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
@@ -901,27 +901,27 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = DECOY_PRODUCER,
+            .kernel = DECOY_PRODUCER,
             .runtime_arg_values = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = DECOY_CONSUMER,
+            .kernel = DECOY_CONSUMER,
             .runtime_arg_values = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values =
                 {{.node = core_b, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         },
         m2::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values =
                 {{.node = core_b, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         },
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -991,11 +991,11 @@ static void run_single_dfb_program_2_0(
     const uint32_t entries_per_core = p.num_entries_in_buffer.value_or(p.num_entries);
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(p.entry_size, entries_per_core, DataType::UINT32);
     // Only allocate (and bind) a DRAM tensor on the side that has a DM kernel.
@@ -1102,27 +1102,27 @@ static void run_single_dfb_program_2_0(
     m2::ProgramRunArgs params;
     if (p.producer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
-            .kernel_spec_name = PRODUCER,
+            .kernel = PRODUCER,
             .runtime_arg_values =
                 {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         });
     } else {
-        params.kernel_run_args.push_back({.kernel_spec_name = PRODUCER});
+        params.kernel_run_args.push_back({.kernel = PRODUCER});
     }
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
-            .kernel_spec_name = CONSUMER,
+            .kernel = CONSUMER,
             .runtime_arg_values =
                 {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         });
     } else {
-        params.kernel_run_args.push_back({.kernel_spec_name = CONSUMER});
+        params.kernel_run_args.push_back({.kernel = CONSUMER});
     }
     if (in_tensor) {
-        params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(*in_tensor)});
+        params.tensor_args.insert({IN_TENSOR, std::cref(*in_tensor)});
     }
     if (out_tensor) {
-        params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
+        params.tensor_args.insert({OUT_TENSOR, std::cref(*out_tensor)});
     }
     m2::SetProgramRunArgs(program, params);
 
@@ -1253,11 +1253,11 @@ static void run_single_dfb_multicore_2_0(
     const m2::NodeCoord core_b{1, 0};
     const bool is_all = (cap == m2::DFBAccessPattern::ALL);
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     // Each core owns num_entries slots → total = 2 * num_entries.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * num_entries, DataType::UINT32);
@@ -1327,18 +1327,18 @@ static void run_single_dfb_multicore_2_0(
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel_spec_name = PRODUCER,
+        {.kernel = PRODUCER,
          .runtime_arg_values =
              {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
               {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
-        {.kernel_spec_name = CONSUMER,
+        {.kernel = CONSUMER,
          .runtime_arg_values =
              {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
               {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, std::cref(in_tensor)},
+        {OUT_TENSOR, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -1383,11 +1383,11 @@ static void run_concurrent_dfbs_program_2_0(
     // Build N DFBs + N producer kernels + N consumer kernels.
     std::vector<m2::DataflowBufferSpec> dfbs;
     std::vector<m2::KernelSpec> kernels;
-    std::vector<std::string> kernel_names;
+    std::vector<m2::KernelSpecName> kernel_names;
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        std::string dfb_id = "dfb_" + std::to_string(i);
-        std::string prod_id = "producer_" + std::to_string(i);
-        std::string cons_id = "consumer_" + std::to_string(i);
+        const m2::DFBSpecName dfb_id{"dfb_" + std::to_string(i)};
+        const m2::KernelSpecName prod_id{"producer_" + std::to_string(i)};
+        const m2::KernelSpecName cons_id{"consumer_" + std::to_string(i)};
         dfbs.push_back({
             .unique_id = dfb_id,
             .entry_size = entry_size,
@@ -1400,7 +1400,8 @@ static void run_concurrent_dfbs_program_2_0(
              .accessor_name = "out",
              .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
-        prod.tensor_bindings = {{.tensor_parameter_name = "in_tensor", .accessor_name = "src_tensor"}};
+        prod.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{"in_tensor"}, .accessor_name = "src_tensor"}};
         prod.compile_time_args = {
             {"num_entries_per_producer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
@@ -1415,7 +1416,8 @@ static void run_concurrent_dfbs_program_2_0(
              .accessor_name = "in",
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
-        cons.tensor_bindings = {{.tensor_parameter_name = "out_tensor", .accessor_name = "dst_tensor"}};
+        cons.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{"out_tensor"}, .accessor_name = "dst_tensor"}};
         cons.compile_time_args = {
             {"num_entries_per_consumer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
@@ -1433,8 +1435,8 @@ static void run_concurrent_dfbs_program_2_0(
         .dataflow_buffers = dfbs,
         .tensor_parameters =
             {
-                {.unique_id = "in_tensor", .spec = in_tensor.tensor_spec()},
-                {.unique_id = "out_tensor", .spec = out_tensor.tensor_spec()},
+                {.unique_id = m2::TensorParamName{"in_tensor"}, .spec = in_tensor.tensor_spec()},
+                {.unique_id = m2::TensorParamName{"out_tensor"}, .spec = out_tensor.tensor_spec()},
             },
         .work_units = {wu},
     };
@@ -1443,11 +1445,11 @@ static void run_concurrent_dfbs_program_2_0(
 
     m2::ProgramRunArgs params;
     for (const auto& name : kernel_names) {
-        params.kernel_run_args.push_back({.kernel_spec_name = name});
+        params.kernel_run_args.push_back({.kernel = name});
     }
     params.tensor_args = {
-        {.tensor_parameter_name = "in_tensor", .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = "out_tensor", .tensor = std::cref(out_tensor)},
+        {m2::TensorParamName{"in_tensor"}, std::cref(in_tensor)},
+        {m2::TensorParamName{"out_tensor"}, std::cref(out_tensor)},
     };
     m2::SetProgramRunArgs(program, params);
 
@@ -1701,8 +1703,8 @@ static void run_sequential_4_dfbs_2_0(
     constexpr std::array<const char*, 4> DFB_NAMES{"buf_0", "buf_1", "buf_2", "buf_3"};
     constexpr std::array<const char*, 4> SRC_NAMES{"src_0", "src_1", "src_2", "src_3"};
     constexpr std::array<const char*, 4> DST_NAMES{"dst_0", "dst_1", "dst_2", "dst_3"};
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
     std::vector<MeshTensor> in_tensors, out_tensors;
@@ -1717,7 +1719,7 @@ static void run_sequential_4_dfbs_2_0(
     dfbs.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
         dfbs.push_back({
-            .unique_id = DFB_NAMES[i],
+            .unique_id = m2::DFBSpecName{DFB_NAMES[i]},
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = tt::DataFormat::Float16_b,
@@ -1728,11 +1730,12 @@ static void run_sequential_4_dfbs_2_0(
         PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_seq_producer_quad_2_0.cpp", num_producers);
     for (uint32_t i = 0; i < 4; ++i) {
         producer.dfb_bindings.push_back(
-            {.dfb_spec_name = DFB_NAMES[i],
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
              .accessor_name = DFB_NAMES[i],
              .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED});
-        producer.tensor_bindings.push_back({.tensor_parameter_name = SRC_NAMES[i], .accessor_name = SRC_NAMES[i]});
+        producer.tensor_bindings.push_back(
+            {.tensor_parameter_name = m2::TensorParamName{SRC_NAMES[i]}, .accessor_name = SRC_NAMES[i]});
     }
     producer.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer}, {"implicit_sync", implicit_sync ? 1u : 0u}};
@@ -1742,11 +1745,12 @@ static void run_sequential_4_dfbs_2_0(
     for (uint32_t i = 0; i < 4; ++i) {
         const auto cap = dfb_specs[i].cap;
         consumer.dfb_bindings.push_back(
-            {.dfb_spec_name = DFB_NAMES[i],
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
              .accessor_name = DFB_NAMES[i],
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = cap});
-        consumer.tensor_bindings.push_back({.tensor_parameter_name = DST_NAMES[i], .accessor_name = DST_NAMES[i]});
+        consumer.tensor_bindings.push_back(
+            {.tensor_parameter_name = m2::TensorParamName{DST_NAMES[i]}, .accessor_name = DST_NAMES[i]});
     }
     consumer.compile_time_args = {
         {"implicit_sync", implicit_sync ? 1u : 0u},
@@ -1760,15 +1764,15 @@ static void run_sequential_4_dfbs_2_0(
 
     // All-pass: each DFB .disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
     for (uint32_t i = 0; i < 4; ++i) {
-        maybe_disable_implicit_sync(producer, implicit_sync, DFB_NAMES[i]);
-        maybe_disable_implicit_sync(consumer, implicit_sync, DFB_NAMES[i]);
+        maybe_disable_implicit_sync(producer, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
+        maybe_disable_implicit_sync(consumer, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
     }
 
     std::vector<m2::TensorParameter> tensor_parameters;
     tensor_parameters.reserve(8);
     for (uint32_t i = 0; i < 4; ++i) {
-        tensor_parameters.push_back({.unique_id = SRC_NAMES[i], .spec = tensor_spec});
-        tensor_parameters.push_back({.unique_id = DST_NAMES[i], .spec = tensor_spec});
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{SRC_NAMES[i]}, .spec = tensor_spec});
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{DST_NAMES[i]}, .spec = tensor_spec});
     }
 
     m2::ProgramSpec spec{
@@ -1790,12 +1794,12 @@ static void run_sequential_4_dfbs_2_0(
     // framework actually launches them on each node. Without this, the kernels
     // are wired up but never start, and outputs stay at the initial value (0).
     params.kernel_run_args = {
-        {.kernel_spec_name = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}},
-        {.kernel_spec_name = CONSUMER, .runtime_arg_values = {{.node = node, .args = {}}}},
+        {.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}},
+        {.kernel = CONSUMER, .runtime_arg_values = {{.node = node, .args = {}}}},
     };
     for (uint32_t i = 0; i < 4; ++i) {
-        params.tensor_args.push_back({.tensor_parameter_name = SRC_NAMES[i], .tensor = std::cref(in_tensors[i])});
-        params.tensor_args.push_back({.tensor_parameter_name = DST_NAMES[i], .tensor = std::cref(out_tensors[i])});
+        params.tensor_args.insert({m2::TensorParamName{SRC_NAMES[i]}, std::cref(in_tensors[i])});
+        params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
     }
     m2::SetProgramRunArgs(program, params);
 
@@ -1864,7 +1868,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     constexpr std::array<const char*, 4> DFB_NAMES{"buf_0", "buf_1", "buf_2", "buf_3"};
     constexpr std::array<const char*, 4> DST_NAMES{"dst_0", "dst_1", "dst_2", "dst_3"};
     constexpr std::array<const char*, 4> CONSUMER_NAMES{"consumer_0", "consumer_1", "consumer_2", "consumer_3"};
-    constexpr const char* PRODUCER = "producer";
+    const m2::KernelSpecName PRODUCER{"producer"};
 
     const auto dram_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::UINT32);
 
@@ -1878,7 +1882,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     dfbs.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         dfbs.push_back({
-            .unique_id = DFB_NAMES[i],
+            .unique_id = m2::DFBSpecName{DFB_NAMES[i]},
             .entry_size = entry_size,
             .num_entries = num_entries,
             .data_format_metadata = tt::DataFormat::Float16_b,
@@ -1892,7 +1896,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         PRODUCER, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_seq_producer_quad_2_0.cpp", /*num_threads=*/1);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer.dfb_bindings.push_back(
-            {.dfb_spec_name = DFB_NAMES[i],
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
              .accessor_name = DFB_NAMES[i],
              .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED});
@@ -1903,14 +1907,16 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     std::vector<m2::KernelSpec> consumers;
     consumers.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        auto c =
-            make_dm_kernel(CONSUMER_NAMES[i], "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
+        auto c = make_dm_kernel(
+            m2::KernelSpecName{CONSUMER_NAMES[i]},
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
         c.dfb_bindings = {
-            {.dfb_spec_name = DFB_NAMES[i],
+            {.dfb_spec_name = m2::DFBSpecName{DFB_NAMES[i]},
              .accessor_name = "in",
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
-        c.tensor_bindings = {{.tensor_parameter_name = DST_NAMES[i], .accessor_name = "dst_tensor"}};
+        c.tensor_bindings = {
+            {.tensor_parameter_name = m2::TensorParamName{DST_NAMES[i]}, .accessor_name = "dst_tensor"}};
         c.compile_time_args = {
             {"num_entries_per_consumer", num_entries},
             {"blocked_consumer", 0u},
@@ -1918,14 +1924,14 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         c.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
         // All-pass: DFB .disable_implicit_sync = !implicit_sync. Producer is Tensix (no DM
         // side); disable on the DM consumer endpoint (post-#45160).
-        maybe_disable_implicit_sync(c, implicit_sync, DFB_NAMES[i]);
+        maybe_disable_implicit_sync(c, implicit_sync, m2::DFBSpecName{DFB_NAMES[i]});
         consumers.push_back(c);
     }
 
     std::vector<m2::TensorParameter> tensor_parameters;
     tensor_parameters.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        tensor_parameters.push_back({.unique_id = DST_NAMES[i], .spec = dram_spec});
+        tensor_parameters.push_back({.unique_id = m2::TensorParamName{DST_NAMES[i]}, .spec = dram_spec});
     }
 
     std::vector<m2::KernelSpec> all_kernels;
@@ -1934,7 +1940,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         all_kernels.push_back(c);
     }
 
-    std::vector<std::string> wu_kernel_names{PRODUCER};
+    std::vector<m2::KernelSpecName> wu_kernel_names{PRODUCER};
     for (const auto* n : CONSUMER_NAMES) {
         wu_kernel_names.emplace_back(n);
     }
@@ -1956,16 +1962,15 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     m2::ProgramRunArgs params;
     // Producer has no runtime args but still needs a KernelRunArgs entry to be
     // launched. Without it, the kernel is wired up but never runs.
-    params.kernel_run_args.push_back(
-        {.kernel_spec_name = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}});
+    params.kernel_run_args.push_back({.kernel = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}});
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.kernel_run_args.push_back(
-            {.kernel_spec_name = CONSUMER_NAMES[i],
+            {.kernel = m2::KernelSpecName{CONSUMER_NAMES[i]},
              .runtime_arg_values = {
                  {.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}});
     }
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        params.tensor_args.push_back({.tensor_parameter_name = DST_NAMES[i], .tensor = std::cref(out_tensors[i])});
+        params.tensor_args.insert({m2::TensorParamName{DST_NAMES[i]}, std::cref(out_tensors[i])});
     }
     m2::SetProgramRunArgs(program, params);
 
@@ -2017,11 +2022,11 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     constexpr uint32_t num_entries = 8;
     const m2::NodeRange grid_2x2{m2::NodeCoord{0, 0}, m2::NodeCoord{1, 1}};  // 4 cores
 
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     // Each core owns num_entries slots → 4 cores × num_entries pages total.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 4 * num_entries, DataType::UINT32);
@@ -2127,8 +2132,8 @@ static void run_intra_tensix_dfb_program_2_0(
     const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
     const uint32_t total_bytes = num_entries * entry_size;
 
-    constexpr const char* DFB = "intra_dfb";
-    constexpr const char* COMPUTE = "compute";
+    const m2::DFBSpecName DFB{"intra_dfb"};
+    const m2::KernelSpecName COMPUTE{"compute"};
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -2175,7 +2180,7 @@ static void run_intra_tensix_dfb_program_2_0(
     // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
     // pattern in main's run_intra_tensix_dfb_program).
     m2::ProgramRunArgs params;
-    params.kernel_run_args = {{.kernel_spec_name = COMPUTE}};
+    params.kernel_run_args = {{.kernel = COMPUTE}};
     m2::SetProgramRunArgs(program, params);
 
     // DFB is the first L1 allocation in the program → lands at the base L1
@@ -2237,11 +2242,11 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     constexpr uint32_t entries_per_neo = num_entries / num_neos;  // = 4
     const m2::NodeCoord node{0, 0};
 
-    constexpr const char* DFB_REMAPPER = "dfb_remapper";
-    constexpr const char* DFB_INTRA = "dfb_intra";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
+    const m2::DFBSpecName DFB_REMAPPER{"dfb_remapper"};
+    const m2::DFBSpecName DFB_INTRA{"dfb_intra"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName COMPUTE{"compute"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
 
     // dfb_remapper: DM->Tensix 1S × 4B ALL, implicit_sync=true.
     m2::DataflowBufferSpec dfb_remapper{
@@ -2317,10 +2322,10 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel_spec_name = PRODUCER,
+        {.kernel = PRODUCER,
          .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
     };
-    params.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
+    params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
     m2::SetProgramRunArgs(program, params);
 
     // Fill DRAM input; DM NOC-reads this into the remapper ring's L1.
@@ -2334,7 +2339,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     // Verify remapper ring L1: DM wrote input_remapper; Tensix consumed credits
     // (ALL pattern) but did not overwrite the ring's data.
     const uint32_t remapper_l1_addr =
-        program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(DFB_REMAPPER))->uniform_alloc_addr();
+        program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_REMAPPER))->uniform_alloc_addr();
     std::vector<uint32_t> l1_remapper;
     detail::ReadFromDeviceL1(device, CoreCoord(0, 0), remapper_l1_addr, num_entries * entry_size, l1_remapper);
     EXPECT_EQ(input_remapper, l1_remapper) << "M2 DM->Tensix strided x ALL remapper ring L1 mismatch";
@@ -2383,11 +2388,11 @@ struct M2ConfigDFBParams {
 static inline Program build_single_dfb_program_2_0(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const M2ConfigDFBParams& p) {
     const m2::NodeCoord node{0, 0};
-    constexpr const char* DFB = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const m2::DFBSpecName DFB{"dfb"};
+    const m2::KernelSpecName PRODUCER{"producer"};
+    const m2::KernelSpecName CONSUMER{"consumer"};
+    const m2::TensorParamName IN_TENSOR{"in_tensor"};
+    const m2::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(p.entry_size, p.num_entries, DataType::UINT32);
 
@@ -2940,8 +2945,8 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "INTRA scope is Quasar-only";
     }
-    constexpr const char* DFB = "intra_dfb";
-    constexpr const char* COMPUTE = "compute";
+    const m2::DFBSpecName DFB{"intra_dfb"};
+    const m2::KernelSpecName COMPUTE{"compute"};
     const m2::NodeCoord node{0, 0};
 
     m2::DataflowBufferSpec dfb_spec{
