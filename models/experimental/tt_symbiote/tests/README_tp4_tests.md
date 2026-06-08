@@ -8,11 +8,14 @@ export MESH_DEVICE=N150x4
 ```
 
 ```bash
-# vision attention
-pytest models/experimental/tt_symbiote/tests/test_dots_ocr_vision_attention_tp.py -s
+# sdpa decode config sweep
+python -m tracy -r -p -m pytest models/experimental/tt_symbiote/tests/sdpa_sweep_test.py -s
 
-# vision mlp
-pytest models/experimental/tt_symbiote/tests/test_dots_ocr_vision_mlp_tp.py -s
+# vision attention  (S=11264; use -k s256 for the PCC-correctness case)
+pytest models/experimental/tt_symbiote/tests/test_dots_ocr_vision_attention_tp.py -k s11264 -s
+
+# vision mlp  (S=11264; use -k m256 for the PCC-correctness case)
+pytest models/experimental/tt_symbiote/tests/test_dots_ocr_vision_mlp_tp.py -k m11264 -s
 
 # text decoder prefill attention
 pytest models/experimental/tt_symbiote/tests/test_dots_ocr_text_attention_prefill_tp.py -s
@@ -20,8 +23,10 @@ pytest models/experimental/tt_symbiote/tests/test_dots_ocr_text_attention_prefil
 # text decoder prefill mlp
 pytest models/experimental/tt_symbiote/tests/test_dots_ocr_text_mlp_prefill_tp.py -s
 
-# sdpa decode config sweep
-python -m tracy -r -p -m pytest models/experimental/tt_symbiote/tests/sdpa_sweep_test.py -s
+# text decoder decode mlp
+pytest models/experimental/tt_symbiote/tests/test_dots_ocr_text_mlp_decode_tp.py -s
+
+
 ```
 
 Tracy (any test): replace `pytest` with `python -m tracy -v -r -p -m pytest`.
