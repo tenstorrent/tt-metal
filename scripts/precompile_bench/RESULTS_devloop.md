@@ -65,6 +65,38 @@ for large edits and wrong for small ones**. The deciding factor is how many TUs 
 a leaf-kernel tweak recompiles too little to beat a plain warm-JIT rerun; editing the whole compute path
 (or a shared `kernel_lib`/llk header, which busts the entire suite) is squarely precompile's win.
 
+## 4. Why warm reuse capped at 81%, and the fix (81% → 99.4%)
+
+The warm run consistently cold-compiled ~90/490 kernels (81% reuse) — much worse than conv2d's ~99%.
+Root-caused by snapshotting the JIT cache after the warmup and diffing what the warm run newly
+compiled, plus an env-gated per-body diagnostic (`UP_FRONT_LOG_SWALLOWED=1`) in the collect plugin:
+
+* The 53 missed kernels were dominated (30, ~57%) by **`fill_pad` reader/writer/compute** — input
+  padding kernels — plus a tail of compute/reader variants and the 3 `cq_*` dispatch kernels.
+* The per-body log showed **10 bodies stashed ZERO ops** — all `test_layer_norm_with_padding[...]`
+  — each throwing `RuntimeError: Tensor.item() cannot be called on meta tensors` on the test's first
+  line: `non_zero_columns = torch.randint(1, w+1, (1,)).item()`. Under `UP_FRONT_META_COLLECT` the
+  tensor is on torch's meta device and `.item()` is unsupported, so the body aborted **before** any
+  ttnn op was stashed → those tests (and their `fill_pad` + `layer_norm` programs) were never collected.
+  That one `.item()` call accounted for the bulk of the 19% gap (the suite has many non-tile-aligned
+  widths → heavy padding; conv2d's aligned shapes barely hit `fill_pad`, hence its ~99%).
+
+**Fix** (`up_front_collect_plugin.py`, `_meta_host_ops`): make `.item()`/`.tolist()` return a
+deterministic stand-in on meta tensors. The extracted scalar only feeds input *data*, never the ttnn
+program shape/config that keys the cache, so it's safe — and the content-hashed cache means any
+mis-collected variant simply misses and recompiles (never a wrong result).
+
+| | unique programs collected | warm-run reuse | tests passing |
+|---|---|---|---|
+| before | 92 | 397/490 (81.0%) | 75/75 |
+| **after** | **112** | **487/490 (99.4%)** | **75/75** |
+
+The remaining 3 misses are the `cq_prefetch`/`cq_dispatch*` kernels — the hardware-free (slow-dispatch)
+warmup has no command queue, so the fast-dispatch CQ kernels are an irreducible ~3-kernel floor.
+**Implication:** with ~99% coverage the warm run drops toward the ~10s execution floor (only 3 inline
+compiles instead of ~90), which improves precompile's standing in every comparison above — the
+north-star and dev-loop numbers in this doc were measured at the old 81% and are now conservative.
+
 ### Practical guidance for the dev loop
 * Iterating on one kernel file: **don't bother with precompile** — keep your JIT cache warm and just rerun
   (~37s here); the cache recompiles only what you changed.

@@ -205,6 +205,8 @@ def _meta_host_ops():
     }
     real_from_torch = ttnn.from_torch
     real_to_torch = ttnn.to_torch
+    real_item = torch.Tensor.item
+    real_tolist = torch.Tensor.tolist
 
     _T2T = {
         torch.float32: ttnn.float32,
@@ -278,10 +280,29 @@ def _meta_host_ops():
             pcc_saved.append((_mod, _mod.comp_pcc))
             _mod.comp_pcc = lambda *a, **k: (True, 0.999999)
 
+    # .item()/.tolist() RAISE on meta tensors. A body that reads a scalar out of a tensor to drive
+    # HOST-side control flow before its ttnn ops (e.g. test_layer_norm_with_padding does
+    # `torch.randint(1, w+1, (1,)).item()` on line 1) would abort under meta collect BEFORE any ttnn
+    # op is stashed -> the whole test (and its fill_pad/layer_norm kernels) goes uncollected. The
+    # extracted value only feeds input *data*, never the ttnn program's shape/config (which is all
+    # that determines the collected kernels), so a deterministic stand-in is safe and lets the body
+    # reach its ops. Only meta tensors are intercepted; real tensors keep exact semantics.
+    def _meta_item(self):
+        if getattr(self, "is_meta", False):
+            return 1
+        return real_item(self)
+
+    def _meta_tolist(self):
+        if getattr(self, "is_meta", False):
+            return real_tolist(real["zeros"](tuple(self.shape)))
+        return real_tolist(self)
+
     for name, orig in real.items():
         setattr(torch, name, _mk(orig))
     ttnn.from_torch = _meta_from_torch
     ttnn.to_torch = _meta_to_torch
+    torch.Tensor.item = _meta_item
+    torch.Tensor.tolist = _meta_tolist
     try:
         yield
     finally:
@@ -289,6 +310,8 @@ def _meta_host_ops():
             setattr(torch, name, orig)
         ttnn.from_torch = real_from_torch
         ttnn.to_torch = real_to_torch
+        torch.Tensor.item = real_item
+        torch.Tensor.tolist = real_tolist
         for _mod, _orig in pcc_saved:
             _mod.comp_pcc = _orig
 
@@ -306,6 +329,13 @@ def pytest_runtest_call(item):
         return (yield)  # let it run normally; it cold-compiles in pass 2
 
     _stats["bodies"] += 1
+    # UP_FRONT_LOG_SWALLOWED=1: per-body diagnostic — which tests threw under NO_DISPATCH and
+    # how many ops each stashed before the throw (reveals coverage: a body that throws BEFORE
+    # stashing its op is a real miss; one that throws on the addr-0 readback after stashing is fine).
+    _log = os.environ.get("UP_FRONT_LOG_SWALLOWED")
+    n_before = ttnn.graph.up_front_num_collected() if _log else 0
+    swallowed = False
+    exc_info = ""
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
         if _META_COLLECT:
@@ -315,14 +345,23 @@ def pytest_runtest_call(item):
             with _cheap_host_ops():
                 return (yield)  # body runs with cheap host stand-ins; ttnn ops still stash
         return (yield)  # pytest runs the body with its real fixtures; ops stash into the collector
-    except Exception:
+    except Exception as e:
         # Expected under NO_DISPATCH: a readback/assert on an addr-0 output. The
         # program was already stashed by the funnel before the failure. Swallow so
         # pass 1 stays green (its results are meaningless — pass 2 is the real run).
         _stats["swallowed"] += 1
+        swallowed = True
+        exc_info = f"{type(e).__name__}: {str(e)[:140]}"
         return None
     finally:
         ttnn.graph.up_front_end_collect()
+        if _log:
+            n_after = ttnn.graph.up_front_num_collected()
+            print(
+                f"UP_FRONT_BODY: {'SWALLOWED' if swallowed else 'ok       '} "
+                f"stashed={n_after - n_before:<3} {item.nodeid}" + (f"  -> {exc_info}" if swallowed else ""),
+                flush=True,
+            )
 
 
 def pytest_sessionstart(session):
