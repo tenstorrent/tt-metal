@@ -36,11 +36,18 @@ _MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "N150x4": (1, 4
     os.environ.get("MESH_DEVICE"), (1, 1)
 )
 _MULTI = _MESH_SHAPE != (1, 1)
+# Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
+# needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
+# TP serving config and is ample for the single 2048-token chunk trace — negligible vs the
+# per-device DRAM that chunk-outer prefill frees. Single-device params are left unchanged.
+_TP_TRACE_REGION_SIZE = 256 * 1024 * 1024
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
         "num_command_queues": 2,
-        **({"fabric_config": ttnn.FabricConfig.FABRIC_1D} if _MULTI else {}),
+        **(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
+        ),
     }
 ]
 
@@ -288,12 +295,12 @@ def test_demo_text(
         f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
-    # Multi-device (TP): route through the non-traced stateful generate path
-    # (prefill fills KV cache + GDN state, then incremental decode). The paged/
-    # traced machinery is single-device-only for now, so both traced_* and paged_*
-    # configs run via this path on a mesh.
+    # Multi-device (TP): route through the chunk-outer prefill + paged decode path.
+    # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
+    # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
+    # sequence — the long-context OOM fix), then incremental paged single-token decode.
     if model.num_devices > 1:
-        generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens)
+        generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
@@ -352,30 +359,70 @@ def _should_use_chunked_trace(model):
     )
 
 
-def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens):
-    """Multi-device (TP) non-traced generation: stateful prefill (fills KV cache +
-    GDN recurrent/conv state) then incremental single-token decode. Returns
-    (generated_tokens, perf_dict) with TTFT and decode tok/s."""
-    import math
+def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
+    """Multi-device (TP) generation via traced chunk-outer prefill + paged decode.
 
-    prompt_ids = token_ids[0].tolist()
-    model.reset_tp()
-    T = len(prompt_ids)
-    T_pad = max(128, math.ceil(T / 128) * 128)
-    padded = prompt_ids + [0] * (T_pad - T)
+    Prefill captures ONE 2048-token chunk's all-layer forward as a trace and replays it
+    per chunk (chunk-outer): each chunk passes through all layers while the GDN recurrent/
+    conv state and the paged KV cache carry across chunks in place, so the GDN seq kernel
+    never materializes full-sequence float32 tensors (the long-context OOM fix). The traced
+    replay DMA-s per-chunk inputs into persistent buffers; the eager (non-traced) fallback
+    instead allocates fresh host tensors every chunk and crashes past ~7872 tokens
+    (command-queue pressure), so it cannot reach long ISL. Decode then continues from the
+    carried state via the standard paged contract (prepare_inputs_decode /
+    ttnn_decode_forward / process_output_decode). Returns (generated_tokens, perf_dict).
 
+    Mirrors the validated TP flow in tests/test_model_tp_contract.py
+    (test_model_tp_long_prefill_traced) and tt/qwen35_vllm.py. prefill_tp / decode_tp /
+    generate_tp are left as the bespoke oracle those tests compare against.
+    """
+    vocab = model.args.vocab_size
+    T = token_ids.shape[1]
+
+    # The flexible (position-general) chunked SDPA requires the page-table width to be a
+    # multiple of 32; round the block budget up so both the captured chunk trace's page
+    # table and the per-request page table satisfy it. Mirrors test_model_tp_long_prefill_traced.
+    num_blocks = ((num_blocks + 31) // 32) * 32
+
+    # Allocate the replicated paged KV cache for the 8 full-attention layers and reset/
+    # bind the GDN state (sets _stable_state so prefill/decode update it in place). The
+    # per-device cache holds n_local_kv_heads (NOT n_kv_heads) — at TP=4 that is 1.
+    kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    # Identity page table covering the whole block budget (prompt + generated tokens).
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+
+    # ---- Capture the per-chunk prefill trace (warmup; NOT counted in TTFT). ----
+    # Also warms the masked-bucket programs (short prompt + the long-prompt tail) before the
+    # trace is parked, so a request never compiles a program that could clobber the trace.
+    CHUNK = 2048
+    t_cap = time.time()
+    model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
+    logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
+
+    # ---- Chunk-outer prefill (real prompt only; the tail is masked internally). ----
     t0 = time.time()
-    logits = model.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
+    logits_dev = model.prefill_traced_chunked(token_ids[:, :T], page_table, actual_len=T)
     ttnn.synchronize_device(model.device)
     ttft = time.time() - t0
 
-    nxt = int(torch.argmax(logits).item())
+    # Logits are replicated across the mesh ([1,1,vocab]); gather one replica.
+    lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+    nxt = int(lt.reshape(-1, vocab)[0].argmax().item())
     generated = [nxt]
+
+    # ---- Paged single-token decode, continuing from the carried GDN + KV state. ----
     pos = T
     t1 = time.time()
     for _ in range(max_generated_tokens - 1):
-        logits = model.decode_tp(nxt, pos)
-        nxt = int(torch.argmax(logits).item())
+        dev = model.prepare_inputs_decode(
+            torch.tensor([[nxt]], dtype=torch.int32),
+            torch.tensor([pos], dtype=torch.int32),
+            page_table=page_table,
+        )
+        tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        logits = model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab]
+        nxt = int(logits.argmax().item())
         generated.append(nxt)
         pos += 1
     ttnn.synchronize_device(model.device)
