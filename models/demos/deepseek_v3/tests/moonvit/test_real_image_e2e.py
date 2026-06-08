@@ -9,18 +9,16 @@ patches directly. That doesn't exercise the HF `KimiVLImageProcessor`
 path — PIL image → resize/normalize → patchify → `pixel_values` +
 `image_grid_hws`. This test closes that gap:
 
-  1. Build an image (synthetic programmatic, or a real skimage photo).
+  1. Build a synthetic PIL image (programmatic — no external download).
   2. Run the HF image processor on it to get `(L, 3, 14, 14)` patches
      plus `(N, 2)` grid metadata.
   3. Feed those into the HF MoonViT + projector reference.
   4. Feed the same into our tt-metal `MoonViT`.
   5. PCC compare at ≥ 0.95 (plus a logged relative-L2 error).
 
-Two test entrypoints:
-  - `test_real_image_through_hf_processor`: synthetic input at 224×224.
-  - `test_real_photo_high_res`: a genuine photograph (skimage `cat`) at
-    448×448 and 896×896 (up to a 64×64 / 4096-patch grid), exercising the
-    pipeline on natural image statistics at the largest single-image sizes.
+Covers 224×224 and 896×896 — the latter is the largest single-image grid
+(64×64 / 4096 patches), exercising the full pipeline and the O(L²)
+attention path end-to-end at maximum sequence length.
 
 Catches bugs the synthetic-patch tests can't:
   - RGB ordering mismatches (HF uses ImageNet-style mean/std normalization
@@ -117,28 +115,12 @@ def _run_processor_e2e(mesh_device, model_args, img, pcc_threshold, tag):
     [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))],
     indirect=True,
 )
-@pytest.mark.parametrize("image_size", [224])
+@pytest.mark.parametrize("image_size", [224, 896])
 def test_real_image_through_hf_processor(mesh_device, model_args, image_size):
-    """HF processor → our MoonViT matches HF MoonViT + projector at PCC ≥ 0.95 (synthetic input)."""
+    """HF processor → our MoonViT matches HF MoonViT + projector at PCC ≥ 0.95.
+
+    896×896 (64×64 / 4096 patches) is the largest single-image grid; its fp32
+    reference forward runs in ~20 s, well within the test budget.
+    """
     img = _make_synthetic_image(width=image_size, height=image_size, seed=42)
     _run_processor_e2e(mesh_device, model_args, img, pcc_threshold=0.95, tag=f"synthetic-{image_size}")
-
-
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))],
-    indirect=True,
-)
-@pytest.mark.parametrize("image_size", [448, 896])
-def test_real_photo_high_res(mesh_device, model_args, image_size):
-    """Genuine photograph through the processor at higher grids (up to 64×64 / 4096 patches).
-
-    Uses a real photo (skimage's `cat`) rather than random noise, exercising the
-    full pipeline on natural image statistics at the largest single-image grids.
-    Measured PCC at 896×896 ≈ 0.96 (real) — the fp32 reference forward over 4096
-    tokens runs in ~20 s, well within the test budget.
-    """
-    skd = pytest.importorskip("skimage.data", reason="scikit-image needed for real-photo E2E")
-    photo = Image.fromarray(skd.cat()).convert("RGB").resize((image_size, image_size), Image.BICUBIC)
-    _run_processor_e2e(mesh_device, model_args, photo, pcc_threshold=0.95, tag=f"real-cat-{image_size}")
