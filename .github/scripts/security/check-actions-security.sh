@@ -31,7 +31,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=75
+MAX_CHECK_NUM=77
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -3850,14 +3850,80 @@ check_75() {
         'AKIA[A-Z0-9]{16}' \
         "${file}" 2>/dev/null || true)
     if [[ -z "${hits}" ]]; then
-        # GitHub PAT: ghp_/ghs_/gho_/ghx_ followed by base36 chars
+        # GitHub classic PAT: ghp_/ghs_/gho_/ghu_/ghr_/ghc_/ght_ followed by 36+ base36 chars
         hits=$(grep -nE \
             'gh[psoruct]_[A-Za-z0-9]{36,}' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -z "${hits}" ]]; then
+        # GitHub fine-grained PAT: github_pat_ followed by 82+ chars (base36+underscore)
+        hits=$(grep -nE \
+            'github_pat_[A-Za-z0-9_]{82,}' \
             "${file}" 2>/dev/null || true)
     fi
     if [[ -n "${hits}" ]]; then
         log_issue "HIGH" "${file}" \
             "Contains hardcoded credential (AWS access key or GitHub PAT) - use secrets context (\${{ secrets.MY_KEY }}) instead of embedding values in workflow files" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_76_description="TLS certificate verification disabled (curl -k/--insecure, wget --no-check-certificate)"
+check_76_severity="HIGH"
+
+example_check_76() {
+    cat <<'EOF'
+    steps:
+      - run: curl -k -o binary https://builds.example.com/tool
+      - run: wget --no-check-certificate https://repo.example.com/install.sh
+EOF
+}
+
+check_76() {
+    local file="$1"
+    local hits
+    # curl -k or --insecure
+    hits=$(grep -nE \
+        'curl[[:space:]].*(-k[[:space:]]|--insecure)' \
+        "${file}" 2>/dev/null || true)
+    if [[ -z "${hits}" ]]; then
+        # wget --no-check-certificate
+        hits=$(grep -nE \
+            'wget[[:space:]].*--no-check-certificate' \
+            "${file}" 2>/dev/null || true)
+    fi
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" \
+            "TLS certificate verification is disabled (curl -k/--insecure or wget --no-check-certificate) - allows MITM attacks; remove the flag and fix the certificate instead" \
+            "$(_extract_lines "${hits}")"
+        return 1
+    fi
+    return 0
+}
+
+check_77_description="package install from insecure HTTP VCS source (pip/uv install git+http://, hg+http://)"
+check_77_severity="MEDIUM"
+
+example_check_77() {
+    cat <<'EOF'
+    steps:
+      - run: pip install git+http://github.com/myorg/myrepo.git@main
+      - run: uv pip install hg+http://bitbucket.org/example/lib
+EOF
+}
+
+check_77() {
+    local file="$1"
+    local hits
+    # pip/uv/poetry install from http:// VCS source
+    hits=$(grep -nE \
+        '(pip[23]?|uv pip|poetry)[[:space:]]+(install|add)[[:space:]].*\b(git|hg|svn|bzr)\+http://' \
+        "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" \
+            "Installs package from an HTTP (non-HTTPS) VCS source - insecure transport allows MITM supply-chain attacks; use git+https:// instead" \
             "$(_extract_lines "${hits}")"
         return 1
     fi

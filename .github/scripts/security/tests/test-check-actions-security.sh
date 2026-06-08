@@ -2600,6 +2600,18 @@ jobs:
       - run: curl -H "Authorization: token ghs_abc123def456ghi789jkl012mno345pqr678" https://api.github.com
 EOF
 
+assert_detects "check 75 flags GitHub fine-grained PAT (github_pat_)" "75" "credential" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: export GH_TOKEN=github_pat_11ABCDE0Y0abc123def456ghijkl_LONGRANDOMSTRINGHEREABCDEFGHIJKLMNOPQRSTUVWXYZ1234567
+EOF
+
 assert_clean "check 75 accepts secrets context reference" "75" <<'EOF'
 name: test
 on: push
@@ -2613,6 +2625,94 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+EOF
+
+# --- Check 76: TLS certificate verification disabled ---
+
+assert_detects "check 76 flags curl -k" "76" "TLS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -k -Lo /tmp/tool https://builds.example.com/tool && chmod +x /tmp/tool
+EOF
+
+assert_detects "check 76 flags curl --insecure" "76" "TLS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl --insecure -o artifact.tar.gz https://builds.example.com/artifact.tar.gz
+EOF
+
+assert_detects "check 76 flags wget --no-check-certificate" "76" "TLS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: wget --no-check-certificate https://builds.example.com/binary -O /usr/local/bin/tool
+EOF
+
+assert_clean "check 76 accepts normal curl without disabling TLS" "76" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: curl -fsSL https://example.com/install.sh -o install.sh
+EOF
+
+# --- Check 77: pip install from insecure HTTP VCS source ---
+
+assert_detects "check 77 flags pip install git+http://" "77" "VCS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install git+http://github.com/myorg/myrepo.git@main
+EOF
+
+assert_detects "check 77 flags pip3 install hg+http://" "77" "VCS" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip3 install hg+http://bitbucket.org/example/lib
+EOF
+
+assert_clean "check 77 accepts pip install git+https://" "77" <<'EOF'
+name: test
+on: push
+permissions: read-all
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - run: pip install git+https://github.com/myorg/myrepo.git@abc123
 EOF
 
 printf '\n'
