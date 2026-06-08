@@ -9,6 +9,7 @@ on CPU before TT conversion so inference has no LoRA-specific runtime cost.
 See ``experimental/models/Wan2_2_LoRA.md`` for the adapter-key formats
 detected by ``fuse_lora_state_dict`` and the supported namespaces.
 """
+from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Sequence
