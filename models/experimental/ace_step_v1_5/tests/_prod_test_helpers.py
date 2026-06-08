@@ -10,10 +10,6 @@ import os
 from pathlib import Path
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_VENDORED_ACESTEP = _REPO_ROOT / "models" / "experimental" / "ace_step_v1_5" / "torch_ref" / "_vendored_acestep"
-
-
 def ckpt_root() -> Path:
     return Path(
         os.environ.get("ACE_STEP_CHECKPOINT_DIR", "~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints")
@@ -36,9 +32,9 @@ def lm_dir(name: str) -> Path | None:
 
 
 def ensure_vendored_acestep_on_path() -> None:
-    from models.experimental.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
+    from models.experimental.ace_step_v1_5.utils.acestep_paths import ensure_host_preprocess_on_path
 
-    ensure_acestep_repo_on_path(_VENDORED_ACESTEP)
+    ensure_host_preprocess_on_path()
 
 
 def init_dit_and_lm_handlers(*, lm_variant: str = "acestep-5Hz-lm-1.7B"):
@@ -55,6 +51,8 @@ def init_dit_and_lm_handlers(*, lm_variant: str = "acestep-5Hz-lm-1.7B"):
         config_path="acestep-v15-base",
         device="cpu",
         use_flash_attention=False,
+        preprocess_only=True,
+        use_mlx_dit=False,
     )
     if not ok:
         raise RuntimeError(f"AceStepHandler.initialize_service failed: {status}")

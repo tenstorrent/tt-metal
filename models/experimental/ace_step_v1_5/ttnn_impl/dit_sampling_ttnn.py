@@ -427,7 +427,7 @@ def apg_guidance_velocity_host(
     dims: list[int] | None = None,
 ) -> torch.Tensor:
     """APG on host ``[B, T, C]`` tensors (permutes to ``[B, C, T]`` for the torch ref)."""
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         apg_forward,
     )
 
@@ -450,7 +450,7 @@ def adg_guidance_velocity_host(
     sigma_scalar: float,
     guidance_scale: float,
 ) -> torch.Tensor:
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         adg_forward,
     )
 

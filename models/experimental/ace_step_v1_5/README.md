@@ -57,7 +57,8 @@ This code is replicated from the work in [tt-metal PR #42463](https://github.com
 
 This folder provides:
 
-- `torch_ref/`: PyTorch reference implementation
+- `host_preprocess/`: demo-only ACE-Step host stack (`acestep.handler`, HF modeling for preprocess init)
+- `torch_ref/`: PyTorch reference modules for PCC tests (not a runnable demo)
 - `ttnn_impl/`: TTNN implementation with one-to-one module mapping
 - `tests/`: per-module PCC validation (Torch vs TTNN)
 - `demo/`: end-to-end demo entry points (`run_prompt_to_wav.py`, `serve_prompt_to_wav.py`, `demo.md`)
@@ -210,7 +211,6 @@ Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam)
 | `--seed` | `int` | `0` | RNG seed (latents + sampling). |
 | `--guidance_scale` | `float` | auto | DiT CFG strength. Default **7** base/sft, **1** turbo (turbo ignores CFG >1). |
 | `--out` | `str` | `ttnn_out.wav` | Output WAV path. |
-| `--use-official-lm` | flag | off | Full official `generate_music` on CPU (PyTorch DiT). A/B reference; no TTNN. |
 | `--pytorch-lm` / `--no-pytorch-lm` | bool | off | Host PyTorch 5 Hz LM instead of TTNN causal LM. |
 | `--torch-vae` | flag | off | PyTorch Oobleck decode instead of TTNN tiled VAE. |
 | `--use-trace` / `--no-use-trace` | bool | **on** | TTNN trace + 2 command queues for preprocess + DiT body. Auto-off for ≥30s mesh long clips. |
@@ -312,10 +312,12 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 ```
 ace_step_v1_5/
   demo/           run_prompt_to_wav.py, serve_prompt_to_wav.py, demo.md
+  host_preprocess/  bundled acestep handler + HF model code for preprocess only
   perf/           benchmark xlsx + export scripts
   torch_ref/
   ttnn_impl/
   tests/
+  utils/          acestep_paths.py, official_lm_preprocess.py, tt_device.py
 ```
 
 ## PCC and module tests

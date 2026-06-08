@@ -97,6 +97,7 @@ def test_lm_head_sharded_norm_patches_distributed_norm_and_apply():
     lm_head_mem = object()
     lm_head_cfg = {"sharded_output_config": lm_head_mem, "sharded_program_config": object()}
     hidden = mock.Mock()
+    hidden.shape = [1, 1, 128, 1024]
     hidden.memory_config.return_value.is_sharded.return_value = False
     dram_hidden = mock.Mock()
     dram_hidden.memory_config.return_value.is_sharded.return_value = False
@@ -111,6 +112,7 @@ def test_lm_head_sharded_norm_patches_distributed_norm_and_apply():
                 get_lm_head_input_mem_config=mock.Mock(return_value=SimpleNamespace(is_sharded=lambda: True)),
                 is_multichip=False,
                 is_distributed_norm=mock.Mock(return_value=False),
+                mesh_device=SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=8)),
             )
             self.prefetcher = None
             self.tt_ccl = None
@@ -406,7 +408,9 @@ def test_apply_prefill_l1_keeps_decode_wqkv_sharded(monkeypatch):
         embd=SimpleNamespace(forward=lambda *a, **k: None),
         norm=None,
     )
-    model_args = SimpleNamespace(prefetcher=None)
+    model_args = SimpleNamespace(
+        prefetcher=None, get_residual_mem_config=mock.Mock(return_value=ttnn.DRAM_MEMORY_CONFIG)
+    )
 
     with mock.patch(
         "models.experimental.ace_step_v1_5.ttnn_impl.qwen_prefill_l1.ace_step_linear_l1_memory_config",

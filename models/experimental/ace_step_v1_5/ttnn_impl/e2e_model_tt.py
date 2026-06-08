@@ -974,7 +974,7 @@ def run_ttnn_denoise_loop(
             enc_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(enc_hs), device=device, dram=mem)
             ctx_tt_pipe = bf16_row_from_numpy_bc(to_numpy_f32(ctx_lat), device=device, dram=mem)
 
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         MomentumBuffer,
     )
     from models.experimental.ace_step_v1_5.utils.tt_device import (

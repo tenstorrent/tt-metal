@@ -74,12 +74,16 @@ def torch_seed():
 @pytest.fixture(scope="session")
 def device():
     ttnn = require_ttnn()
+    from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
+
     dev = ttnn.open_device(**_open_kwargs())
 
     if hasattr(dev, "enable_program_cache"):
         dev.enable_program_cache()
-    yield dev
-    ttnn.close_device(dev)
+    try:
+        yield dev
+    finally:
+        close_ace_step_device(ttnn, dev)
 
 
 def require_ttnn():
@@ -111,14 +115,18 @@ def mesh_device():
         )
         if hasattr(mesh, "enable_program_cache"):
             mesh.enable_program_cache()
+        from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
+
         try:
             yield mesh
         finally:
-            ttnn.close_mesh_device(mesh)
+            close_ace_step_device(ttnn, mesh)
         return
 
     # Fallback: some TTNN builds only expose single-device APIs.
     if hasattr(ttnn, "open_device"):
+        from models.experimental.ace_step_v1_5.utils.tt_device import close_ace_step_device
+
         dev = ttnn.open_device(**_open_kwargs())
 
         if hasattr(dev, "enable_program_cache"):
@@ -126,7 +134,7 @@ def mesh_device():
         try:
             yield dev
         finally:
-            ttnn.close_device(dev)
+            close_ace_step_device(ttnn, dev)
         return
 
     pytest.skip("No TT device API available (missing open_mesh_device/open_device).")

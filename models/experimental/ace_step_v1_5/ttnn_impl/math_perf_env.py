@@ -1166,10 +1166,19 @@ def ace_step_dit_body_trace_safe(
 
     Long clips fall back to DRAM matmul (``per_core_M`` > 16) with ``to_memory_config`` in the
     graph; body trace capture/replay is not bit-accurate in that regime (same class of issue as
-    traced VAE tiles / ``DitCfgPrepTrace``).
+    traced VAE tiles / ``DitCfgPrepTrace``). Host writes / event sync during
+    ``begin_trace_capture`` also TT_FATAL when DRAM hops are still in the graph.
     """
     cap = ace_step_dit_max_fused_m_tiles() if max_fused_m is None else int(max_fused_m)
-    return ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(patch_seq_len)) <= cap
+    if ace_step_dit_fused_m_tiles(batch_size=int(batch_size), seq_len=int(patch_seq_len)) > cap:
+        return False
+    if ace_step_dit_prefers_dram_activations(
+        batch_size=int(batch_size),
+        seq_len=int(patch_seq_len),
+        max_fused_m=max_fused_m,
+    ):
+        return False
+    return True
 
 
 def ace_step_matmul_activation(
