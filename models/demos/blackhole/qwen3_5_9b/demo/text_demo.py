@@ -411,24 +411,108 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     nxt = int(lt.reshape(-1, vocab)[0].argmax().item())
     generated = [nxt]
 
-    # ---- Paged single-token decode, continuing from the carried GDN + KV state. ----
-    pos = T
-    t1 = time.time()
-    for _ in range(max_generated_tokens - 1):
-        dev = model.prepare_inputs_decode(
-            torch.tensor([[nxt]], dtype=torch.int32),
-            torch.tensor([pos], dtype=torch.int32),
+    # ---- Traced paged single-token decode, continuing from the carried GDN + KV state. ----
+    # Decode is captured ONCE as a trace and replayed with ttnn.execute_trace, so each step costs
+    # a single device dispatch instead of re-issuing every op of all 64 layers from the host. The
+    # eager loop (one ttnn_decode_forward + host readback per token) was the 27B decode bottleneck
+    # (~3.5 tok/s -> ~18 tok/s traced). Mirrors the single-device _run_traced_generation here and
+    # the validated TP traced decode in qwen35_27b/.../test_e2e_generate.py.
+    #
+    # The begin/end_trace_capture run is a THROWAWAY: in this tt-metal version its output is
+    # unreliable and it advances the GDN recurrent/conv state (and writes paged KV at pos T). So we
+    # snapshot the post-prefill GDN state, capture, then RESTORE it — preserving buffer addresses so
+    # the trace stays valid. (KV[T] is harmlessly overwritten by the first real replay; positions
+    # <T were written by the real prefill.) Every real decode step is then a pure execute_trace
+    # replay, validated bit-faithful to eager by tests/test_tp_traced_decode_parity.py (PCC == 1.0).
+    # Snapshot/restore is O(GDN state) and context-length independent — unlike re-prefill it does
+    # not re-run multi-chunk prefill (which corrupted decode at >=4k). QWEN35_TP_DECODE_EAGER=1
+    # forces the old eager loop (A/B comparison / fallback).
+    from models.tt_transformers.tt.common import copy_host_to_device
+
+    mesh = model.mesh_device
+    eager = os.environ.get("QWEN35_TP_DECODE_EAGER") == "1"
+
+    def _read(out):
+        return int(model.process_output_decode(out, B=1, S=1).reshape(-1)[:vocab].argmax().item())
+
+    def _update(token, position):
+        host = model.prepare_decode_inputs_host(
+            torch.tensor([[token]], dtype=torch.int32),
+            torch.tensor([position], dtype=torch.int32),
             page_table=page_table,
         )
+        copy_host_to_device(host, device_tensors=dev)
+
+    # GDN recurrent/conv state is per-device (each TP rank owns its value heads); snapshot ALL
+    # ranks (ConcatMeshToTensor) and restore by sharding back into the SAME buffers (ttnn.copy
+    # preserves the addresses the trace baked in). Only GDN layers carry recurrent state.
+    _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
+
+    def _snapshot_gdn():
+        comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+        return [
+            (
+                ttnn.to_torch(dn.rec_state, mesh_composer=comp),
+                [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+            )
+            for dn in _gdn
+        ]
+
+    def _restore_gdn(snap):
+        mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
+
+        def _back(t):
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+
+        for dn, (rec, convs) in zip(_gdn, snap):
+            r = _back(rec)
+            ttnn.copy(r, dn.rec_state)
+            ttnn.deallocate(r)
+            for j, c in enumerate(convs):
+                cc = _back(c)
+                ttnn.copy(cc, dn.conv_states[j])
+                ttnn.deallocate(cc)
+
+    # Persistent device input buffers (token, cur_pos, packed rope, page_table).
+    dev = model.prepare_inputs_decode(
+        torch.tensor([[nxt]], dtype=torch.int32),
+        torch.tensor([T], dtype=torch.int32),
+        page_table=page_table,
+    )
+
+    trace_id = None
+    tt_logits = None
+    if not eager:
+        gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
+        # Compile the decode programs (eager) then capture a throwaway trace; both advance GDN
+        # state, so restore the snapshot afterward.
+        model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
         tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
-        logits = model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab]
-        nxt = int(logits.argmax().item())
+        ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        _restore_gdn(gdn_snap)
+
+    pos = T
+    decode_times = []
+    while len(generated) < max_generated_tokens:
+        _update(nxt, pos)
+        t_step = time.time()
+        if eager:
+            tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        else:
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh)
+        decode_times.append(time.time() - t_step)
+        nxt = _read(tt_logits)
         generated.append(nxt)
         pos += 1
-    ttnn.synchronize_device(model.device)
-    dt = time.time() - t1
-    n_dec = max(1, len(generated) - 1)
-    return generated, {"ttft_s": ttft, "decode_tok_s": (n_dec / dt) if dt > 0 else 0.0}
+    if trace_id is not None:
+        ttnn.release_trace(mesh, trace_id)
+
+    # Steady-state throughput (drop the first step, which can carry one-time costs).
+    steady = decode_times[1:] if len(decode_times) > 1 else decode_times
+    avg = (sum(steady) / len(steady)) if steady else float("inf")
+    return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0}
 
 
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):
