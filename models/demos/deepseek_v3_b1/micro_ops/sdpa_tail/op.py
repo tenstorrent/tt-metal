@@ -99,6 +99,7 @@ class SdpaTailSingleCore:
         # Tile configuration
         TILE = l1_tensor.tile
         tile_size = TILE.get_tile_size(data_format)
+        l_out_face_geometry = ttnn.FaceGeometry(TILE.face_shape[0], TILE.num_faces)
 
         # Calculate number of tiles
         num_l_tiles = block_size * num_blocks
@@ -140,6 +141,7 @@ class SdpaTailSingleCore:
         l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, l_out_tensor)
         l_out_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         l_out_cb_descriptor.format_descriptors[0].page_size = tile_size
+        l_out_cb_descriptor.format_descriptors[0].face_geometry = l_out_face_geometry
 
         ms_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_ms_out, ms_out_tensor)
         ms_out_cb_descriptor.format_descriptors[0].tile = tile_descriptor

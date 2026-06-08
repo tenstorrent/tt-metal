@@ -14,14 +14,11 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-
-namespace tt::tt_metal {
-struct ProgramDescriptor;
-}  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
 
@@ -786,11 +783,14 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> = std::nullopt);
 
-// ProgramDescriptor overload: pushes up to 5 SemaphoreDescriptors onto
-// desc.semaphores (one per worker, on `worker_logical_core`) using sequential
-// ids, and embeds those ids - plus the optional shared termination-master id -
-// into worker_rt_args at the same slots as the Program& overload.  Used by
-// CCL ops migrating to the descriptor framework.
+// ProgramDescriptor (Contract-2) variant of fabric_mux_connection_rt_args.
+// Mirrors the legacy Program& helper but allocates the five mux-side semaphores by
+// pushing SemaphoreDescriptors into desc.semaphores and recording their IDs into
+// worker_rt_args at the same positions. Semaphore IDs are obtained from
+// ProgramDescriptor::find_available_semaphore_id so they don't collide with IDs
+// already allocated on the same worker_logical_core. An optional
+// termination_master_semaphore_id can be supplied if the caller already owns one
+// (e.g. the termination master worker on this core).
 void fabric_mux_connection_rt_args(
     bool mux_connection_valid,
     bool is_termination_master,

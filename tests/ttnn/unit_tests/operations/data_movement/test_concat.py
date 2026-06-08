@@ -66,6 +66,28 @@ def test_concat(device, height, width, dim, dtype):
     assert_equal(torch_output_tensor, output)
 
 
+def test_concat_size_switches(device):
+    def to_tt(t, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # 1) decode-shape concat — caches a program
+    a = torch.rand(1, 1, 1, 64, dtype=torch.bfloat16)
+    tt_a = to_tt(a, device)
+    ttnn.concat([tt_a, tt_a], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # 2) prefill-shape concat — CRASH on this one
+    b = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    c = torch.rand(1, 4, 64, 64, dtype=torch.bfloat16)
+    tt_b, tt_c = to_tt(b, device), to_tt(c, device)
+    ttnn.concat([tt_b, tt_c], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize(
     "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
     (

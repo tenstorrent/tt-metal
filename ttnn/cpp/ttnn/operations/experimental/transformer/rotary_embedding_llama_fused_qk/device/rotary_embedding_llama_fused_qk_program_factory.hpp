@@ -6,30 +6,16 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/rotary_embedding_llama_fused_qk_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
-struct RotaryEmbeddingLlamaFusedQKSharedVariables {
-    tt::tt_metal::CBHandle cb_q_input{};
-    tt::tt_metal::CBHandle cb_k_input{};
-    tt::tt_metal::CBHandle cb_cos{};
-    tt::tt_metal::CBHandle cb_sin{};
-    tt::tt_metal::CBHandle cb_trans_mat{};
-    tt::tt_metal::CBHandle cb_q_output{};
-    tt::tt_metal::CBHandle cb_k_output{};
-};
-
 struct RotaryEmbeddingLlamaFusedQKProgramFactory {
-    using shared_variables_t = RotaryEmbeddingLlamaFusedQKSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
-        const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
-        const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
-        RotaryEmbeddingLlamaFusedQkResult& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    // Contract (1): single ProgramDescriptor.  All seven working CBs
+    // (q/k inputs, cos/sin/trans_mat, q/k outputs) are sharded and bind through
+    // CBDescriptor::buffer so the framework patches dynamic addresses on cache hit.
+    // The single compute kernel takes one per-core runtime arg to select q vs k work.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const RotaryEmbeddingLlamaFusedQkParams& operation_attributes,
         const RotaryEmbeddingLlamaFusedQkInputs& tensor_args,
         RotaryEmbeddingLlamaFusedQkResult& tensor_return_value);

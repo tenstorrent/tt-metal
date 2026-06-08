@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/small_vector.hpp>
+
 #include "ttnn/types.hpp"
 
 namespace ttnn {
 
 ttnn::Tensor moreh_full(
-    const ttnn::SmallVector<uint32_t>& shape,
+    const ttsl::SmallVector<uint32_t>& shape,
     std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
     const DataType& dtype = DataType::BFLOAT16,

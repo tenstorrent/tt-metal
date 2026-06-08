@@ -78,9 +78,12 @@ void append_fabric_mux_connection_rt_args(
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& worker_rt_args);
 
-// ProgramDescriptor overload: pushes 5 SemaphoreDescriptors onto desc.semaphores
-// (one per worker) using sequential ids, and embeds those ids into worker_rt_args
-// at the same slots as the Program& overload.
+// ProgramDescriptor (Contract-2) variant — same wire layout as the legacy helper
+// (17 args in the order listed above), but allocates the five worker-side
+// semaphores by pushing SemaphoreDescriptors onto desc.semaphores and writes
+// the resulting args into a KernelDescriptor::RTArgList so callers can feed
+// the list directly into KernelDescriptor::emplace_runtime_args. The legacy
+// Program& helper is preserved; consumers migrate one at a time.
 void append_fabric_mux_connection_rt_args(
     bool mux_connection_valid,
     const tt::tt_metal::CoreCoord& mux_virtual_core,
@@ -91,6 +94,6 @@ void append_fabric_mux_connection_rt_args(
     bool is_termination_master,
     tt::tt_metal::CoreCoord termination_master_virtual_core,
     tt::tt_metal::ProgramDescriptor& desc,
-    std::vector<uint32_t>& worker_rt_args);
+    tt::tt_metal::KernelDescriptor::RTArgList& worker_rt_args);
 
 }  // namespace ttnn::experimental::ccl

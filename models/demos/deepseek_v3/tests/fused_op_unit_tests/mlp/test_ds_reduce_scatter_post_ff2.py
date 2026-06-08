@@ -452,7 +452,7 @@ def _build_reduce_scatter_inputs(
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

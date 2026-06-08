@@ -130,9 +130,10 @@ Kernel::Kernel(
     bool is_metal2_kernel,
     const DataflowBufferLocalAccessorHandleMap& dataflow_buffer_local_accessor_handles,
     const SemaphoreLocalAccessorHandleMap& semaphore_local_accessor_handles,
-    const std::vector<std::string>& named_runtime_args,
-    const std::vector<std::string>& named_common_runtime_args,
-    const std::vector<TensorBindingHandle>& tensor_binding_handles) :
+    const std::vector<std::string>& runtime_arg_names,
+    const std::vector<std::string>& common_runtime_arg_names,
+    const std::vector<TensorBindingHandle>& tensor_binding_handles,
+    const KernelCrtaLayout& crta_layout) :
     programmable_core_type_(programmable_core_type),
     processor_class_(processor_class),
     kernel_src_(kernel_src),
@@ -142,9 +143,10 @@ Kernel::Kernel(
     is_metal2_kernel_(is_metal2_kernel),
     dataflow_buffer_local_accessor_handles_(dataflow_buffer_local_accessor_handles),
     semaphore_local_accessor_handles_(semaphore_local_accessor_handles),
-    named_runtime_args_(named_runtime_args),
-    named_common_runtime_args_(named_common_runtime_args),
+    runtime_arg_names_(runtime_arg_names),
+    common_runtime_arg_names_(common_runtime_arg_names),
     tensor_binding_handles_(tensor_binding_handles),
+    crta_layout_(crta_layout),
 
     core_with_max_runtime_args_({0, 0}),
     defines_(defines),
@@ -317,11 +319,13 @@ void Kernel::process_semaphore_local_accessor_handles(
     }
 }
 
-void Kernel::process_tensor_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t cta_offset, uint32_t addr_crta_offset)>
-        callback) const {
+void Kernel::process_tensor_binding_handles(const std::function<void(
+                                                const std::string& accessor_name,
+                                                uint32_t cta_offset,
+                                                uint32_t addr_crta_offset,
+                                                uint32_t num_runtime_field_crta_words)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset);
+        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
     }
 }
 
@@ -523,16 +527,17 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(handle.accessor_name);
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
+        hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
     }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
-    hasher.update(static_cast<uint64_t>(this->named_runtime_args_.size()));
-    for (const auto& name : this->named_runtime_args_) {
+    hasher.update(static_cast<uint64_t>(this->runtime_arg_names_.size()));
+    for (const auto& name : this->runtime_arg_names_) {
         hasher.update(name);
     }
-    hasher.update(static_cast<uint64_t>(this->named_common_runtime_args_.size()));
-    for (const auto& name : this->named_common_runtime_args_) {
+    hasher.update(static_cast<uint64_t>(this->common_runtime_arg_names_.size()));
+    for (const auto& name : this->common_runtime_arg_names_) {
         hasher.update(name);
     }
     hasher.update(this->kernel_src_.source_);

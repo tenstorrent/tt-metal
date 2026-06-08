@@ -36,10 +36,13 @@ void kernel_main() {
 #if FUSE_PRE_ADD
     constexpr uint32_t blk = get_compile_time_arg_val(2);
 #endif
+    // True iff the factory configured cb_inp with UnpackToDestFp32. Used by the
+    // non-FUSE branch to gate the welford state re-establishment after the transpose.
+    constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_1;           // x**2
+    constexpr uint32_t cb_scratch = tt::CBIndex::c_1;      // scratch for post-Welford transpose
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_2;  // recip table
 #if FUSE_PRE_ADD
     constexpr uint32_t cb_res = tt::CBIndex::c_5;         // residual b
@@ -53,7 +56,7 @@ void kernel_main() {
 #if FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_res, cb_inp);
 #else
-    compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_scratch);
 #endif
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
@@ -156,7 +159,7 @@ void kernel_main() {
             cb_push_back(cb_m2_spill, 1);
         }
 
-        // Finalize: reload accumulator and write mean and variance to cb_x2.
+        // Finalize: reload accumulator and write mean and variance to cb_scratch.
         cb_wait_front(cb_mean_spill, 1);
         cb_wait_front(cb_m2_spill, 1);
         tile_regs_acquire();
@@ -171,32 +174,60 @@ void kernel_main() {
         cb_pop_front(cb_mean_spill, 1);
         cb_pop_front(cb_m2_spill, 1);
 
-        cb_reserve_back(cb_x2, 2);
+        cb_reserve_back(cb_scratch, 2);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_mean_spill, cb_x2);
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
-        cb_push_back(cb_x2, 2);
+        pack_reconfig_data_format(cb_mean_spill, cb_scratch);
+        pack_tile(dst1, cb_scratch);
+        pack_tile(dst2, cb_scratch);
+        cb_push_back(cb_scratch, 2);
         tile_regs_release();
 #else
         reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
+        pack_reconfig_data_format(cb_scratch);
 
         tile_regs_acquire();
         uint32_t start_N = 0;
-        transpose_wh_init(cb_inp, cb_x2);
+        transpose_wh_init(cb_inp, cb_scratch);
         welford_init();
 
+        // When the input CB carries Float32 with fp32_dest_acc_en=true, the program factory
+        // sets UnpackToDestFp32 for cb_inp so transpose_wh_tile preserves FP32 precision into DEST.
+        // Its math-side init (called from transpose_wh_init_short) records slots [16, 32) of the
+        // math-thread replay buffer, clobbering the LREG2 / LREG3 portions of Welford's recurrence
+        // (welford records slots [0, 32), which is 4 LREG variants of 8 instructions each, fully unrolled).
+        // welford_init<WelfordInitMode::PreserveStats>() after each transpose_wh_tile re-records
+        // all 32 slots with the welford recurrence so welford_update replays welford ops instead
+        // of stale transpose-dest ops. PreserveStats keeps the running mean / M2 accumulator in
+        // LREG4/5, which survive transpose_dest anyway because it only uses FPU MOVs. UNPACK A
+        // is left in transpose=1 by transpose_wh_tile; welford_update is pure SFPU and does
+        // not consume that state, and the next iteration's transpose_wh_init_short reprograms
+        // it.
+        //
+        // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+        // through SrcA without touching the math-thread replay buffer, so the recovery is
+        // gated out.
         for (uint32_t wt = 0; wt < (Wt - 1); wt++) {
             cb_wait_front(cb_inp, 1);  // cumulative wait
+            if constexpr (welford_unpack_fp32_active) {
+                transpose_wh_init_short(cb_inp);
+            }
             transpose_wh_tile(cb_inp, 0, dst0);
+            if constexpr (welford_unpack_fp32_active) {
+                welford_init<WelfordInitMode::PreserveStats>();
+            }
             // welford_tile<dst0, dst1, dst2, true, 0>((wt) * 32, W, 0, {});
             welford_update<W>(dst0, start_N, *p_reciprocals);
             start_N += 32;
             cb_pop_front(cb_inp, 1);
         }
         cb_wait_front(cb_inp, 1);  // cumulative wait
+        if constexpr (welford_unpack_fp32_active) {
+            transpose_wh_init_short(cb_inp);
+        }
         transpose_wh_tile(cb_inp, 0, dst0);
+        if constexpr (welford_unpack_fp32_active) {
+            welford_init<WelfordInitMode::PreserveStats>();
+        }
         welford_update_rows<W>(dst0, start_N, 0, last_tile_rows, *p_reciprocals);
         cb_pop_front(cb_inp, 1);
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
@@ -205,23 +236,23 @@ void kernel_main() {
         //  transpose_wh_dest_init_short();
         //  transpose_wh_dest(dst1);
         //  transpose_wh_dest(dst2);
-        cb_reserve_back(cb_x2, 2);
+        cb_reserve_back(cb_scratch, 2);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
-        cb_push_back(cb_x2, 2);
+        pack_tile(dst1, cb_scratch);
+        pack_tile(dst2, cb_scratch);
+        cb_push_back(cb_scratch, 2);
         tile_regs_release();
 #endif
 
-        reconfig_data_format(cb_x2, cb_x2);
+        reconfig_data_format(cb_scratch, cb_scratch);
         pack_reconfig_data_format(cb_out);
-        transpose_wh_init_short(cb_x2);
+        transpose_wh_init_short(cb_scratch);
         tile_regs_acquire();
-        cb_wait_front(cb_x2, 2);  // cumulative wait
-        transpose_wh_tile(cb_x2, 0, dst0);
-        transpose_wh_tile(cb_x2, 1, dst1);
-        cb_pop_front(cb_x2, 2);
+        cb_wait_front(cb_scratch, 2);  // cumulative wait
+        transpose_wh_tile(cb_scratch, 0, dst0);
+        transpose_wh_tile(cb_scratch, 1, dst1);
+        cb_pop_front(cb_scratch, 2);
 
         tile_regs_commit();
         tile_regs_wait();

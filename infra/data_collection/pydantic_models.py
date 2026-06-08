@@ -7,9 +7,9 @@ Definition of the pydantic models used for data production.
 """
 
 from datetime import datetime
-from typing import List, Optional, Union, Tuple
-
 from enum import Enum
+from typing import List, Optional, Union
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -61,6 +61,25 @@ class JobStatus(str, Enum):
     action_required = "action_required"
 
 
+class TTSmiReset(BaseModel):
+    """
+    Tracks tt-smi reset behavior per CI/CD job attempt.
+
+    ``github_job_id`` lives on the parent :class:`Job`; the wrangler copies it when
+    inserting into ``tt_smi_reset``.
+    """
+
+    workflow_attempt: int = Field(description="Workflow run attempt number.")
+    tt_smi_reset_attempt: int = Field(description="Sequential tt-smi reset attempt number within the job.")
+    final_status: str = Field(description="Final reset status for this reset attempt: SUCCESS or FAILURE.")
+    total_reset_time_sec: Optional[float] = Field(
+        None, description="Total time spent in this reset attempt in seconds."
+    )
+    error_summary: Optional[str] = Field(
+        None, description="Summary of reset-related error messages extracted from logs."
+    )
+
+
 class Job(BaseModel):
     """
     Contains information about the execution of CI/CD jobs, each one associated with a
@@ -108,6 +127,10 @@ class Job(BaseModel):
     job_label: Optional[str] = Field(None, description="GitHub CI runner label for the job.")
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
+    )
+    tt_smi_reset: Optional[List[TTSmiReset]] = Field(
+        None,
+        description="tt-smi reset attempts for this job, if any.",
     )
 
     # Model validator to check the unique combination constraint

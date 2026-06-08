@@ -19,7 +19,6 @@ template <
     int ITERATIONS = 8,
     [[maybe_unused]] bool CLAMP_NEGATIVE = true>
 void calculate_exponential([[maybe_unused]] const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
-    static_assert(EN_32BIT_DEST == false, "Non-default EN_32BIT_DEST not supported in Quasar exp");
     static_assert(SCALE_EN == false, "Non-default SCALE_EN not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     LLK_ASSERT(
@@ -31,7 +30,8 @@ void calculate_exponential([[maybe_unused]] const uint exp_base_scale_factor = p
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     [[maybe_unused]] uint32_t scale = 0x3F800000,
-    [[maybe_unused]] bool CLAMP_NEGATIVE = true>
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true,
+    [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");

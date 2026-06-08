@@ -57,8 +57,8 @@ void kernel_main() {
     uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
     uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
     for (uint32_t i = 0; i < Wt; i++) {
-        noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
-        noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
+        noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
+        noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
         cos_sin_curr_id++;
         sin_l1_write_addr += sin_tile_bytes;
         cos_l1_write_addr += cos_tile_bytes;
@@ -73,7 +73,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(rotated_input_cb_id, onetile);
             uint32_t rotated_input_l1_write_addr = get_write_ptr(rotated_input_cb_id);
-            noc_async_read_tile(rotated_input_curr_id, s0, rotated_input_l1_write_addr);
+            noc_async_read_page(rotated_input_curr_id, s0, rotated_input_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(rotated_input_cb_id, onetile);
             rotated_input_curr_id++;
@@ -81,14 +81,14 @@ void kernel_main() {
 #ifndef DECODE_MODE
             cb_reserve_back(sin_cb_id, onetile);
             uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-            noc_async_read_tile(cos_sin_curr_id, s2, sin_l1_write_addr);
+            noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(sin_cb_id, onetile);
 #endif
 
             cb_reserve_back(input_cb_id, onetile);
             uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
-            noc_async_read_tile(input_curr_id, s0, input_l1_write_addr);
+            noc_async_read_page(input_curr_id, s0, input_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(input_cb_id, onetile);
             input_curr_id++;
@@ -96,7 +96,7 @@ void kernel_main() {
 #ifndef DECODE_MODE
             cb_reserve_back(cos_cb_id, onetile);
             uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-            noc_async_read_tile(cos_sin_curr_id, s1, cos_l1_write_addr);
+            noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cos_cb_id, onetile);
             cos_sin_curr_id++;

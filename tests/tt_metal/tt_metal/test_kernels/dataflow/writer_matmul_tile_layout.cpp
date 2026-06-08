@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // out tensor args
@@ -35,8 +36,8 @@ void kernel_main() {
     // single-tile
     uint32_t single_tile_size_bytes = cb_out0.get_tile_size();
 
-    constexpr auto out_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(out_args, out_tensor_addr);
+    const auto s = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_tensor_addr, single_tile_size_bytes);
 
     bool one_time_profile = true;
     uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;

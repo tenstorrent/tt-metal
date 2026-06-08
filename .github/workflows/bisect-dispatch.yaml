@@ -60,6 +60,9 @@ permissions:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   determine-runner-config:
     runs-on: ubuntu-latest
     outputs:
@@ -99,7 +102,7 @@ jobs:
           echo "Determined arch: $ARCH_NAME"
 
   test-dispatch:
-    needs: determine-runner-config
+    needs: [check-harbor, determine-runner-config]
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:
@@ -112,8 +115,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
-        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
+        PYTHONFAULTHANDLER: 1 # prints Python stack trace on segfault
+        PYTHONMALLOC: debug # adds checks, helps catch memory issues
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
@@ -143,12 +146,15 @@ jobs:
             exit 1
           fi
           # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          # Omit |read-only unless actually true — ccache 4.13 treats the presence of the
+          # option (even =false) as read-only due to an std::optional<bool> check bug.
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}"
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 0
           submodules: recursive
@@ -162,17 +168,16 @@ jobs:
         run: |
           echo "Checking GitHub CLI, jq, and zstd installation..."
 
-          # Check and install GitHub CLI
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing GitHub CLI 2.81.0..."
-            apt-get update
-            wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
-            apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
-            rm -f gh_2.81.0_linux_amd64.deb
-            echo "GitHub CLI 2.81.0 installed successfully"
-          else
-            echo "GitHub CLI is already installed"
-          fi
+          # Always force-install our pinned GitHub CLI version.
+          # Runners may have an older gh pre-installed that lacks --commit support
+          # (added in gh v2.29). Skipping install when gh exists silently inherits
+          # that old version and breaks download_artifacts.sh.
+          echo "Installing GitHub CLI 2.81.0 (force)..."
+          apt-get update -q
+          wget -q -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
+          apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
+          rm -f gh_2.81.0_linux_amd64.deb
+          echo "GitHub CLI 2.81.0 installed successfully"
 
           # Check and install jq and zstd
           if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then

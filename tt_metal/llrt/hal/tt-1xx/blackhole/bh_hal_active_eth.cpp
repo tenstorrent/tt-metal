@@ -122,7 +122,7 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_ERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(DevicePrintMemoryLayout);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     // TODO: this is wrong, need eth specific value. For now use same value as idle
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_ERISC_KERNEL_CONFIG_SIZE;
@@ -177,6 +177,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC0_RESET_PC)] = AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERISC1_RESET_PC)] = SUBORDINATE_AERISC_RESET_PC;
     eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::RISC_SOFT_RESET)] = RISCV_DEBUG_REG_SOFT_RESET_0;
+    eth_debug_regs[ttsl::as_underlying_type<EthDebugReg>(EthDebugReg::ERR_STAT)] =
+        ETH_CORE_A_ETH_CTRL_A_ERR_STAT_REG_ADDR;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;

@@ -54,6 +54,13 @@ void kernel_main() {
     constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    // Welford-fp32 alias for cb_in0. Shares SRAM with cb_in0 but has its own buffer index
+    // configured with UnpackToDestFp32, plus its own read/write pointers.
+    // The Welford section of compute reads the alias to get full fp32 into DEST, while later
+    // FPU consumers read cb_in0 directly. When welford_fp32_alias is false, cb_in0_welford_id
+    // == cb_in0_id and the gated pushes below are skipped.
+    constexpr uint32_t cb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -61,6 +68,7 @@ void kernel_main() {
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
     CircularBuffer cb_in0(cb_in0_id);
+    CircularBuffer cb_in0_welford(cb_in0_welford_id);
     CircularBuffer cb_repack(cb_repack_id);
     CircularBuffer cb_repack_out(cb_repack_out_id);
     CircularBuffer cb_out0(cb_out0_id);
@@ -136,6 +144,14 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }
@@ -205,6 +221,14 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     cb_in0.push_back(1);
+                    if constexpr (welford_fp32_alias) {
+                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                        // alias) so the noc.async_read above already filled both views; this is
+                        // purely bookkeeping so compute's welford section can wait_front
+                        // on cb_in0_welford independently of cb_in0.
+                        cb_in0_welford.reserve_back(1);
+                        cb_in0_welford.push_back(1);
+                    }
                 }
                 mt_offset += num_channels_tiles;
             }
