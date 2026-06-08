@@ -509,7 +509,9 @@ class TTVibeVoiceGenerator:
         if self.ref_inference is not None:
             self._reset_ref_tokenizer_caches()
 
-        use_fp32_argmax = True
+        # On-device argmax (ttnn.argmax) — numerically identical to host fp32 argmax
+        # (bf16→fp32 upcast is monotonic) and avoids copying the full vocab row.
+        use_fp32_argmax = False
         next_token = _greedy_argmax(logits_pos, use_fp32=use_fp32_argmax)
         step_hidden = prefill_hidden
 
