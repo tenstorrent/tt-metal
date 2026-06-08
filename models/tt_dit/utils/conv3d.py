@@ -484,6 +484,13 @@ _DEFAULT_BLOCKINGS = {
 # Key:   (in_channels, out_channels, kernel_size_3tuple)
 # Value: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1)
 _FP32_BLOCKINGS: dict = {
+    # --- Main vocoder ups inner-conv (ConvTranspose1d via Conv1d, run unsharded after T-gather) ---
+    (1536, 768, (11, 1, 1)): (128, 128, 32, 1, 1),  # ups[0]
+    (768, 384, (4, 1, 1)): (256, 32, 64, 1, 1),  # ups[1]
+    (384, 192, (4, 1, 1)): (128, 64, 32, 1, 1),  # ups[2]
+    (192, 96, (4, 1, 1)): (64, 32, 64, 1, 1),  # ups[3]
+    (96, 64, (4, 1, 1)): (32, 32, 16, 1, 1),  # ups[4] (out=48 padded to 64)
+    (64, 32, (4, 1, 1)): (64, 32, 16, 1, 1),  # ups[5] (in=48 padded to 64, out=2 padded to 32)
     # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
     (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
     (768, 768, (11, 1, 1)): (256, 32, 2, 1, 1),  # stage 0 AMP k11
