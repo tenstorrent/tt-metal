@@ -656,15 +656,11 @@ PhysicalSystemDescriptor run_local_discovery(
 }
 
 PhysicalSystemDescriptor run_local_discovery_live(
+    tt::umd::ClusterDescriptor& cluster_desc,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     tt::TargetDevice target_device_type,
     bool all_hostnames_unique) {
-    std::unique_ptr<tt::umd::ClusterDescriptor> cdptr = tt::umd::Cluster::create_cluster_descriptor();
-
-    // Live discovery and silicon discovery refresh the descriptor from UMD; other modes keep a stable snapshot of
-    // the caller-provided descriptor.
-    auto& cluster_desc_ref = *cdptr;
-    return run_local_discovery(cluster_desc_ref, distributed_context, target_device_type, all_hostnames_unique);
+    return run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 }
 
 }  // namespace discovery_impl
@@ -691,7 +687,8 @@ PhysicalSystemDescriptor run_physical_system_discovery(
 
     PhysicalSystemDescriptor psd =
         dispatch_live
-            ? discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique)
+            ? discovery_impl::run_local_discovery_live(
+                  cluster_desc, distributed_context, target_device_type, all_hostnames_unique)
             : discovery_impl::run_local_discovery(
                   cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
 
